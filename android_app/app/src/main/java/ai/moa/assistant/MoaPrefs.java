@@ -44,6 +44,10 @@ final class MoaPrefs {
     private static final String KEY_PREVIOUS_VERSION_CODE = "previous_version_code";
     private static final String KEY_PREVIOUS_VERSION_NAME = "previous_version_name";
     private static final String KEY_PREVIOUS_GIT_SHA = "previous_git_sha";
+    private static final String KEY_PREFERRED_YOUTUBE_PACKAGE = "preferred_youtube_package";
+    private static final String KEY_YOUTUBE_FIXTURE_VERSION = "youtube_fixture_version";
+    private static final String KEY_YOUTUBE_FIXTURE_SIGNER = "youtube_fixture_signer";
+    static final String DEFAULT_YOUTUBE_PACKAGE = "app.revanced.android.youtube";
 
     // Orb scale contract shared by the overlay (applies it) and the main app
     // (exposes the slider). Percent of the 96dp base window; clamped 50-150.
@@ -135,6 +139,49 @@ final class MoaPrefs {
                 .putString(KEY_GATEWAY_URL, gatewayUrl == null ? "" : gatewayUrl.trim())
                 .putString(KEY_GATEWAY_TOKEN, gatewayToken == null ? "" : gatewayToken.trim())
                 .apply();
+    }
+
+    static String preferredYoutubePackage(Context context) {
+        return preferredYoutubePackageValue(prefs(context).getString(
+                KEY_PREFERRED_YOUTUBE_PACKAGE, DEFAULT_YOUTUBE_PACKAGE));
+    }
+
+    static void setPreferredYoutubePackage(Context context, String packageName) {
+        prefs(context).edit().putString(
+                KEY_PREFERRED_YOUTUBE_PACKAGE, preferredYoutubePackageValue(packageName)).apply();
+    }
+
+    static void saveYoutubePackageFixture(
+            Context context, String packageName, long versionCode, String signerSha256) {
+        String normalizedPackage = preferredYoutubePackageValue(packageName);
+        String signer = safe(signerSha256).toLowerCase(Locale.US);
+        if (versionCode <= 0L || !signer.matches("[a-f0-9]{64}(?:,[a-f0-9]{64})*")) {
+            clearYoutubePackageFixture(context);
+            return;
+        }
+        prefs(context).edit()
+                .putString(KEY_PREFERRED_YOUTUBE_PACKAGE, normalizedPackage)
+                .putLong(KEY_YOUTUBE_FIXTURE_VERSION, versionCode)
+                .putString(KEY_YOUTUBE_FIXTURE_SIGNER, signer)
+                .apply();
+    }
+
+    static void clearYoutubePackageFixture(Context context) {
+        prefs(context).edit().remove(KEY_YOUTUBE_FIXTURE_VERSION)
+                .remove(KEY_YOUTUBE_FIXTURE_SIGNER).apply();
+    }
+
+    static YoutubePackageFixture youtubePackageFixture(Context context) {
+        return new YoutubePackageFixture(
+                preferredYoutubePackage(context),
+                prefs(context).getLong(KEY_YOUTUBE_FIXTURE_VERSION, 0L),
+                prefs(context).getString(KEY_YOUTUBE_FIXTURE_SIGNER, ""));
+    }
+
+    static String preferredYoutubePackageValue(String packageName) {
+        String value = safe(packageName);
+        return value.matches("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+")
+                ? value : DEFAULT_YOUTUBE_PACKAGE;
     }
 
     static boolean spokenRepliesEnabled(Context context) {
@@ -486,6 +533,25 @@ final class MoaPrefs {
         ENDPOINT_PATH,
         STALE_MAIN_MACHINE,
         LOCAL_DEV
+    }
+
+    static final class YoutubePackageFixture {
+        final String packageName;
+        final long versionCode;
+        final String signerSha256;
+
+        YoutubePackageFixture(String packageName, long versionCode, String signerSha256) {
+            this.packageName = safe(packageName);
+            this.versionCode = versionCode;
+            this.signerSha256 = safe(signerSha256).toLowerCase(Locale.US);
+        }
+
+        boolean matches(String packageName, long versionCode, String signerSha256) {
+            return this.versionCode > 0L
+                    && this.packageName.equals(safe(packageName))
+                    && this.versionCode == versionCode
+                    && this.signerSha256.equals(safe(signerSha256).toLowerCase(Locale.US));
+        }
     }
 
     private static SharedPreferences prefs(Context context) {

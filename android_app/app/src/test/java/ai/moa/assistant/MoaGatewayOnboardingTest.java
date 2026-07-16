@@ -5,9 +5,29 @@ import org.junit.Test;
 import java.net.SocketTimeoutException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class MoaGatewayOnboardingTest {
+    @Test
+    public void preferredYoutubeDefaultsToRevancedAndRejectsMalformedPackages() {
+        assertEquals("app.revanced.android.youtube", MoaPrefs.DEFAULT_YOUTUBE_PACKAGE);
+        assertEquals("app.revanced.android.youtube", MoaPrefs.preferredYoutubePackageValue("youtube"));
+        assertEquals("com.google.android.youtube", MoaPrefs.preferredYoutubePackageValue(
+                " com.google.android.youtube "));
+    }
+
+    @Test
+    public void youtubeFixtureBindsPackageVersionAndSignerExactly() {
+        String signer = "a".repeat(64);
+        MoaPrefs.YoutubePackageFixture fixture = new MoaPrefs.YoutubePackageFixture(
+                "app.revanced.android.youtube", 123L, signer);
+        assertTrue(fixture.matches("app.revanced.android.youtube", 123L, signer));
+        assertFalse(fixture.matches("com.google.android.youtube", 123L, signer));
+        assertFalse(fixture.matches("app.revanced.android.youtube", 124L, signer));
+        assertFalse(fixture.matches("app.revanced.android.youtube", 123L, "b".repeat(64)));
+    }
+
     @Test
     public void defaultGatewayUsesHostedOrigin() {
         assertEquals("https://api.agee.app", MoaPrefs.DEFAULT_GATEWAY_URL);

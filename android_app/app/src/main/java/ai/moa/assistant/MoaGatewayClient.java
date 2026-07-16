@@ -201,6 +201,39 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject createMediaBookmark(JSONObject body) throws Exception {
+        return new JSONObject(postJson(apiEndpoint("/v1/media/bookmarks"), body.toString(), 15000));
+    }
+
+    JSONObject mediaBookmarks() throws Exception {
+        return new JSONObject(getText(apiEndpoint("/v1/media/bookmarks?limit=500"), 15000));
+    }
+
+    JSONObject resolveMediaBookmark(String query) throws Exception {
+        String value = safe(query);
+        if (value.isEmpty()) throw new IllegalArgumentException("media bookmark query is required");
+        return new JSONObject(getText(
+                apiEndpoint("/v1/media/bookmarks?q=" + urlEncode(value)), 15000));
+    }
+
+    JSONObject mediaBookmark(String bookmarkId) throws Exception {
+        String id = bookmarkPathId(bookmarkId);
+        return new JSONObject(getText(apiEndpoint("/v1/media/bookmarks/" + id), 15000));
+    }
+
+    JSONObject deleteMediaBookmark(String bookmarkId) throws Exception {
+        String id = bookmarkPathId(bookmarkId);
+        return new JSONObject(deleteText(apiEndpoint("/v1/media/bookmarks/" + id), 15000));
+    }
+
+    private static String bookmarkPathId(String bookmarkId) {
+        String id = safe(bookmarkId);
+        if (!id.matches("[a-zA-Z0-9_-]{1,120}")) {
+            throw new IllegalArgumentException("media bookmark id is invalid");
+        }
+        return id;
+    }
+
     void downloadLatestAndroidUpdate(File destination) throws Exception {
         downloadFile(apiEndpoint("/v1/android/updates/latest.apk"), destination, 120000);
     }
@@ -331,6 +364,24 @@ final class MoaGatewayClient {
         String responseText = readStream(stream);
         connection.disconnect();
 
+        if (status < 200 || status >= 300) {
+            throw new IllegalStateException("HTTP " + status + " " + responseText);
+        }
+        return responseText;
+    }
+
+    private String deleteText(String endpoint, int readTimeoutMs) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
+        connection.setRequestMethod("DELETE");
+        connection.setConnectTimeout(3500);
+        connection.setReadTimeout(readTimeoutMs);
+        if (!token.isEmpty()) {
+            connection.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        int status = connection.getResponseCode();
+        String responseText = readStream(status >= 400
+                ? connection.getErrorStream() : connection.getInputStream());
+        connection.disconnect();
         if (status < 200 || status >= 300) {
             throw new IllegalStateException("HTTP " + status + " " + responseText);
         }

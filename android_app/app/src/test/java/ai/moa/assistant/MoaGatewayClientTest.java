@@ -177,6 +177,32 @@ public final class MoaGatewayClientTest {
         throw new AssertionError("Expected gateway error");
     }
 
+    @Test
+    public void mediaBookmarkMethodsUseBoundedGatewayRoutes() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+        JSONObject created = client.createMediaBookmark(new JSONObject()
+                .put("video_id", "dQw4w9WgXcQ"));
+        assertEquals("bookmark_1", created.getJSONObject("bookmark").getString("id"));
+        assertEquals("POST", requests.get(0).method);
+        assertEquals("/v1/media/bookmarks", requests.get(0).path);
+
+        assertEquals(1, client.mediaBookmarks().getJSONArray("bookmarks").length());
+        assertEquals("GET", requests.get(1).method);
+        assertEquals("/v1/media/bookmarks?limit=500", requests.get(1).target);
+
+        assertEquals("bookmark_1", client.resolveMediaBookmark("favorite chorus")
+                .getJSONObject("resolution").getJSONObject("bookmark").getString("id"));
+        assertEquals("/v1/media/bookmarks?q=favorite+chorus", requests.get(2).target);
+
+        assertEquals("bookmark_1", client.mediaBookmark("bookmark_1")
+                .getJSONObject("bookmark").getString("id"));
+        assertEquals("GET", requests.get(3).method);
+
+        assertTrue(client.deleteMediaBookmark("bookmark_1").getBoolean("deleted"));
+        assertEquals("DELETE", requests.get(4).method);
+        assertEquals("/v1/media/bookmarks/bookmark_1", requests.get(4).path);
+    }
+
     private TestResponse responseFor(RequestRecord request) {
         requests.add(request);
         if (request.body.contains("\"mode\":\"error\"")) {
@@ -203,6 +229,15 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"store\":{\"type\":\"json-files\"},\"recent_runs\":[{\"id\":\"run_789\"}],\"recent_turns\":[],\"sessions\":[]}");
         } else if ("/v1/agent/profile".equals(request.path)) {
             return new TestResponse(200, "{\"profile\":{\"language\":\"am-ET\",\"language_primary\":\"am-ET\",\"input_languages\":\"am-ET,en-US\",\"input_language_primary\":\"am-ET\"}}");
+        } else if ("/v1/media/bookmarks/bookmark_1".equals(request.path)) {
+            return new TestResponse(200, "DELETE".equals(request.method)
+                    ? "{\"deleted\":true}" : "{\"bookmark\":{\"id\":\"bookmark_1\"}}");
+        } else if ("/v1/media/bookmarks".equals(request.path) && "GET".equals(request.method)) {
+            if (request.target.contains("?q=")) return new TestResponse(200,
+                    "{\"resolution\":{\"status\":\"matched\",\"bookmark\":{\"id\":\"bookmark_1\"}}}");
+            return new TestResponse(200, "{\"bookmarks\":[{\"id\":\"bookmark_1\"}]}");
+        } else if ("/v1/media/bookmarks".equals(request.path)) {
+            return new TestResponse(200, "{\"bookmark\":{\"id\":\"bookmark_1\"}}");
         }
         return new TestResponse(404, "{\"error\":\"not found\"}");
     }

@@ -1,8 +1,12 @@
 package ai.moa.assistant;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.accessibility.AccessibilityEvent;
@@ -12,8 +16,12 @@ import org.json.JSONException;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 public final class MoaAccessibilityService extends AccessibilityService {
@@ -24,11 +32,19 @@ public final class MoaAccessibilityService extends AccessibilityService {
     private static volatile String latestPackage = "";
     private static volatile String latestClass = "";
     private static volatile long latestUpdatedAtMs = 0L;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private volatile MoaYoutubeAccessibilityExecutor youtubeExecutor;
+    private volatile long clipboardGeneration;
+    private ClipboardManager clipboardManager;
+    private final ClipboardManager.OnPrimaryClipChangedListener clipboardListener =
+            () -> clipboardGeneration++;
 
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
         activeService = this;
+        clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboardManager != null) clipboardManager.addPrimaryClipChangedListener(clipboardListener);
     }
 
     @Override
@@ -57,6 +73,9 @@ public final class MoaAccessibilityService extends AccessibilityService {
         }
         latestSummary = summary;
         latestUpdatedAtMs = System.currentTimeMillis();
+        if (youtubeExecutor != null) {
+            youtubeExecutor.onAccessibilityEvent();
+        }
     }
 
     @Override
@@ -65,6 +84,8 @@ public final class MoaAccessibilityService extends AccessibilityService {
 
     @Override
     public boolean onUnbind(Intent intent) {
+        cancelYoutubeOperation();
+        removeClipboardListener();
         if (activeService == this) {
             activeService = null;
         }
@@ -73,10 +94,17 @@ public final class MoaAccessibilityService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        cancelYoutubeOperation();
+        removeClipboardListener();
         if (activeService == this) {
             activeService = null;
         }
         super.onDestroy();
+    }
+
+    private void removeClipboardListener() {
+        if (clipboardManager != null) clipboardManager.removePrimaryClipChangedListener(clipboardListener);
+        clipboardManager = null;
     }
 
     static boolean isRunning() {
@@ -126,6 +154,19 @@ public final class MoaAccessibilityService extends AccessibilityService {
         );
     }
 
+    static int currentActiveWindowId() {
+        MoaAccessibilityService service = activeService;
+        AccessibilityNodeInfo root = service == null ? null : service.getRootInActiveWindow();
+        return root == null ? -1 : root.getWindowId();
+    }
+
+    static String freshActivePackage() {
+        MoaAccessibilityService service = activeService;
+        AccessibilityNodeInfo root = service == null ? null : service.getRootInActiveWindow();
+        CharSequence packageName = root == null ? null : root.getPackageName();
+        return packageName == null ? "" : packageName.toString().trim();
+    }
+
     static TapResult clickByText(String label, String expectedPackage) {
         MoaAccessibilityService service = activeService;
         String target = normalize(label);
@@ -167,6 +208,48 @@ public final class MoaAccessibilityService extends AccessibilityService {
     static boolean performHome() {
         MoaAccessibilityService service = activeService;
         return service != null && service.performGlobalAction(GLOBAL_ACTION_HOME);
+    }
+
+    static synchronized YoutubeStartResult executeYoutubeOperation(
+            MoaYoutubeAccessibilityExecutor.Request request,
+            MoaYoutubeAccessibilityExecutor.Callback callback
+    ) {
+        MoaAccessibilityService service = activeService;
+        if (service == null || request == null || callback == null) {
+            return YoutubeStartResult.UNAVAILABLE;
+        }
+        if (service.youtubeExecutor != null) {
+            return YoutubeStartResult.BUSY;
+        }
+        YoutubeDriver driver = new YoutubeDriver(service);
+        final MoaYoutubeAccessibilityExecutor[] holder = new MoaYoutubeAccessibilityExecutor[1];
+        MoaYoutubeAccessibilityExecutor executor = new MoaYoutubeAccessibilityExecutor(
+                request,
+                driver,
+                result -> {
+                    if (service.youtubeExecutor == holder[0]) {
+                        service.youtubeExecutor = null;
+                    }
+                    callback.onTerminal(result);
+                }
+        );
+        holder[0] = executor;
+        service.youtubeExecutor = executor;
+        service.mainHandler.post(executor::start);
+        return YoutubeStartResult.STARTED;
+    }
+
+    static void cancelActiveYoutubeOperation() {
+        MoaAccessibilityService service = activeService;
+        if (service != null) {
+            service.cancelYoutubeOperation();
+        }
+    }
+
+    enum YoutubeStartResult {
+        STARTED,
+        BUSY,
+        UNAVAILABLE
     }
 
     static String latestScreenSummary() {
@@ -282,5 +365,157 @@ public final class MoaAccessibilityService extends AccessibilityService {
         builder.append(text).append(" |");
         seen.add(text);
         count[0]++;
+    }
+
+    private void cancelYoutubeOperation() {
+        MoaYoutubeAccessibilityExecutor executor = youtubeExecutor;
+        youtubeExecutor = null;
+        if (executor != null) {
+            executor.cancel();
+        }
+    }
+
+    private static final class YoutubeDriver implements MoaYoutubeAccessibilityExecutor.Driver {
+        private final MoaAccessibilityService service;
+        private final Map<String, AccessibilityNodeInfo> currentNodes = new HashMap<>();
+        private String snapshotPackage = "";
+        private int snapshotWindowId = -1;
+
+        private YoutubeDriver(MoaAccessibilityService service) {
+            this.service = service;
+        }
+
+        @Override
+        public MoaYoutubeAccessibilityExecutor.Snapshot snapshot() {
+            AccessibilityNodeInfo root = service.getRootInActiveWindow();
+            if (root == null || root.getPackageName() == null) {
+                return null;
+            }
+            snapshotPackage = root.getPackageName().toString();
+            snapshotWindowId = root.getWindowId();
+            currentNodes.clear();
+            List<MoaYoutubeAccessibilityExecutor.Node> nodes = new ArrayList<>();
+            collect(root, "0", "", nodes, 0);
+            MoaMediaSessionController.Snapshot media =
+                    new MoaMediaSessionController(service).currentSnapshot(snapshotPackage);
+            return youtubeSnapshot(snapshotPackage, snapshotWindowId, nodes, media);
+        }
+
+        @Override
+        public boolean click(String localId) {
+            AccessibilityNodeInfo node = validatedNode(localId);
+            return node != null && node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        }
+
+        @Override
+        public boolean setText(String localId, String value) {
+            AccessibilityNodeInfo node = validatedNode(localId);
+            if (node == null || !node.isEditable()) {
+                return false;
+            }
+            Bundle arguments = new Bundle();
+            arguments.putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    value
+            );
+            return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+        }
+
+        @Override
+        public boolean scrollForward(String localId) {
+            AccessibilityNodeInfo node = validatedNode(localId);
+            return node != null && node.isScrollable()
+                    && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+        }
+
+        @Override
+        public boolean back() {
+            return service.performGlobalAction(GLOBAL_ACTION_BACK);
+        }
+
+        @Override
+        public String clipboardText() {
+            ClipboardManager clipboard = (ClipboardManager) service.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null || !clipboard.hasPrimaryClip() || clipboard.getPrimaryClip() == null
+                    || clipboard.getPrimaryClip().getItemCount() != 1) {
+                return "";
+            }
+            CharSequence value = clipboard.getPrimaryClip().getItemAt(0).coerceToText(service);
+            return value == null ? "" : value.toString();
+        }
+
+        @Override
+        public long clipboardGeneration() {
+            return service.clipboardGeneration;
+        }
+
+        @Override
+        public long nowMs() {
+            return System.currentTimeMillis();
+        }
+
+        @Override
+        public void postDelayed(Runnable runnable, long delayMs) {
+            service.mainHandler.postDelayed(runnable, Math.max(0L, delayMs));
+        }
+
+        private void collect(
+                AccessibilityNodeInfo node,
+                String localId,
+                String parentId,
+                List<MoaYoutubeAccessibilityExecutor.Node> output,
+                int depth
+        ) {
+            if (node == null || depth > 12 || output.size() >= MoaYoutubeAccessibilityExecutor.MAX_NODES + 1) {
+                return;
+            }
+            currentNodes.put(localId, node);
+            output.add(new MoaYoutubeAccessibilityExecutor.Node(
+                    localId,
+                    parentId,
+                    string(node.getViewIdResourceName()),
+                    string(node.getText()),
+                    string(node.getContentDescription()),
+                    node.isClickable(),
+                    node.isEditable(),
+                    node.isScrollable(),
+                    node.isCheckable() && node.isChecked()
+            ));
+            for (int index = 0; index < node.getChildCount(); index++) {
+                collect(node.getChild(index), localId + "." + index, localId, output, depth + 1);
+                if (output.size() > MoaYoutubeAccessibilityExecutor.MAX_NODES) {
+                    return;
+                }
+            }
+        }
+
+        private AccessibilityNodeInfo validatedNode(String localId) {
+            AccessibilityNodeInfo root = service.getRootInActiveWindow();
+            if (root == null || root.getPackageName() == null
+                    || !snapshotPackage.equals(root.getPackageName().toString())
+                    || snapshotWindowId != root.getWindowId()) {
+                return null;
+            }
+            AccessibilityNodeInfo node = currentNodes.get(localId);
+            return node != null && node.getWindowId() == snapshotWindowId ? node : null;
+        }
+
+        private static String string(CharSequence value) {
+            return value == null ? "" : value.toString();
+        }
+    }
+
+    static MoaYoutubeAccessibilityExecutor.Snapshot youtubeSnapshot(
+            String packageName, int windowId, List<MoaYoutubeAccessibilityExecutor.Node> nodes,
+            MoaMediaSessionController.Snapshot media) {
+        String videoId = media == null ? "" : MoaYoutubeUiPolicy.extractVideoId(
+                media.mediaId.isEmpty() ? media.mediaUri : media.mediaId);
+        boolean bound = media != null && packageName.equals(media.packageName)
+                && MoaMediaSpotStore.isValidYouTubeVideoId(videoId) && !media.title.isEmpty();
+        return new MoaYoutubeAccessibilityExecutor.Snapshot(packageName,
+                MoaYoutubeUiPolicy.profileForPackage(packageName) == null ? ""
+                        : MoaYoutubeUiPolicy.profileForPackage(packageName).version,
+                bound ? videoId : "", bound ? media.title : "",
+                bound ? media.mediaFingerprint : "", windowId, nodes);
     }
 }

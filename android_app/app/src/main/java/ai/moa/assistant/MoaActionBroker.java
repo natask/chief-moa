@@ -1,12 +1,17 @@
 package ai.moa.assistant;
 
 import android.Manifest;
+import android.app.SearchManager;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
+import android.content.pm.Signature;
 import android.provider.ContactsContract;
 
 import org.json.JSONException;
@@ -19,6 +24,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.security.MessageDigest;
+import java.util.TreeSet;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 final class MoaActionBroker {
     private static final String RISK_READ_ONLY = "read_only";
@@ -26,14 +37,31 @@ final class MoaActionBroker {
     private static final String RISK_EXTERNAL_SIDE_EFFECT = "external_side_effect";
     private static final String APPROVAL_IMPLICIT = "implicit_user_command";
     private static final String APPROVAL_TARGET_APP_CONFIRMATION = "target_app_confirmation";
-    private static final int DEFAULT_APP_LIST_LIMIT = 40;
-    private static final int MAX_APP_LIST_LIMIT = 120;
+    private static final String APPROVAL_LOCAL_CONFIRMATION = "local_confirmation";
+    private static final String MEDIA_STORE_AUTHORITY = "ai.moa.assistant.media-store";
     private static final Map<String, Capability> CAPABILITIES = createCapabilityManifest();
 
     private final Context context;
+    private final MoaMediaSessionController mediaSessions;
+    private final MoaMediaSpotStore mediaSpots;
+    private final MoaMediaDeleteJournal mediaDeletes;
+    private final MoaActionApprovalController approvals = new MoaActionApprovalController();
+    private YoutubePlaylistExecutor youtubePlaylistExecutor;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Map<String, CompletableFuture<String>> mediaSyncs = new ConcurrentHashMap<>();
 
     MoaActionBroker(Context context) {
         this.context = context.getApplicationContext();
+        mediaSessions = new MoaMediaSessionController(this.context);
+        mediaSpots = new MoaMediaSpotStore(this.context);
+        mediaDeletes = new MoaMediaDeleteJournal(this.context);
+        youtubePlaylistExecutor = this::executeYoutubePlaylist;
+        retryPendingMediaSyncs();
+        retryPendingMediaDeletes();
+    }
+
+    void setYoutubePlaylistExecutor(YoutubePlaylistExecutor executor) {
+        youtubePlaylistExecutor = executor;
     }
 
     LocalActionResult tryHandleLocalCommand(String text) {
@@ -113,6 +141,15 @@ final class MoaActionBroker {
     }
 
     ToolExecutionResult executeToolRequest(String tool, JSONObject input) {
+        return executeToolRequest("", tool, input, null);
+    }
+
+    ToolExecutionResult executeToolRequest(String requestId, String tool, JSONObject input) {
+        return executeToolRequest(requestId, tool, input, null);
+    }
+
+    ToolExecutionResult executeToolRequest(
+            String requestId, String tool, JSONObject input, ToolResultCallback callback) {
         String name = safe(tool).toLowerCase(Locale.US);
         JSONObject args = input == null ? new JSONObject() : input;
 
@@ -181,13 +218,7 @@ final class MoaActionBroker {
         }
 
         if ("app.launch".equals(name)) {
-            String target = safe(args.optString("app", args.optString("name", args.optString("target", args.optString("package", "")))));
-            if (target.isEmpty()) {
-                Capability capability = CAPABILITIES.get("app.launch");
-                JSONObject receipt = recordReceipt(capability, "", false, "App target is required.");
-                return ToolExecutionResult.done(false, "App target is required.", receipt);
-            }
-            return openLauncherAppForTool(target);
+            return openLauncherAppForTool(args);
         }
 
         if ("app.list".equals(name)) {
@@ -214,6 +245,22 @@ final class MoaActionBroker {
             return openContactForTool(args);
         }
 
+        if ("media.open".equals(name)) {
+            return openMediaForTool(requestId, args, callback);
+        }
+
+        if ("media.control".equals(name)) {
+            return controlMediaForTool(args);
+        }
+
+        if ("media.bookmark".equals(name)) {
+            return bookmarkMediaForTool(requestId, args, callback);
+        }
+
+        if ("media.playlist".equals(name)) {
+            return preparePlaylistTool(requestId, args);
+        }
+
         return ToolExecutionResult.done(false, "Unsupported local tool: " + name + ".", null);
     }
 
@@ -227,6 +274,18 @@ final class MoaActionBroker {
 
     JSONArray executionAdapters() {
         return MoaAccessibilityService.currentExecutionAdapters();
+    }
+
+    JSONObject mediaSessionDescriptor() {
+        MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(
+                MoaPrefs.preferredYoutubePackage(context));
+        JSONObject descriptor = snapshot == null ? new JSONObject() : snapshot.toJson();
+        try {
+            descriptor.put("notification_access", mediaSessions.hasNotificationAccess());
+            descriptor.put("preferred_package", MoaPrefs.preferredYoutubePackage(context));
+        } catch (JSONException ignored) {
+        }
+        return descriptor;
     }
 
     String currentScreenSummary() {
@@ -246,8 +305,7 @@ final class MoaActionBroker {
     }
 
     private static String currentPackageName() {
-        JSONObject descriptor = MoaAccessibilityService.currentActiveAppDescriptor();
-        return safe(descriptor.optString("package_name", ""));
+        return safe(MoaAccessibilityService.freshActivePackage());
     }
 
     String promptWithScreenContext(String prompt) {
@@ -281,6 +339,32 @@ final class MoaActionBroker {
         return manifest;
     }
 
+    JSONArray localToolManifest() throws JSONException {
+        JSONArray manifest = new JSONArray();
+        List<String> tools = new ArrayList<>(CAPABILITIES.keySet());
+        Collections.sort(tools);
+        for (String tool : tools) {
+            Capability capability = CAPABILITIES.get(tool);
+            if ("blocked".equals(capability.approval)
+                    || "external.side_effect".equals(capability.tool)) {
+                continue;
+            }
+            JSONObject item = new JSONObject()
+                    .put("tool", capability.tool)
+                    .put("risk", capability.risk)
+                    .put("approval", capability.approval);
+            if ("screen.tap_text".equals(tool)) {
+                item.put("required_input", new JSONArray().put("expected_package"));
+            } else if ("media.control".equals(tool)) {
+                item.put("required_input", new JSONArray().put("action"));
+            } else if ("media.playlist".equals(tool)) {
+                item.put("required_input", new JSONArray().put("operation"));
+            }
+            manifest.put(item);
+        }
+        return manifest;
+    }
+
     boolean rejectsModelProposal(JSONObject proposal) {
         if (proposal == null) {
             return true;
@@ -301,46 +385,1116 @@ final class MoaActionBroker {
         return LocalActionResult.handled(listLauncherAppsForTool(new JSONObject()).reply);
     }
 
+    private ToolExecutionResult openMediaForTool(
+            String requestId, JSONObject args, ToolResultCallback callback) {
+        Capability capability = CAPABILITIES.get("media.open");
+        String packageName = resolveMediaOpenYoutubePackage(args);
+        if (packageName.isEmpty()) {
+            return mediaFailure(capability, "youtube", "The preferred YouTube app is not installed.");
+        }
+        String videoId = MoaYoutubeUiPolicy.extractVideoId(args.optString(
+                "video_id", args.optString("url", args.optString("canonical_url", ""))));
+        long positionMs = mediaPositionMs(args);
+        if (!videoId.isEmpty()) {
+            return openYoutubeVideo(capability, packageName, videoId, positionMs);
+        }
+        String query = safe(args.optString("query", args.optString("search", args.optString("title", ""))));
+        if (query.isEmpty()) {
+            Intent launch = context.getPackageManager().getLaunchIntentForPackage(packageName);
+            return launch == null
+                    ? mediaFailure(capability, packageName, "The selected YouTube app has no launch activity.")
+                    : startMediaIntent(capability, packageName, launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            "Opened " + packageName + ".");
+        }
+        MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(packageName);
+        if (hasSuppliedMediaBinding(args) && !matchesOptionalMediaBinding(args, snapshot)) {
+            return mediaFailure(capability, packageName,
+                    "The supplied media session binding is stale or unavailable.");
+        }
+        Intent search = new Intent(Intent.ACTION_SEARCH).setPackage(packageName)
+                .putExtra(SearchManager.QUERY, query).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        String channel = safe(args.optString("channel", ""));
+        if (shouldSelectYoutubeSearch(query, callback != null,
+                approvedYoutubeAutomationPackage(packageName),
+                search.resolveActivity(context.getPackageManager()) != null)) {
+            try {
+                context.startActivity(search);
+            } catch (RuntimeException error) {
+                return mediaFailure(capability, packageName, "The selected YouTube app could not be opened.");
+            }
+            String operationId = safe(requestId).isEmpty() ? "media_" + UUID.randomUUID() : requestId;
+            mainHandler.postDelayed(() -> startYoutubeSearchSelection(
+                    operationId, packageName, query, channel, callback), 700L);
+            return ToolExecutionResult.pending("Opened YouTube search and waiting for the exact result.");
+        }
+        return startMediaIntent(capability, packageName, search,
+                "Opened YouTube search for \"" + query + "\".");
+    }
+
+    private void startYoutubeSearchSelection(
+            String operationId, String packageName, String title, String channel,
+            ToolResultCallback callback) {
+        MoaYoutubeAccessibilityExecutor.Request request = new MoaYoutubeAccessibilityExecutor.Request(
+                operationId, MoaYoutubeAccessibilityExecutor.Kind.OPEN_SEARCH_RESULT,
+                packageName, MoaAccessibilityService.currentActiveWindowId(),
+                title, channel, "", "",
+                System.currentTimeMillis() + MoaYoutubeUiPolicy.MAX_OPERATION_LIFETIME_MS);
+        MoaAccessibilityService.YoutubeStartResult started =
+                MoaAccessibilityService.executeYoutubeOperation(request, result -> {
+                    boolean success = result.outcome == MoaYoutubeAccessibilityExecutor.Outcome.COMPLETE;
+                    String summary = success ? "Opened the exact YouTube search result."
+                            : "YouTube search stopped: " + result.reason + ".";
+                    callback.onResult(success
+                            ? mediaSuccess(CAPABILITIES.get("media.open"), packageName, summary)
+                            : mediaFailure(CAPABILITIES.get("media.open"), packageName, summary));
+                });
+        if (started != MoaAccessibilityService.YoutubeStartResult.STARTED) {
+            callback.onResult(mediaFailure(CAPABILITIES.get("media.open"), packageName,
+                    started == MoaAccessibilityService.YoutubeStartResult.BUSY
+                            ? "Another YouTube operation is already running."
+                            : "Screen access is unavailable for YouTube search selection."));
+        }
+    }
+
+    static boolean shouldSelectYoutubeSearch(
+            String query, boolean callbackAvailable, boolean approvedAdapter, boolean handlerAvailable) {
+        return !safe(query).isEmpty() && callbackAvailable && approvedAdapter && handlerAvailable;
+    }
+
+    private ToolExecutionResult openYoutubeVideo(
+            Capability capability, String packageName, String videoId, long positionMs) {
+        Uri.Builder uri = Uri.parse(MoaMediaSpotStore.canonicalYouTubeWatchUri(videoId)).buildUpon();
+        if (positionMs > 0L) {
+            uri.appendQueryParameter("t", Math.max(0L, positionMs / 1000L) + "s");
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri.build()).setPackage(packageName)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return startMediaIntent(capability, packageName, intent,
+                "Opened YouTube video " + videoId + (positionMs > 0L ? " at the saved spot." : "."));
+    }
+
+    private ToolExecutionResult startMediaIntent(
+            Capability capability, String packageName, Intent intent, String successReply) {
+        if (intent.resolveActivity(context.getPackageManager()) == null) {
+            return mediaFailure(capability, packageName, "The selected YouTube app cannot handle this request.");
+        }
+        try {
+            context.startActivity(intent);
+            return mediaSuccess(capability, packageName, successReply);
+        } catch (RuntimeException error) {
+            return mediaFailure(capability, packageName, "The selected YouTube app could not be opened.");
+        }
+    }
+
+    private ToolExecutionResult controlMediaForTool(JSONObject args) {
+        Capability capability = CAPABILITIES.get("media.control");
+        MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(
+                resolveYoutubePackage(new JSONObject()));
+        if (snapshot == null) {
+            String reason = mediaSessions.hasNotificationAccess()
+                    ? "No active YouTube media session is available."
+                    : "Notification access is required for media control.";
+            return mediaFailure(capability, "youtube", reason);
+        }
+        String packageName = snapshot.packageName;
+        String fingerprint = snapshot.mediaFingerprint;
+        if (!matchesOptionalMediaBinding(args, snapshot)) {
+            return mediaFailure(capability, packageName,
+                    "The supplied media session binding is stale.");
+        }
+        String operation = safe(args.optString("operation", args.optString("action", ""))).toLowerCase(Locale.US);
+        MoaMediaSessionController.ControlResult result;
+        switch (operation) {
+            case "play": result = mediaSessions.play(packageName, fingerprint); break;
+            case "pause": result = mediaSessions.pause(packageName, fingerprint); break;
+            case "toggle": result = mediaSessions.toggle(packageName, fingerprint); break;
+            case "stop": result = mediaSessions.stop(packageName, fingerprint); break;
+            case "next": result = mediaSessions.next(packageName, fingerprint); break;
+            case "previous": result = mediaSessions.previous(packageName, fingerprint); break;
+            case "seek":
+            case "seek_to":
+                result = mediaSessions.seek(packageName, fingerprint, mediaPositionMs(args));
+                break;
+            case "seek_by":
+                result = mediaSessions.seekBy(
+                        packageName, fingerprint, args.optLong("offset_ms", 0L));
+                break;
+            default: return mediaFailure(capability, packageName, "Unsupported media control operation.");
+        }
+        String reason = result.executed() ? "Media control completed." : result.reason;
+        return result.executed() ? mediaSuccess(capability, packageName, reason)
+                : mediaFailure(capability, packageName, reason);
+    }
+
+    private ToolExecutionResult bookmarkMediaForTool(
+            String requestId, JSONObject args, ToolResultCallback callback) {
+        if (!mediaDeletes.healthy()) return mediaFailure(CAPABILITIES.get("media.bookmark"),
+                "bookmark", "Bookmark recovery state is unavailable; no action was taken.");
+        String operation = safe(args.optString("operation", args.optString("action", "remember")))
+                .toLowerCase(Locale.US);
+        if ("list".equals(operation)) return listMediaSpots(callback);
+        if ("open".equals(operation)) return openMediaSpot(args, callback);
+        if (!Set.of("remember", "save", "delete", "remove").contains(operation)) {
+            return mediaFailure(CAPABILITIES.get("media.bookmark"), "bookmark", "Unsupported bookmark operation.");
+        }
+        if (safe(requestId).isEmpty()) {
+            return mediaFailure(CAPABILITIES.get("media.bookmark"), "bookmark",
+                    "A request id is required for bookmark changes.");
+        }
+        if (Set.of("delete", "remove").contains(operation) && findMediaSpot(args) == null) {
+            return prepareRemoteDeleteConfirmation(requestId, operation, args, callback);
+        }
+        if (Set.of("remember", "save").contains(operation)) {
+            String canonicalId = canonicalYoutubeVideoId(
+                    args.optString("url", args.optString("canonical_url", "")));
+            String requestedId = MoaYoutubeUiPolicy.extractVideoId(args.optString("video_id", ""));
+            if (!canonicalId.isEmpty() && hasMediaPosition(args)) {
+                materializeBookmarkIdentity(args, canonicalId, mediaPositionMs(args), "canonical_uri");
+            } else {
+                MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(
+                        resolveYoutubePackage(args));
+                String snapshotId = snapshot == null ? "" : MoaYoutubeUiPolicy.extractVideoId(
+                        !snapshot.mediaId.isEmpty() ? snapshot.mediaId : snapshot.mediaUri);
+                if (!snapshotId.isEmpty() && (requestedId.isEmpty() || requestedId.equals(snapshotId))) {
+                    materializeBookmarkIdentity(
+                            args, snapshotId, snapshot.positionMs, "session_media_id");
+                } else if (snapshot != null && callback != null
+                        && approvedYoutubeAutomationPackage(snapshot.packageName)) {
+                    return captureMediaSpotForConfirmation(requestId, args, snapshot, callback);
+                } else {
+                    return mediaFailure(CAPABILITIES.get("media.bookmark"), "bookmark",
+                            "The exact current video ID could not be shown for approval.");
+                }
+            }
+        }
+        return bindBookmarkApproval(requestId, operation, args);
+    }
+
+    private ToolExecutionResult prepareRemoteDeleteConfirmation(
+            String requestId, String operation, JSONObject args, ToolResultCallback callback) {
+        String gatewayId = bookmarkIdArgument(args);
+        if (callback == null || !gatewayId.matches("[A-Za-z0-9_-]{1,120}") || !gatewayConfigured()) {
+            return mediaFailure(CAPABILITIES.get("media.bookmark"), gatewayId,
+                    "The synced spot could not be loaded for deletion approval.");
+        }
+        new Thread(() -> {
+            try {
+                MoaMediaSpotStore.Spot spot = syncedSpot(
+                        gatewayClientForBookmarks().mediaBookmark(gatewayId).optJSONObject("bookmark"));
+                if (spot == null || !gatewayId.equals(spot.gatewayBookmarkId)) {
+                    throw new IllegalStateException("bookmark unavailable");
+                }
+                materializeRemoteDeleteTarget(args, spot);
+                callback.onResult(bindBookmarkApproval(requestId, operation, args));
+            } catch (Exception unavailable) {
+                callback.onResult(mediaFailure(CAPABILITIES.get("media.bookmark"), gatewayId,
+                        "The synced spot could not be loaded for deletion approval."));
+            }
+        }, "moa-media-bookmark-delete-prepare").start();
+        return ToolExecutionResult.pending("Loading the synced spot for deletion approval.");
+    }
+
+    static void materializeRemoteDeleteTarget(JSONObject args, MoaMediaSpotStore.Spot spot) {
+        try {
+            args.put("_remote_gateway_id", spot.gatewayBookmarkId);
+            args.put("_remote_label", spot.label);
+            args.put("_remote_video_id", spot.mediaId);
+            args.put("_remote_position_ms", spot.positionMs);
+        } catch (JSONException ignored) {
+        }
+    }
+
+    static MoaMediaSpotStore.Spot boundRemoteDeleteTarget(JSONObject args) {
+        String id = safe(args == null ? "" : args.optString("_remote_gateway_id", ""));
+        String videoId = safe(args == null ? "" : args.optString("_remote_video_id", ""));
+        String label = safe(args == null ? "" : args.optString("_remote_label", ""));
+        long position = args == null ? -1L : args.optLong("_remote_position_ms", -1L);
+        if (!id.matches("[A-Za-z0-9_-]{1,120}")
+                || !MoaMediaSpotStore.isValidYouTubeVideoId(videoId)
+                || label.isEmpty() || position < 0L) return null;
+        long now = System.currentTimeMillis();
+        return new MoaMediaSpotStore.Spot("remote_delete_" + id, label, "", label,
+                "youtube", "", videoId, MoaMediaSpotStore.canonicalYouTubeWatchUri(videoId),
+                position, position, "gateway_synced", now, now, null, id);
+    }
+
+    private ToolExecutionResult bindBookmarkApproval(
+            String requestId, String operation, JSONObject args) {
+        try {
+            approvals.bind(requestId, "media.bookmark", args, MEDIA_STORE_AUTHORITY,
+                    System.currentTimeMillis(), System.currentTimeMillis() + 120_000L);
+        } catch (RuntimeException error) {
+            return mediaFailure(CAPABILITIES.get("media.bookmark"), "bookmark",
+                    "Bookmark approval could not be bound to this request.");
+        }
+        return ToolExecutionResult.confirmation(bookmarkDisclosure(operation, args));
+    }
+
+    private ToolExecutionResult captureMediaSpotForConfirmation(
+            String requestId, JSONObject args, MoaMediaSessionController.Snapshot snapshot,
+            ToolResultCallback callback) {
+        MoaYoutubeAccessibilityExecutor.Request request = new MoaYoutubeAccessibilityExecutor.Request(
+                requestId, MoaYoutubeAccessibilityExecutor.Kind.CAPTURE_VIDEO_ID,
+                snapshot.packageName, MoaAccessibilityService.currentActiveWindowId(),
+                snapshot.title, "", "", "",
+                System.currentTimeMillis() + MoaYoutubeUiPolicy.MAX_OPERATION_LIFETIME_MS);
+        MoaAccessibilityService.YoutubeStartResult started =
+                MoaAccessibilityService.executeYoutubeOperation(request, result -> {
+                    if (result.outcome != MoaYoutubeAccessibilityExecutor.Outcome.COMPLETE
+                            || !MoaMediaSpotStore.isValidYouTubeVideoId(result.videoId)
+                            || !rawVideoIdMatchesCapture(args, result.videoId)) {
+                        callback.onResult(mediaFailure(CAPABILITIES.get("media.bookmark"),
+                                snapshot.packageName, "Video ID capture stopped: " + result.reason + "."));
+                        return;
+                    }
+                    MoaMediaSessionController.Snapshot fresh =
+                            mediaSessions.currentSnapshot(snapshot.packageName);
+                    if (fresh == null || !snapshot.mediaFingerprint.equals(fresh.mediaFingerprint)) {
+                        callback.onResult(mediaFailure(CAPABILITIES.get("media.bookmark"),
+                                snapshot.packageName, "The current video changed during ID capture."));
+                        return;
+                    }
+                    materializeBookmarkIdentity(
+                            args, result.videoId, fresh.positionMs, "adapter_extracted");
+                    callback.onResult(bindBookmarkApproval(requestId, "remember", args));
+                });
+        if (started != MoaAccessibilityService.YoutubeStartResult.STARTED) {
+            return mediaFailure(CAPABILITIES.get("media.bookmark"), snapshot.packageName,
+                    started == MoaAccessibilityService.YoutubeStartResult.BUSY
+                            ? "Another YouTube operation is already running."
+                            : "Screen access is unavailable to capture the current video ID.");
+        }
+        return ToolExecutionResult.pending("Identifying the exact video before confirmation.");
+    }
+
+    static void materializeBookmarkIdentity(
+            JSONObject args, String videoId, long positionMs, String provenance) {
+        try {
+            args.put("video_id", videoId);
+            args.put("position_ms", Math.max(0L, positionMs));
+            args.put("_media_identity_provenance", safe(provenance));
+        } catch (JSONException ignored) {
+        }
+    }
+
+    static boolean rawVideoIdMatchesCapture(JSONObject args, String capturedVideoId) {
+        String requested = MoaYoutubeUiPolicy.extractVideoId(
+                args == null ? "" : args.optString("video_id", ""));
+        return requested.isEmpty() || requested.equals(capturedVideoId);
+    }
+
+    static String canonicalYoutubeVideoId(String candidate) {
+        String validated = MoaMediaSessionController.validatedYouTubeHttpsUri(candidate);
+        return validated.isEmpty() ? "" : MoaYoutubeUiPolicy.extractVideoId(validated);
+    }
+
+    private String bookmarkDisclosure(String operation, JSONObject args) {
+        MoaMediaSpotStore.Spot existing = Set.of("delete", "remove").contains(operation)
+                ? findMediaSpot(args) : null;
+        if (existing == null && Set.of("delete", "remove").contains(operation)) {
+            existing = boundRemoteDeleteTarget(args);
+        }
+        String label = existing == null
+                ? safe(args.optString("label", args.optString("name", "unnamed"))) : existing.label;
+        String video = existing == null ? firstNonEmpty(
+                args.optString("video_id", ""), MoaYoutubeUiPolicy.extractVideoId(
+                        args.optString("url", args.optString("canonical_url", ""))))
+                : existing.mediaId;
+        long position = existing == null
+                ? mediaPositionMs(args)
+                : existing.positionMs;
+        String note = existing == null ? safe(args.optString("note", "")) : existing.note;
+        return (Set.of("delete", "remove").contains(operation) ? "Delete" : "Remember")
+                + " bookmark. Label: \"" + label + "\". Video: " + video
+                + ". Position: " + position + " ms. Note: "
+                + (note.isEmpty() ? "none" : "\"" + note + "\"")
+                + ". Sync: update your gateway bookmark record.";
+    }
+
+    private ToolExecutionResult rememberMediaSpot(
+            String requestId, JSONObject args, ToolResultCallback callback) {
+        Capability capability = CAPABILITIES.get("media.bookmark");
+        String packageName = resolveYoutubePackage(args);
+        String requestedId = MoaYoutubeUiPolicy.extractVideoId(args.optString("video_id", ""));
+        String provenance = safe(args.optString("_media_identity_provenance", ""));
+        if (!MoaMediaSpotStore.isValidYouTubeVideoId(requestedId) || !hasMediaPosition(args)
+                || !Set.of("canonical_uri", "session_media_id", "adapter_extracted").contains(provenance)) {
+            return mediaFailure(capability, requestedId,
+                    "The approved video record is incomplete or no longer provenance-bound.");
+        }
+        return persistMediaSpot(args, null, packageName, requestedId, provenance);
+    }
+
+    private ToolExecutionResult persistMediaSpot(
+            JSONObject args, MoaMediaSessionController.Snapshot snapshot,
+            String packageName, String videoId, String provenance) {
+        Capability capability = CAPABILITIES.get("media.bookmark");
+        if (safe(packageName).isEmpty()) {
+            return mediaFailure(capability, videoId, "No installed YouTube app is available for this bookmark.");
+        }
+        String label = safe(args.optString("label", args.optString("name", "")));
+        if (label.isEmpty()) {
+            return mediaFailure(capability, videoId, "A bookmark label is required.");
+        }
+        if (!hasMediaPosition(args) && snapshot == null) {
+            return mediaFailure(capability, videoId,
+                    "A current media session or explicit video position is required to remember a spot.");
+        }
+        long position = hasMediaPosition(args) ? mediaPositionMs(args) : snapshot.positionMs;
+        long duration = snapshot == null ? Math.max(position, 0L) : Math.max(snapshot.durationMs, position);
+        String title = safe(args.optString("title", snapshot == null ? label : snapshot.title));
+        long now = System.currentTimeMillis();
+        String id = "android_" + UUID.randomUUID();
+        MoaMediaSpotStore.Spot spot = new MoaMediaSpotStore.Spot(
+                id, label, args.optString("note", ""), title.isEmpty() ? label : title,
+                packageName, args.optString("instance", ""), videoId,
+                MoaMediaSpotStore.canonicalYouTubeWatchUri(videoId), position, duration,
+                provenance, now, now, null);
+        if (!mediaDeletes.putPendingSync(spot.id)) {
+            return mediaFailure(capability, videoId,
+                    "The video spot was not stored because sync recovery could not be reserved.");
+        }
+        if (!mediaSpots.put(spot)) {
+            mediaDeletes.removePendingSync(spot.id);
+            return mediaFailure(capability, videoId, "The video spot could not be stored locally.");
+        }
+        syncMediaSpot(spot);
+        return mediaSuccess(capability, videoId, "Remembered \"" + label + "\" at " + position + " ms.");
+    }
+
+    private ToolExecutionResult listMediaSpots(ToolResultCallback callback) {
+        List<MoaMediaSpotStore.Spot> spots = mediaSpots.all();
+        if (callback != null && gatewayConfigured()) {
+            new Thread(() -> callback.onResult(mergedMediaSpotList(spots)),
+                    "moa-media-bookmark-list").start();
+            return ToolExecutionResult.pending("Loading synced video spots.");
+        }
+        return localMediaSpotList(spots, "");
+    }
+
+    private ToolExecutionResult localMediaSpotList(
+            List<MoaMediaSpotStore.Spot> spots, String suffix) {
+        StringBuilder reply = new StringBuilder(spots.isEmpty() ? "No saved video spots." : "Saved video spots: ");
+        for (int index = 0; index < Math.min(spots.size(), 40); index++) {
+            if (index > 0) reply.append(", ");
+            reply.append(spots.get(index).label);
+        }
+        if (spots.size() > 40) reply.append(" and ").append(spots.size() - 40).append(" more");
+        reply.append(suffix);
+        return mediaSuccess(bookmarkImplicitCapability(RISK_READ_ONLY), "bookmarks", reply.toString());
+    }
+
+    private ToolExecutionResult openMediaSpot(JSONObject args, ToolResultCallback callback) {
+        Capability capability = bookmarkImplicitCapability(RISK_NAVIGATION);
+        MoaMediaSpotStore.Spot spot = findMediaSpot(args);
+        if (spot == null) {
+            if (callback != null && gatewayConfigured()) {
+                new Thread(() -> callback.onResult(openSyncedMediaSpot(args)),
+                        "moa-media-bookmark-open").start();
+                return ToolExecutionResult.pending("Resolving the synced video spot.");
+            }
+            return mediaFailure(capability, "bookmark", "That saved video spot was not found or was ambiguous.");
+        }
+        String packageName = "gateway_synced".equals(spot.identityStrength)
+                ? resolveYoutubePackage(args) : resolveYoutubePackage(args, spot.packageName);
+        ToolExecutionResult opened = openYoutubeVideo(
+                capability, packageName, spot.mediaId, spot.positionMs);
+        if (opened.success) mediaSpots.markOpened(spot.id, System.currentTimeMillis());
+        return opened;
+    }
+
+    private ToolExecutionResult mergedMediaSpotList(List<MoaMediaSpotStore.Spot> local) {
+        try {
+            JSONArray remote = gatewayClientForBookmarks().mediaBookmarks().optJSONArray("bookmarks");
+            List<MoaMediaSpotStore.Spot> merged = new ArrayList<>(local);
+            Set<String> remoteIds = new java.util.HashSet<>();
+            for (MoaMediaSpotStore.Spot spot : local) remoteIds.add(spot.gatewayBookmarkId);
+            if (remote != null) for (int index = 0; index < remote.length(); index++) {
+                MoaMediaSpotStore.Spot spot = syncedSpot(remote.optJSONObject(index));
+                if (spot != null && !remoteIds.contains(spot.gatewayBookmarkId)
+                        && !mediaDeletes.containsGatewayId(spot.gatewayBookmarkId)
+                        && !mediaDeletes.containsVideoId(spot.mediaId)) merged.add(spot);
+            }
+            return localMediaSpotList(merged, " (local and synced). ");
+        } catch (Exception unavailable) {
+            return localMediaSpotList(local, " (gateway unavailable). ");
+        }
+    }
+
+    private ToolExecutionResult openSyncedMediaSpot(JSONObject args) {
+        Capability capability = bookmarkImplicitCapability(RISK_NAVIGATION);
+        try {
+            String id = safe(args.optString("gateway_bookmark_id",
+                    args.optString("bookmark_id", args.optString("id", ""))));
+            JSONObject payload = id.isEmpty()
+                    ? gatewayClientForBookmarks().resolveMediaBookmark(args.optString(
+                            "label", args.optString("query", args.optString("name", ""))))
+                    : gatewayClientForBookmarks().mediaBookmark(id);
+            JSONObject bookmark = payload.optJSONObject("bookmark");
+            if (bookmark == null && payload.optJSONObject("resolution") != null) {
+                JSONObject resolution = payload.optJSONObject("resolution");
+                if ("matched".equals(resolution.optString("status", ""))) {
+                    bookmark = resolution.optJSONObject("bookmark");
+                }
+            }
+            MoaMediaSpotStore.Spot spot = syncedSpot(bookmark);
+            if (spot == null || mediaDeletes.containsGatewayId(spot.gatewayBookmarkId)
+                    || mediaDeletes.containsVideoId(spot.mediaId)) {
+                return mediaFailure(capability, "bookmark",
+                    "That synced video spot was not found or was ambiguous.");
+            }
+            mediaSpots.put(spot);
+            ToolExecutionResult opened = openYoutubeVideo(capability,
+                    resolveYoutubePackage(args), spot.mediaId, spot.positionMs);
+            if (opened.success) mediaSpots.markOpened(spot.id, System.currentTimeMillis());
+            return opened;
+        } catch (Exception unavailable) {
+            return mediaFailure(capability, "bookmark", "The synced video spot could not be loaded.");
+        }
+    }
+
+    static MoaMediaSpotStore.Spot syncedSpot(JSONObject item) {
+        if (item == null || !"youtube".equals(item.optString("provider", "youtube"))) return null;
+        String gatewayId = safe(item.optString("id", ""));
+        String videoId = safe(item.optString("video_id", ""));
+        String label = safe(item.optString("label", ""));
+        long position = item.optLong("position_ms", -1L);
+        if (!gatewayId.matches("[A-Za-z0-9_-]{1,120}")
+                || !MoaMediaSpotStore.isValidYouTubeVideoId(videoId)
+                || label.isEmpty() || position < 0L) return null;
+        long now = System.currentTimeMillis();
+        return new MoaMediaSpotStore.Spot(
+                "synced_" + gatewayId, label, item.optString("note", ""), label,
+                "youtube", "", videoId, MoaMediaSpotStore.canonicalYouTubeWatchUri(videoId),
+                position, Math.max(position, 0L), "gateway_synced", now, now, null, gatewayId);
+    }
+
+    private boolean gatewayConfigured() {
+        return !safe(MoaPrefs.gatewayUrl(context)).isEmpty();
+    }
+
+    private MoaGatewayClient gatewayClientForBookmarks() {
+        return new MoaGatewayClient(MoaPrefs.gatewayUrl(context), MoaPrefs.gatewayToken(context));
+    }
+
+    private static Capability bookmarkImplicitCapability(String risk) {
+        return new Capability("media.bookmark", risk, APPROVAL_IMPLICIT);
+    }
+
+    private ToolExecutionResult deleteMediaSpot(JSONObject args, ToolResultCallback callback) {
+        Capability capability = CAPABILITIES.get("media.bookmark");
+        MoaMediaSpotStore.Spot localSpot;
+        MoaMediaSpotStore.Spot spot;
+        CompletableFuture<String> sync;
+        synchronized (mediaSyncs) {
+            localSpot = findMediaSpot(args);
+            spot = localSpot == null ? boundRemoteDeleteTarget(args) : localSpot;
+            sync = localSpot == null ? null : mediaSyncs.get(localSpot.id);
+            if (sync == null && localSpot != null
+                    && mediaDeletes.pendingSyncIds().contains(localSpot.id)) {
+                sync = new CompletableFuture<>();
+                sync.completeExceptionally(new IllegalStateException("sync outcome requires reconciliation"));
+            }
+        }
+        if (spot == null) {
+            return mediaFailure(capability, "bookmark", "That saved video spot was not found or was ambiguous.");
+        }
+        if (!safe(spot.gatewayBookmarkId).isEmpty() || sync != null) {
+            if (callback == null || !gatewayConfigured()) {
+                return mediaFailure(capability, spot.id,
+                        "The synced spot was kept because gateway deletion is unavailable. Try again later.");
+            }
+            MoaMediaSpotStore.Spot expectedLocal = localSpot;
+            if (!mediaDeletes.put(expectedLocal == null ? "" : expectedLocal.id,
+                    spot.gatewayBookmarkId, spot.mediaId)) {
+                return mediaFailure(capability, spot.id,
+                        "The delete could not be reserved durably; nothing was changed.");
+            }
+            CompletableFuture<String> pendingSync = sync;
+            new Thread(() -> deleteSyncedMediaSpot(spot, expectedLocal, pendingSync, callback),
+                    "moa-media-bookmark-delete").start();
+            return ToolExecutionResult.pending("Deleting the synced video spot.");
+        }
+        if (!mediaSpots.removeIfGenerationMatches(spot)) {
+            return mediaFailure(capability, spot.id, "That saved video spot was not found or was ambiguous.");
+        }
+        return mediaSuccess(capability, spot.id, "Deleted saved spot \"" + spot.label + "\".");
+    }
+
+    private void deleteSyncedMediaSpot(
+            MoaMediaSpotStore.Spot spot, MoaMediaSpotStore.Spot expectedLocal,
+            CompletableFuture<String> sync,
+            ToolResultCallback callback) {
+        Capability capability = CAPABILITIES.get("media.bookmark");
+        try {
+            String gatewayId = safe(spot.gatewayBookmarkId);
+            if (gatewayId.isEmpty() && sync != null) {
+                try {
+                    gatewayId = safe(sync.get());
+                } catch (Exception createFailed) {
+                    JSONObject retried = gatewayClientForBookmarks().createMediaBookmark(
+                            mediaSpotSyncPayload(spot));
+                    JSONObject bookmark = retried.optJSONObject("bookmark");
+                    gatewayId = bookmark == null ? "" : safe(bookmark.optString("id", ""));
+                }
+            }
+            if (!gatewayId.matches("[A-Za-z0-9_-]{1,120}")) {
+                throw new IllegalStateException("synced bookmark id unavailable");
+            }
+            gatewayClientForBookmarks().deleteMediaBookmark(gatewayId);
+            boolean removed = expectedLocal == null
+                    || mediaSpots.removeIfGenerationMatches(expectedLocal);
+            synchronized (mediaSyncs) {
+                if (expectedLocal != null) mediaSyncs.remove(expectedLocal.id, sync);
+            }
+            mediaDeletes.remove(expectedLocal == null ? "" : expectedLocal.id, spot.gatewayBookmarkId);
+            if (expectedLocal != null) mediaDeletes.removePendingSync(expectedLocal.id);
+            callback.onResult(removed
+                    ? mediaSuccess(capability, spot.id, "Deleted saved spot \"" + spot.label + "\".")
+                    : mediaFailure(capability, spot.id,
+                            "The synced spot was deleted, but its local record had already changed."));
+        } catch (Exception unavailable) {
+            callback.onResult(mediaFailure(capability, spot.id,
+                    "The synced spot was kept because gateway deletion failed. Try again later."));
+        }
+    }
+
+    private MoaMediaSpotStore.Spot findMediaSpot(JSONObject args) {
+        String id = bookmarkIdArgument(args);
+        for (MoaMediaSpotStore.Spot spot : mediaSpots.all()) {
+            if (!mediaDeletes.containsLocalDelete(spot.id) && mediaSpotMatchesId(spot, id)) return spot;
+        }
+        if (!id.isEmpty()) return null;
+        List<MoaMediaSpotStore.Spot> available = new ArrayList<>();
+        for (MoaMediaSpotStore.Spot spot : mediaSpots.all()) {
+            if (!mediaDeletes.containsLocalDelete(spot.id)) available.add(spot);
+        }
+        MoaMediaSpotStore.Resolution resolution = MoaMediaSpotStore.resolve(available,
+                args.optString("label", args.optString("query", args.optString("name", ""))));
+        return resolution.status == MoaMediaSpotStore.ResolutionStatus.MATCH ? resolution.spot : null;
+    }
+
+    static String bookmarkIdArgument(JSONObject args) {
+        JSONObject value = args == null ? new JSONObject() : args;
+        return safe(value.optString("gateway_bookmark_id",
+                value.optString("bookmark_id", value.optString("id", ""))));
+    }
+
+    private ToolExecutionResult preparePlaylistTool(String requestId, JSONObject args) {
+        Capability capability = CAPABILITIES.get("media.playlist");
+        String operation = safe(args.optString("operation", args.optString("action", "")))
+                .toLowerCase(Locale.US);
+        if (Set.of("get", "inspect", "list", "show").contains(operation)) {
+            return mediaFailure(capability, "playlist", "Playlist inspection is not available without the package-bound UI adapter.");
+        }
+        String packageName = resolveYoutubePackage(args);
+        if (safe(requestId).isEmpty() || packageName.isEmpty()
+                || playlistKind(args) == null || !approvedYoutubeAutomationPackage(packageName)) {
+            return mediaFailure(capability, packageName, "A request id and installed preferred YouTube package are required.");
+        }
+        if (!materializePlaylistAuthority(args, packageName)) {
+            return mediaFailure(capability, packageName,
+                    "Fresh package, window, and media evidence were unavailable for approval.");
+        }
+        try {
+            approvals.bind(requestId, "media.playlist", args, packageName,
+                    System.currentTimeMillis(), System.currentTimeMillis() + 120_000L);
+        } catch (RuntimeException error) {
+            return mediaFailure(capability, packageName, "Playlist approval could not be bound to this request.");
+        }
+        String playlist = safe(args.optString("playlist", args.optString("playlist_name", "")));
+        String replacement = safe(args.optString("replacement_name", args.optString("new_name", "")));
+        return ToolExecutionResult.confirmation(playlistDisclosure(
+                operation, playlist, replacement, packageName));
+    }
+
+    static String playlistDisclosure(
+            String operation, String playlist, String replacement, String packageName) {
+        return "Allow A.G. to " + safe(operation)
+                + (safe(playlist).isEmpty() ? " this playlist" : " playlist \"" + safe(playlist) + "\"")
+                + ("rename".equals(safe(operation)) ? " to \"" + safe(replacement) + "\"" : "")
+                + " in " + safe(packageName) + "?";
+    }
+
+    ToolExecutionResult resolveToolConfirmation(
+            String requestId, String tool, JSONObject args, boolean approved,
+            ToolResultCallback callback) {
+        String toolName = safe(tool).toLowerCase(Locale.US);
+        Capability capability = CAPABILITIES.get(toolName);
+        if (!Set.of("media.playlist", "media.bookmark").contains(toolName)) {
+            return mediaFailure(capability, "approval", "Unsupported confirmation request.");
+        }
+        if (!approved) {
+            MoaActionApprovalController.Decision rejected = approvals.reject(
+                    requestId, System.currentTimeMillis());
+            if (rejected.outcome == MoaActionApprovalController.Outcome.ALREADY_TERMINAL) {
+                return ToolExecutionResult.pending("Approval was already terminal.");
+            }
+            return mediaFailure(capability, requestId, "Media change cancelled.");
+        }
+        String currentPackage = "media.bookmark".equals(toolName)
+                ? MEDIA_STORE_AUTHORITY : currentPackageName();
+        MoaActionApprovalController.Decision decision = approvals.approve(
+                requestId, args, currentPackage, System.currentTimeMillis());
+        if (decision.outcome == MoaActionApprovalController.Outcome.ALREADY_TERMINAL) {
+            return ToolExecutionResult.pending("Approval was already terminal.");
+        }
+        if (!decision.mayExecute) {
+            return mediaFailure(capability, requestId,
+                    "The change was not executed because its target or request changed.");
+        }
+        if ("media.bookmark".equals(toolName)) {
+            String operation = safe(args.optString("operation", args.optString("action", "remember")))
+                    .toLowerCase(Locale.US);
+            return Set.of("delete", "remove").contains(operation)
+                    ? deleteMediaSpot(args, callback) : rememberMediaSpot(requestId, args, callback);
+        }
+        if (youtubePlaylistExecutor == null) {
+            return mediaFailure(capability, currentPackage,
+                    "Playlist approval was recorded, but the supported YouTube UI adapter is unavailable.");
+        }
+        return youtubePlaylistExecutor.execute(
+                requestId, args, currentPackage, decision.binding, callback);
+    }
+
+    private ToolExecutionResult executeYoutubePlaylist(
+            String requestId, JSONObject args, String expectedPackage,
+            MoaActionApprovalController.Binding binding,
+            ToolResultCallback callback) {
+        MoaYoutubeAccessibilityExecutor.Kind kind = playlistKind(args);
+        if (kind == null || callback == null || binding == null
+                || !playlistAuthorityStillMatches(args, expectedPackage)) {
+            return mediaFailure(CAPABILITIES.get("media.playlist"), expectedPackage,
+                    "Playlist UI automation is not approved for this installed YouTube build.");
+        }
+        int windowId = args.optInt("_approved_window_id", -1);
+        String playlist = args.optString("playlist", args.optString("playlist_name", ""));
+        String replacement = args.optString("replacement_name", args.optString("new_name", ""));
+        MoaYoutubeAccessibilityExecutor.Request request;
+        if (playlistNeedsMediaBinding(kind)) {
+            request = new MoaYoutubeAccessibilityExecutor.Request(requestId, kind, expectedPackage,
+                    windowId, args.optString("_observed_title", ""), "", playlist, replacement,
+                    args.optString("_approved_ui_profile", ""),
+                    args.optString("_observed_video_id", ""),
+                    args.optString("_observed_title", ""),
+                    args.optString("_observed_media_fingerprint", ""), binding.expiresAtMillis);
+        } else {
+            request = new MoaYoutubeAccessibilityExecutor.Request(requestId, kind, expectedPackage,
+                    windowId, "", "", playlist, replacement, binding.expiresAtMillis);
+        }
+        MoaAccessibilityService.YoutubeStartResult started =
+                MoaAccessibilityService.executeYoutubeOperation(request, result -> {
+                    boolean success = result.outcome == MoaYoutubeAccessibilityExecutor.Outcome.COMPLETE;
+                    String summary = success ? "Playlist operation completed."
+                            : "Playlist operation stopped: " + result.reason + ".";
+                    Capability capability = CAPABILITIES.get("media.playlist");
+                    callback.onResult(success ? mediaSuccess(capability, expectedPackage, summary)
+                            : mediaFailure(capability, expectedPackage, summary));
+                });
+        if (started != MoaAccessibilityService.YoutubeStartResult.STARTED) {
+            return mediaFailure(CAPABILITIES.get("media.playlist"), expectedPackage,
+                    started == MoaAccessibilityService.YoutubeStartResult.BUSY
+                            ? "Another YouTube operation is already running."
+                            : "Screen access is unavailable for the playlist operation.");
+        }
+        return ToolExecutionResult.pending("Playlist operation started.");
+    }
+
+    private boolean materializePlaylistAuthority(JSONObject args, String packageName) {
+        PackageEvidence evidence = packageEvidence(packageName);
+        MoaYoutubeUiPolicy.UiProfile profile = MoaYoutubeUiPolicy.profileForPackage(packageName);
+        int windowId = MoaAccessibilityService.currentActiveWindowId();
+        if (evidence == null || profile == null || windowId < 0
+                || !packageName.equals(currentPackageName())) return false;
+        MoaYoutubeAccessibilityExecutor.Kind kind = playlistKind(args);
+        try {
+            args.put("_approved_package", packageName)
+                    .put("_approved_version_code", evidence.versionCode)
+                    .put("_approved_signer_sha256", evidence.signerSha256)
+                    .put("_approved_ui_profile", profile.version)
+                    .put("_approved_window_id", windowId);
+            if (playlistNeedsMediaBinding(kind)) {
+                MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(packageName);
+                String videoId = snapshot == null ? "" : MoaYoutubeUiPolicy.extractVideoId(
+                        snapshot.mediaId.isEmpty() ? snapshot.mediaUri : snapshot.mediaId);
+                if (snapshot == null || !MoaMediaSpotStore.isValidYouTubeVideoId(videoId)
+                        || snapshot.title.isEmpty()) return false;
+                args.put("_observed_video_id", videoId)
+                        .put("_observed_title", snapshot.title)
+                        .put("_observed_media_fingerprint", snapshot.mediaFingerprint);
+            }
+            return true;
+        } catch (JSONException ignored) { return false; }
+    }
+
+    private boolean playlistAuthorityStillMatches(JSONObject args, String packageName) {
+        PackageEvidence evidence = packageEvidence(packageName);
+        MoaYoutubeUiPolicy.UiProfile profile = MoaYoutubeUiPolicy.profileForPackage(packageName);
+        if (evidence == null || profile == null || !approvedYoutubeAutomationPackage(packageName)
+                || !packageName.equals(args.optString("_approved_package", ""))
+                || evidence.versionCode != args.optLong("_approved_version_code", -1L)
+                || !evidence.signerSha256.equals(args.optString("_approved_signer_sha256", ""))
+                || !profile.version.equals(args.optString("_approved_ui_profile", ""))
+                || args.optInt("_approved_window_id", -1) != MoaAccessibilityService.currentActiveWindowId()) {
+            return false;
+        }
+        MoaYoutubeAccessibilityExecutor.Kind kind = playlistKind(args);
+        if (!playlistNeedsMediaBinding(kind)) return true;
+        MoaMediaSessionController.Snapshot fresh = mediaSessions.currentSnapshot(packageName);
+        return fresh != null && fresh.mediaFingerprint.equals(
+                args.optString("_observed_media_fingerprint", ""));
+    }
+
+    private static boolean playlistNeedsMediaBinding(MoaYoutubeAccessibilityExecutor.Kind kind) {
+        return kind == MoaYoutubeAccessibilityExecutor.Kind.ADD_TO_PLAYLIST
+                || kind == MoaYoutubeAccessibilityExecutor.Kind.REMOVE_FROM_PLAYLIST
+                || kind == MoaYoutubeAccessibilityExecutor.Kind.CREATE_PLAYLIST;
+    }
+
+    private static MoaYoutubeAccessibilityExecutor.Kind playlistKind(JSONObject args) {
+        String operation = safe(args == null ? "" : args.optString(
+                "operation", args.optString("action", ""))).toLowerCase(Locale.US);
+        switch (operation) {
+            case "add":
+            case "add_to_playlist": return MoaYoutubeAccessibilityExecutor.Kind.ADD_TO_PLAYLIST;
+            case "remove":
+            case "remove_from_playlist": return MoaYoutubeAccessibilityExecutor.Kind.REMOVE_FROM_PLAYLIST;
+            case "create": return MoaYoutubeAccessibilityExecutor.Kind.CREATE_PLAYLIST;
+            case "rename": return MoaYoutubeAccessibilityExecutor.Kind.RENAME_PLAYLIST;
+            case "delete": return MoaYoutubeAccessibilityExecutor.Kind.DELETE_PLAYLIST;
+            default: return null;
+        }
+    }
+
+    private String resolveYoutubePackage(JSONObject args) {
+        return resolveYoutubePackage(args, MoaPrefs.preferredYoutubePackage(context));
+    }
+
+    private String resolveMediaOpenYoutubePackage(JSONObject args) {
+        String appName = safe(args.optString("app_name", args.optString("appName", "")));
+        MoaPrefs.YoutubePackageFixture fixture = MoaPrefs.youtubePackageFixture(context);
+        String trustedFixture = approvedYoutubePackage(fixture.packageName) ? fixture.packageName : "";
+        String fixtureLabel = trustedFixture.isEmpty() ? "" : installedAppLabel(trustedFixture);
+        return resolveMediaOpenAppName(appName, MoaPrefs.preferredYoutubePackage(context),
+                trustedFixture, fixtureLabel,
+                installedYoutubePackages(MoaPrefs.preferredYoutubePackage(context)));
+    }
+
+    static String resolveMediaOpenAppName(
+            String appName, String savedDefault, String trustedFixturePackage,
+            String trustedFixtureLabel, Set<String> installedPackages) {
+        String name = normalizeAppLabel(appName);
+        Set<String> installed = installedPackages == null ? Collections.emptySet() : installedPackages;
+        if (name.isEmpty() || "youtube".equals(name)) {
+            return fallbackYoutubePackage(savedDefault, trustedFixturePackage, installed);
+        }
+        if (Set.of("youtube advanced", "youtube revanced", "advanced", "revanced").contains(name)) {
+            return installed.contains(MoaYoutubeUiPolicy.REVANCED_PACKAGE)
+                    ? MoaYoutubeUiPolicy.REVANCED_PACKAGE : "";
+        }
+        if (Set.of("stock", "stock youtube", "official", "official youtube").contains(name)) {
+            return installed.contains(MoaYoutubeUiPolicy.OFFICIAL_PACKAGE)
+                    ? MoaYoutubeUiPolicy.OFFICIAL_PACKAGE : "";
+        }
+        if (!safe(trustedFixturePackage).isEmpty()
+                && name.equals(normalizeAppLabel(trustedFixtureLabel))
+                && installed.contains(trustedFixturePackage)) {
+            return trustedFixturePackage;
+        }
+        return "";
+    }
+
+    private String installedAppLabel(String packageName) {
+        try {
+            PackageManager manager = context.getPackageManager();
+            return safe(String.valueOf(manager.getApplicationLabel(
+                    manager.getApplicationInfo(packageName, 0))));
+        } catch (PackageManager.NameNotFoundException unavailable) {
+            return "";
+        }
+    }
+
+    private String resolveYoutubePackage(JSONObject args, String fallback) {
+        String explicit = safe(args.optString("preferred_package", args.optString("preferredPackage", "")));
+        String candidate = explicit.isEmpty() ? safe(fallback) : explicit;
+        String alias = MoaYoutubeUiPolicy.resolveExpectedPackage(candidate, candidate, installedYoutubePackages(candidate));
+        if (!alias.isEmpty()) candidate = alias;
+        if (!explicit.isEmpty()) {
+            return approvedYoutubePackage(candidate) ? candidate : "";
+        }
+        MoaPrefs.YoutubePackageFixture fixture = MoaPrefs.youtubePackageFixture(context);
+        String approved = approvedYoutubePackage(fixture.packageName) ? fixture.packageName : "";
+        return fallbackYoutubePackage(candidate, approved, installedYoutubePackages(candidate));
+    }
+
+    static String fallbackYoutubePackage(
+            String preferred, String approved, Set<String> installedPackages) {
+        Set<String> installed = installedPackages == null ? Collections.emptySet() : installedPackages;
+        if (MoaMediaSessionController.isYouTubeLikePackage(preferred) && installed.contains(preferred)) return preferred;
+        if (MoaMediaSessionController.isYouTubeLikePackage(approved) && installed.contains(approved)) return approved;
+        return installed.contains(MoaYoutubeUiPolicy.OFFICIAL_PACKAGE)
+                ? MoaYoutubeUiPolicy.OFFICIAL_PACKAGE : "";
+    }
+
+    static boolean hasSuppliedMediaBinding(JSONObject args) {
+        return !expectedPackage(args).isEmpty()
+                || !safe(args == null ? "" : args.optString(
+                        "media_fingerprint", args.optString("fingerprint", ""))).isEmpty();
+    }
+
+    static boolean matchesOptionalMediaBinding(
+            JSONObject args, MoaMediaSessionController.Snapshot snapshot) {
+        if (!hasSuppliedMediaBinding(args)) return true;
+        if (snapshot == null) return false;
+        String expected = expectedPackage(args);
+        String fingerprint = safe(args.optString(
+                "media_fingerprint", args.optString("fingerprint", "")));
+        return (expected.isEmpty() || MoaMediaSessionController.packageMatches(
+                expected, snapshot.packageName))
+                && (fingerprint.isEmpty() || fingerprint.equals(snapshot.mediaFingerprint));
+    }
+
+    static long relativeMediaPosition(long currentPositionMs, long offsetMs) {
+        long boundedCurrent = Math.max(0L, Math.min(
+                currentPositionMs, MoaMediaSessionController.MAX_MEDIA_TIME_MS));
+        if (offsetMs > 0L && boundedCurrent > MoaMediaSessionController.MAX_MEDIA_TIME_MS - offsetMs) {
+            return MoaMediaSessionController.MAX_MEDIA_TIME_MS;
+        }
+        if (offsetMs < 0L && boundedCurrent < -offsetMs) return 0L;
+        return Math.max(0L, Math.min(boundedCurrent + offsetMs,
+                MoaMediaSessionController.MAX_MEDIA_TIME_MS));
+    }
+
+    static boolean mediaSpotMatchesId(MoaMediaSpotStore.Spot spot, String id) {
+        return spot != null && !safe(id).isEmpty()
+                && (id.equals(spot.id) || id.equals(spot.gatewayBookmarkId));
+    }
+
+    private boolean approvedYoutubeAutomationPackage(String packageName) {
+        return MoaYoutubeUiPolicy.profileForPackage(packageName) != null
+                && approvedYoutubePackage(packageName);
+    }
+
+    private boolean approvedYoutubePackage(String packageName) {
+        PackageEvidence evidence = packageEvidence(packageName);
+        return evidence != null && MoaPrefs.youtubePackageFixture(context).matches(
+                packageName, evidence.versionCode, evidence.signerSha256);
+    }
+
+    private PackageEvidence packageEvidence(String packageName) {
+        try {
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, flags);
+            Signature[] signatures = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? info.signingInfo == null ? null : info.signingInfo.getApkContentsSigners()
+                    : info.signatures;
+            if (signatures == null || signatures.length == 0) return null;
+            TreeSet<String> digests = new TreeSet<>();
+            for (Signature signature : signatures) {
+                byte[] bytes = MessageDigest.getInstance("SHA-256").digest(signature.toByteArray());
+                StringBuilder hex = new StringBuilder(64);
+                for (byte value : bytes) hex.append(String.format(Locale.US, "%02x", value));
+                digests.add(hex.toString());
+            }
+            long version = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? info.getLongVersionCode() : info.versionCode;
+            return new PackageEvidence(version, String.join(",", digests));
+        } catch (Exception unavailable) {
+            return null;
+        }
+    }
+
+    private Set<String> installedYoutubePackages(String candidate) {
+        java.util.HashSet<String> installed = new java.util.HashSet<>();
+        for (String item : new String[]{candidate, MoaYoutubeUiPolicy.OFFICIAL_PACKAGE,
+                MoaYoutubeUiPolicy.REVANCED_PACKAGE,
+                MoaPrefs.youtubePackageFixture(context).packageName}) {
+            if (isInstalled(item)) installed.add(item);
+        }
+        return installed;
+    }
+
+    private boolean isInstalled(String packageName) {
+        if (safe(packageName).isEmpty()) return false;
+        try {
+            context.getPackageManager().getPackageInfo(packageName, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            return false;
+        }
+    }
+
+    static long mediaPositionMs(JSONObject args) {
+        JSONObject value = args == null ? new JSONObject() : args;
+        if (value.has("position_ms")) return boundedMediaPosition(value.optLong("position_ms", 0L));
+        if (value.has("start_position_ms")) return boundedMediaPosition(value.optLong("start_position_ms", 0L));
+        long seconds = value.optLong("position_seconds", value.optLong("start_seconds", 0L));
+        return boundedMediaPosition(seconds > Long.MAX_VALUE / 1000L ? Long.MAX_VALUE : seconds * 1000L);
+    }
+
+    static boolean hasMediaPosition(JSONObject args) {
+        return args != null && (args.has("position_ms") || args.has("start_position_ms")
+                || args.has("position_seconds") || args.has("start_seconds"));
+    }
+
+    private static long boundedMediaPosition(long value) {
+        return Math.max(0L, Math.min(value, MoaMediaSessionController.MAX_MEDIA_TIME_MS));
+    }
+
+    private ToolExecutionResult mediaSuccess(Capability capability, String target, String reply) {
+        return ToolExecutionResult.done(true, reply, recordReceipt(capability, target, true, reply));
+    }
+
+    private ToolExecutionResult mediaFailure(Capability capability, String target, String reply) {
+        return ToolExecutionResult.done(false, reply, recordReceipt(capability, target, false, reply));
+    }
+
+    private void syncMediaSpot(MoaMediaSpotStore.Spot spot) {
+        String gatewayUrl = MoaPrefs.gatewayUrl(context);
+        if (safe(gatewayUrl).isEmpty()) return;
+        CompletableFuture<String> sync = new CompletableFuture<>();
+        mediaSyncs.put(spot.id, sync);
+        new Thread(() -> {
+            try {
+                JSONObject body = mediaSpotSyncPayload(spot);
+                JSONObject response = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(context))
+                        .createMediaBookmark(body);
+                JSONObject bookmark = response.optJSONObject("bookmark");
+                String gatewayId = bookmark == null ? "" : safe(bookmark.optString("id", ""));
+                if (!gatewayId.matches("[A-Za-z0-9_-]{1,120}")) {
+                    throw new IllegalStateException("gateway bookmark id unavailable");
+                }
+                synchronized (mediaSyncs) {
+                    boolean attached = mediaSpots.attachGatewayBookmarkId(spot, gatewayId);
+                    sync.complete(gatewayId);
+                    mediaSyncs.remove(spot.id, sync);
+                    if (!attached) mediaDeletes.put("", gatewayId, spot.mediaId);
+                    mediaDeletes.removePendingSync(spot.id);
+                }
+            } catch (Exception unavailable) {
+                sync.completeExceptionally(unavailable);
+                // Local durability is authoritative for the just-completed action.
+            }
+        }, "moa-media-bookmark-sync").start();
+    }
+
+    private void retryPendingMediaDeletes() {
+        if (!gatewayConfigured() || mediaDeletes.all().isEmpty()) return;
+        new Thread(() -> {
+            for (MoaMediaDeleteJournal.Entry entry : mediaDeletes.all()) {
+                MoaMediaSpotStore.Spot local = localMediaSpot(entry.localId);
+                try {
+                    String gatewayId = entry.gatewayId;
+                    if (gatewayId.isEmpty() && local != null) {
+                        JSONObject response = gatewayClientForBookmarks().createMediaBookmark(
+                                mediaSpotSyncPayload(local));
+                        JSONObject bookmark = response.optJSONObject("bookmark");
+                        gatewayId = bookmark == null ? "" : safe(bookmark.optString("id", ""));
+                    }
+                    if (!gatewayId.matches("[A-Za-z0-9_-]{1,120}")) continue;
+                    gatewayClientForBookmarks().deleteMediaBookmark(gatewayId);
+                    if (local != null) mediaSpots.removeIfGenerationMatches(local);
+                    mediaDeletes.remove(entry.localId, entry.gatewayId);
+                } catch (Exception retryLater) {
+                    // The durable entry remains for the next process or explicit retry.
+                }
+            }
+        }, "moa-media-delete-retry").start();
+    }
+
+    private void retryPendingMediaSyncs() {
+        if (!gatewayConfigured()) return;
+        for (String localId : mediaDeletes.pendingSyncIds()) {
+            MoaMediaSpotStore.Spot spot = localMediaSpot(localId);
+            if (spot != null && !mediaDeletes.containsLocalDelete(localId)) syncMediaSpot(spot);
+        }
+    }
+
+    private MoaMediaSpotStore.Spot localMediaSpot(String id) {
+        for (MoaMediaSpotStore.Spot spot : mediaSpots.all()) if (spot.id.equals(id)) return spot;
+        return null;
+    }
+
+    static JSONObject mediaSpotSyncPayload(MoaMediaSpotStore.Spot spot) throws JSONException {
+        return new JSONObject()
+                .put("provider", "youtube")
+                .put("video_id", spot.mediaId)
+                .put("canonical_url", spot.mediaUri)
+                .put("position_ms", spot.positionMs)
+                .put("label", spot.label)
+                .put("note", spot.note)
+                .put("aliases", new JSONArray())
+                .put("source_surface", "android")
+                .put("idempotency_key", spot.id)
+                .put("user_approved", true);
+    }
+
     private ToolExecutionResult listLauncherAppsForTool(JSONObject args) {
         Capability capability = CAPABILITIES.get("app.list");
-        List<String> labels = launcherAppLabels(context.getPackageManager());
-        String reply = formatAppListReply(labels, args.optInt("limit", DEFAULT_APP_LIST_LIMIT));
-        JSONObject receipt = recordReceipt(capability, "launcher_apps", true, "Listed " + labels.size() + " launcher apps.");
+        java.util.Iterator<String> keys = args.keys();
+        while (keys.hasNext()) if (!"limit".equals(keys.next())) {
+            return ToolExecutionResult.done(false, "app.list accepts only a bounded limit.",
+                    recordReceipt(capability, "launcher_apps", false, "Rejected unapproved app.list input."));
+        }
+        MoaAppLaunchPolicy.LabelProjection projection = MoaAppLaunchPolicy.projectVisibleLabels(
+                MoaAppLaunchPolicy.installedLauncherCandidates(context.getPackageManager()),
+                args.optInt("limit", MoaAppLaunchPolicy.DEFAULT_LIST_LIMIT));
+        String reply = MoaAppLaunchPolicy.formatListReply(projection.labels, projection.total);
+        JSONObject receipt = recordReceipt(capability, "launcher_apps", true,
+                "Listed " + projection.labels.size() + " launcher apps.");
         return ToolExecutionResult.done(true, reply, receipt);
     }
 
     private LocalActionResult openLauncherApp(String target) {
-        return LocalActionResult.handled(openLauncherAppForTool(target).reply);
+        JSONObject input = new JSONObject();
+        try { input.put("app_name", target); } catch (JSONException ignored) {}
+        return LocalActionResult.handled(openLauncherAppForTool(input).reply);
     }
 
-    private ToolExecutionResult openLauncherAppForTool(String target) {
+    private ToolExecutionResult openLauncherAppForTool(JSONObject args) {
         Capability capability = CAPABILITIES.get("app.launch");
-        PackageManager packageManager = context.getPackageManager();
-        List<AppCandidate> matches = matchingLauncherApps(packageManager, target);
-        if (matches.isEmpty()) {
+        List<MoaAppLaunchPolicy.Candidate> installed =
+                MoaAppLaunchPolicy.installedLauncherCandidates(context.getPackageManager());
+        MoaAppLaunchPolicy.Resolution resolution = MoaAppLaunchPolicy.resolveToolInput(args, installed);
+        String target = safe(args.optString("app_name", args.optString("appName",
+                args.optString("name", args.optString("app", "")))));
+        if (resolution.status == MoaAppLaunchPolicy.Status.INVALID_LABEL
+                || resolution.status == MoaAppLaunchPolicy.Status.RAW_APPLICATION_ID) {
+            return ToolExecutionResult.done(false, "Use a visible app name; raw package or intent input is not allowed.",
+                    recordReceipt(capability, "launcher_app", false, "Rejected non-label app launch input."));
+        }
+        String normalizedTarget = normalizeAppLabel(target);
+        if (normalizedTarget.equals("youtube") || normalizedTarget.equals("youtube advanced")
+                || normalizedTarget.equals("youtube revanced")) {
+            JSONObject mediaArgs = new JSONObject();
+            try {
+                if (!normalizedTarget.equals("youtube")) mediaArgs.put("preferred_package", "advanced");
+            } catch (JSONException ignored) {
+            }
+            String packageName = resolveYoutubePackage(mediaArgs);
+            Intent launch = packageName.isEmpty() ? null
+                    : context.getPackageManager().getLaunchIntentForPackage(packageName);
+            if (launch != null) {
+                try {
+                    context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    return ToolExecutionResult.done(true, "Opened " + packageName + ".",
+                            recordReceipt(capability, packageName, true, "Opened preferred YouTube app."));
+                } catch (RuntimeException ignored) {
+                }
+            }
+        }
+        if (resolution.status == MoaAppLaunchPolicy.Status.NOT_FOUND) {
             JSONObject receipt = recordReceipt(capability, target, false, "No matching launcher app.");
             return ToolExecutionResult.done(false, "I could not find an installed app matching \"" + target + "\".", receipt);
         }
-        if (matches.size() > 1) {
-            StringBuilder names = new StringBuilder();
-            for (int i = 0; i < Math.min(matches.size(), 4); i += 1) {
-                if (i > 0) {
-                    names.append(", ");
-                }
-                names.append(matches.get(i).label);
-            }
+        if (resolution.status == MoaAppLaunchPolicy.Status.AMBIGUOUS) {
+            String names = String.join(", ", resolution.candidateLabels);
             JSONObject receipt = recordReceipt(capability, target, false, "Multiple launcher app matches.");
             return ToolExecutionResult.done(false, "I found multiple apps matching \"" + target + "\": " + names + ". Say the full app name.", receipt);
         }
-
-        AppCandidate app = matches.get(0);
-        Intent launchIntent = packageManager.getLaunchIntentForPackage(app.packageName);
-        if (launchIntent == null) {
-            launchIntent = new Intent(Intent.ACTION_MAIN);
-            launchIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-            launchIntent.setClassName(app.packageName, app.activityName);
-        }
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        MoaAppLaunchPolicy.Candidate app = resolution.candidate;
+        Intent launchIntent = MoaAppLaunchPolicy.explicitLauncherIntent(app);
         try {
             context.startActivity(launchIntent);
             JSONObject receipt = recordReceipt(capability, app.label, true, "Opened launcher app.");
@@ -516,80 +1670,6 @@ final class MoaActionBroker {
         return null;
     }
 
-    private static List<AppCandidate> matchingLauncherApps(PackageManager packageManager, String target) {
-        String normalizedTarget = normalizeAppLabel(target);
-        if (normalizedTarget.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<ResolveInfo> activities = launcherActivities(packageManager);
-        List<AppCandidate> exact = new ArrayList<>();
-        List<AppCandidate> fuzzy = new ArrayList<>();
-        for (ResolveInfo info : activities) {
-            AppCandidate candidate = appCandidate(packageManager, info);
-            if (candidate == null) {
-                continue;
-            }
-            String label = candidate.label;
-            String packageName = candidate.packageName;
-            String normalizedLabel = normalizeAppLabel(label);
-            String normalizedPackage = normalizeAppLabel(packageName);
-            if (normalizedLabel.equals(normalizedTarget) || normalizedPackage.equals(normalizedTarget)) {
-                exact.add(candidate);
-            } else if (normalizedLabel.contains(normalizedTarget) || normalizedPackage.contains(normalizedTarget)) {
-                fuzzy.add(candidate);
-            }
-        }
-        return exact.isEmpty() ? fuzzy : exact;
-    }
-
-    private static List<String> launcherAppLabels(PackageManager packageManager) {
-        Map<String, AppCandidate> byPackage = new HashMap<>();
-        for (ResolveInfo info : launcherActivities(packageManager)) {
-            AppCandidate candidate = appCandidate(packageManager, info);
-            if (candidate != null && !byPackage.containsKey(candidate.packageName)) {
-                byPackage.put(candidate.packageName, candidate);
-            }
-        }
-
-        List<AppCandidate> apps = new ArrayList<>(byPackage.values());
-        Collections.sort(apps, (left, right) -> {
-            String leftLabel = normalizeAppLabel(left.label);
-            String rightLabel = normalizeAppLabel(right.label);
-            int labelCompare = leftLabel.compareTo(rightLabel);
-            if (labelCompare != 0) {
-                return labelCompare;
-            }
-            return left.packageName.compareTo(right.packageName);
-        });
-
-        List<String> labels = new ArrayList<>();
-        for (AppCandidate app : apps) {
-            labels.add(app.label);
-        }
-        return labels;
-    }
-
-    private static List<ResolveInfo> launcherActivities(PackageManager packageManager) {
-        Intent launcherIntent = new Intent(Intent.ACTION_MAIN);
-        launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-        return packageManager.queryIntentActivities(launcherIntent, 0);
-    }
-
-    private static AppCandidate appCandidate(PackageManager packageManager, ResolveInfo info) {
-        if (info == null || info.activityInfo == null) {
-            return null;
-        }
-        String packageName = safe(info.activityInfo.packageName);
-        String activityName = safe(info.activityInfo.name);
-        if (packageName.isEmpty()) {
-            return null;
-        }
-        CharSequence loadedLabel = info.loadLabel(packageManager);
-        String label = safe(loadedLabel == null ? "" : loadedLabel.toString());
-        return new AppCandidate(label.isEmpty() ? packageName : label, packageName, activityName);
-    }
-
     static String openAppTarget(String text) {
         String trimmed = safe(text);
         String lower = trimmed.toLowerCase(Locale.US);
@@ -618,35 +1698,6 @@ final class MoaActionBroker {
                 .toLowerCase(Locale.US)
                 .replaceAll("[^a-z0-9]+", " ")
                 .trim();
-    }
-
-    static String formatAppListReply(List<String> labels, int requestedLimit) {
-        if (labels == null || labels.isEmpty()) {
-            return "No launcher apps were visible.";
-        }
-        int limit = boundedAppListLimit(requestedLimit);
-        int count = Math.min(labels.size(), limit);
-        StringBuilder builder = new StringBuilder();
-        if (count < labels.size()) {
-            builder.append("Installed apps (").append(count).append(" of ").append(labels.size()).append("): ");
-        } else {
-            builder.append("Installed apps: ");
-        }
-        for (int i = 0; i < count; i += 1) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(labels.get(i));
-        }
-        builder.append(". Say /open app <name> to launch one.");
-        return builder.toString();
-    }
-
-    static int boundedAppListLimit(int requestedLimit) {
-        if (requestedLimit <= 0) {
-            return DEFAULT_APP_LIST_LIMIT;
-        }
-        return Math.min(requestedLimit, MAX_APP_LIST_LIMIT);
     }
 
     static String emailDraftRecipient(JSONObject input) {
@@ -789,6 +1840,10 @@ final class MoaActionBroker {
         capabilities.put("url.open", new Capability("url.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("phone.dial", new Capability("phone.dial", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("contact.open", new Capability("contact.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
+        capabilities.put("media.open", new Capability("media.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
+        capabilities.put("media.control", new Capability("media.control", RISK_NAVIGATION, APPROVAL_IMPLICIT));
+        capabilities.put("media.bookmark", new Capability("media.bookmark", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_LOCAL_CONFIRMATION));
+        capabilities.put("media.playlist", new Capability("media.playlist", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_LOCAL_CONFIRMATION));
         capabilities.put("external.side_effect", new Capability("external.side_effect", RISK_EXTERNAL_SIDE_EFFECT, "confirm"));
         capabilities.put("sensitive.side_effect", new Capability("sensitive.side_effect", "sensitive_side_effect", "blocked"));
         return Collections.unmodifiableMap(capabilities);
@@ -796,6 +1851,11 @@ final class MoaActionBroker {
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static String firstNonEmpty(String... values) {
+        for (String value : values) if (!safe(value).isEmpty()) return safe(value);
+        return "";
     }
 
     static final class LocalActionResult {
@@ -820,16 +1880,41 @@ final class MoaActionBroker {
         final boolean success;
         final String reply;
         final JSONObject receipt;
+        final boolean requiresConfirmation;
+        final boolean pending;
 
-        private ToolExecutionResult(boolean success, String reply, JSONObject receipt) {
+        private ToolExecutionResult(
+                boolean success, String reply, JSONObject receipt,
+                boolean requiresConfirmation, boolean pending) {
             this.success = success;
             this.reply = reply == null ? "" : reply;
             this.receipt = receipt;
+            this.requiresConfirmation = requiresConfirmation;
+            this.pending = pending;
         }
 
         static ToolExecutionResult done(boolean success, String reply, JSONObject receipt) {
-            return new ToolExecutionResult(success, reply, receipt);
+            return new ToolExecutionResult(success, reply, receipt, false, false);
         }
+
+        static ToolExecutionResult confirmation(String reply) {
+            return new ToolExecutionResult(false, reply, null, true, false);
+        }
+
+        static ToolExecutionResult pending(String reply) {
+            return new ToolExecutionResult(false, reply, null, false, true);
+        }
+    }
+
+    interface YoutubePlaylistExecutor {
+        ToolExecutionResult execute(
+                String requestId, JSONObject args, String expectedPackage,
+                MoaActionApprovalController.Binding binding,
+                ToolResultCallback callback);
+    }
+
+    interface ToolResultCallback {
+        void onResult(ToolExecutionResult result);
     }
 
     private static final class Capability {
@@ -844,15 +1929,14 @@ final class MoaActionBroker {
         }
     }
 
-    private static final class AppCandidate {
-        final String label;
-        final String packageName;
-        final String activityName;
+    private static final class PackageEvidence {
+        final long versionCode;
+        final String signerSha256;
 
-        AppCandidate(String label, String packageName, String activityName) {
-            this.label = label;
-            this.packageName = packageName;
-            this.activityName = activityName;
+        PackageEvidence(long versionCode, String signerSha256) {
+            this.versionCode = versionCode;
+            this.signerSha256 = signerSha256;
         }
     }
+
 }
