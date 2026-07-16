@@ -345,6 +345,23 @@ companion versus seamless-assistant UX remains an explicit product decision.
 The macOS-only `MoaMac` product adds the native proactive surface:
 
 ```text
+menu-bar app or Control-Space
+  -> app-owned compact command panel (no AX read or pixel capture)
+  -> bounded authenticated POST /v1/chat to the user-configured gateway
+  -> inert assistant text rendered in the panel
+```
+
+The command panel stores the canonical gateway origin in app preferences and
+the gateway bearer token in Keychain. It contains no packaged destination or
+provider credentials, rejects redirects, uses an ephemeral URL session, and
+never attaches screen context implicitly. Provider selection and credentials
+remain gateway-owned. This is the first daily companion slice; ticketed live
+voice, shared session-event presentation, pointer overlays, and approved native
+actions remain staged work.
+
+The privacy-scoped proactive flow remains separate:
+
+```text
 Paused launch (no AX read, screen capture, or network)
   -> user selects the verified frontmost process
   -> user chooses local_only, ask_each_time, or trusted_server_15m
@@ -1932,6 +1949,14 @@ queues.
   transport, turn storage, transcript events, and assistant audio events.
 - `gateway/lib/voice-providers.js`: Swappable streaming voice
   provider package boundary, currently loopback and Gemini Live.
+- `apple_surfaces/Sources/MoaMac/main.swift`: menu-bar lifecycle, global
+  Control-Space registration, and floating command-panel ownership.
+- `apple_surfaces/Sources/MoaMacCore/GatewayChat.swift`: bounded canonical
+  macOS chat request and inert reply decoding.
+- `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: Keychain-backed
+  gateway connection state and redirect-rejecting ephemeral chat transport.
+- `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact typed
+  companion surface; it does not own Accessibility or capture authority.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,
