@@ -15,7 +15,7 @@ public enum LocalProgramError: Error, Equatable, Sendable {
     case toolBudgetExceeded, invalidInput, staleObservation, staleTarget
     case unknownHandle, unsupportedAction, approvalRequired, capabilityDenied
     case unsafeProgram, replayed
-    case stopped
+    case stopped, indeterminate
     case executionFailed(String)
 }
 
@@ -86,6 +86,51 @@ public struct MacProgramCatalog: Codable, Equatable, Sendable {
     }
 }
 
+public struct MacCapabilitySchema: Codable, Equatable, Sendable {
+    public let type: String
+    public let required: [String]
+    public let properties: [String: String]
+    public let additionalProperties: Bool
+    public init(type: String, required: [String], properties: [String: String], additionalProperties: Bool = false) {
+        self.type = type; self.required = required; self.properties = properties
+        self.additionalProperties = additionalProperties
+    }
+    enum CodingKeys: String, CodingKey {
+        case type, required, properties; case additionalProperties = "additional_properties"
+    }
+}
+
+public struct MacCapabilityDescriptor: Codable, Equatable, Sendable {
+    public let capabilityID: String, description: String
+    public let inputSchema: MacCapabilitySchema, outputSchema: MacCapabilitySchema
+    public let effectClass: String, approvalClass: String, idempotency: String, concurrency: String
+    public let restoreCapabilityID: String?
+    public init(capabilityID: String, description: String, inputSchema: MacCapabilitySchema,
+                outputSchema: MacCapabilitySchema, effectClass: String, approvalClass: String,
+                idempotency: String, concurrency: String, restoreCapabilityID: String?) {
+        self.capabilityID = capabilityID; self.description = description
+        self.inputSchema = inputSchema; self.outputSchema = outputSchema
+        self.effectClass = effectClass; self.approvalClass = approvalClass
+        self.idempotency = idempotency; self.concurrency = concurrency
+        self.restoreCapabilityID = restoreCapabilityID
+    }
+    enum CodingKeys: String, CodingKey {
+        case description, idempotency, concurrency
+        case capabilityID = "capability_id", inputSchema = "input_schema", outputSchema = "output_schema"
+        case effectClass = "effect_class", approvalClass = "approval_class"
+        case restoreCapabilityID = "restore_capability_id"
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(capabilityID, forKey: .capabilityID); try c.encode(description, forKey: .description)
+        try c.encode(inputSchema, forKey: .inputSchema); try c.encode(outputSchema, forKey: .outputSchema)
+        try c.encode(effectClass, forKey: .effectClass); try c.encode(approvalClass, forKey: .approvalClass)
+        try c.encode(idempotency, forKey: .idempotency); try c.encode(concurrency, forKey: .concurrency)
+        if let restoreCapabilityID { try c.encode(restoreCapabilityID, forKey: .restoreCapabilityID) }
+        else { try c.encodeNil(forKey: .restoreCapabilityID) }
+    }
+}
+
 public struct MacLocalProgramAdvertisement: Codable, Equatable, Sendable {
     public struct Catalog: Codable, Equatable, Sendable {
         public let version: Int, sha256: String
@@ -104,13 +149,48 @@ public struct MacLocalProgramAdvertisement: Codable, Equatable, Sendable {
     public let issuedAt: Date
     public let expiresAt: Date
 
-    public static let capabilityIDs = [
-        "macos.accessibility.observe", "macos.accessibility.find",
-        "macos.accessibility.press", "macos.accessibility.confirm",
-        "macos.accessibility.cancel", "macos.accessibility.increment",
-        "macos.accessibility.decrement", "macos.accessibility.show_menu",
-        "macos.accessibility.set_value", "macos.app.current", "macos.window.current",
-    ]
+    public static let descriptors: [MacCapabilityDescriptor] = {
+        let empty = MacCapabilitySchema(type: "object", required: [], properties: [:])
+        let observation = MacCapabilitySchema(type: "object", required: ["application_name", "binding", "nodes", "window_title"],
+            properties: ["binding": "object", "nodes": "array", "application_name": "string", "window_title": "string"])
+        let find = MacCapabilitySchema(type: "object", required: [], properties: ["role": "string", "label": "string"])
+        let actionProperties = ["action": "string", "handle": "string", "observation_id": "string"]
+        let receiptKeys = ["version", "type", "receipt_id", "execution_id", "claimant", "tool_call_id",
+            "attempt", "capability_id", "program_sha256", "catalog_sha256", "bindings_sha256",
+            "input_sha256", "pre_state_sha256", "approval_id", "started_at", "finished_at", "status",
+            "result", "post_state_sha256", "previous_receipt_sha256", "receipt_sha256"]
+        let receipt = MacCapabilitySchema(type: "object", required: receiptKeys,
+            properties: Dictionary(uniqueKeysWithValues: receiptKeys.map { ($0,
+                ["version", "attempt"].contains($0) ? "integer" :
+                ["claimant", "result"].contains($0) ? "object" : "string_or_null") }))
+        func descriptor(_ id: String, _ description: String, _ input: MacCapabilitySchema,
+                        _ output: MacCapabilitySchema, effect: String = "read",
+                        approval: String = "none", idempotency: String = "read_only") -> MacCapabilityDescriptor {
+            .init(capabilityID: id, description: description, inputSchema: input, outputSchema: output,
+                effectClass: effect, approvalClass: approval, idempotency: idempotency,
+                concurrency: "serialized_resource", restoreCapabilityID: nil)
+        }
+        let reads = [
+            descriptor("macos.accessibility.observe", "Observe bounded state for the bound macOS window.", empty, observation),
+            descriptor("macos.accessibility.find", "Find bounded nodes in the bound Accessibility snapshot.", find,
+                .init(type: "array", required: [], properties: [:])),
+            descriptor("macos.app.current", "Read the application identity already bound by the local grant.", empty,
+                .init(type: "object", required: ["bundle_id", "name", "pid"], properties: ["bundle_id": "string", "name": "string", "pid": "integer"])),
+            descriptor("macos.window.current", "Read the exact window already bound by the local grant.", empty,
+                .init(type: "object", required: ["observation_id", "title", "window_id"], properties: ["observation_id": "string", "title": "string", "window_id": "string"])),
+        ]
+        let actions = ["cancel", "confirm", "decrement", "increment", "press", "set_value", "show_menu"].map { action in
+            let requiresValue = action == "set_value"
+            let input = MacCapabilitySchema(type: "object",
+                required: ["action", "handle", "observation_id"] + (requiresValue ? ["value"] : []),
+                properties: actionProperties.merging(requiresValue ? ["value": "string"] : [:]) { first, _ in first })
+            return descriptor("macos.accessibility.\(action)", "Perform the reviewed \(action) operation on a bound Accessibility handle.",
+                input, receipt,
+                effect: "external_side_effect", approval: "explicit_confirm", idempotency: "non_idempotent")
+        }
+        return (reads + actions).sorted { $0.capabilityID < $1.capabilityID }
+    }()
+    public static let capabilityIDs = descriptors.map(\.capabilityID)
 
     public init(deviceID: String, advertisementID: String = "sra_local",
                 issuedAt: Date = Date(), expiresAt: Date? = nil) {
@@ -118,10 +198,10 @@ public struct MacLocalProgramAdvertisement: Codable, Equatable, Sendable {
         target = .init(surfaceType: "macos", deviceID: deviceID)
         runtime = .init(runtimeID: "macos.javascriptcore-ax.v1", language: "javascript",
             bridgeVersion: 1, entrypoint: "main")
-        let digest = MacLocalProgramDigest.catalog(version: 1, capabilityIDs: Self.capabilityIDs)
+        let digest = MacLocalProgramDigest.catalog(version: 1, descriptors: Self.descriptors)
         catalog = .init(version: 1, sha256: digest, capabilityIDs: Self.capabilityIDs)
         limits = .localMaximum; self.issuedAt = issuedAt
-        self.expiresAt = expiresAt ?? issuedAt.addingTimeInterval(60)
+        self.expiresAt = expiresAt ?? issuedAt.addingTimeInterval(5 * 60)
     }
     enum CodingKeys: String, CodingKey {
         case version, type, target, runtime, catalog, limits
@@ -189,6 +269,8 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
     public static func sourceDigest(_ source: String) -> String { MacLocalProgramDigest.data(Data(source.utf8)) }
 
     public static func decodeStrict(_ data: Data) throws -> Self {
+        guard let canonical = try? MacCanonicalJSON.parse(data), case .object = canonical
+        else { throw LocalProgramError.invalidEnvelope }
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw LocalProgramError.invalidEnvelope }
         try require(root, ["version", "type", "execution_id", "session_id", "turn_id", "target", "runtime", "program", "catalog", "bindings", "limits", "approval_policy", "idempotency_key", "issued_at", "expires_at"])
         try object(root, "target", ["surface_type", "device_id"])
@@ -214,7 +296,10 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
               Self.validDigest(program.sha256), program.sha256 == Self.sourceDigest(program.source),
               catalog.version == advertisement.catalog.version,
               catalog.sha256 == advertisement.catalog.sha256, Self.validDigest(catalog.sha256),
-              !catalog.allowedCapabilityIDs.isEmpty,
+              advertisement.catalog.capabilityIDs == MacLocalProgramAdvertisement.capabilityIDs,
+              advertisement.catalog.sha256 == MacLocalProgramDigest.catalog(version: advertisement.catalog.version,
+                descriptors: MacLocalProgramAdvertisement.descriptors),
+              catalog.allowedCapabilityIDs == catalog.allowedCapabilityIDs.sorted(),
               Set(catalog.allowedCapabilityIDs).count == catalog.allowedCapabilityIDs.count,
               Set(catalog.allowedCapabilityIDs).isSubset(of: allowed),
               bindings.kind == "macos_accessibility", Self.validDigest(bindings.stateSHA256),
@@ -222,12 +307,11 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
               !bindings.localGrantID.isEmpty, !bindings.bundleID.isEmpty,
               !bindings.processGeneration.isEmpty, !bindings.signingIdentity.isEmpty,
               !bindings.windowID.isEmpty, !bindings.axSnapshotID.isEmpty,
-              approvalPolicy.program == "exact_source",
-              Set(approvalPolicy.alwaysAsk).isSubset(of: Set(catalog.allowedCapabilityIDs)),
-              Set(catalog.allowedCapabilityIDs.filter {
-                  $0.hasPrefix("macos.accessibility.") &&
-                  $0 != "macos.accessibility.observe" && $0 != "macos.accessibility.find"
-              }).isSubset(of: Set(approvalPolicy.alwaysAsk)),
+              ["preauthorized", "local_policy", "approval_required"].contains(approvalPolicy.program),
+              approvalPolicy.alwaysAsk == approvalPolicy.alwaysAsk.sorted(),
+              Set(approvalPolicy.alwaysAsk).count == approvalPolicy.alwaysAsk.count,
+              Set(approvalPolicy.alwaysAsk).isSubset(of: ["read", "navigation", "local_mutation",
+                "external_side_effect", "destructive", "security_sensitive", "financial", "publishing", "sending"]),
               limits.sourceBytes > 0, limits.sourceBytes <= advertisement.limits.sourceBytes,
               limits.wallMS > 0, limits.wallMS <= advertisement.limits.wallMS,
               limits.memoryBytes == advertisement.limits.memoryBytes,
@@ -235,8 +319,11 @@ public struct MacLocalProgramEnvelope: Codable, Equatable, Sendable {
               limits.parallelCalls == 1, limits.resultBytes > 0,
               limits.resultBytes <= advertisement.limits.resultBytes,
               limits.logBytes >= 0, limits.logBytes <= advertisement.limits.logBytes,
-              expiresAt > issuedAt, expiresAt.timeIntervalSince(issuedAt) <= 60,
+              expiresAt > issuedAt, expiresAt.timeIntervalSince(issuedAt) <= 5 * 60,
+              expiresAt <= advertisement.expiresAt,
               now >= issuedAt.addingTimeInterval(-30), now < expiresAt,
+              advertisement.expiresAt > advertisement.issuedAt,
+              advertisement.expiresAt.timeIntervalSince(advertisement.issuedAt) <= 5 * 60,
               now >= advertisement.issuedAt.addingTimeInterval(-30), now < advertisement.expiresAt
         else {
             if target.deviceID != advertisement.target.deviceID { throw LocalProgramError.wrongDevice }
@@ -526,19 +613,35 @@ public enum MacLocalProgramDigest {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     public static func bindings(_ value: MacLocalProgramEnvelope.Bindings) -> String {
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        // Bindings contain only finite Codable primitives, so encoding failure
-        // is not representable after construction.
-        return data(try! encoder.encode(value))
+        canonical(value)
     }
-    public static func catalog(version: Int, capabilityIDs: [String]) -> String {
-        let value: [String: Any] = ["version": version, "capability_ids": capabilityIDs.sorted()]
-        return data(try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
+    public static func axState(_ value: MacAXProgramObservation) -> String {
+        struct Node: Encodable {
+            let role: String, label: String?, enabled: Bool, focused: Bool, actions: [String]
+        }
+        struct State: Encodable {
+            let bundleID: String, pid: Int32, processGeneration: String, windowID: String
+            let nodes: [Node]
+            enum CodingKeys: String, CodingKey {
+                case pid, nodes; case bundleID = "bundle_id", processGeneration = "process_generation"
+                case windowID = "window_id"
+            }
+        }
+        return canonical(State(bundleID: value.binding.bundleID, pid: value.binding.pid,
+            processGeneration: value.binding.processGeneration, windowID: value.binding.windowID,
+            nodes: value.nodes.map { Node(role: $0.role, label: $0.label, enabled: $0.enabled,
+                focused: $0.focused, actions: $0.actions) }))
+    }
+    public static func catalog(version: Int, descriptors: [MacCapabilityDescriptor]) -> String {
+        struct Snapshot: Encodable { let version: Int; let capabilities: [MacCapabilityDescriptor] }
+        return canonical(Snapshot(version: version,
+            capabilities: descriptors.sorted { $0.capabilityID < $1.capabilityID }))
     }
     public static func canonical<T: Encodable>(_ value: T) -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
-        return data(try! encoder.encode(value))
+        let encoded = try! encoder.encode(value)
+        return data(try! MacCanonicalJSON.parse(encoded).canonicalData)
     }
 }
 

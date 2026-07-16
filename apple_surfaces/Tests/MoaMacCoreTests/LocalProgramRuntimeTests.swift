@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import MoaMacCore
+import MoaMacProgramRunnerCore
 @testable import MoaMacShell
 import Testing
 
@@ -12,6 +13,7 @@ private final class FakeMacProgramAuthority: MacAccessibilityProgramAuthority, @
     var observationError: (any Error)?
     var actionError: (any Error)?
     var observeHook: (@Sendable () -> Void)?
+    var actionHook: (@Sendable () -> Void)?
     let observation: MacAXProgramObservation
 
     init(now: Date) {
@@ -44,14 +46,21 @@ private final class FakeMacProgramAuthority: MacAccessibilityProgramAuthority, @
     func perform(_ request: MacAXActionRequest, executionID: String,
                  sequence: Int, now: Date) throws -> MacAXActionOutcome {
         actions += 1
+        actionHook?()
         if let actionError { throw actionError }
         guard request.handle == "node-1", request.observationID == "obs-1",
               request.action == "press" else { throw LocalProgramError.unknownHandle }
-        return .init(postStateSHA256: nil, resourceID: "ax_fixture_target")
+        return .init(postStateSHA256: String(repeating: "c", count: 64), resourceID: "ax_fixture_target")
     }
 }
 
 private struct FixtureFailure: Error {}
+private struct FixtureApprover: MacProgramApprovalAuthorizing {
+    func resolve(approvalID: String, effectClass: String, capabilityID: String,
+                 executionID: String, expiresAt: Date) -> MacProgramApprovalDecision {
+        .init(approvalID: approvalID, status: "approved")
+    }
+}
 
 private let fixtureNow = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -72,7 +81,8 @@ private func makeRuntime(source: String,
                          deviceID: String = "mac-fixture") -> (JavaScriptCoreMacProgramRuntime, MacLocalProgramEnvelope, FakeMacProgramAuthority) {
     let fake = authority ?? FakeMacProgramAuthority(now: fixtureNow)
     let runtime = JavaScriptCoreMacProgramRuntime(deviceID: deviceID, authority: fake,
-        clientInstanceID: "client-fixture", journal: journal ?? makeJournal(), now: { fixtureNow })
+        clientInstanceID: "client-fixture", journal: journal ?? makeJournal(),
+        approvalAuthorizer: FixtureApprover(), now: { fixtureNow })
     let ad = runtime.advertisement
     let envelope = MacLocalProgramEnvelope(executionID: executionID, sessionID: "session-fixture",
         turnID: "turn-fixture", target: ad.target, runtime: ad.runtime,
@@ -82,8 +92,12 @@ private func makeRuntime(source: String,
         bindings: .init(localGrantID: "grant-fixture", bundleID: "com.example.fixture", pid: 42,
             processGeneration: "generation-1", signingIdentity: "fixture-signing",
             windowID: "window-1", axSnapshotID: "obs-1", stateSHA256: String(repeating: "a", count: 64)),
-        limits: limits, approvalPolicy: .init(program: "exact_source",
-            alwaysAsk: capabilities.filter { $0.hasPrefix("macos.accessibility.") && !$0.hasSuffix("observe") && !$0.hasSuffix("find") }),
+        limits: limits, approvalPolicy: .init(program: "preauthorized",
+            alwaysAsk: capabilities.contains(where: { capability in
+                MacLocalProgramAdvertisement.descriptors.first(where: { $0.capabilityID == capability })?.effectClass != "read"
+            }) ? ["external_side_effect", "local_mutation"].filter { effect in
+                MacLocalProgramAdvertisement.descriptors.contains { capabilities.contains($0.capabilityID) && $0.effectClass == effect }
+            } : []),
         idempotencyKey: idempotencyKey, issuedAt: fixtureNow.addingTimeInterval(-1),
         expiresAt: fixtureNow.addingTimeInterval(30))
     return (runtime, envelope, fake)
@@ -127,11 +141,67 @@ private func makeRuntime(source: String,
     #expect(throws: LocalProgramError.invalidEnvelope) {
         try MacLocalProgramEnvelope.decodeStrict(Data(#"{"version":1}"#.utf8))
     }
+    #expect(throws: LocalProgramError.invalidEnvelope) {
+        try MacLocalProgramEnvelope.decodeStrict(Data(#"{"version":1,"version":1}"#.utf8))
+    }
     var malformed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     malformed["version"] = "wrong-type"
     #expect(throws: LocalProgramError.invalidEnvelope) {
         try MacLocalProgramEnvelope.decodeStrict(JSONSerialization.data(withJSONObject: malformed))
     }
+}
+
+@Test func restrictedJCSMatchesIndependentFixturesAndRejectsAmbiguity() throws {
+    let fixture = Data(#"{"a/b":"slash","arr":[null,true,false,0,42],"ctl":"\u000f","n":9007199254740991,"€":"euro","😀":"astral"}"#.utf8)
+    let canonical = try MacCanonicalJSON.parse(fixture)
+    #expect(MacLocalProgramDigest.data(canonical.canonicalData) ==
+        "9af6189a09fc6952309cae21a8e858ac2b4860fb8d59500bdfb5cc9d66165e7c")
+    let find = try MacCanonicalJSON.parse(Data(#"{"role":"AXButton","label":"Continue"}"#.utf8))
+    #expect(MacLocalProgramDigest.data(find.canonicalData) ==
+        "82b3e4a6b489561ad477090b36f30a5e6897d42c30411e53f9c3a763f96648a1")
+    #expect(throws: LocalProgramError.invalidInput) { try MacCanonicalJSON.parse(Data(#"{"a":1,"a":1}"#.utf8)) }
+    #expect(throws: LocalProgramError.invalidInput) { try MacCanonicalJSON.parse(Data("9007199254740992".utf8)) }
+    #expect(throws: LocalProgramError.invalidInput) { try MacCanonicalJSON.parse(Data("1.0".utf8)) }
+    #expect(throws: LocalProgramError.invalidInput) { try MacCanonicalJSON.parse(Data("01".utf8)) }
+    let escaped = MacCanonicalJSON.string("\u{8}\t\n\u{c}\r\\\"").canonicalString
+    #expect(escaped == #""\b\t\n\f\r\\\"""#)
+    for malformed in ["", "?", "true false", "{", "{1:2}", #"{"a" 1}"#,
+                      #"{"a":1 "b":2}"#, "[1 2]", #""unterminated"#,
+                      #""\uZZZZ""#, "-", "-x", "tru"] {
+        #expect(throws: LocalProgramError.invalidInput) {
+            try MacCanonicalJSON.parse(Data(malformed.utf8))
+        }
+    }
+}
+
+@Test func runnerCoreStrictTranscriptCoversTerminalHostAndFailurePaths() {
+    #expect(MacProgramRunnerSession.run(arguments: ["runner"], read: { nil }, write: { _ in }) == 64)
+    var bad = [["kind": "start", "source": "return 1;", "extra": true] as [String: Any]]
+    #expect(MacProgramRunnerSession.run(arguments: ["runner", "--stdio-v1"],
+        read: { bad.isEmpty ? nil : bad.removeFirst() }, write: { _ in }) == 64)
+
+    func transcript(source: String, replies: [[String: Any]] = []) -> [[String: Any]] {
+        var input = [["kind": "start", "source": source] as [String: Any]] + replies
+        var output: [[String: Any]] = []
+        #expect(MacProgramRunnerSession.run(arguments: ["runner", "--stdio-v1"],
+            read: { input.isEmpty ? nil : input.removeFirst() }, write: { output.append($0) }) == 0)
+        return output
+    }
+    #expect(transcript(source: "return 1;").last?["output_json"] as? String == "1")
+    #expect(transcript(source: "return undefined;").last?["output_json"] as? String == "null")
+    #expect(transcript(source: "return );").last?["error"] as? String == "runtime_failed")
+    let calls = transcript(source: "return tools.macos.app.current();", replies: [
+        ["kind": "call_result", "id": 1, "output_json": #"{"name":"Fixture"}"#]
+    ])
+    #expect(calls.first?["capability_id"] as? String == "macos.app.current")
+    #expect(calls.last?["output_json"] as? String == #"{"name":"Fixture"}"#)
+    #expect(transcript(source: "return tools.macos.app.current();").last?["error"] as? String == "runtime_failed")
+    let hugeSource = String(repeating: " ", count: 65_537)
+    var huge = [["kind": "start", "source": hugeSource] as [String: Any]]
+    #expect(MacProgramRunnerSession.run(arguments: ["runner", "--stdio-v1"],
+        read: { huge.isEmpty ? nil : huge.removeFirst() }, write: { _ in }) == 64)
+    #expect(transcript(source: #"return "x".repeat(65537);"#)
+        .last?["error"] as? String == "limit_exceeded")
 }
 
 @Test func localProgramBranchesAcrossMultipleLocalCallsAndReceiptsEveryAttempt() {
@@ -203,13 +273,14 @@ private func makeRuntime(source: String,
     #expect(failed.error == #"executionFailed("host operation failed")"#)
 
     let (syntaxRuntime, syntax, _) = makeRuntime(source: "return );")
-    #expect(syntaxRuntime.execute(syntax, approvedProgramSHA256: syntax.program.sha256).error?.contains("SyntaxError") == true)
+    #expect(syntaxRuntime.execute(syntax, approvedProgramSHA256: syntax.program.sha256).error ==
+        #"executionFailed("program runner failed")"#)
 
     let continuationSource = #"try { tools.macos.accessibility.find({unexpected:true}); } catch (error) {} return tools.macos.accessibility.observe();"#
     let (continuationRuntime, continuation, _) = makeRuntime(source: continuationSource)
     let stopped = continuationRuntime.execute(continuation, approvedProgramSHA256: continuation.program.sha256)
     #expect(stopped.error == "invalidInput")
-    #expect(stopped.receipts.count == 2)
+    #expect(stopped.receipts.isEmpty)
 }
 
 @Test func deniedCapabilityAndToolBudgetFailClosedWithAttemptReceipts() {
@@ -285,11 +356,16 @@ private func makeRuntime(source: String,
 
 @Test func approvalSchemaAndStaleAuthorityAreRejected() {
     let (runtime, envelope, fake) = makeRuntime(source: "return 1;")
-    #expect(runtime.execute(envelope, approvedProgramSHA256: String(repeating: "0", count: 64)).error == "approvalRequired")
+    let rejected = runtime.execute(envelope, approvedProgramSHA256: String(repeating: "0", count: 64))
+    #expect(rejected.status == "rejected")
+    #expect(rejected.error == "proposal_rejected")
+    #expect((try? runtime.lifecycleEvents(executionID: envelope.executionID).map(\.kind)) == ["terminal"])
     #expect(fake.validated == 0)
 
-    let (_, invalid, _) = makeRuntime(source: "return tools.macos.accessibility.find({unexpected:true});")
-    let invalidResult = runtime.execute(invalid, approvedProgramSHA256: invalid.program.sha256)
+    let (invalidRuntime, invalid, _) = makeRuntime(
+        source: "return tools.macos.accessibility.find({unexpected:true});",
+        executionID: "exec-invalid-schema", idempotencyKey: "idem-invalid-schema")
+    let invalidResult = invalidRuntime.execute(invalid, approvedProgramSHA256: invalid.program.sha256)
     #expect(invalidResult.error == "invalidInput")
 
     let staleFake = FakeMacProgramAuthority(now: fixtureNow); staleFake.validationError = LocalProgramError.staleTarget
@@ -304,7 +380,7 @@ private func makeRuntime(source: String,
         executionID: "exec-infinite", idempotencyKey: "idem-infinite")
     let started = Date()
     let result = runtime.execute(envelope, approvedProgramSHA256: envelope.program.sha256)
-    #expect(result.status == "failed")
+    #expect(result.status == "timed_out")
     #expect(result.error == "expired")
     #expect(Date().timeIntervalSince(started) < 2)
     #expect(fake.observations == 0)
@@ -314,7 +390,7 @@ private func makeRuntime(source: String,
 @Test func runnerHandleAndLaunchFailureFailClosedWithoutAuthority() {
     let handle = MacProgramRunnerHandle()
     handle.stop()
-    #expect(handle.withActive { 1 } == nil)
+    #expect(!handle.admitCall())
     let process = Process()
     handle.attach(process)
     handle.stop()
@@ -351,7 +427,7 @@ private func makeRuntime(source: String,
     #expect(state.outcome(timedOut: false).error == nil)
     state.consume(Data(repeating: 0x78, count: LocalProgramLimits.outputBytes + 16 * 1024 + 1))
     #expect(state.outcome(timedOut: false).error == "program runner frame exceeded local limit")
-    #expect(handle.withActive { 1 } == nil)
+    #expect(!handle.admitCall())
 }
 
 @Test func undefinedResultIsNormalizedWithoutExpandingTheBridge() {
@@ -403,7 +479,7 @@ private func makeRuntime(source: String,
     #expect(runtime.execute(oversized, approvedProgramSHA256: oversized.program.sha256).error == "sourceTooLarge")
 
     let defaultAdvertisement = MacLocalProgramAdvertisement(deviceID: "default-fixture", issuedAt: fixtureNow)
-    #expect(defaultAdvertisement.expiresAt == fixtureNow.addingTimeInterval(60))
+    #expect(defaultAdvertisement.expiresAt == fixtureNow.addingTimeInterval(5 * 60))
 
     let widenedLimits = MacProgramLimits(sourceBytes: valid.limits.sourceBytes,
         wallMS: valid.limits.wallMS, memoryBytes: 1, toolCalls: valid.limits.toolCalls,
@@ -448,7 +524,7 @@ private func makeRuntime(source: String,
     let eventDecoder = JSONDecoder(); eventDecoder.dateDecodingStrategy = .iso8601
     for event in events {
         let encoded = try eventEncoder.encode(event)
-        #expect(try eventDecoder.decode(MacProgramLifecycleEvent.self, from: encoded) == event)
+        #expect(try MacProgramLifecycleEvent.decodeStrict(encoded) == event)
         let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(Set(object.keys) == ["version", "type", "event_id", "execution_id", "sequence", "kind", "occurred_at", "claimant", "payload"])
     }
@@ -495,6 +571,43 @@ private func makeRuntime(source: String,
         approvedProgramSHA256: reusedKey.program.sha256).error == "replayed")
 }
 
+
+@Test func mutationUsesPerCallApprovalAndLinksTrustworthyPostState() throws {
+    let source = #"return tools.macos.accessibility.press({handle:"node-1", observation_id:"obs-1"});"#
+    let (runtime, envelope, _) = makeRuntime(source: source,
+        executionID: "exec-approval", idempotencyKey: "idem-approval")
+    let result = runtime.execute(envelope, approvedProgramSHA256: envelope.program.sha256)
+    #expect(result.status == "completed")
+    let receipt = try #require(result.receipts.first)
+    #expect(receipt.approvalID?.hasPrefix("approval_") == true)
+    #expect(receipt.postStateSHA256 == String(repeating: "c", count: 64))
+    let events = try runtime.lifecycleEvents(executionID: envelope.executionID)
+    #expect(events.map(\.kind) == ["accepted", "started", "tool_started", "approval_required",
+        "approval_resolved", "tool_finished", "terminal"])
+}
+
+@Test func stopReturnsBeforeInFlightEffectAndReceiptsIndeterminate() async throws {
+    let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+    let fake = FakeMacProgramAuthority(now: fixtureNow)
+    fake.actionHook = { entered.signal(); release.wait() }
+    let source = #"return tools.macos.accessibility.press({handle:"node-1", observation_id:"obs-1"});"#
+    let (runtime, envelope, _) = makeRuntime(source: source, authority: fake,
+        executionID: "exec-indeterminate", idempotencyKey: "idem-indeterminate")
+    let task = Task.detached { runtime.execute(envelope, approvedProgramSHA256: envelope.program.sha256) }
+    let enteredResult = await withCheckedContinuation { continuation in
+        DispatchQueue.global().async { continuation.resume(returning: entered.wait(timeout: .now() + 2)) }
+    }
+    #expect(enteredResult == .success)
+    let before = Date()
+    try runtime.requestStop(executionID: envelope.executionID)
+    #expect(Date().timeIntervalSince(before) < 0.25)
+    release.signal()
+    let result = await task.value
+    #expect(result.status == "indeterminate")
+    #expect(result.receipts.last?.status == "indeterminate")
+    #expect(result.receipts.last?.postStateSHA256 == nil)
+}
+
 @Test func cooperativeStopPreventsEveryLaterEffectAndPersistsOrderedTerminal() async throws {
     let entered = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
@@ -537,6 +650,26 @@ private func makeRuntime(source: String,
         try MacProgramLifecycleEvent(executionID: "exec", sequence: 0, kind: "accepted",
             occurredAt: fixtureNow, claimant: .init(deviceID: "device", clientInstanceID: "client"),
             payload: .accepted(proposalSHA256: String(repeating: "a", count: 64)))
+    }
+    let claimant = MacReceiptClaimant(deviceID: "device", clientInstanceID: "client")
+    let lifecycle: [MacProgramLifecycleEvent] = [
+        try .init(executionID: "exec", sequence: 1, kind: "approval_required", occurredAt: fixtureNow,
+            claimant: claimant, payload: .approvalRequired(approvalID: "approval_fixture",
+                effectClass: "external_side_effect", capabilityID: "macos.accessibility.press",
+                toolCallID: "call_fixture", attempt: 1, expiresAt: fixtureNow.addingTimeInterval(10))),
+        try .init(executionID: "exec", sequence: 2, kind: "approval_resolved", occurredAt: fixtureNow,
+            claimant: claimant, payload: .approvalResolved(approvalID: "approval_fixture", status: "approved")),
+        try .init(executionID: "exec", sequence: 3, kind: "progress", occurredAt: fixtureNow,
+            claimant: claimant, payload: .progress(message: "Processed local items.", completed: 1, total: 2)),
+    ]
+    let strictEncoder = JSONEncoder(); strictEncoder.dateEncodingStrategy = .iso8601
+    for event in lifecycle {
+        #expect(try MacProgramLifecycleEvent.decodeStrict(strictEncoder.encode(event)) == event)
+    }
+    #expect(throws: LocalProgramError.invalidInput) {
+        try MacProgramLifecycleEvent(executionID: "exec", sequence: 1, kind: "progress",
+            occurredAt: fixtureNow, claimant: claimant,
+            payload: .progress(message: "", completed: 2, total: 1))
     }
     #expect(throws: LocalProgramError.invalidInput) {
         try MacProgramLifecycleEvent(executionID: "exec", sequence: 1, kind: "tool_started",
@@ -593,6 +726,20 @@ private func makeRuntime(source: String,
         inputSHA256: String(repeating: "b", count: 64), preStateSHA256: String(repeating: "a", count: 64),
         sequence: 1, startedAt: fixtureNow)
     try journal.beginTool(executionID: envelope.executionID, pending: pending)
+    try journal.requireApproval(executionID: envelope.executionID, approvalID: "approval-transition",
+        effectClass: "external_side_effect", capabilityID: pending.capabilityID,
+        toolCallID: pending.toolCallID, expiresAt: fixtureNow.addingTimeInterval(10), at: fixtureNow)
+    try journal.resolveApproval(executionID: envelope.executionID,
+        approvalID: "approval-transition", status: "approved", at: fixtureNow)
+    #expect(throws: LocalProgramError.replayed) {
+        try journal.resolveApproval(executionID: envelope.executionID,
+            approvalID: "approval-transition", status: "approved", at: fixtureNow)
+    }
+    #expect(throws: LocalProgramError.replayed) {
+        try journal.requireApproval(executionID: envelope.executionID, approvalID: "approval-late",
+            effectClass: "external_side_effect", capabilityID: pending.capabilityID,
+            toolCallID: pending.toolCallID, expiresAt: fixtureNow.addingTimeInterval(31), at: fixtureNow)
+    }
     #expect(throws: LocalProgramError.replayed) {
         try journal.beginTool(executionID: envelope.executionID, pending: pending)
     }

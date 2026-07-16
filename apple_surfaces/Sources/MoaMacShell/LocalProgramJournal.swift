@@ -39,7 +39,7 @@ public struct MacProgramTerminalReceipt: Codable, Equatable, Sendable {
     public let runtimeID: String, programSHA256: String, catalogSHA256: String, bindingsSHA256: String
     public let startedAt: Date?, finishedAt: Date, status: String
     public let toolAttempts: ToolAttempts, result: Result
-    public let finalStateSHA256: String?, error: Failure?, previousReceiptSHA256: String?, receiptSHA256: String
+    public let finalStateSHA256: String?, error: Failure, previousReceiptSHA256: String?, receiptSHA256: String
 
     enum CodingKeys: String, CodingKey {
         case version, type, claimant, status, result, error
@@ -58,7 +58,19 @@ public struct MacProgramTerminalReceipt: Codable, Equatable, Sendable {
             lastReceiptSHA256: receipts.last?.receiptSHA256)
         let boundedResult = Result(summary: status == "completed" ? "program_completed" : "program_not_completed",
             dataSHA256: local.resultJSON.map { MacLocalProgramDigest.data(Data($0.utf8)) }, artifactRefs: [])
-        let failure = status == "completed" ? nil : Failure(code: status, message: nil)
+        let failure: Failure
+        switch status {
+        case "completed": failure = Failure(code: nil, message: nil)
+        case "rejected": failure = Failure(code: "proposal_rejected", message: "The local proposal was rejected.")
+        case "timed_out": failure = Failure(code: "timeout", message: "The local program exceeded its wall-time limit.")
+        case "stopped": failure = Failure(code: "user_stop", message: "The local program was stopped by the user.")
+        case "interrupted": failure = Failure(code: "runtime_interrupted", message: "The local runtime was interrupted.")
+        case "indeterminate": failure = Failure(code: "indeterminate", message: "A local effect outcome could not be proven.")
+        default:
+            let limit = local.error.map { $0.contains("TooLarge") || $0.contains("Budget") || $0.contains("expired") } ?? false
+            failure = Failure(code: limit ? "limit_exceeded" : "runtime_failed",
+                message: limit ? "A local execution limit was exceeded." : "The local runtime failed safely.")
+        }
         let material = HashMaterial(version: 1, type: "surface.execution.receipt", receiptID: receiptID,
             executionID: local.executionID, sessionID: local.sessionID, turnID: local.turnID,
             claimant: claimant, runtimeID: local.runtimeID, programSHA256: local.programSHA256,
@@ -94,7 +106,7 @@ public struct MacProgramTerminalReceipt: Codable, Equatable, Sendable {
         try c.encode(finishedAt, forKey: .finishedAt); try c.encode(status, forKey: .status)
         try c.encode(toolAttempts, forKey: .toolAttempts); try c.encode(result, forKey: .result)
         if let finalStateSHA256 { try c.encode(finalStateSHA256, forKey: .finalStateSHA256) } else { try c.encodeNil(forKey: .finalStateSHA256) }
-        if let error { try c.encode(error, forKey: .error) } else { try c.encodeNil(forKey: .error) }
+        try c.encode(error, forKey: .error)
         if let previousReceiptSHA256 { try c.encode(previousReceiptSHA256, forKey: .previousReceiptSHA256) } else { try c.encodeNil(forKey: .previousReceiptSHA256) }
         try c.encode(receiptSHA256, forKey: .receiptSHA256)
     }
@@ -105,12 +117,12 @@ public struct MacProgramTerminalReceipt: Codable, Equatable, Sendable {
         let runtimeID: String, programSHA256: String, catalogSHA256: String, bindingsSHA256: String
         let startedAt: Date?, finishedAt: Date, status: String
         let toolAttempts: ToolAttempts, result: Result
-        let finalStateSHA256: String?, error: Failure?, previousReceiptSHA256: String?
+        let finalStateSHA256: String?, error: Failure, previousReceiptSHA256: String?
         init(version: Int, type: String, receiptID: String, executionID: String, sessionID: String,
              turnID: String, claimant: MacReceiptClaimant, runtimeID: String, programSHA256: String,
              catalogSHA256: String, bindingsSHA256: String, startedAt: Date?, finishedAt: Date,
              status: String, toolAttempts: ToolAttempts, result: Result, finalStateSHA256: String?,
-             error: Failure?, previousReceiptSHA256: String?) {
+             error: Failure, previousReceiptSHA256: String?) {
             self.version = version; self.type = type; self.receiptID = receiptID
             self.executionID = executionID; self.sessionID = sessionID; self.turnID = turnID
             self.claimant = claimant; self.runtimeID = runtimeID; self.programSHA256 = programSHA256
@@ -150,7 +162,7 @@ public struct MacProgramTerminalReceipt: Codable, Equatable, Sendable {
             try c.encode(finishedAt, forKey: .finishedAt); try c.encode(status, forKey: .status)
             try c.encode(toolAttempts, forKey: .toolAttempts); try c.encode(result, forKey: .result)
             if let finalStateSHA256 { try c.encode(finalStateSHA256, forKey: .finalStateSHA256) } else { try c.encodeNil(forKey: .finalStateSHA256) }
-            if let error { try c.encode(error, forKey: .error) } else { try c.encodeNil(forKey: .error) }
+            try c.encode(error, forKey: .error)
             if let previousReceiptSHA256 { try c.encode(previousReceiptSHA256, forKey: .previousReceiptSHA256) } else { try c.encodeNil(forKey: .previousReceiptSHA256) }
         }
     }
@@ -163,6 +175,10 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         case toolStarted(capabilityID: String, toolCallID: String, attempt: Int)
         case toolFinished(capabilityID: String, toolCallID: String, attempt: Int,
                           status: String, receiptID: String, receiptSHA256: String)
+        case approvalRequired(approvalID: String, effectClass: String, capabilityID: String,
+                              toolCallID: String, attempt: Int, expiresAt: Date)
+        case approvalResolved(approvalID: String, status: String)
+        case progress(message: String, completed: Int, total: Int)
         case stopping(reason: String)
         case terminal(status: String, receiptID: String, receiptSHA256: String)
     }
@@ -182,10 +198,37 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         self.occurredAt = occurredAt; self.claimant = claimant; self.payload = payload
     }
 
+    public static func decodeStrict(_ data: Data) throws -> Self {
+        guard case .object(let root) = try MacCanonicalJSON.parse(data),
+              Set(root.keys) == ["version", "type", "event_id", "execution_id", "sequence",
+                  "kind", "occurred_at", "claimant", "payload"],
+              let kind = root["kind"]?.stringValue,
+              case .object(let payload) = root["payload"] else { throw LocalProgramError.invalidInput }
+        let keys: Set<String>
+        switch kind {
+        case "accepted": keys = ["proposal_sha256"]
+        case "started": keys = []
+        case "tool_started": keys = ["capability_id", "tool_call_id", "attempt"]
+        case "tool_finished": keys = ["capability_id", "tool_call_id", "attempt", "status", "receipt_id", "receipt_sha256"]
+        case "approval_required": keys = ["approval_id", "effect_class", "capability_id", "tool_call_id", "attempt", "expires_at"]
+        case "approval_resolved": keys = ["approval_id", "status"]
+        case "progress": keys = ["message", "completed", "total"]
+        case "stopping": keys = ["reason"]
+        case "terminal": keys = ["status", "receipt_id", "receipt_sha256"]
+        default: throw LocalProgramError.invalidInput
+        }
+        guard Set(payload.keys) == keys else { throw LocalProgramError.invalidInput }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        do { return try decoder.decode(Self.self, from: data) }
+        catch { throw LocalProgramError.invalidInput }
+    }
+
     private static func kind(of payload: Payload) -> String {
         switch payload {
         case .accepted: "accepted"; case .started: "started"
         case .toolStarted: "tool_started"; case .toolFinished: "tool_finished"
+        case .approvalRequired: "approval_required"; case .approvalResolved: "approval_resolved"
+        case .progress: "progress"
         case .stopping: "stopping"; case .terminal: "terminal"
         }
     }
@@ -200,6 +243,14 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         case .toolFinished(let capability, let call, let attempt, let status, let receipt, let receiptSHA):
             return !capability.isEmpty && !call.isEmpty && attempt >= 1 && !receipt.isEmpty && digest(receiptSHA) &&
                 ["succeeded", "failed", "rejected", "stale_state", "timed_out", "stopped", "indeterminate"].contains(status)
+        case .approvalRequired(let approval, let effect, let capability, let call, let attempt, _):
+            return !approval.isEmpty && !capability.isEmpty && !call.isEmpty && attempt >= 1 &&
+                ["read", "navigation", "local_mutation", "external_side_effect", "destructive",
+                 "security_sensitive", "financial", "publishing", "sending"].contains(effect)
+        case .approvalResolved(let approval, let status):
+            return !approval.isEmpty && ["approved", "denied", "expired", "cancelled"].contains(status)
+        case .progress(let message, let completed, let total):
+            return !message.isEmpty && message.utf8.count <= 240 && completed >= 0 && completed <= total
         case .stopping(let reason): return ["user_stop", "timeout", "policy_revoked", "surface_shutdown"].contains(reason)
         case .terminal(let status, let receipt, let receiptSHA):
             return !receipt.isEmpty && digest(receiptSHA) &&
@@ -218,6 +269,12 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         enum CodingKeys: String, CodingKey { case attempt, status; case capabilityID = "capability_id", toolCallID = "tool_call_id", receiptID = "receipt_id", receiptSHA256 = "receipt_sha256" }
     }
     private struct Stopping: Codable { let reason: String }
+    private struct ApprovalRequired: Codable {
+        let approvalID: String, effectClass: String, capabilityID: String, toolCallID: String, attempt: Int, expiresAt: Date
+        enum CodingKeys: String, CodingKey { case attempt; case approvalID = "approval_id", effectClass = "effect_class", capabilityID = "capability_id", toolCallID = "tool_call_id", expiresAt = "expires_at" }
+    }
+    private struct ApprovalResolved: Codable { let approvalID: String, status: String; enum CodingKeys: String, CodingKey { case status; case approvalID = "approval_id" } }
+    private struct Progress: Codable { let message: String, completed: Int, total: Int }
     private struct Terminal: Codable { let status: String, receiptID: String, receiptSHA256: String; enum CodingKeys: String, CodingKey { case status; case receiptID = "receipt_id", receiptSHA256 = "receipt_sha256" } }
     private struct Empty: Codable {}
 
@@ -235,6 +292,13 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         case .toolFinished(let capability, let call, let attempt, let status, let receipt, let digest):
             try container.encode(ToolFinished(capabilityID: capability, toolCallID: call, attempt: attempt,
                 status: status, receiptID: receipt, receiptSHA256: digest), forKey: .payload)
+        case .approvalRequired(let approval, let effect, let capability, let call, let attempt, let expiry):
+            try container.encode(ApprovalRequired(approvalID: approval, effectClass: effect,
+                capabilityID: capability, toolCallID: call, attempt: attempt, expiresAt: expiry), forKey: .payload)
+        case .approvalResolved(let approval, let status):
+            try container.encode(ApprovalResolved(approvalID: approval, status: status), forKey: .payload)
+        case .progress(let message, let completed, let total):
+            try container.encode(Progress(message: message, completed: completed, total: total), forKey: .payload)
         case .stopping(let reason): try container.encode(Stopping(reason: reason), forKey: .payload)
         case .terminal(let status, let receipt, let digest):
             try container.encode(Terminal(status: status, receiptID: receipt, receiptSHA256: digest), forKey: .payload)
@@ -257,6 +321,9 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
         case "started": _ = try container.decode(Empty.self, forKey: .payload); payload = .started
         case "tool_started": let value = try container.decode(ToolStarted.self, forKey: .payload); payload = .toolStarted(capabilityID: value.capabilityID, toolCallID: value.toolCallID, attempt: value.attempt)
         case "tool_finished": let value = try container.decode(ToolFinished.self, forKey: .payload); payload = .toolFinished(capabilityID: value.capabilityID, toolCallID: value.toolCallID, attempt: value.attempt, status: value.status, receiptID: value.receiptID, receiptSHA256: value.receiptSHA256)
+        case "approval_required": let value = try container.decode(ApprovalRequired.self, forKey: .payload); payload = .approvalRequired(approvalID: value.approvalID, effectClass: value.effectClass, capabilityID: value.capabilityID, toolCallID: value.toolCallID, attempt: value.attempt, expiresAt: value.expiresAt)
+        case "approval_resolved": let value = try container.decode(ApprovalResolved.self, forKey: .payload); payload = .approvalResolved(approvalID: value.approvalID, status: value.status)
+        case "progress": let value = try container.decode(Progress.self, forKey: .payload); payload = .progress(message: value.message, completed: value.completed, total: value.total)
         case "stopping": payload = .stopping(reason: try container.decode(Stopping.self, forKey: .payload).reason)
         case "terminal": let value = try container.decode(Terminal.self, forKey: .payload); payload = .terminal(status: value.status, receiptID: value.receiptID, receiptSHA256: value.receiptSHA256)
         default: throw LocalProgramError.invalidInput
@@ -269,16 +336,18 @@ public struct MacProgramLifecycleEvent: Codable, Equatable, Sendable {
 
 public struct MacProgramPendingTool: Codable, Equatable, Sendable {
     public let toolCallID: String, capabilityID: String, inputSHA256: String, preStateSHA256: String
+    public let effectClass: String
     public let sequence: Int
     public let startedAt: Date
     public init(toolCallID: String, capabilityID: String, inputSHA256: String,
-                preStateSHA256: String, sequence: Int, startedAt: Date) {
+                preStateSHA256: String, effectClass: String = "read", sequence: Int, startedAt: Date) {
         self.toolCallID = toolCallID; self.capabilityID = capabilityID
         self.inputSHA256 = inputSHA256; self.preStateSHA256 = preStateSHA256
+        self.effectClass = effectClass
         self.sequence = sequence; self.startedAt = startedAt
     }
     enum CodingKeys: String, CodingKey {
-        case sequence; case toolCallID = "tool_call_id", capabilityID = "capability_id"
+        case sequence; case toolCallID = "tool_call_id", capabilityID = "capability_id", effectClass = "effect_class"
         case inputSHA256 = "input_sha256", preStateSHA256 = "pre_state_sha256", startedAt = "started_at"
     }
 }
@@ -289,11 +358,16 @@ public enum MacProgramClaim: Equatable, Sendable {
 }
 
 public protocol MacProgramJournaling: AnyObject, Sendable {
+    func reject(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
+                clientInstanceID: String, at: Date) throws -> MacLocalProgramResult
     func claim(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
                clientInstanceID: String, at: Date) throws -> MacProgramClaim
     func markStarted(executionID: String, at: Date) throws
     func beginTool(executionID: String, pending: MacProgramPendingTool) throws
     func finishTool(executionID: String, receipt: MacLocalActionReceipt, at: Date) throws
+    func requireApproval(executionID: String, approvalID: String, effectClass: String,
+                         capabilityID: String, toolCallID: String, expiresAt: Date, at: Date) throws
+    func resolveApproval(executionID: String, approvalID: String, status: String, at: Date) throws
     func finish(executionID: String, result: MacLocalProgramResult, at: Date) throws
     func requestStop(executionID: String, at: Date) throws
     func isStopRequested(executionID: String) throws -> Bool
@@ -309,10 +383,13 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         let executionID: String, idempotencyKey: String, sessionID: String, turnID: String
         let claimantDeviceID: String, clientInstanceID: String
         let runtimeID: String, proposalSHA256: String, programSHA256: String, catalogSHA256: String, bindingsSHA256: String
+        let initialStateSHA256: String
+        let proposalExpiresAt: Date
         var nextSequence: Int
         var stopRequested: Bool
         var events: [MacProgramLifecycleEvent]
         var pending: [String: MacProgramPendingTool]
+        var approvals: [String: String]
         var receipts: [MacLocalActionReceipt]
         var terminal: MacLocalProgramResult?
         var terminalReceipt: MacProgramTerminalReceipt?
@@ -328,6 +405,44 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         self.lockURL = fileURL.appendingPathExtension("lock")
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
+    }
+
+    public func reject(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
+                       clientInstanceID: String, at: Date) throws -> MacLocalProgramResult {
+        try mutate { state in
+            if let existing = state.records[envelope.executionID]?.terminal { return existing }
+            guard !state.records.values.contains(where: { $0.idempotencyKey == envelope.idempotencyKey })
+            else { throw LocalProgramError.replayed }
+            let claimant = MacReceiptClaimant(deviceID: claimantDeviceID,
+                clientInstanceID: clientInstanceID)
+            let local = MacLocalProgramResult(executionID: envelope.executionID,
+                sessionID: envelope.sessionID, turnID: envelope.turnID,
+                claimantDeviceID: claimantDeviceID, runtimeID: envelope.runtime.runtimeID,
+                status: "rejected", resultJSON: nil, error: "proposal_rejected", toolCalls: 0,
+                receipts: [], programSHA256: envelope.program.sha256,
+                catalogSHA256: envelope.catalog.sha256,
+                bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
+                startedAt: nil, finishedAt: at)
+            let terminalReceipt = MacProgramTerminalReceipt.make(
+                receiptID: "receipt_\(UUID().uuidString.lowercased())", result: local,
+                claimant: claimant, receipts: [], status: "rejected", finishedAt: at)
+            let event = try MacProgramLifecycleEvent(executionID: envelope.executionID,
+                sequence: 1, kind: "terminal", occurredAt: at, claimant: claimant,
+                payload: .terminal(status: "rejected", receiptID: terminalReceipt.receiptID,
+                    receiptSHA256: terminalReceipt.receiptSHA256))
+            state.records[envelope.executionID] = Record(executionID: envelope.executionID,
+                idempotencyKey: envelope.idempotencyKey, sessionID: envelope.sessionID,
+                turnID: envelope.turnID, claimantDeviceID: claimantDeviceID,
+                clientInstanceID: clientInstanceID, runtimeID: envelope.runtime.runtimeID,
+                proposalSHA256: MacLocalProgramDigest.canonical(envelope),
+                programSHA256: envelope.program.sha256, catalogSHA256: envelope.catalog.sha256,
+                bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
+                initialStateSHA256: envelope.bindings.stateSHA256,
+                proposalExpiresAt: envelope.expiresAt, nextSequence: 2, stopRequested: false,
+                events: [event], pending: [:], approvals: [:], receipts: [], terminal: local,
+                terminalReceipt: terminalReceipt)
+            return local
+        }
     }
 
     public func claim(_ envelope: MacLocalProgramEnvelope, claimantDeviceID: String,
@@ -356,8 +471,10 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
                 clientInstanceID: clientInstanceID, runtimeID: envelope.runtime.runtimeID,
                 proposalSHA256: proposalSHA256,
                 programSHA256: envelope.program.sha256, catalogSHA256: envelope.catalog.sha256,
-                bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings), nextSequence: 2,
-                stopRequested: false, events: [event], pending: [:], receipts: [], terminal: nil,
+                bindingsSHA256: MacLocalProgramDigest.bindings(envelope.bindings),
+                initialStateSHA256: envelope.bindings.stateSHA256,
+                proposalExpiresAt: envelope.expiresAt, nextSequence: 2,
+                stopRequested: false, events: [event], pending: [:], approvals: [:], receipts: [], terminal: nil,
                 terminalReceipt: nil)
             return .accepted
         }
@@ -374,7 +491,10 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
         try update(executionID) { record in
             guard record.terminal == nil, !record.stopRequested else { throw LocalProgramError.stopped }
             guard record.pending[pending.toolCallID] == nil,
-                  !record.receipts.contains(where: { $0.toolCallID == pending.toolCallID })
+                  !record.receipts.contains(where: { $0.toolCallID == pending.toolCallID }),
+                  pending.preStateSHA256 == (record.receipts.last(where: {
+                      $0.postStateSHA256 != nil
+                  })?.postStateSHA256 ?? record.initialStateSHA256)
             else { throw LocalProgramError.replayed }
             record.pending[pending.toolCallID] = pending
             try Self.append(kind: "tool_started", at: pending.startedAt,
@@ -395,7 +515,7 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
                   receipt.postStateSHA256.map(Self.isDigest) ?? true,
                   receipt.result.dataSHA256.map(Self.isDigest) ?? true,
                   ["semantic_ax_action_executed", "bounded_local_read_completed",
-                   "local_capability_did_not_complete"].contains(receipt.result.summary),
+                   "local_capability_did_not_complete", "local_capability_outcome_indeterminate"].contains(receipt.result.summary),
                   receipt.executionID == record.executionID,
                   receipt.claimant == MacReceiptClaimant(deviceID: record.claimantDeviceID,
                     clientInstanceID: record.clientInstanceID),
@@ -408,9 +528,35 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
                   pending.inputSHA256 == receipt.inputSHA256,
                   pending.preStateSHA256 == receipt.preStateSHA256
             else { throw LocalProgramError.replayed }
+            guard pending.effectClass == "read" || receipt.status != "succeeded" || receipt.postStateSHA256 != nil
+            else { throw LocalProgramError.replayed }
             record.receipts.append(receipt)
             try Self.append(kind: "tool_finished", at: at, capabilityID: receipt.capabilityID,
                 toolCallID: receipt.toolCallID, status: receipt.status, to: &record)
+        }
+    }
+
+    public func requireApproval(executionID: String, approvalID: String, effectClass: String,
+                                capabilityID: String, toolCallID: String, expiresAt: Date, at: Date) throws {
+        try update(executionID) { record in
+            guard record.terminal == nil, record.pending[toolCallID] != nil,
+                  record.approvals[approvalID] == nil, expiresAt <= record.proposalExpiresAt,
+                  expiresAt > at else { throw LocalProgramError.replayed }
+            record.approvals[approvalID] = "pending"
+            try Self.append(kind: "approval_required", at: at, capabilityID: capabilityID,
+                toolCallID: toolCallID, status: effectClass, approvalID: approvalID,
+                approvalExpiresAt: expiresAt, to: &record)
+        }
+    }
+
+    public func resolveApproval(executionID: String, approvalID: String, status: String, at: Date) throws {
+        try update(executionID) { record in
+            guard record.terminal == nil, record.approvals[approvalID] == "pending" else {
+                throw LocalProgramError.replayed
+            }
+            record.approvals[approvalID] = status
+            try Self.append(kind: "approval_resolved", at: at, status: status,
+                approvalID: approvalID, to: &record)
         }
     }
 
@@ -479,9 +625,13 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
 
     private static func append(kind: String, at: Date, capabilityID: String? = nil,
                                toolCallID: String? = nil, status: String? = nil,
+                               approvalID: String? = nil, approvalExpiresAt: Date? = nil,
                                to record: inout Record) throws {
         let claimant = MacReceiptClaimant(deviceID: record.claimantDeviceID,
             clientInstanceID: record.clientInstanceID)
+        guard record.events.last.map({ at >= $0.occurredAt }) ?? true else {
+            throw LocalProgramError.invalidInput
+        }
         let payload: MacProgramLifecycleEvent.Payload
         switch kind {
         case "started": payload = .started
@@ -494,6 +644,14 @@ public final class AtomicFileMacProgramJournal: MacProgramJournaling, @unchecked
             payload = .toolFinished(capabilityID: capabilityID, toolCallID: toolCallID, attempt: 1,
                 status: status, receiptID: receipt.receiptID, receiptSHA256: receipt.receiptSHA256)
         case "stopping": payload = .stopping(reason: "user_stop")
+        case "approval_required":
+            guard let approvalID, let status, let capabilityID, let toolCallID, let approvalExpiresAt
+            else { throw LocalProgramError.invalidInput }
+            payload = .approvalRequired(approvalID: approvalID, effectClass: status,
+                capabilityID: capabilityID, toolCallID: toolCallID, attempt: 1, expiresAt: approvalExpiresAt)
+        case "approval_resolved":
+            guard let approvalID, let status else { throw LocalProgramError.invalidInput }
+            payload = .approvalResolved(approvalID: approvalID, status: status)
         case "terminal":
             guard let receipt = record.terminalReceipt, let status else { throw LocalProgramError.invalidInput }
             payload = .terminal(status: status, receiptID: receipt.receiptID,
