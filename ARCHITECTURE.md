@@ -1280,6 +1280,19 @@ The gateway publishes update artifacts, but it does not install them on the
 phone. The Android app remains the local authority and the platform package
 installer is the final approval step.
 
+VPS publication is a transaction over an immutable release directory. The
+publisher first validates the local `current` pointer and byte-consistent
+release/legacy metadata, acquires an owner lock, and snapshots the prior
+pointer, manifest, and APK. It uploads into operation-specific staging without
+deleting earlier releases, rejects a release-id collision unless every expected
+byte matches, and switches the legacy files plus `current` only after final
+verification. A failed finalizer restores and verifies the snapshot; an
+interrupted or transport-uncertain finalizer leaves the owner lock and evidence
+in place. A separate acknowledgement verifies the durable publication receipt
+and exact committed bytes before removing that lock. Missing acknowledgement is
+therefore a recoverable locked state, never permission to publish over unknown
+remote state.
+
 ### Phone Action
 
 ```text
@@ -1293,6 +1306,81 @@ User request or model proposal
 
 Model output and screen text are untrusted inputs. They can inform proposals;
 they cannot directly execute phone actions.
+
+### Device-Local Media And Saved Spots
+
+```text
+spoken/typed media request
+  -> gateway queues a bounded media proposal for the owning surface
+  -> Android or browser validates current local media identity and user authority
+  -> the surface executes locally and returns a terminal receipt
+  -> an explicitly approved saved spot may sync as a bounded gateway bookmark
+```
+
+The Android phone-action catalog is the same across ordinary typed chat,
+`POST /v1/voice/turns`, cascaded voice reasoning, and Android legacy-Live tool
+dispatch. `app.launch` accepts only a user-visible launcher label and succeeds
+only when that label resolves uniquely among `ACTION_MAIN`/`CATEGORY_LAUNCHER`
+activities; `app.list` returns a bounded projection of those labels. Packages,
+components, activities, intents, hidden components, and model-selected raw
+application ids have no launch authority. Both actions stay pinned to the
+source Android device and complete through its claim/receipt loop.
+
+Android obtains active-media authority only after the user enables Moa's
+`NotificationListenerService`; that grant lets the app query
+`MediaSessionManager` and invoke only transport actions advertised by the
+selected session. Control and seek bind the proposal to a fresh package, media
+fingerprint, and position. Missing notification access, unsupported transport,
+or identity drift fails closed.
+
+YouTube execution is not bound to one model-selected package. Android stores a
+device-local preferred app alias; `YouTube` resolves locally to the installed
+Advanced/ReVanced package by default, with stock YouTube as a compatible named
+choice. An explicit user-visible variant name may override the alias for one
+request. The selected package is rebound at execution time. Undocumented
+package-specific Accessibility support lives behind a named adapter with an
+allowed package/signature, supported version range, bounded state transitions,
+and fixtures; an unknown build, signature mismatch, missing selector, ambiguous
+state, or foreground-app change disables the adapter rather than guessing.
+Playlist approval and execution bind the package, installed version code,
+signer digest, local UI-profile version, active window, expiry, and—for
+membership/create operations—the observed video identity and media fingerprint.
+Success is reported only after a fresh bounded snapshot proves the exact
+postcondition: membership checked state, uniquely visible created name, old-to-new
+rename, or absence after deletion. The gateway never performs these UI actions.
+
+A saved video spot requires a syntactically valid real YouTube `video_id` plus
+a bounded playback position. Title/package-only identity may help an explicitly
+confirmed search but cannot create a bookmark. After the user approves sync,
+the owning surface may send the gateway only the bounded bookmark record:
+bookmark id, provider, video id, position, label, optional bounded note/title,
+source surface, and creation/update times. Media-session tokens, package
+signatures, cookies, authorization data, page bodies, accessibility trees, and
+raw audio are excluded. The gateway is the authorized cross-surface bookmark
+store and router; it holds no YouTube credential and calls no YouTube API.
+Recall resolves normalized text by exact label, phrase containment, then bounded
+token overlap; equal best matches are ambiguous. Direct raw-audio matching is
+deferred: spoken words are resolved only after transcription.
+
+The browser extension implements the same saved-spot contract locally. After
+explicit activation it parses supported canonical YouTube URL shapes and reads
+the bounded current HTML-media time, or opens a canonical video URL with the
+saved timestamp. For a query-only open, it opens a local YouTube search and
+selects only one exact title match, further constrained by exact channel when
+provided; zero or duplicate matches execute nothing. This path uses no OAuth,
+cookie access, CDP, or authenticated browser-agent session. Android and browser
+each remain responsible for local validation, execution, and receipts when
+recalling the shared record.
+
+Local execution and eventual gateway reporting are separate durable states.
+Each client records the gateway request id, current claim id, one receipt id,
+and the canonical result before executing or retrying; the gateway accepts a
+terminal receipt only from the bound claimant before lease expiry and treats an
+identical retry as idempotent. Bookmark creates/deletes likewise use bounded
+durable outboxes. A delete tombstone is committed before local cache removal and
+suppresses a stale gateway record until the remote delete is acknowledged, so a
+restart or network failure cannot silently resurrect the bookmark. Capacity
+exhaustion fails closed rather than evicting older unacknowledged work.
 
 ### Cross-Device Tool Hub
 
