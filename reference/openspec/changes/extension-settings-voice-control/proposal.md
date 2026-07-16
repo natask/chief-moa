@@ -18,9 +18,11 @@ prompt and behavior) is one of the settings this surface reads and writes.
   path that turns "make yourself terser" or "set the system prompt to ..." into
   concrete settings changes applied through the setting owner's validated
   gateway-profile or extension-local path.
-- Give the agent a complete, queryable catalog of user-configurable settings so
-  the user can list, explain, semantically search, compare, and ask for useful
-  recommendations without already knowing exact setting labels.
+- Give the agent a queryable catalog of canonical gateway runtime-profile
+  settings so the user can list, explain, semantically search, compare, and ask
+  for useful recommendations without already knowing exact setting labels.
+  Merging browser-local controls into that projection is a follow-up; this
+  browser change does not claim an Android settings registry.
 - Project catalog results as selectable visual controls in the existing command
   or workspace surface. Options remains the deep configuration and Chrome
   permission-remediation surface rather than the only place settings can be
@@ -33,6 +35,19 @@ prompt and behavior) is one of the settings this surface reads and writes.
 - Keep provider API keys, subscriptions, model calls, and customization
   persistence on the engine side. The extension may hold only the engine
   connection/session state needed to reach that engine.
+
+## Implemented Slice Boundary
+
+The gateway implements a read-only catalog over its canonical runtime profile,
+including list, exact get, deterministic meaning/alias search, recommendation,
+current/default values, constraints, redaction, and rejection of unknown
+settings. The same catalog is available through authenticated HTTP routes and
+the gateway voice agent's `read_agent_settings` tool.
+
+The current browser does not yet merge extension-local controls into that
+catalog, render catalog results in a Command-K-style surface, or broker generic
+extension-local writes. Android preferences remain Android-owned and are not
+enumerated or mutated by this browser/gateway slice.
 
 ## Capabilities
 
