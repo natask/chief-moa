@@ -739,7 +739,8 @@ if (
   !/looksLikePageContextQuestion/.test(backgroundSource) ||
   !/looksLikePageContextQuestion\(instruction\)[\s\S]{0,140}runBrowserAgentTurn/.test(backgroundSource) ||
   !/function isPageContextTranscript/.test(contentSource) ||
-  !/isProfileControlTranscript\(text\) \|\| isPageContextTranscript\(text\)/.test(contentSource)
+  !/function isSettingsQueryTranscript/.test(contentSource) ||
+  !/isProfileControlTranscript\(text\)[\s\S]{0,140}isSettingsQueryTranscript\(text\)[\s\S]{0,140}isPageContextTranscript\(text\)/.test(contentSource)
 ) {
   throw new Error("typed and final spoken page/current-page questions must route to the shared browser-agent orchestrator");
 }

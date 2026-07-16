@@ -1995,6 +1995,61 @@
     });
   }
 
+  function attachSettingsResults(cueId, payload) {
+    const entry = cues.get(cueId);
+    const card = entry?.cardEl || log?.querySelector(`.agee-cue[data-cue="${cueId}"]`);
+    if (!card) return;
+    card.querySelector(".agee-settings-results")?.remove();
+    const settings = Array.isArray(payload?.settings) ? payload.settings : [];
+    const list = document.createElement("div");
+    list.className = "agee-settings-results";
+    list.setAttribute("role", "listbox");
+    for (const setting of settings) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "agee-setting-row";
+      row.dataset.settingId = setting.id;
+      row.setAttribute("role", "option");
+      const title = document.createElement("strong");
+      title.textContent = setting.title || setting.id;
+      const current = document.createElement("span");
+      current.textContent = `Current: ${formatOverlaySettingValue(setting.current)}`;
+      const description = document.createElement("small");
+      description.textContent = setting.description || "Registered setting.";
+      row.append(title, current, description);
+      row.addEventListener("click", () => {
+        row.classList.toggle("agee-setting-row-expanded");
+        description.textContent = row.classList.contains("agee-setting-row-expanded")
+          ? `${setting.description || "Registered setting."} Owner: ${setting.owner || "unknown"}. Takes effect: ${setting.takes_effect || "unspecified"}.`
+          : setting.description || "Registered setting.";
+      });
+      list.appendChild(row);
+      if (setting.deep_link?.target === "microphone_permission") {
+        const action = document.createElement("button");
+        action.type = "button";
+        action.className = "agee-setting-action";
+        action.textContent = setting.deep_link.label || "Open microphone setup";
+        action.addEventListener("click", () => {
+          action.disabled = true;
+          safeRuntimeSendMessage({ cmd: "openOptions", target: setting.deep_link.target }).then((result) => {
+            if (!result?.ok) action.disabled = false;
+          }).catch(() => { action.disabled = false; });
+        });
+        list.appendChild(action);
+      }
+    }
+    if (!settings.length) list.textContent = "No registered settings matched.";
+    card.appendChild(list);
+    holdCueOpen(cueId);
+  }
+
+  function formatOverlaySettingValue(value) {
+    if (value === null || value === undefined || value === "") return "Not set";
+    if (Array.isArray(value)) return value.join(", ") || "None";
+    if (typeof value === "object") return "Configured";
+    return String(value);
+  }
+
   // Apply a page_tweak action that arrived over the live voice socket. content.js
   // and tweaks.js are separate content scripts in the same tab and cannot message
   // each other directly, so the record is routed through the background, which
@@ -3638,7 +3693,14 @@
   }
 
   function shouldRouteLiveTranscriptThroughGateway(text) {
-    return isProfileControlTranscript(text) || isPageContextTranscript(text) || isBrowserCommandTranscript(text);
+    return isProfileControlTranscript(text) || isSettingsQueryTranscript(text) || isPageContextTranscript(text) || isBrowserCommandTranscript(text);
+  }
+
+  function isSettingsQueryTranscript(text) {
+    const lower = normalizeSpokenCommand(text);
+    if (!lower || !/\b(settings?|preferences?|configuration)\b/.test(lower)) return false;
+    if (/\b(set|change|update|enable|disable|turn on|turn off|clear)\b/.test(lower)) return true;
+    return /\b(list|show|find|search|recommend|useful|what|which|tell me|all|every)\b/.test(lower);
   }
 
   function isPageContextTranscript(text) {
@@ -4238,6 +4300,9 @@
         // Replies live in the cue/result surface. The composer stays free for
         // the next command instead of becoming a chat transcript.
         if (agentState === "thinking") setAgentState("idle");
+        return false;
+      case "settingsResults":
+        attachSettingsResults(msg.cueId, msg.payload || {});
         return false;
       case "error":
         showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible

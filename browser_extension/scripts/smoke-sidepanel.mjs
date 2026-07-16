@@ -189,6 +189,59 @@ async function main() {
     ) {
       throw new Error(`settings discovery did not render the typed permission projection: ${JSON.stringify(settingsProjection)}`);
     }
+    const parity = await evaluate(pageCdp, `(async () => {
+      const panel = await import(chrome.runtime.getURL("sidepanel.js"));
+      const spoken = await panel.projectSpokenSettingsQuery({}, "Find settings about microphone access");
+      const spokenIds = spoken.settings.map((setting) => setting.id);
+      const renderedIds = [...document.querySelectorAll(".setting-row")].map((row) => row.dataset.settingId);
+      await panel.runSettingsQuery("list");
+      const allIds = [...document.querySelectorAll(".setting-row")].map((row) => row.dataset.settingId);
+      return { spokenIds, renderedIds, allIds };
+    })()`);
+    if (
+      parity.spokenIds[0] !== "browser.microphone_permission" ||
+      parity.renderedIds[0] !== parity.spokenIds[0] ||
+      !["browser.gateway_url", "browser.gateway_token", "browser.livekit_voice", "browser.background_automation", "browser.microphone_permission", "browser.agent_role"]
+        .every((id) => parity.allIds.includes(id))
+    ) {
+      throw new Error(`spoken/typed settings identities or complete local All projection diverged: ${JSON.stringify(parity)}`);
+    }
+    const writes = await evaluate(pageCdp, `new Promise(async (resolveWrites) => {
+      const port = chrome.runtime.connect({ name: "agee-panel" });
+      let reqId = 8100;
+      const pending = new Map();
+      port.onMessage.addListener((msg) => {
+        const resolve = pending.get(msg?.reqId);
+        if (resolve) { pending.delete(msg.reqId); resolve(msg); }
+      });
+      const request = (payload) => new Promise((resolve) => {
+        const id = reqId++;
+        pending.set(id, resolve);
+        port.postMessage({ reqId: id, ...payload });
+      });
+      const unknown = await request({ cmd: "settingsWrite", id: "browser.not_real", value: true });
+      const microphone = await request({ cmd: "settingsWrite", id: "browser.microphone_permission", value: "granted" });
+      const background = await request({ cmd: "settingsWrite", id: "browser.background_automation", value: true });
+      const livekit = await request({ cmd: "settingsWrite", id: "browser.livekit_voice", value: true });
+      const token = await request({ cmd: "settingsWrite", id: "browser.gateway_token", value: "smoke-secret-must-not-return" });
+      await request({ cmd: "settingsWrite", id: "browser.gateway_token", value: "" });
+      const stored = await chrome.storage.local.get({ ageeLivekitVoiceEnabled: false, ageeBackgroundAutomationEnabled: false });
+      resolveWrites({ unknown, microphone, background, livekit, token, stored });
+    })`);
+    if (
+      writes.unknown?.error !== "unknown_setting" ||
+      writes.microphone?.error !== "setting_not_writable" ||
+      writes.background?.error !== "explicit_versioned_approval_required" ||
+      writes.livekit?.receipt?.current !== true ||
+      writes.stored.ageeLivekitVoiceEnabled !== true ||
+      writes.stored.ageeBackgroundAutomationEnabled !== false ||
+      JSON.stringify(writes.token).includes("smoke-secret-must-not-return") ||
+      writes.token?.receipt?.redacted !== true
+    ) {
+      throw new Error(`owner-brokered settings writes violated validation/redaction: ${JSON.stringify(writes)}`);
+    }
+    await evaluate(pageCdp, 'document.querySelector(".setting-row[data-setting-id=\\"browser.microphone_permission\\"]")?.click()');
+    await waitForEval(pageCdp, '!document.getElementById("settingsDetail")?.hidden && document.querySelector("#settingsDetail .setting-deep-link")');
     await evaluate(pageCdp, 'document.querySelector("#settingsDetail .setting-deep-link")?.click()');
     const optionsTarget = await waitForTarget(
       devToolsPort,
@@ -238,7 +291,7 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "settings search selected the grounded microphone row and opened its focused walkthrough, " +
+        "typed/spoken settings identities matched, All exposed every local control, brokered writes failed closed/redacted, microphone walkthrough opened, " +
         "conversational roles had no selector, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
     );
   } finally {

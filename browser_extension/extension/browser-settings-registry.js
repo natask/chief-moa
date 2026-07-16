@@ -1,5 +1,6 @@
 const OPERATIONS = Object.freeze(["list", "get", "search", "recommend"]);
 const MAX_RESULTS = 20;
+const MAX_LIST_RESULTS = 100;
 
 const DEFINITIONS = Object.freeze([
   define({
@@ -11,6 +12,7 @@ const DEFINITIONS = Object.freeze([
     defaultValue: "https://api.agee.app",
     constraints: ["HTTPS, or HTTP on localhost/private development networks."],
     takesEffect: "next gateway request",
+    writable: true,
   }),
   define({
     id: "browser.gateway_token",
@@ -22,6 +24,7 @@ const DEFINITIONS = Object.freeze([
     constraints: ["Secret value stays in browser-local storage and is always redacted."],
     takesEffect: "next gateway request",
     redaction: "configured state only",
+    writable: true,
   }),
   define({
     id: "browser.livekit_voice",
@@ -33,6 +36,7 @@ const DEFINITIONS = Object.freeze([
     constraints: ["Experimental; failure falls back to the standard WebSocket voice path."],
     takesEffect: "next voice session",
     allowedValues: [false, true],
+    writable: true,
   }),
   define({
     id: "browser.background_automation",
@@ -45,6 +49,8 @@ const DEFINITIONS = Object.freeze([
     takesEffect: "next background claim",
     allowedValues: [false, true],
     mutability: "explicit user consent only",
+    writable: true,
+    writeRequires: "versioned explicit approval",
   }),
   define({
     id: "browser.microphone_permission",
@@ -59,6 +65,18 @@ const DEFINITIONS = Object.freeze([
     mutability: "user action only",
     deepLink: { target: "microphone_permission", label: "Open microphone setup" },
   }),
+  define({
+    id: "browser.agent_role",
+    title: "Browser agent role",
+    category: "agent",
+    description: "The persisted role selected for browser turns in the overlay and side panel.",
+    aliases: ["delegate", "help", "collaborate", "explain", "browser mode", "agent mode"],
+    defaultValue: "delegate",
+    constraints: ["Controls browser-turn posture; it does not bypass typed action authority or approval."],
+    takesEffect: "next browser turn",
+    allowedValues: ["delegate", "help", "collaborate", "explain"],
+    writable: true,
+  }),
 ]);
 
 function define(input) {
@@ -68,6 +86,8 @@ function define(input) {
     scope: "this browser",
     redaction: input.redaction || "none",
     mutability: input.mutability || "user configurable",
+    writable: input.writable === true,
+    writeRequires: input.writeRequires || "none",
   });
 }
 
@@ -78,6 +98,7 @@ function browserSettings(state = {}) {
     "browser.livekit_voice": state.livekitVoiceEnabled === true,
     "browser.background_automation": state.backgroundAutomationEnabled === true && state.backgroundAutomationConsentCurrent === true,
     "browser.microphone_permission": normalizePermission(state.microphonePermission),
+    "browser.agent_role": normalizeAgentRole(state.agentRole),
   };
   return DEFINITIONS.map((definition) => ({
     id: definition.id,
@@ -93,6 +114,8 @@ function browserSettings(state = {}) {
     takes_effect: definition.takesEffect,
     redaction: definition.redaction,
     mutability: definition.mutability,
+    writable: definition.writable,
+    write_requires: definition.writeRequires,
     ...(definition.allowedValues ? { allowed_values: definition.allowedValues.slice() } : {}),
     ...(definition.deepLink ? { deep_link: { ...definition.deepLink } } : {}),
   }));
@@ -113,9 +136,14 @@ function readBrowserSettings(args = {}, state = {}) {
   if ((operation === "search" || operation === "recommend") && !query) {
     return { ok: false, error: "settings_query_required", operation };
   }
-  const limit = Math.max(1, Math.min(Number(args.limit || MAX_RESULTS) || MAX_RESULTS, MAX_RESULTS));
+  const maximum = operation === "list" ? MAX_LIST_RESULTS : MAX_RESULTS;
+  const requestedLimit = args.limit == null ? maximum : Number(args.limit);
+  const limit = Math.max(1, Math.min(requestedLimit || maximum, maximum));
+  const offset = operation === "list"
+    ? Math.max(0, Math.min(Number(args.offset || 0) || 0, settings.length))
+    : 0;
   const results = operation === "list"
-    ? settings.slice(0, limit)
+    ? settings.slice(offset, offset + limit)
     : settings
       .map((setting) => ({ setting, score: scoreSetting(setting, query) }))
       .filter((entry) => entry.score > 0)
@@ -126,7 +154,18 @@ function readBrowserSettings(args = {}, state = {}) {
         match: { score, reason: `matched registered ${setting.category} setting` },
         ...(operation === "recommend" ? { recommendation: recommendationFor(setting) } : {}),
       }));
-  return { ok: true, operation, query, count: results.length, settings: results };
+  return {
+    ok: true,
+    operation,
+    query,
+    count: results.length,
+    total: operation === "list" ? settings.length : results.length,
+    offset,
+    next_offset: operation === "list" && offset + results.length < settings.length
+      ? offset + results.length
+      : null,
+    settings: results,
+  };
 }
 
 function normalizeGatewaySetting(setting) {
@@ -149,14 +188,95 @@ function normalizeGatewaySetting(setting) {
     constraints,
     takes_effect: "next admitted turn",
     redaction: setting.redacted ? "value redacted" : "none",
-    mutability: setting.managed ? "gateway managed" : "user configurable through gateway profile",
+    mutability: setting.writable === false || setting.managed ? "gateway managed" : "user configurable through gateway profile",
+    writable: setting.writable !== false && setting.managed !== true,
+    write_requires: "gateway profile validation",
     ...(setting.recommendation ? { recommendation: setting.recommendation } : {}),
     ...(setting.match ? { match: setting.match } : {}),
   };
 }
 
+function mergeSettingsResults(localSettings, gatewaySettings, { operation = "search", limit = MAX_RESULTS } = {}) {
+  const merged = [...(Array.isArray(localSettings) ? localSettings : []), ...(Array.isArray(gatewaySettings) ? gatewaySettings : [])];
+  if (operation === "list") return merged.slice(0, MAX_LIST_RESULTS);
+  const bounded = Math.max(1, Math.min(Number(limit) || MAX_RESULTS, MAX_RESULTS));
+  return merged.slice(0, bounded);
+}
+
 function normalizePermission(value) {
   return ["granted", "denied", "prompt"].includes(value) ? value : "unknown";
+}
+
+function normalizeAgentRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  return ["delegate", "help", "collaborate", "explain"].includes(role) ? role : "delegate";
+}
+
+function parseSettingsQueryIntent(text) {
+  const raw = String(text || "").trim();
+  const lower = normalizeQuery(raw);
+  if (!lower || !/\b(settings?|preferences?|configuration)\b/.test(lower)) return null;
+  if (/\b(set|change|update|enable|disable|turn on|turn off|clear)\b/.test(lower)) return null;
+  const canonical = raw.match(/\b((?:browser|gateway)\.[a-z0-9_]+)\b/i)?.[1]?.toLowerCase();
+  if (canonical && /\b(get|show|explain|what|which|tell)\b/.test(lower)) {
+    return { operation: "get", id: canonical, query: "" };
+  }
+  if (/\b(all|every|everything|complete|full)\b/.test(lower) || /\b(list|show|tell me)\b.*\bsettings?\b/.test(lower)) {
+    return { operation: "list", query: "" };
+  }
+  const operation = /\b(recommend|useful|best|help(?:ful)?|should i)\b/.test(lower) ? "recommend" : "search";
+  const query = lower
+    .replace(/\b(?:find|search|show|list|tell me|what|which|are|is|the|my|all|settings?|preferences?|configuration|recommend|recommended|useful|best|for|about|related to)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return query ? { operation, query } : { operation: "list", query: "" };
+}
+
+function parseBrowserSettingWriteIntent(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  let match = raw.match(/\b(?:set|change|update)\s+(?:the\s+)?(?:agent\s+)?gateway\s+(?:url|origin|endpoint)\s+(?:to|=|:)\s*(\S+)\s*$/i);
+  if (match) return { id: "browser.gateway_url", value: match[1] };
+  match = raw.match(/\b(?:set|change|update)\s+(?:the\s+)?gateway\s+(?:token|session token)\s+(?:to|=|:)\s*(.+)$/i);
+  if (match) return { id: "browser.gateway_token", value: match[1].trim() };
+  if (/\b(?:clear|remove|forget)\s+(?:the\s+)?gateway\s+(?:token|session token)\b/i.test(raw)) {
+    return { id: "browser.gateway_token", value: "" };
+  }
+  match = raw.match(/\b(?:set|change|switch)\s+(?:the\s+)?browser\s+(?:agent\s+)?(?:role|mode)\s+(?:to|=|:)\s*(delegate|help|collaborate|explain)\b/i);
+  if (match) return { id: "browser.agent_role", value: match[1].toLowerCase() };
+  if (/\b(?:enable|turn on|use)\b.*\blivekit\b/i.test(raw)) return { id: "browser.livekit_voice", value: true };
+  if (/\b(?:disable|turn off|stop using)\b.*\blivekit\b/i.test(raw)) return { id: "browser.livekit_voice", value: false };
+  if (/\b(?:enable|turn on|allow)\b.*\bbackground (?:browser )?automation\b/i.test(raw)) {
+    return { id: "browser.background_automation", value: true };
+  }
+  if (/\b(?:disable|turn off|stop)\b.*\bbackground (?:browser )?automation\b/i.test(raw)) {
+    return { id: "browser.background_automation", value: false };
+  }
+  return null;
+}
+
+function validateBrowserSettingWrite(args = {}) {
+  const id = String(args.id || "").trim().toLowerCase();
+  const definition = DEFINITIONS.find((item) => item.id === id);
+  if (!definition) return { ok: false, error: "unknown_setting", setting_id: id };
+  if (!definition.writable) return { ok: false, error: "setting_not_writable", setting_id: id };
+  const value = args.value;
+  if (id === "browser.gateway_url" || id === "browser.gateway_token") {
+    if (typeof value !== "string" || value.length > 4096) return { ok: false, error: "invalid_setting_value", setting_id: id };
+  } else if (id === "browser.livekit_voice" || id === "browser.background_automation") {
+    if (typeof value !== "boolean") return { ok: false, error: "invalid_setting_value", setting_id: id };
+    if (id === "browser.background_automation" && value === true) {
+      const approval = args.approval;
+      if (approval?.approved !== true || approval?.setting_id !== id || approval?.consent_version !== 1) {
+        return { ok: false, error: "explicit_versioned_approval_required", setting_id: id, consent_version: 1 };
+      }
+    }
+  } else if (id === "browser.agent_role") {
+    if (!["delegate", "help", "collaborate", "explain"].includes(String(value || "").toLowerCase())) {
+      return { ok: false, error: "invalid_setting_value", setting_id: id };
+    }
+  }
+  return { ok: true, id, value };
 }
 
 function normalizeQuery(value) {
@@ -194,6 +314,10 @@ export {
   DEFINITIONS,
   OPERATIONS,
   browserSettings,
+  mergeSettingsResults,
   normalizeGatewaySetting,
+  parseBrowserSettingWriteIntent,
+  parseSettingsQueryIntent,
   readBrowserSettings,
+  validateBrowserSettingWrite,
 };
