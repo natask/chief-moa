@@ -2,7 +2,7 @@
 
 ## Candidate
 
-- Implementation and architecture candidate: `ef0fe12fa9fbb2842b7aa5062753ce050cde517d`.
+- Repaired implementation candidate: `adeede01e1fdeb775f74dc29c99e225b6673b00d`.
 - Release-only manifest bump: `43ca3a49` (`0.1.72` to collision-free `0.1.78`).
 - Base: `26f7384f1919f37b38840c72035a85797bbe5375`.
 - Verification and packaging used isolated worktrees, temporary gateway state,
@@ -26,6 +26,13 @@
   visible window or focus change.
 - `android_app/./gradlew testDebugUnitTest assembleDebug`: passed.
 - `openspec validate cross-surface-session-history --strict`: passed.
+- Independent verification first rejected `ef0fe12f` for a 32,000/32,768
+  Android display mismatch, permissive invalid limits, and unreported unreadable
+  records. Candidate `adeede01` repaired all three. A fresh independent worktree
+  proved exact 32,768-character Android display, HTTP 400 with no messages for
+  five invalid bounds, and `unreadable=2` for corrupt voice and chat files while
+  retaining only valid text. Focused gateway tests passed 12/12, Android unit and
+  build checks passed, and the worktree remained clean.
 
 ## Artifacts
 
@@ -33,8 +40,8 @@
   `44164da16efb64a2b52b7ed79b3e350a16257b6d61766db6b73cd2bdf7a717a3`.
 - Android isolated OTA store:
   `.context/artifacts/cross-surface-session-history/android-ota`, release
-  `ai.moa.assistant-2026071601`, APK SHA-256
-  `12121f14329fc1f24f74dc54d97a90ac9d490c46b4d993db8a55b2a7c586931b`.
+  `ai.moa.assistant-2026071602`, APK SHA-256
+  `fe2ef0aa0e425bbceb30857485aa4b8c79298b1686f4545166d2810679777942`.
 - The gateway session-message smoke is the isolated local preview for this
   bounded read-only route. The VPS promotion path must still create its own
   separate TLS URL, database, queue, storage, and worker pool before applying.
