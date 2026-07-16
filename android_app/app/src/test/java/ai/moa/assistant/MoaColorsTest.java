@@ -22,13 +22,19 @@ public final class MoaColorsTest {
     }
 
     @Test
-    public void baseSurfacesAreOpaqueTrueBlack() {
+    public void primarySurfacesAreOpaqueTrueBlack() {
+        // Every card/surface background the spec claims as true black: the
+        // full-app base + cards and the overlay panel/transcript cards.
         assertEquals(0xFF000000, MoaColors.SURFACE_0);
         assertEquals(0xFF000000, MoaColors.PANEL_BG);
+        assertEquals(0xFF000000, MoaColors.APP_CARD_BG);
     }
 
     @Test
-    public void raisedSurfacesAreOpaqueAndNeutral() {
+    public void raisedFillsAreOpaqueAndNeutral() {
+        // Bubble/control fills sit one neutral step above the black cards:
+        // opaque (no bleed-through) and cast-free, but intentionally not
+        // #000000 so they stay distinguishable.
         assertEquals(0xFF, alpha(MoaColors.RAISED));
         assertEquals(0xFF, alpha(MoaColors.COMPOSER_BG));
         assertTrue("RAISED must be neutral (no color cast)", neutral(MoaColors.RAISED));
