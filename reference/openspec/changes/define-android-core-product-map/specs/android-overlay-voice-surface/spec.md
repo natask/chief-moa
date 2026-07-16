@@ -14,22 +14,34 @@ The Android app SHALL provide an overlay control that remains available above ot
 ### Requirement: Tap-Based Voice Loop
 The overlay SHALL make the primary voice loop available through simple orb gestures.
 
-#### Scenario: Single tap opens chat menu
-- **WHEN** the user single taps the orb while no command speech is active
-- **THEN** the app opens the chat menu for typed input
-- **AND** it does not start, stop, or submit a voice turn
+#### Scenario: Single tap starts or sends current-thread voice
+- **WHEN** voice-first gestures are enabled and the user single taps the idle orb
+- **THEN** the app starts voice capture on the active durable thread
+- **WHEN** the user single taps again while that capture is active
+- **THEN** the app commits that turn exactly once
 
 #### Scenario: Click-and-hold drags orb
 - **WHEN** the user presses the orb, holds, and moves it
 - **THEN** the app repositions the orb
 - **AND** it does not start voice capture or toggle the chat menu
 
-#### Scenario: Double-click-and-hold push-to-talk
-- **WHEN** the user double-clicks and holds the orb while no voice turn is active
-- **THEN** the app starts a push-to-talk voice turn after the second press is held
-- **AND** displays a live transcript overlay
-- **AND** releasing the orb submits the best available speech without waiting
-  for the continuous-loop silence timeout
+#### Scenario: Still hold is push-to-talk
+- **WHEN** voice-first gestures are enabled and the user holds the orb without
+  moving beyond the drag threshold
+- **THEN** the app starts push-to-talk on the active durable thread
+- **AND** releasing the orb commits the best available speech exactly once
+
+#### Scenario: Double tap continues the durable thread
+- **WHEN** voice-first gestures are enabled and the user double taps the orb
+- **THEN** the app starts or continues voice on the active durable thread
+- **AND** it does not replace the thread or cancel or commit an active capture
+
+#### Scenario: Triple tap hard-interrupts
+- **WHEN** voice-first gestures are enabled and the user triple taps during
+  capture, playback, or an active response
+- **THEN** the app stops that active voice work without erasing prior transcript
+  history
+- **AND** a fourth tap and beyond do nothing
 
 #### Scenario: Continuous loop commits after short silence
 - **WHEN** the user starts a continuous voice launch path and speaks a short utterance
@@ -94,8 +106,9 @@ The Android app SHALL show current speech text while the user is speaking.
 - **AND** previous voice-turn messages are not shown in that surface
 
 ### Requirement: Reviewable Tap Voice Draft
-When voice-first gestures are enabled, the Android overlay SHALL treat a tap
-voice turn as a reversible draft rather than an implicit submission.
+When voice-first gestures are enabled, the Android overlay SHALL keep a tap
+voice turn locally reversible while allowing orb tap, Send, or natural silence
+to converge on the same idempotent submission.
 
 #### Scenario: Tap starts a draft
 - **WHEN** the user taps the idle orb

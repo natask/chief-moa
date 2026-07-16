@@ -58,11 +58,20 @@ screenshots in `scratch/mobile-ui-enhance/screens/` and
 - Grant microphone permission.
 - Start the assistant circle.
 - Single tap the orb.
-- Confirm the chat menu opens for typed input.
+- Confirm capture starts on the active thread and native X/Send alternatives
+  appear beside the orb.
+- Speak a short request, pause naturally, and confirm silence submits it once
+  without requiring Send.
+- Start another draft and tap the orb or Send; confirm either path submits once
+  and the other cannot duplicate it.
 - Press and hold the orb, drag it to a new spot, and release.
 - Confirm the orb moves without opening the transcript overlay or chat menu.
-- Double-click and hold the orb, speak a short request, and release.
-- Confirm release submits the turn without waiting for extra silence.
+- Hold the orb still, speak a short request, and release.
+- Confirm release submits the turn once without waiting for extra silence.
+- Double tap and confirm voice stays on the active durable thread without
+  cancelling or committing an already-active capture.
+- Triple tap during capture or playback; confirm active voice work stops while
+  prior transcript/history stays visible. Confirm a fourth tap is a no-op.
 - Confirm the transcript appears in the overlay/panel history.
 - Confirm the assistant answer appears as text.
 - Confirm `Play spoken replies` is off by default.

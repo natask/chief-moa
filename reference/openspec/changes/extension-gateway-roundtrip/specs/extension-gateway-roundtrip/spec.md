@@ -73,6 +73,27 @@ through an intent.
 - **AND** it does not show older chat-history turns unless the user explicitly
   asks for history through an intent
 
+### Requirement: Browser overlay de-emphasizes on outside interaction
+The extension SHALL treat its lion and attached command/result surface as one
+presentation family. Interacting with the page outside that family SHALL make
+the family transparent enough to reveal the page without dismissing it,
+mutating its draft/history, or changing the active voice session.
+
+#### Scenario: Outside page interaction preserves overlay state
+- **WHEN** the command surface is open and the user points or focuses outside
+  the lion and attached overlay
+- **THEN** the lion and attached surface become visually de-emphasized in place
+- **AND** the page receives its original interaction
+- **AND** the overlay draft, visible result state, and active voice session stay
+  unchanged
+
+#### Scenario: Inside interaction restores the overlay
+- **WHEN** the presentation family is de-emphasized and the user interacts with
+  the lion or attached overlay
+- **THEN** the whole family returns to full opacity
+- **AND** opening the overlay through an extension command also restores full
+  opacity
+
 ### Requirement: Describe round trip through gateway
 The extension SHALL render page descriptions that originate from the configured
 gateway browser-agent turn route.

@@ -102,8 +102,8 @@
 ## 11. Reviewable Cross-Surface Overlay Controls
 
 - [x] 11.1 Show `X` and `↑` controls for every tap-started Android voice draft.
-- [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
-      silently committing a draft; keep hold-release as the fast commit path.
+- [x] 11.2 Converge orb tap, Send, and natural silence on one idempotent commit;
+      keep X as local cancel and hold-release as the fast commit path.
 - [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card
       wholly above the orb, including while the orb moves, repositioning the
       orb down when the measured card plus gap would not otherwise fit.
@@ -111,8 +111,8 @@
 - [x] 11.5 Verify Android unit tests, `assembleDebug`, and strict OpenSpec validation.
 - [ ] 11.6 Publish the committed Android OTA artifact and verify its update metadata.
 - [x] 11.7 Place Android draft controls beside the orb instead of in the voice card.
-- [x] 11.8 Give the browser voice-first mascot matching side controls and prevent
-      a later mascot click from silently sending the draft.
+- [x] 11.8 Give the browser voice-first mascot matching side controls and route
+      every enabled send affordance through one idempotent commit path.
 - [x] 11.9 Verify and package the browser extension parity slice.
 - [x] 11.10 Coalesce Android orb, active-card, and draft-control relayouts to
       display frames while dragging; do no relayout before touch slop, keep the
@@ -140,10 +140,11 @@ local unpacked-extension reload signal completed without a client acknowledgemen
 - [x] 12.1 Make single click start/stop-and-send current-thread capture.
 - [x] 12.2 Make hold/release push-to-talk in the same thread and preserve
       hold-drag cancellation.
-- [x] 12.3 Make double-click start/stop-and-send fresh-thread capture; cancel an
-      active current-thread capture without sending before the fresh start.
-- [x] 12.4 Make triple-click cancel without sending and open chat; remove the
-      superseded Android and browser X/Send draft controls.
+- [x] 12.3 Make double-click start or continue capture on the active durable
+      thread without replacing, cancelling, or committing an active capture.
+- [x] 12.4 Make triple-click hard-interrupt active voice work without erasing
+      prior transcript history; retain native X/Send alternatives and make a
+      fourth click and beyond no-ops.
 - [x] 12.5 Verify Android unit tests and `assembleDebug`, plus browser verify and
       real headless-Chrome smoke, from the isolated integration candidate.
 - [ ] 12.6 Complete physical-phone timing, touch-slop, interruption, mode, and
