@@ -10,6 +10,10 @@ const runtime = createContentContextControlRuntime({
 assert.ok(Object.isFrozen(runtime));
 assert.deepEqual(runtime.consumeContextControls(), { action: "", label: "" });
 
+runtime.armNewThread("  gesture thread  ");
+assert.deepEqual(runtime.consumeContextControls(), { action: "new", label: "gesture thread" });
+assert.deepEqual(runtime.consumeContextControls(), { action: "", label: "" });
+
 for (const value of [null, "", "ordinary request", "/-", "/unknown value"]) {
   assert.equal(runtime.maybeHandleContextSlashCommand(value), false);
 }
