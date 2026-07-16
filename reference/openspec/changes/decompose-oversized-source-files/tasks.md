@@ -357,6 +357,14 @@
       functions. Raise the exact whole-extension ratchet to 31.73% lines,
       15.04% branches, and 13.69% functions with 32 passing unit tests and a
       passing real headless-Chromium smoke.
+- [x] 4.4e Execute the LiveKit background coordinator, proactive confirmation
+      page, and offscreen audio worklet under focused success, failure,
+      authorization, message-routing, browser-capability, and audio-buffer
+      tests. Enforce focused 90% gates, verified respectively at
+      100%/90.19%/100%, 100%/91.66%/100%, and 100%/100%/100% for
+      lines/branches/functions. Raise the exact whole-extension ratchet to
+      34.02% lines, 16.39% branches, and 15.05% functions with 35 passing unit
+      tests and a passing real headless-Chromium smoke.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
