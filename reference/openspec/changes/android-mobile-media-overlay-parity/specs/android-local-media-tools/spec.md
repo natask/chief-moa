@@ -9,8 +9,17 @@ resolution and execution authority.
 #### Scenario: Unique visible launcher label
 - **WHEN** the current user turn explicitly asks to open a visible app label
 - **AND** exactly one exported launcher activity matches that label
-- **THEN** the gateway pins an `app.launch` proposal to the source Android device
+- **THEN** the gateway routes an `app.launch` proposal to the only eligible
+  Android device, or to a device principal established independently of the
+  request body
 - **AND** Android launches that exact activity and writes a claim-bound receipt
+
+#### Scenario: Caller-supplied device affinity
+- **WHEN** a shared-bearer request supplies an Android-like source string or a
+  device id without independently authenticated device evidence
+- **THEN** those fields grant no device affinity
+- **AND** the gateway queues work only when one compatible Android device is
+  eligible, otherwise it fails closed as ambiguous and queues nothing
 
 #### Scenario: List visible apps
 - **WHEN** the current user turn explicitly asks which apps are installed

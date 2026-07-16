@@ -8,8 +8,11 @@ legacy-Live sessions receive the same bounded Android `phone_action` catalog.
 against exported launcher activities and requires exactly one match. `app.list`
 returns a size- and count-bounded projection of visible launcher labels. The
 gateway strips or rejects package, component, activity, intent, and target
-selectors, pins the proposal to the source Android device, and cannot turn a
-model-authored application id into execution authority.
+selectors and cannot turn a model-authored application id or caller-supplied
+device id into execution authority. The shared user bearer authorizes a
+proposal, not a device principal: without independently authenticated device
+evidence the gateway routes only when exactly one compatible Android device is
+online, and fails closed as ambiguous when more than one is eligible.
 
 ## Device-local media authority
 

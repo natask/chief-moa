@@ -1323,8 +1323,13 @@ dispatch. `app.launch` accepts only a user-visible launcher label and succeeds
 only when that label resolves uniquely among `ACTION_MAIN`/`CATEGORY_LAUNCHER`
 activities; `app.list` returns a bounded projection of those labels. Packages,
 components, activities, intents, hidden components, and model-selected raw
-application ids have no launch authority. Both actions stay pinned to the
-source Android device and complete through its claim/receipt loop.
+application ids have no launch authority. The shared gateway bearer authorizes
+the proposal but is not a device principal, so request-body `source` and
+`device_id` values cannot pin execution. In the current single-phone path the
+gateway queues only when exactly one compatible Android device is online; with
+multiple eligible phones it fails closed as ambiguous until independently
+authenticated device evidence exists. Actions complete through the selected
+phone's claim/receipt loop.
 
 Android obtains active-media authority only after the user enables Moa's
 `NotificationListenerService`; that grant lets the app query
