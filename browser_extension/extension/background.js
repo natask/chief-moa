@@ -2218,7 +2218,6 @@ function handleOffscreenVoiceError(id, error) {
   if (!session) return;
   const message = extensionMicApprovalMessage(error);
   session.setupErrorMessage = message;
-  chrome.runtime.openOptionsPage?.().catch(() => {});
   deliverVoiceSessionEvent(session, {
     event: {
       type: "error",

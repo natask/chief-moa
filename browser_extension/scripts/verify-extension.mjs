@@ -449,10 +449,18 @@ if (
   !/microphone_capture_failed/.test(backgroundSource) ||
   !/recoverable:\s*false/.test(backgroundSource) ||
   !/chrome:\/\/extensions\/\?id=\$\{chrome\.runtime\.id\}/.test(backgroundSource) ||
-  !/chrome\.runtime\.openOptionsPage/.test(backgroundSource) ||
   !/msg\.recoverable === false \|\| msg\.code === "microphone_capture_failed"/.test(contentSource)
 ) {
   throw new Error("extension offscreen microphone failures must be explicit, non-recoverable, and guide the user to grant extension microphone permission");
+}
+const offscreenVoiceErrorBody = sourceBetween(
+  backgroundSource,
+  /function handleOffscreenVoiceError\(/,
+  /function claimActiveAgentTab\(/,
+  "offscreen voice error handler"
+);
+if (/openOptionsPage/.test(offscreenVoiceErrorBody)) {
+  throw new Error("microphone failure must stay in the current surface instead of opening Options");
 }
 
 if (!/cmd === "voiceSessionStart"/.test(backgroundSource)) {
@@ -965,15 +973,31 @@ if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*f
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
 }
 
+const voiceFirstTapBody = sourceBetween(
+  contentSource,
+  /function handleVoiceFirstTap\(/,
+  /function armVoiceFirstChainReset\(/,
+  "canonical mark tap chain"
+);
 if (
-  !/id="agee-draft-cancel"[\s\S]{0,240}id="agee-draft-send"/.test(contentSource) ||
-  !/function reviewableVoiceDraftActive\(\)/.test(contentSource) ||
-  !/function sendReviewableVoiceDraft\(\)/.test(contentSource) ||
-  !/autoCommit: false/.test(contentSource) ||
-  !/A later mascot click never owns disposition/.test(contentSource) ||
-  !/#agee-root \.agee-draft-control/.test(overlayCssSource)
+  !/resolveVoiceFirstTapChain/.test(voiceFirstTapBody) ||
+  !/AgeeVoiceCaptureGesture\.resolveVoiceFirstTransition/.test(contentSource) ||
+  !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
+  !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
+  !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
+  !/open_chat_preserve_capture[\s\S]{0,220}openTextSurface/.test(contentSource)
 ) {
-  throw new Error("voice-first browser drafts must use visible X—mascot—Send controls without click-to-send or silence auto-commit");
+  throw new Error("mark gestures must defer collision-safe single/double/triple actions and support either stop gesture");
+}
+const mainContentScripts = manifest.content_scripts?.find((entry) => entry.js?.includes("content.js"))?.js || [];
+if (
+  mainContentScripts.indexOf("voice-capture-gesture.js") < 0 ||
+  mainContentScripts.indexOf("voice-capture-gesture.js") > mainContentScripts.indexOf("content.js") ||
+  /ageeVoiceFirstGesturesEnabled|VOICE_FIRST_GESTURES_KEY/.test(contentSource) ||
+  /voiceFirstGestures|Voice-first orb gestures/.test(optionsHtmlSource + optionsSource) ||
+  /agee-draft-control/.test(contentSource + overlayCssSource)
+) {
+  throw new Error("canonical mark gestures must load before content.js and expose no optional setting or draft controls");
 }
 
 const launcherClickBody = sourceBetween(
@@ -992,22 +1016,8 @@ const startLauncherDragBody = sourceBetween(
   /function moveLauncherDrag\(/,
   "launcher pointerdown handler"
 );
-if (!/isLauncherSecondTap\(e\)[\s\S]{0,140}scheduleLauncherDoubleClickHold\(e\)/.test(startLauncherDragBody)) {
-  throw new Error("launcher voice must require a double-click-and-hold, not a first-press hold");
-}
-
-const launcherDoubleClickHoldBody = sourceBetween(
-  contentSource,
-  /function scheduleLauncherDoubleClickHold\(/,
-  /function cancelLauncherDoubleClickHold\(/,
-  "launcher double-click-hold handler"
-);
-if (
-  !/beginManualVoiceGesture\(\)/.test(launcherDoubleClickHoldBody) ||
-  !/DOUBLE_CLICK_HOLD_MS/.test(launcherDoubleClickHoldBody) ||
-  !/holdToTalkActive = true/.test(launcherDoubleClickHoldBody)
-) {
-  throw new Error("double-click-and-hold must start recording on the second press and use the hold threshold only to decide release-to-commit");
+if (!/beginVoiceFirstPress\(e\)/.test(startLauncherDragBody)) {
+  throw new Error("launcher pointerdown must always enter the canonical voice gesture machine");
 }
 
 if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {

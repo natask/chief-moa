@@ -48,7 +48,7 @@ const ids = [
   "replyLanguageOptions", "heardLanguageSelected", "heardLanguageSearch",
   "heardLanguageOptions", "profileCatalogState", "profileStatus", "companionSearch",
   "companionList", "companionDetails", "companionPrompt", "companionStatus",
-  "livekitVoice", "livekitVoiceStatus", "voiceFirstGestures", "voiceFirstGesturesStatus",
+  "livekitVoice", "livekitVoiceStatus",
   "backgroundAutomation", "backgroundAutomationStatus", "save", "testGateway",
   "grantMic", "checkMic", "saveProfile", "refreshProfile", "searchCompanions",
   "createCompanion", "previewCompanion", "applyCompanion", "resetProfile", "applyChange",
@@ -64,7 +64,6 @@ const stored = {
   ageeGatewayToken: "",
   ageeGatewayUserSet: true,
   ageeLivekitVoiceEnabled: true,
-  ageeVoiceFirstGesturesEnabled: true,
   ageeBackgroundAutomationEnabled: true,
   ageeBackgroundAutomationConsentVersion: 1,
 };
@@ -119,7 +118,6 @@ await new Promise((resolve) => setImmediate(resolve));
 
 assert.equal(elements.get("gatewayUrl").value, "");
 assert.equal(elements.get("livekitVoice").checked, true);
-assert.equal(elements.get("voiceFirstGestures").checked, true);
 assert.equal(elements.get("backgroundAutomation").checked, true);
 assert.ok(storageListener);
 
@@ -149,11 +147,8 @@ elements.get("profileScope").value = "device";
 assert.match(await options.profileQuery(), /^\?scope=device&device_id=browser_/);
 
 await elements.get("livekitVoice").emit("change");
-await elements.get("voiceFirstGestures").emit("change");
 elements.get("livekitVoice").checked = false;
 await elements.get("livekitVoice").emit("change");
-elements.get("voiceFirstGestures").checked = false;
-await elements.get("voiceFirstGestures").emit("change");
 elements.get("backgroundAutomation").checked = false;
 await elements.get("backgroundAutomation").emit("change");
 assert.equal(stored.ageeBackgroundAutomationConsentVersion, 0);
@@ -481,7 +476,7 @@ stored.ageeGatewayUrl = "";
 stored.ageeGatewayToken = "";
 stored.ageeGatewayUserSet = true;
 const optionalIds = new Set([
-  "livekitVoice", "livekitVoiceStatus", "voiceFirstGestures", "voiceFirstGesturesStatus",
+  "livekitVoice", "livekitVoiceStatus",
   "backgroundAutomation", "backgroundAutomationStatus", "modelOptions", "voiceName",
   "languageOptions", "replyLanguageSelected", "replyLanguageSearch", "replyLanguageOptions",
   "heardLanguageSelected", "heardLanguageSearch", "heardLanguageOptions", "profileCatalogState",
