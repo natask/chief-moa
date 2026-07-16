@@ -6,6 +6,7 @@ import {
   canonicalJson,
   capabilityDefinition,
   sha256,
+  sha256Source,
   utf8Bytes,
   validateSurfaceProgramEnvelope,
 } from "../extension/surface-program-contract.js";
@@ -13,7 +14,7 @@ import { bindingsMatch, createSurfaceProgramBroker, validateCapabilityArgs } fro
 import { boundedSelector, createChromeSurfaceProgramAdapter, injectionValue } from "../extension/surface-program-chrome-adapter.js";
 
 async function fixtureEnvelope(overrides = {}) {
-  const runtime = await browserProgramRuntimeManifest("device_fixture");
+  const runtime = await browserProgramRuntimeManifest("device_fixture", Date.parse("2026-07-16T12:00:00.000Z"));
   const source = "return await tools.browser.tab.get({});";
   const bindingState = { tab_id: 7, window_id: 2, frame_id: 0, origin: "http://127.0.0.1:8123", document_id: "doc_fixture", page_epoch: 42 };
   const binding = { kind: "browser_document", ...bindingState, observation_id: "obs_fixture", observation_sha256: await sha256({ fixture: "observation" }), state_sha256: await sha256(bindingState) };
@@ -23,8 +24,8 @@ async function fixtureEnvelope(overrides = {}) {
       version: 1, type: "surface.execution.proposed", execution_id: "exec_fixture", session_id: "session_fixture", turn_id: "turn_fixture",
       target: { surface_type: "browser_extension", device_id: "device_fixture" },
       runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
-      program: { source, sha256: await sha256(source) },
-      catalog: { version: runtime.catalog.version, sha256: runtime.catalog.sha256, allowed_capability_ids: CAPABILITIES.map((item) => item.name) },
+      program: { source, sha256: await sha256Source(source) },
+      catalog: { version: runtime.catalog.version, sha256: runtime.catalog.sha256, allowed_capability_ids: CAPABILITIES.map((item) => item.capability_id) },
       bindings: binding,
       limits: { source_bytes: utf8Bytes(source), wall_ms: 5000, memory_bytes: null, tool_calls: 20, parallel_calls: 4, result_bytes: 16 * 1024, log_bytes: 0 },
       approval_policy: { program: "preauthorized", always_ask: [] }, idempotency_key: "idem_fixture",
@@ -39,11 +40,27 @@ test("surface program contract advertises exact schemas and validates a bound pr
   assert.equal(runtime.runtime.entrypoint, "main");
   assert.equal(runtime.catalog.capability_ids.length, 8);
   assert.ok(runtime.catalog.sha256.match(/^[a-f0-9]{64}$/));
-  assert.equal(capabilityDefinition("browser.page.fill").concurrency, "serialized_write");
+  assert.equal(capabilityDefinition("browser.page.fill").concurrency, "serialized_resource");
   assert.equal(capabilityDefinition("missing"), null);
   assert.equal(canonicalJson({ b: 2, a: [1] }), '{"a":[1],"b":2}');
   const valid = await validateSurfaceProgramEnvelope(envelope, { nowMs: Date.parse("2026-07-16T12:00:30Z"), expectedDeviceId: "device_fixture", runtime });
   assert.equal(valid.sourceBytes, utf8Bytes(envelope.program.source));
+});
+
+test("JCS and exact-source hashes match cross-language contract vectors", async () => {
+  const catalogVector = { version: 7, capabilities: [{
+    capability_id: "browser.page.observe", description: "Observe bounded state for the bound fixture page.",
+    input_schema: {}, output_schema: {}, effect_class: "read", approval_class: "none",
+    idempotency: "read_only", concurrency: "parallel_read", restore_capability_id: null,
+  }] };
+  assert.equal(canonicalJson(catalogVector), '{"capabilities":[{"approval_class":"none","capability_id":"browser.page.observe","concurrency":"parallel_read","description":"Observe bounded state for the bound fixture page.","effect_class":"read","idempotency":"read_only","input_schema":{},"output_schema":{},"restore_capability_id":null}],"version":7}');
+  assert.equal(await sha256(catalogVector), "9b3084e1d7488ed0bc8754ca378b26536f954830561f01fc256927398b3f638b");
+  assert.equal(await sha256Source("return 'é';\n"), "d9757c71db600244268f318e19e102a9bfd520eeb0d5e4f62139d1768521dfe8");
+  assert.equal(await sha256({}), "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a");
+  assert.equal(await sha256({ fixture: "observation" }), "7e3298fbcc102021f32c271177f54a62d674a7584249afc51bfa757ce7aa09c8");
+  assert.equal(await sha256({ b: 2, a: 1 }), await sha256({ a: 1, b: 2 }));
+  assert.notEqual(await sha256Source("é"), await sha256Source("e\u0301"));
+  for (const invalid of [undefined, Number.NaN, Infinity, 2 ** 53, "\uD800", { value: undefined }]) assert.throws(() => canonicalJson(invalid));
 });
 
 test("surface program contract fails closed for mutation, drift, stale target, approval, and unknown fields", async () => {
@@ -56,7 +73,7 @@ test("surface program contract fails closed for mutation, drift, stale target, a
     (e) => ({ ...e, catalog: { ...e.catalog, sha256: "0".repeat(64) } }),
     (e) => ({ ...e, catalog: { ...e.catalog, allowed_capability_ids: ["browser.root.escape"] } }),
     (e) => ({ ...e, bindings: { ...e.bindings, origin: "https://user:pass@example.com" } }),
-    (e) => ({ ...e, bindings: { ...e.bindings, frame_id: 1 } }),
+    (e) => ({ ...e, bindings: { ...e.bindings, frame_id: -1 } }),
     (e) => ({ ...e, bindings: { ...e.bindings, observation_sha256: "bad" } }),
     (e) => ({ ...e, limits: { ...e.limits, tool_calls: 0 } }),
     (e) => ({ ...e, approval_policy: { program: "preauthorized", always_ask: ["browser.page.click"] } }),
@@ -66,7 +83,6 @@ test("surface program contract fails closed for mutation, drift, stale target, a
     (e) => ({ ...e, target: { ...e.target, surface_type: "android" } }),
     (e) => ({ ...e, program: { ...e.program, source: "" } }),
     (e) => ({ ...e, program: { ...e.program, sha256: "bad" } }),
-    (e) => ({ ...e, catalog: { ...e.catalog, allowed_capability_ids: [] } }),
     (e) => ({ ...e, catalog: { ...e.catalog, allowed_capability_ids: [e.catalog.allowed_capability_ids[0], e.catalog.allowed_capability_ids[0]] } }),
     (e) => ({ ...e, bindings: { ...e.bindings, kind: "gateway_server" } }),
     (e) => ({ ...e, bindings: { ...e.bindings, tab_id: -1 } }),
@@ -183,17 +199,19 @@ test("broker enforces expiry, state, call, parallel, result, and failure boundar
   const revoked = createSurfaceProgramBroker({ envelope, adapter: revokeAdapter, clock: () => Date.parse("2026-07-16T12:00:30Z") });
   const [revokedHandle] = await revoked.call("browser.page.query_elements", { selector: "x" });
   const firstWrite = revoked.call("browser.page.click", { element_id: revokedHandle.element_id });
+  const firstRejected = assert.rejects(firstWrite, /finalized_indeterminate/);
   const queuedWrite = revoked.call("browser.page.click", { element_id: revokedHandle.element_id });
   const queuedRejected = assert.rejects(queuedWrite, /revoked/);
   await new Promise((resolve) => setTimeout(resolve, 0));
   revoked.revoke();
   assert.equal(revoked.stats().revoked, true);
   await assert.rejects(revoked.call("browser.page.snapshot", {}), /revoked/);
+  assert.equal(await revoked.finalizeUnresolved(), 2);
   releaseWrite();
-  await firstWrite;
+  await firstRejected;
   await queuedRejected;
   assert.equal(dispatchedWrites, 1, "a queued write began after bridge revocation");
-  assert.equal(revoked.trace().at(-1).status, "rejected");
+  assert.deepEqual(revoked.trace().slice(-2).map((entry) => entry.status), ["indeterminate", "rejected"]);
 
   let releaseIndeterminate;
   const indeterminateEffect = new Promise((resolve) => { releaseIndeterminate = resolve; });
@@ -210,6 +228,42 @@ test("broker enforces expiry, state, call, parallel, result, and failure boundar
   await lateRejected;
   assert.equal(indeterminate.trace().filter((entry) => entry.capability_id === "browser.page.click").length, 1);
   assert.equal(indeterminate.trace().at(-1).receipt_sha256, finalizedReceipt, "late effect completion changed the durable receipt chain");
+
+  let releaseA; let releaseB; let releaseFirstReceipt;
+  const effectA = new Promise((resolve) => { releaseA = resolve; });
+  const effectB = new Promise((resolve) => { releaseB = resolve; });
+  const firstReceiptBlocked = new Promise((resolve) => { releaseFirstReceipt = resolve; });
+  let snapshotCall = 0; let receiptCall = 0;
+  const parallelFinalize = createSurfaceProgramBroker({
+    envelope,
+    adapter: { ...adapter, snapshot: () => (++snapshotCall === 1 ? effectA : effectB) },
+    clock: () => Date.parse("2026-07-16T12:00:30Z"),
+    recordReceipt: async (entry) => { receiptCall += 1; if (receiptCall === 1) await firstReceiptBlocked; return entry; },
+  });
+  const callA = parallelFinalize.call("browser.page.snapshot", {});
+  const callB = parallelFinalize.call("browser.page.snapshot", {});
+  const rejectedA = assert.rejects(callA, /finalized_indeterminate/);
+  const rejectedB = assert.rejects(callB, /finalized_indeterminate/);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const finalizing = parallelFinalize.finalizeUnresolved();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseB({ ok: "b" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseFirstReceipt();
+  assert.equal(await finalizing, 2);
+  releaseA({ ok: "a" });
+  await Promise.all([rejectedA, rejectedB]);
+  assert.equal(parallelFinalize.trace().length, 2);
+  assert.ok(parallelFinalize.trace().every((entry) => entry.status === "indeterminate"));
+
+  const immediate = createSurfaceProgramBroker({ envelope, adapter, clock: () => Date.parse("2026-07-16T12:00:30Z") });
+  const admitted = immediate.call("browser.page.snapshot", {});
+  const admittedRejected = assert.rejects(admitted, /revoked|finalized/);
+  immediate.revoke();
+  assert.equal(await immediate.finalizeUnresolved(), 1, "an admitted call was lost across asynchronous input hashing");
+  await admittedRejected;
+  assert.equal(immediate.trace()[0].status, "rejected");
+  assert.equal(immediate.trace()[0].pre_state_sha256, envelope.bindings.state_sha256);
 });
 
 test("Chrome adapter uses only exact tab injection and rejects malformed inputs", async () => {

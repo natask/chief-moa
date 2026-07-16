@@ -24,7 +24,7 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
 function server() {
-  const state = { heartbeat: null, request: null, claimed: false, receipts: [] };
+  const state = { heartbeat: null, request: null, claimed: false, receipts: [], toolReceipts: [], events: [] };
   const instance = createServer(async (req, res) => {
     let body = ""; for await (const chunk of req) body += chunk;
     const json = body ? JSON.parse(body) : {};
@@ -36,6 +36,8 @@ function server() {
       if (state.request && !state.claimed) { state.claimed = true; return send({ request: state.request }); }
       return send({});
     }
+    if (/\/tool-receipts$/.test(req.url || "")) { state.toolReceipts.push(json); return send({ ok: true }); }
+    if (/\/events$/.test(req.url || "")) { state.events.push(json); return send({ ok: true }); }
     if (/\/receipts$/.test(req.url || "")) { state.receipts.push(json); return send({ ok: true }); }
     return send({});
   });
@@ -95,10 +97,16 @@ async function main() {
     assert(receipt.tool_attempts?.count >= 7, "expected many local tool calls");
     assert(!("device_id" in receipt) && receipt.claimant?.surface_type === "browser_extension", "terminal receipt was not the closed browser shape");
     assert(receipt.previous_receipt_sha256 === receipt.tool_attempts.last_receipt_sha256, "terminal receipt did not continue the tool chain");
+    await waitFor(() => loopback.state.events.at(-1)?.kind === "terminal", 5000);
     const records = await evaluate(workerCdp, `chrome.storage.local.get("ageeSurfaceProgramRecordsV1").then(v=>v.ageeSurfaceProgramRecordsV1)`);
     const localRecord = Object.values(records)[0];
     assert(localRecord.tool_receipts.length === receipt.tool_attempts.count, "tool receipts were not durably recorded before terminal");
     assert(localRecord.tool_receipts.every((item, index, all) => item.previous_receipt_sha256 === (index ? all[index - 1].receipt_sha256 : null)), "tool receipt chain is broken");
+    assert(localRecord.events[0].kind === "accepted" && localRecord.events[1].kind === "started" && localRecord.events.at(-1).kind === "terminal", "lifecycle boundaries are incomplete");
+    assert(localRecord.events.every((event, index) => event.sequence === index + 1), "lifecycle sequence is not contiguous");
+    assert(loopback.state.toolReceipts.length === receipt.tool_attempts.count, "tool receipts were not uploaded individually");
+    const uploadedEvents = [...new Map(loopback.state.events.map((event) => [event.event_id, event])).values()].sort((a, b) => a.sequence - b.sequence);
+    assert(uploadedEvents.length === localRecord.events.length && uploadedEvents.every((event, index) => event.sequence === index + 1), `lifecycle events were not uploaded idempotently: remote=${uploadedEvents.length} local=${localRecord.events.length}`);
     const state = await evaluate(pageCdp, `({status:document.querySelector('#status').textContent,note:document.querySelector('#note').value})`);
     assert(state.status === "done" && state.note === "done locally", JSON.stringify(state));
     loopback.state.claimed = false;
