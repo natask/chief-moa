@@ -87,7 +87,14 @@
   pointer-events: auto;
   touch-action: none;
   overflow: visible;
-  transition: transform 0.2s ease;
+  transition: transform 0.2s ease, opacity 0.16s ease;
+}
+
+/* Page interaction de-emphasizes the complete attached presentation without
+   changing hit targets or assistant state. #agee-root remains click-through;
+   only the explicit controls above retain pointer events. */
+#agee-root.agee-passive #agee-launcher {
+  opacity: 0.38;
 }
 
 /* Reviewable voice draft: disposition belongs beside the mascot, never in the
@@ -112,6 +119,10 @@
   padding: 0 0 2px;
   pointer-events: auto;
   touch-action: manipulation;
+  transition: opacity 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+#agee-root.agee-passive .agee-draft-control {
+  opacity: 0.3;
 }
 #agee-root .agee-draft-control[hidden] {
   display: none;
@@ -517,6 +528,9 @@
   opacity: 1;
   transform: translateY(0);
   display: block;
+}
+#agee-root.agee-open.agee-passive #agee-panel {
+  opacity: 0.3;
 }
 /* Legacy voice strip. Browser voice renders transcript and assistant text in
    cue cards above the input, so this top strip stays hidden in all phases. */
