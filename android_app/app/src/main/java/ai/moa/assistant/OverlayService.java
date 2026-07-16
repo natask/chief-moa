@@ -131,6 +131,7 @@ public final class OverlayService extends Service {
     private String conversationId = "";
     private boolean currentStreamingTurnRouted;
     private boolean currentStreamingTurnCommitRequested;
+    private boolean remoteClosedVoiceRetryAvailable;
     private String currentStreamingTranscript = "";
     private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private final MoaAgentRunTracker agentRuns = new MoaAgentRunTracker();
@@ -972,10 +973,14 @@ public final class OverlayService extends Service {
     }
 
     private boolean reviewableVoiceDraftActive() {
+        if (pushToTalkVoiceTurn || currentStreamingTurnCommitRequested) {
+            return false;
+        }
+        if (remoteClosedVoiceRetryAvailable) {
+            return true;
+        }
         return MoaPrefs.voiceFirstGestures(this)
                 && continuousVoiceLoop
-                && !pushToTalkVoiceTurn
-                && !currentStreamingTurnCommitRequested
                 && (voiceRuntimeState == VoiceRuntimeState.LISTENING
                     || voiceRuntimeState == VoiceRuntimeState.RECOVERING);
     }
@@ -1059,6 +1064,7 @@ public final class OverlayService extends Service {
 
     private void discardVoiceDraft() {
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        remoteClosedVoiceRetryAvailable = false;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1075,6 +1081,19 @@ public final class OverlayService extends Service {
 
     private void sendVoiceDraft() {
         if (!reviewableVoiceDraftActive()) {
+            return;
+        }
+        if (MoaVoiceCloseRecoveryPolicy.canConsumeTextRetry(
+                remoteClosedVoiceRetryAvailable, currentStreamingTranscript)) {
+            remoteClosedVoiceRetryAvailable = false;
+            manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+            continuousVoiceLoop = false;
+            // A final STT callback already recorded the user message; a close
+            // after only a partial did not. Preserve that distinction so retry
+            // neither loses nor duplicates the chat row. Consuming the flag
+            // before routing makes a second Send tap inert.
+            routeStreamingTranscriptThroughMoa(
+                    currentStreamingTranscript, !voiceUserTranscriptFinal);
             return;
         }
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
@@ -2613,6 +2632,7 @@ public final class OverlayService extends Service {
     private void handleOrbCancelTalkLoop() {
         suppressFirstTapTurnEmptyCue = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        remoteClosedVoiceRetryAvailable = false;
         if (audioNoteActive) {
             cancelAudioNoteCapture();
         }
@@ -3331,6 +3351,7 @@ public final class OverlayService extends Service {
         final int generation = ++streamingVoiceGeneration;
         currentStreamingTurnRouted = false;
         currentStreamingTurnCommitRequested = false;
+        remoteClosedVoiceRetryAvailable = false;
         currentStreamingAssistantRecorded = false;
         currentStreamingTranscript = "";
         streamingTranscriptAccumulator.reset();
@@ -3613,23 +3634,35 @@ public final class OverlayService extends Service {
                 // so reaching here means turn_done never arrived. If a turn was
                 // committed and in flight, say so instead of resetting silently.
                 if (currentStreamingTurnCommitRequested) {
+                    remoteClosedVoiceRetryAvailable =
+                            MoaVoiceCloseRecoveryPolicy.shouldOfferTextRetry(
+                                    termination,
+                                    true,
+                                    currentStreamingTranscript);
                     currentStreamingTurnCommitRequested = false;
                     String closeDetail = termination.code > 0
                             ? " (code " + termination.code + ")"
                             : "";
                     Log.w(TAG, "voice socket closed" + closeDetail + ": " + safe(termination.reason));
-                    String notice = "Voice connection dropped" + closeDetail
-                            + ". Your words are still here — tap Send to retry.";
+                    String notice = remoteClosedVoiceRetryAvailable
+                            ? "Voice connection dropped" + closeDetail
+                                + ". Your words are still here — tap Send to retry."
+                            : "Voice connection dropped" + closeDetail
+                                + ". Start a new turn to try again.";
                     updateVoiceAssistantTranscript(notice);
                     speakOverlayNotice(notice);
-                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                    setVoiceRuntimeState(remoteClosedVoiceRetryAvailable
+                            ? VoiceRuntimeState.RECOVERING
+                            : VoiceRuntimeState.ERROR);
                     continuousVoiceLoop = false;
                     updateMicState();
-                    mainHandler.postDelayed(() -> {
-                        if (isCurrentStreamingGeneration(generation)) {
-                            showReadyForNextVoiceTurn(generation);
-                        }
-                    }, 900);
+                    if (!remoteClosedVoiceRetryAvailable) {
+                        mainHandler.postDelayed(() -> {
+                            if (isCurrentStreamingGeneration(generation)) {
+                                showReadyForNextVoiceTurn(generation);
+                            }
+                        }, 900);
+                    }
                     return;
                 }
                 if (continuousVoiceLoop && currentStreamingTranscript.isEmpty() && voiceAssistantTranscript.isEmpty()) {
