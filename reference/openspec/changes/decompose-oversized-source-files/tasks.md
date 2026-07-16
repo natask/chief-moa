@@ -398,6 +398,12 @@
       functions; reduce `content.js` to 4,499 lines and raise the exact
       whole-extension ratchet to 48.36% lines, 28.52% branches, and 24.85%
       functions with 42 passing unit tests.
+- [x] 4.4k Extract content voice transcript routing, profile-control and speech
+      overlap policy, audio-segment normalization, playback progress, and
+      transcript merging into a focused runtime. Verified at 100% lines,
+      97.03% branches, and 100% functions; reduce `content.js` to 4,298 lines
+      and raise the exact whole-extension ratchet to 49.69% lines, 30.53%
+      branches, and 26.14% functions with 43 passing unit tests.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.
