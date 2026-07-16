@@ -22,14 +22,19 @@ current="$(git -C "$APP_DIR" rev-parse HEAD)"
 [ "$target" != "$current" ] || exit 0
 
 require_drain() {
-  curl -fsS --max-time 5 "$MOA_CONTROL_PLANE_URL/health" | node -e '
-    let body=""; process.stdin.on("data", (chunk) => body += chunk).on("end", () => {
-      const activity = JSON.parse(body).voice_stream?.activity;
-      if (!activity?.drain_safe) {
-        console.error(`promotion deferred: gateway is not drained (${JSON.stringify(activity || {})})`);
-        process.exit(75);
-      }
-    });'
+  local activity
+  activity="$(curl -fsS --max-time 5 "$MOA_CONTROL_PLANE_URL/health")"
+  if ! node_runtime -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      const activity = JSON.parse(input).voice_stream?.activity ?? {};
+      if (activity.drain_safe !== true) process.exit(1);
+    });
+  ' <<<"$activity"; then
+    echo "promotion deferred: gateway is not drained ($activity)" >&2
+    return 75
+  fi
 }
 require_drain
 
@@ -103,7 +108,7 @@ storage_ref="docker-volume://${project}_moa-gateway-data"
 worker_ref="worker-pool://${project}-disabled-isolated"
 backup_ref="backup://${latest_backup##*/}"
 rollback_ref="git://$current"
-node "$source_dir/scripts/vps/create-promotion-evidence.js" \
+node_runtime "$source_dir/scripts/vps/create-promotion-evidence.js" \
   --commit "$target" --control-plane-url "$MOA_CONTROL_PLANE_URL" --output "$evidence_file" \
   --preview-url "$preview_url" --active-url "$MOA_ACTIVE_URL" \
   --database-ref "$database_ref" --queue-ref "$queue_ref" --storage-ref "$storage_ref" \

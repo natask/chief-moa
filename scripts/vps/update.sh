@@ -114,7 +114,7 @@ candidate_sha="$(git -C "$APP_DIR" rev-parse "origin/$REF^{commit}" 2>/dev/null 
   echo "MOA_PROMOTION_EVIDENCE_FILE or --evidence is required" >&2
   exit 65
 }
-node "$SCRIPT_DIR/validate-promotion-evidence.js" \
+node_runtime "$SCRIPT_DIR/validate-promotion-evidence.js" \
   --file "$EVIDENCE_FILE" --commit "$candidate_sha" --target gateway \
   --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
 
@@ -132,11 +132,13 @@ fi
 # no-interruption evidence.
 port="$(env_value GATEWAY_PORT)"
 port="${port:-8787}"
-if ! curl -fsS --max-time 5 "http://127.0.0.1:$port/health" | node -e '
-  let body=""; process.stdin.on("data", (chunk) => body += chunk).on("end", () => {
-    const activity = JSON.parse(body).voice_stream?.activity;
-    if (!activity?.drain_safe) process.exit(1);
-  });'; then
+if ! curl -fsS --max-time 5 "http://127.0.0.1:$port/health" | node_runtime -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  process.stdin.on("end", () => {
+    if (JSON.parse(input).voice_stream?.activity?.drain_safe !== true) process.exit(1);
+  });
+'; then
   echo "Promotion deferred: active gateway is no longer drain-safe." >&2
   exit 75
 fi
@@ -165,7 +167,7 @@ MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   compose build gateway
 # Backup/restore and build can outlive a lease. Recheck M4 immediately before
 # the first active effect while the old gateway/control plane is still alive.
-node "$SCRIPT_DIR/validate-promotion-evidence.js" \
+node_runtime "$SCRIPT_DIR/validate-promotion-evidence.js" \
   --file "$EVIDENCE_FILE" --commit "$candidate_sha" --target gateway \
   --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
 compose up -d --no-deps gateway
@@ -195,7 +197,7 @@ fi
 
 # 5. Only after the complete edge-visible smoke succeeds, record the M4
 # observed effect and immutable receipt, then write the local receipt mirror.
-node "$SCRIPT_DIR/record-promotion-receipt.js" \
+node_runtime "$SCRIPT_DIR/record-promotion-receipt.js" \
   --evidence "$EVIDENCE_FILE" --commit "$candidate_sha" --previous "$old_full_sha" \
   --receipt "$receipt_file" --receipt-backup "$receipt_backup" --journal "$promotion_journal" \
   --health-url "http://127.0.0.1:$port/health" \

@@ -34,6 +34,7 @@ wait_for_gateway_health() {
   printf 'health current=%s\n' "$(cat "$TEST_STATE/current")" >>"$TEST_STATE/log"
   if [ "$TEST_FAILURE" = health ] && grep -q '^c' "$TEST_STATE/current"; then return 45; fi
 }
+node_runtime() { node "$@"; }
 EOF
   cat >"$case_dir/scripts/backup.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -159,6 +160,7 @@ EOF
       grep -q 'PROMOTION RECOVERY REQUIRED' "$case_dir/stderr"
       before="$(wc -l <"$case_dir/log")"
       PATH="$case_dir/bin:$PATH" TEST_STATE="$case_dir" TEST_FAILURE=recovery \
+        APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" BACKUP_DIR="$case_dir/backups" \
         bash "$case_dir/scripts/recover-promotion.sh" --journal "$case_dir/journal.json"
       [ "$(wc -l <"$case_dir/log")" -eq "$before" ]
       grep -qx receipted "$case_dir/m4"

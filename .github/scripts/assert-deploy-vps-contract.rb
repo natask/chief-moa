@@ -38,6 +38,10 @@ PUBLISH_ENV = {
 }.freeze
 VERIFY_SCRIPT = <<~'BASH'
   set -euo pipefail
+  bash -n scripts/vps/*.sh
+  bash scripts/vps/test-node-runtime.sh
+  bash scripts/vps/test-install-promotion-control-plane.sh
+  bash scripts/vps/test-update-rollback.sh
   cd gateway
   # Same installer and lockfile as dev and the Docker image: what gets
   # verified is what ships.
