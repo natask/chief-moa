@@ -1641,6 +1641,18 @@ active URL change, active-service restart) requires a Postgres dump, a
 `DATA_DIR` snapshot, and a passing scratch restore check first
 (`scripts/vps/backup.sh`, `scripts/vps/restore-check.sh`).
 
+Gateway-touching master pushes are verified in a read-only CI job. A separate,
+write-scoped job may atomically advance only `vps-deploy` to that exact verified
+master SHA. The droplet then owns runtime authority: its pull timer requires
+four distinct credentials, waits for a drain-safe gateway, backs up active
+state, runs the candidate from an isolated checkout/project/ports/volumes,
+proves the candidate can restore and read the prior state, records the M4
+review/preview/verification/apply claim, and only then calls the guarded updater.
+The updater rechecks drain safety immediately before checkout mutation and
+records the observed effect and receipt after edge-visible health passes.
+Stale voice WebSockets are terminated by ping/pong liveness checks so leaked
+connection bookkeeping cannot wedge the drain gate indefinitely.
+
 Agent harnesses and their credentials never run on or mount into the VPS
 gateway; remote agent execution uses the worker-pull model where the user's
 execution machine connects outbound to claim queued runs.

@@ -118,6 +118,23 @@ defaults are migrated only when no token has been stored.
 
 ## Update The Running Gateway
 
+One-time promotion-worker setup generates distinct scoped credentials without
+printing them, writes the root-only worker environment, and installs the
+systemd environment drop-in. It does not restart the gateway; run backup and
+restore-check and verify the live drain before recreating the gateway once to
+load the new role credentials:
+
+```sh
+scripts/vps/install-promotion-control-plane.sh --install
+```
+
+After that bootstrap, CI advances only the verified `vps-deploy` ref. The VPS
+timer runs `scripts/vps/promote-candidate.sh`, which creates an isolated
+candidate checkout and Compose stack, checks the candidate against a restored
+active backup, records the M4 chain, then delegates the active mutation to the
+guarded updater. Missing credentials or an active voice turn safely defer the
+timer instead of weakening the gate.
+
 ```sh
 /opt/chief-moa/app/scripts/vps/update.sh --ref master
 ```

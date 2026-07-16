@@ -259,6 +259,15 @@ Verification:
   for recurring backup/restore verification, and a macOS LaunchAgent plus rsync
   pull script for off-host backup copies. This does not mean the active timers
   were installed or an active backup was run.
+- [x] 8.7 Restore the exact-SHA `vps-deploy` publication boundary after the
+  read-only CI job passes, with a hostile workflow-contract test that keeps
+  write authority out of pull requests and verification steps.
+- [x] 8.8 Add the missing droplet promotion worker: distinct scoped credential
+  bootstrap, drain-safe checks, active backup, candidate restored-state check,
+  isolated Compose preview/auth smoke, M4 evidence creation, guarded apply,
+  receipt, and preview cleanup. A final drain check runs immediately before
+  checkout mutation, and missing evidence is a safe timer deferral rather than
+  a two-minute failure loop.
 
 Acceptance: before any active URL change, active-service restart, Master Orch
 apply, or client cutover, a Postgres dump and `DATA_DIR` snapshot exist and a

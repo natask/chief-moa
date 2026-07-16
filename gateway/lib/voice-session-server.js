@@ -19,7 +19,7 @@ const {
 } = require("./voice-playback-progress");
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
-
+const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -29,12 +29,12 @@ const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
 const PROVIDER_EVENT_ERROR_MAX_CHARS = 240;
 const PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
-
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const sessionsDir = path.join(dataDir, "voice-sessions");
   const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
   const connections = new Set();
+  const heartbeat = startVoiceSessionHeartbeat({ connections, intervalMs: options?.heartbeatIntervalMs });
   const pendingReplacements = new Map();
   const steeringCoordinator = createVoiceTurnSteeringCoordinator({ connections, pending: pendingReplacements });
   const agentProfile = options?.agentProfile || null;
@@ -51,13 +51,12 @@ function createVoiceSessionServer(options) {
     }),
   });
   fs.mkdirSync(sessionsDir, { recursive: true });
-
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: Number(options?.maxPayloadBytes || 2 * 1024 * 1024),
   });
-
   wss.on("connection", (ws, request) => {
+    heartbeat.track(ws);
     const connection = new VoiceSessionConnection(ws, {
       request,
       sessionsDir,
@@ -94,6 +93,7 @@ function createVoiceSessionServer(options) {
       });
     },
     close(callback) {
+      heartbeat.close();
       wss.close(callback);
     },
   };

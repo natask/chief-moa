@@ -127,14 +127,26 @@ if [ -z "$latest_backup" ]; then
 fi
 "$SCRIPT_DIR/restore-check.sh" "${latest_backup%/}"
 
+# A user turn may start while backup/restore runs. Recheck at the last point
+# before checkout mutation; M4 evidence is necessary but cannot replace live
+# no-interruption evidence.
+port="$(env_value GATEWAY_PORT)"
+port="${port:-8787}"
+if ! curl -fsS --max-time 5 "http://127.0.0.1:$port/health" | node -e '
+  let body=""; process.stdin.on("data", (chunk) => body += chunk).on("end", () => {
+    const activity = JSON.parse(body).voice_stream?.activity;
+    if (!activity?.drain_safe) process.exit(1);
+  });'; then
+  echo "Promotion deferred: active gateway is no longer drain-safe." >&2
+  exit 75
+fi
+
 # 2. Move the checkout to the requested ref. This checkout is a deploy
 # artifact, never a workspace (fix work happens in branches elsewhere), so
 # --force discarding stray local files is the wanted behavior: without it a
 # single untracked file that the new ref tracks wedges every update.
 old_full_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
 old_sha="${old_full_sha:0:12}"
-port="$(env_value GATEWAY_PORT)"
-port="${port:-8787}"
 # Preserve the prior immutable receipt so a failed candidate cannot erase the
 # last known-good deployment record while ensuring its own receipt is absent.
 if [ -f "$receipt_file" ]; then

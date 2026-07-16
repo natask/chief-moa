@@ -6,7 +6,8 @@ ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
 run_case() {
-  local failure="$1" expected="$2" case_dir="$ROOT/$failure"
+  local failure="$1" expected="$2"
+  local case_dir="$ROOT/$failure"
   mkdir -p "$case_dir/scripts" "$case_dir/app" "$case_dir/backups" "$case_dir/bin"
   cp "$SCRIPT_DIR/update.sh" "$case_dir/scripts/update.sh"
   cp "$SCRIPT_DIR/recover-promotion.sh" "$case_dir/scripts/recover-promotion.sh"
@@ -65,6 +66,7 @@ esac
 EOF
   cat >"$case_dir/bin/node" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" != -e ] || { cat >/dev/null; exit 0; }
 name="$(basename "$1")"
 if [ "$name" = validate-promotion-evidence.js ]; then
   count="$(cat "$TEST_STATE/validate-count" 2>/dev/null || echo 0)"; count=$((count + 1)); echo "$count" >"$TEST_STATE/validate-count"
@@ -101,6 +103,10 @@ if [ "$name" = record-promotion-receipt.js ]; then
   exit 0
 fi
 exit 91
+EOF
+  cat >"$case_dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '{"voice_stream":{"activity":{"drain_safe":true}}}\n'
 EOF
   cat >"$case_dir/bin/docker" <<'EOF'
 #!/usr/bin/env bash
