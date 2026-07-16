@@ -450,6 +450,13 @@
       3,583 lines and raise the exact whole-extension ratchet to 55.39% lines,
       36.59% branches, and 31.68% functions with 49 passing unit tests and a
       passing real headless-Chromium smoke.
+- [x] 4.4s Extract declarative UI-spec storage hydration, DOM presentation, and
+      bounded action dispatch from `content.js` into a focused controller while
+      retaining the existing sanitized proposal-only action boundary. Verify
+      the focused runtime at 100% lines, 97.45% branches, and 100% functions;
+      reduce `content.js` to 3,136 lines and raise the exact whole-extension
+      ratchet to 57.74% lines, 38.69% branches, and 32.01% functions with 46
+      passing unit-test files and a passing real headless-Chromium smoke.
 - [x] 4.5 Enforce at least 90% lines, branches, and functions for the LiveKit
       worker. Verified at 99.07% lines, 90.40% branches, and 92.00% functions
       with all 19 tests passing.

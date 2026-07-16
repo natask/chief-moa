@@ -1485,7 +1485,10 @@ queues.
   voice, explicitly invoked page context, settings, engine-served UI spec
   rendering, and engine-routed browser actions, including the background
   agent-loop poll (`pollBrowserAgentTasks`) behind versioned, default-off
-  consent. UI spec smoke:
+  consent. `content-ui-controller-runtime.js` owns sanitized declarative UI
+  presentation and dispatches only the bounded action vocabulary through
+  injected content callbacks; a UI spec remains a proposal rather than an
+  executable command. UI spec smoke:
   `browser_extension/scripts/smoke-ui-spec.mjs` (`npm run smoke:ui-spec`).
   Agent-loop smoke:
   `browser_extension/scripts/smoke-agent-loop.mjs`
