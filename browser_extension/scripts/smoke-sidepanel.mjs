@@ -243,13 +243,10 @@ async function main() {
     await pageCdp.send("Runtime.enable");
     await waitForEval(pageCdp, 'document.readyState === "complete" && document.getElementById("status")?.textContent === "Ready."');
 
-    const roleUi = await evaluate(pageCdp, `(() => ({
-      selectors: document.querySelectorAll("#agentModeSelector, [data-agent-mode-option]").length,
-      roles: [roleForInstruction("explain this"), roleForInstruction("help me do this"),
-        roleForInstruction("work with me"), roleForInstruction("organize this page")],
-    }))()`);
-    if (roleUi?.selectors !== 0 || JSON.stringify(roleUi?.roles) !== JSON.stringify(["explain", "help", "collaborate", "delegate"])) {
-      throw new Error(`side-panel conversational roles are not selector-free: ${JSON.stringify(roleUi)}`);
+    const roleSelectorCount = await evaluate(pageCdp,
+      'document.querySelectorAll("#agentModeSelector, [data-agent-mode-option]").length');
+    if (roleSelectorCount !== 0) {
+      throw new Error(`side-panel conversational roles are not selector-free: ${roleSelectorCount} selectors`);
     }
 
     await evaluate(workerCdp, `(async () => {

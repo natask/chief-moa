@@ -1379,27 +1379,6 @@ async function main() {
       throw new Error(`unexpected demo result: ${resultText}`);
     }
 
-    if (coverageOutput) {
-      const workerCoverage = await evaluate(workerCdp, "globalThis.__coverage__ || null");
-      const contentCoverage = await evaluate(workerCdp, `
-        (async () => {
-          const tabs = await chrome.tabs.query({ url: "http://localhost:*/*" });
-          const snapshots = [];
-          for (const tab of tabs) {
-            const [snapshot] = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: () => globalThis.__coverage__ || null,
-            });
-            if (snapshot?.result) snapshots.push(snapshot.result);
-          }
-          return snapshots;
-        })()
-      `);
-      const coverage = [workerCoverage, ...(contentCoverage || [])].filter(Boolean);
-      mkdirSync(dirname(coverageOutput), { recursive: true });
-      writeFileSync(coverageOutput, JSON.stringify({ schema_version: 1, coverage }));
-    }
-
     const updateReinjection = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${pointerTabId};
