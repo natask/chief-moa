@@ -18,7 +18,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.os.SystemClock;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -78,6 +80,13 @@ public final class MainActivity extends Activity {
     private Button micButton;
     private Button contactsButton;
     private Button startButton;
+    // Raw screen point of the Start button's last ACTION_UP; drives where the
+    // lion appears. Touchless activations (accessibility, keyboard,
+    // programmatic clicks) leave this stale and fall back to the button center.
+    private float startTouchUpRawX;
+    private float startTouchUpRawY;
+    private long startTouchUpAtMs;
+    private boolean startTouchUpCaptured;
     private Button stopButton;
     private Button updateButton;
     private Button rollbackButton;
@@ -338,6 +347,18 @@ public final class MainActivity extends Activity {
         card.addView(contactsButton);
 
         startButton = primaryButton("Start assistant circle");
+        // Remember where the activating touch lifted so the lion can appear
+        // exactly under the finger. Returning false keeps normal click
+        // dispatch (and accessibility clicks) intact.
+        startButton.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                startTouchUpRawX = event.getRawX();
+                startTouchUpRawY = event.getRawY();
+                startTouchUpAtMs = event.getEventTime();
+                startTouchUpCaptured = true;
+            }
+            return false;
+        });
         startButton.setOnClickListener(v -> startOverlay());
         card.addView(startButton);
 
@@ -627,6 +648,18 @@ public final class MainActivity extends Activity {
             return;
         }
         Intent intent = new Intent(this, OverlayService.class);
+        // Center the lion under the activating touch; a click with no fresh
+        // touch (accessibility/keyboard/programmatic) centers on the button.
+        if (MoaOrbPlacement.touchPlacementUsable(startTouchUpCaptured, startTouchUpAtMs, SystemClock.uptimeMillis())) {
+            intent.putExtra(OverlayService.EXTRA_ORB_CENTER_X, startTouchUpRawX);
+            intent.putExtra(OverlayService.EXTRA_ORB_CENTER_Y, startTouchUpRawY);
+        } else if (startButton != null && startButton.isAttachedToWindow()) {
+            int[] location = new int[2];
+            startButton.getLocationOnScreen(location);
+            intent.putExtra(OverlayService.EXTRA_ORB_CENTER_X, location[0] + startButton.getWidth() / 2f);
+            intent.putExtra(OverlayService.EXTRA_ORB_CENTER_Y, location[1] + startButton.getHeight() / 2f);
+        }
+        startTouchUpCaptured = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
         } else {

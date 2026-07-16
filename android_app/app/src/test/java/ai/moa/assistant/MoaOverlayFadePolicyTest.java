@@ -143,6 +143,59 @@ public final class MoaOverlayFadePolicyTest {
     }
 
     @Test
+    public void keyboardHoldBlocksOutsideFade() {
+        MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
+
+        // Composer engaged: keyboard/IME touches and other outside reports
+        // must not park the family.
+        policy.setFadeHold(true);
+        assertTrue(policy.isFadeHeld());
+        assertFalse(policy.shouldScheduleFadeConfirm(1000));
+        assertFalse(policy.confirmFade(1000));
+        assertFalse(policy.isFaded());
+    }
+
+    @Test
+    public void engagingKeyboardHoldVoidsInFlightConfirm() {
+        MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
+
+        // Outside report scheduled, then the composer gains focus before the
+        // deferred confirm fires: the fade must not land.
+        assertTrue(policy.shouldScheduleFadeConfirm(1000));
+        policy.setFadeHold(true);
+        assertFalse(policy.confirmFade(1000));
+        assertFalse(policy.isFaded());
+    }
+
+    @Test
+    public void releasingKeyboardHoldRestoresOrdinaryOutsideFade() {
+        MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
+
+        policy.setFadeHold(true);
+        assertFalse(policy.shouldScheduleFadeConfirm(1000));
+        // Keyboard dismissed / panel closed: ordinary outside taps fade again.
+        policy.setFadeHold(false);
+        assertFalse(policy.isFadeHeld());
+        assertTrue(policy.shouldScheduleFadeConfirm(2000));
+        assertTrue(policy.confirmFade(2000));
+        assertTrue(policy.isFaded());
+    }
+
+    @Test
+    public void keyboardHoldDoesNotWakeAParkedFamily() {
+        MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
+        assertTrue(policy.shouldScheduleFadeConfirm(1000));
+        assertTrue(policy.confirmFade(1000));
+
+        // Engaging/releasing the hold is not a wake: only a family touch or an
+        // explicit restore brings the family back.
+        policy.setFadeHold(true);
+        assertTrue(policy.isFaded());
+        policy.setFadeHold(false);
+        assertTrue(policy.isFaded());
+    }
+
+    @Test
     public void gatesShareOneFamilyFadeState() {
         MoaOverlayFadePolicy policy = new MoaOverlayFadePolicy();
         MoaOverlayFadePolicy.WindowGate orb = policy.newWindowGate();
