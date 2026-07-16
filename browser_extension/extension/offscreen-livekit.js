@@ -45,10 +45,10 @@ function ensureAudioElement() {
   return audioEl;
 }
 
-async function connect({ id, url, token }) {
+async function connect({ id, url, token }, RoomCtor = Room) {
   await teardown();
   activeId = id;
-  room = new Room({ adaptiveStream: true, dynacast: true });
+  room = new RoomCtor({ adaptiveStream: true, dynacast: true });
 
   room.on(RoomEvent.ParticipantAttributesChanged, (_changed, participant) => {
     const attrs = participant?.attributes || {};
@@ -115,3 +115,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
+
+export { connect, ensureAudioElement, mapAgentState, post, teardown };
