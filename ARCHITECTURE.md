@@ -280,14 +280,18 @@ literal voice transcription only:
 
 ```text
 external app has a focused non-secure AXTextField/AXTextArea
-  -> Moa binds app PID/process generation/signing identity, focused window,
+  -> Moa validates the live and static code objects, then binds app PID/process
+     generation/signing identity, focused window,
      focused AX element, role/settable/secure state, value digest, and selection
      before its command panel takes focus
   -> gateway returns the exact final transcript; no model rewrite is requested
   -> Moa previews that literal transcript and asks for a separate confirmation
-  -> local hash-linked pending receipt is appended and fsynced
-  -> the same app/window/element/value/selection state is synchronously
-     revalidated immediately before one AXValue set
+  -> under a cross-instance file lock, a complete hash-linked pending journal
+     is written to a same-directory temp file, fsynced, atomically renamed, and
+     followed by a directory fsync
+  -> live/static code validity, process generation/signing identity, and the
+     same app/window/element/value/selection state are synchronously re-read
+     immediately before one AXValue set
   -> local terminal inserted/rejected receipt is appended; no click, key,
      submit, focus steal, or fallback action occurs
 ```
@@ -295,7 +299,8 @@ external app has a focused non-secure AXTextField/AXTextArea
 Secure, non-settable, unsupported-role, wrong-process-generation, changed-window,
 changed-element, changed-value, and changed-selection targets fail with zero AX
 mutation. Receipts contain hashes and bounded outcome metadata, never the raw
-field value or transcript. The current ad-hoc-signed QA bundle remains
+field value or transcript. A required rejected terminal receipt failure is
+surfaced and the rejected effect remains unexecuted. The current ad-hoc-signed QA bundle remains
 compilation and package evidence only; this insertion path has not been launched
 or TCC-tested and is not a production signing/notarization artifact.
 

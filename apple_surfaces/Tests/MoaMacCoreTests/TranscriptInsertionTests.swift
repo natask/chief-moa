@@ -1,9 +1,9 @@
 import Foundation
-import MoaMacCore
+@testable import MoaMacCore
 import Testing
 
 #if os(macOS)
-import MoaMacShell
+@testable import MoaMacShell
 #endif
 
 private let insertionNow = Date(timeIntervalSince1970: 1_800_000_000)
@@ -231,6 +231,68 @@ private func receiptDraft(
             receiptDraft(attempt: UUID(), target: UUID(), stage: .pending, outcome: .pending)
         )
     }
+    let malformedURL = directory.appendingPathComponent("malformed.jsonl")
+    try Data("not-json\n".utf8).write(to: malformedURL)
+    #expect(throws: TranscriptInsertionError.journalFailure) {
+        try FsyncTranscriptReceiptJournal(url: malformedURL).receipts()
+    }
+}
+
+private final class ConcurrentErrors: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Error] = []
+    func append(_ error: Error) { lock.withLock { values.append(error) } }
+    var isEmpty: Bool { lock.withLock { values.isEmpty } }
+}
+
+@Test func fsyncJournalSerializesConcurrentWritersAcrossInstances() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("receipts.jsonl")
+    let journals = (0..<8).map { _ in FsyncTranscriptReceiptJournal(url: url) }
+    let errors = ConcurrentErrors()
+    DispatchQueue.concurrentPerform(iterations: 48) { index in
+        do {
+            _ = try journals[index % journals.count].append(receiptDraft(
+                attempt: UUID(),
+                target: UUID(),
+                stage: .pending,
+                outcome: .pending
+            ))
+        } catch {
+            errors.append(error)
+        }
+    }
+    #expect(errors.isEmpty)
+    #expect(try FsyncTranscriptReceiptJournal(url: url).receipts().count == 48)
+}
+
+@Test func atomicJournalHandlesShortWritesAndPreservesPriorFileOnCrash() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("receipts.jsonl")
+    let shortWriter = FsyncTranscriptReceiptJournal(
+        url: url,
+        writer: POSIXAtomicReceiptWriter(maximumWriteSize: 7)
+    )
+    let first = try shortWriter.append(receiptDraft(
+        attempt: UUID(), target: UUID(), stage: .pending, outcome: .pending
+    ))
+    #expect(try shortWriter.receipts() == [first])
+
+    let crashing = FsyncTranscriptReceiptJournal(
+        url: url,
+        writer: POSIXAtomicReceiptWriter(maximumWriteSize: 5, failAfterBytes: 13)
+    )
+    #expect(throws: TranscriptInsertionError.journalFailure) {
+        try crashing.append(receiptDraft(
+            attempt: UUID(), target: UUID(), stage: .pending, outcome: .pending
+        ))
+    }
+    #expect(try FsyncTranscriptReceiptJournal(url: url).receipts() == [first])
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        .filter { $0.hasSuffix(".tmp") }
+    #expect(leftovers.isEmpty)
 }
 
 #if os(macOS)
@@ -280,6 +342,84 @@ private final class FailOnSecondReceiptJournal: TranscriptReceiptJournaling, @un
         return try memory.append(draft)
     }
     func receipts() throws -> [TranscriptInsertionReceipt] { try memory.receipts() }
+}
+
+@MainActor @Test func mutationExecutorRejectsProcessReplacementAtFinalCheck() throws {
+    let binding = try TranscriptTargetBinding(capturedAt: insertionNow, state: targetState())
+    let preview = try TranscriptInsertionPreview(binding: binding, literalTranscript: "literal")
+    let replacement = ProcessIdentity(
+        bundleID: insertionProcess.bundleID,
+        pid: insertionProcess.pid,
+        processStart: insertionNow,
+        signingIdentity: insertionProcess.signingIdentity
+    )
+    var inspections = [
+        TranscriptMutationInspection(state: targetState(), rawValue: "draft", signingValid: true),
+        TranscriptMutationInspection(state: targetState(process: replacement), rawValue: "draft", signingValid: true),
+    ]
+    var effects = 0
+    #expect(throws: TranscriptInsertionError.wrongApplication) {
+        try TranscriptMutationExecutor.execute(preview: preview, binding: binding) {
+            inspections.removeFirst()
+        } setValue: { _ in effects += 1 }
+    }
+    #expect(effects == 0)
+}
+
+@MainActor @Test func mutationExecutorRejectsInvalidSigningAtEitherCheck() throws {
+    let binding = try TranscriptTargetBinding(capturedAt: insertionNow, state: targetState())
+    let preview = try TranscriptInsertionPreview(binding: binding, literalTranscript: "literal")
+    for invalidIndex in [0, 1] {
+        var index = 0
+        var effects = 0
+        #expect(throws: TranscriptInsertionError.wrongApplication) {
+            try TranscriptMutationExecutor.execute(preview: preview, binding: binding) {
+                defer { index += 1 }
+                return TranscriptMutationInspection(
+                    state: targetState(),
+                    rawValue: "draft",
+                    signingValid: index != invalidIndex
+                )
+            } setValue: { _ in effects += 1 }
+        }
+        #expect(effects == 0)
+    }
+}
+
+@MainActor @Test func mutationExecutorUsesLiteralSelectionAndRejectsRawValueDrift() throws {
+    let binding = try TranscriptTargetBinding(
+        capturedAt: insertionNow,
+        state: targetState(value: "draft", selection: .init(location: 2, length: 2))
+    )
+    let preview = try TranscriptInsertionPreview(binding: binding, literalTranscript: "XYZ")
+    var inspections = 0
+    var output: String?
+    try TranscriptMutationExecutor.execute(preview: preview, binding: binding) {
+        inspections += 1
+        return TranscriptMutationInspection(state: binding.state, rawValue: "draft", signingValid: true)
+    } setValue: { output = $0 }
+    #expect(inspections == 2)
+    #expect(output == "drXYZt")
+
+    var values = ["draft", "other"]
+    output = nil
+    #expect(throws: TranscriptInsertionError.staleState) {
+        try TranscriptMutationExecutor.execute(preview: preview, binding: binding) {
+            TranscriptMutationInspection(state: binding.state, rawValue: values.removeFirst(), signingValid: true)
+        } setValue: { output = $0 }
+    }
+    #expect(output == nil)
+
+    let inconsistent = try TranscriptTargetBinding(
+        capturedAt: insertionNow,
+        state: targetState(value: "long-value", selection: .init(location: 8, length: 0))
+    )
+    let inconsistentPreview = try TranscriptInsertionPreview(binding: inconsistent, literalTranscript: "x")
+    #expect(throws: TranscriptInsertionError.invalidSelection) {
+        try TranscriptMutationExecutor.execute(preview: inconsistentPreview, binding: inconsistent) {
+            TranscriptMutationInspection(state: inconsistent.state, rawValue: "short", signingValid: true)
+        } setValue: { _ in }
+    }
 }
 
 @MainActor @Test func coordinatorCapturesBeforeFocusPreviewsThenJournalsAndMutatesOnce() async throws {
@@ -332,6 +472,19 @@ private final class FailOnSecondReceiptJournal: TranscriptReceiptJournaling, @un
     let receipts = try journal.receipts()
     #expect(receipts.count == 1)
     #expect(receipts[0].outcome == .pending)
+}
+
+@MainActor @Test func rejectedMutationReceiptFailureIsSurfacedWithZeroEffect() async throws {
+    let adapter = FakeTranscriptAXAdapter()
+    adapter.mutationError = .focusChanged
+    let journal = FailOnSecondReceiptJournal()
+    let coordinator = TranscriptInsertionCoordinator(adapter: adapter, journal: journal)
+    #expect(coordinator.captureBeforeMoaTakesFocus())
+    await #expect(throws: TranscriptInsertionError.terminalJournalFailure) {
+        try await coordinator.insertLiteralTranscript("literal", approver: FixedTranscriptApprover(true))
+    }
+    #expect(adapter.mutations.isEmpty)
+    #expect(try journal.receipts().map(\.outcome) == [.pending])
 }
 
 @MainActor @Test(arguments: [

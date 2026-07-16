@@ -126,7 +126,9 @@ not a model action. Before Moa takes focus it SHALL bind the prior application
 process generation/signing identity, focused window, focused editable AX
 element, secure/settable role state, current value digest, and selected range.
 It SHALL preview the exact final transcript and require a separate confirmation
-before insertion.
+before insertion. Signing metadata SHALL be accepted only after the live and
+static code objects pass validity checks, and code validity/process identity
+SHALL be re-read in the final check immediately before mutation.
 
 #### Scenario: User confirms an unchanged editable target
 - **WHEN** the exact transcript is confirmed and every bound target/state field
@@ -145,6 +147,18 @@ before insertion.
 - **THEN** they form a local hash-linked sequence
 - **AND** raw transcripts, field values, labels, AX trees, and screenshots are
       absent
+
+#### Scenario: Two app instances write receipts concurrently
+- **WHEN** concurrent attempts append to the same local journal
+- **THEN** writes serialize across instances and preserve one valid hash chain
+- **AND** a short write or crash before atomic replacement leaves the prior
+      valid journal readable
+
+#### Scenario: Rejection terminal receipt cannot be persisted
+- **WHEN** final target revalidation rejects and its required terminal receipt
+      cannot be durably written
+- **THEN** the receipt failure is surfaced
+- **AND** no AX mutation occurs
 
 ### Requirement: Local receipts precede optional sync
 The macOS surface SHALL atomically durably commit/fsync a bounded pending receipt

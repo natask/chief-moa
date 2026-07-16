@@ -72,17 +72,21 @@ import MoaMacCore
             try adapter.revalidateAndSet(preview, binding: binding)
         } catch {
             let insertionError = error as? TranscriptInsertionError ?? .staleState
-            _ = try? journal.append(.init(
-                attemptID: preview.attemptID,
-                targetID: preview.targetID,
-                stage: .terminal,
-                outcome: .rejected,
-                targetStateDigest: binding.stateFingerprint,
-                transcriptDigest: preview.transcriptDigest,
-                transcriptBytes: preview.transcriptBytes,
-                recordedAt: now(),
-                errorCode: insertionError.rawValue
-            ))
+            do {
+                _ = try journal.append(.init(
+                    attemptID: preview.attemptID,
+                    targetID: preview.targetID,
+                    stage: .terminal,
+                    outcome: .rejected,
+                    targetStateDigest: binding.stateFingerprint,
+                    transcriptDigest: preview.transcriptDigest,
+                    transcriptBytes: preview.transcriptBytes,
+                    recordedAt: now(),
+                    errorCode: insertionError.rawValue
+                ))
+            } catch {
+                throw TranscriptInsertionError.terminalJournalFailure
+            }
             throw insertionError
         }
         do {
@@ -136,39 +140,36 @@ import MoaMacCore
         guard let target, target.binding == binding, target.binding.id == preview.targetID else {
             throw TranscriptInsertionError.noTarget
         }
-        guard let running = NSRunningApplication(processIdentifier: binding.state.process.pid),
-              ProcessInspector.identity(running) == binding.state.process else {
-            throw TranscriptInsertionError.wrongApplication
-        }
-        let currentWindow = try elementAttribute(target.app, kAXFocusedWindowAttribute, error: .focusChanged)
-        let currentElement = try elementAttribute(target.app, kAXFocusedUIElementAttribute, error: .focusChanged)
-        guard CFEqual(currentWindow, target.window), CFEqual(currentElement, target.element) else {
-            throw TranscriptInsertionError.focusChanged
-        }
-        let current = try state(process: binding.state.process, window: currentWindow, element: currentElement)
-        try TranscriptInsertionPolicy.validate(binding: binding, current: current)
-
-        let rawValue = try stringAttribute(currentElement, kAXValueAttribute, error: .staleState)
-        let range = NSRange(location: current.selection.location, length: current.selection.length)
-        guard NSMaxRange(range) <= (rawValue as NSString).length else {
-            throw TranscriptInsertionError.invalidSelection
-        }
-        let nextValue = (rawValue as NSString).replacingCharacters(in: range, with: preview.literalTranscript)
-
-        // One final state read occurs directly adjacent to AXValue set. Any
-        // target, focus, value, selection, role, secure, or settable change
-        // rejects before the only mutating API call in this adapter.
-        let finalWindow = try elementAttribute(target.app, kAXFocusedWindowAttribute, error: .focusChanged)
-        let finalElement = try elementAttribute(target.app, kAXFocusedUIElementAttribute, error: .focusChanged)
-        guard CFEqual(finalWindow, target.window), CFEqual(finalElement, target.element) else {
-            throw TranscriptInsertionError.focusChanged
-        }
-        let finalState = try state(process: binding.state.process, window: finalWindow, element: finalElement)
-        try TranscriptInsertionPolicy.validate(binding: binding, current: finalState)
-        guard AXUIElementSetAttributeValue(finalElement, kAXValueAttribute as CFString, nextValue as CFTypeRef) == .success else {
-            throw TranscriptInsertionError.nonSettable
+        try TranscriptMutationExecutor.execute(preview: preview, binding: binding) {
+            try inspect(target)
+        } setValue: { nextValue in
+            guard AXUIElementSetAttributeValue(
+                target.element,
+                kAXValueAttribute as CFString,
+                nextValue as CFTypeRef
+            ) == .success else { throw TranscriptInsertionError.nonSettable }
         }
         self.target = nil
+    }
+
+    private func inspect(_ target: BoundAXTarget) throws -> TranscriptMutationInspection {
+        // Re-read and cryptographically validate the live code object on every
+        // inspection. The final call is adjacent to TranscriptMutationExecutor's
+        // setValue closure; no bound identity is passed into state construction.
+        guard let running = NSRunningApplication(processIdentifier: target.binding.state.process.pid),
+              let actualProcess = ProcessInspector.identity(running) else {
+            throw TranscriptInsertionError.wrongApplication
+        }
+        let window = try elementAttribute(target.app, kAXFocusedWindowAttribute, error: .focusChanged)
+        let element = try elementAttribute(target.app, kAXFocusedUIElementAttribute, error: .focusChanged)
+        guard CFEqual(window, target.window), CFEqual(element, target.element) else {
+            throw TranscriptInsertionError.focusChanged
+        }
+        return TranscriptMutationInspection(
+            state: try state(process: actualProcess, window: window, element: element),
+            rawValue: try stringAttribute(element, kAXValueAttribute, error: .staleState),
+            signingValid: true
+        )
     }
 
     private func state(process: ProcessIdentity, window: AXUIElement, element: AXUIElement) throws -> TranscriptTargetState {

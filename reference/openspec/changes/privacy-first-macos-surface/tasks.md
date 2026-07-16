@@ -19,8 +19,9 @@
       process revalidation, JPEG re-encoding, dimension/byte caps, and no
       whole-desktop or ungranted periodic capture.
 - [x] 2.6 Add literal final-transcript insertion bound before Moa takes focus,
-      with exact preview/confirmation, immediate AX revalidation, fsync-backed
-      pending/terminal receipts, and zero-mutation rejection fixtures.
+      with exact preview/confirmation, verified code identity, two immediate AX
+      revalidation reads, cross-instance atomic/fsync pending/terminal receipts,
+      crash/short-write recovery, and zero-mutation rejection fixtures.
 
 ## 3. Explicit release
 

@@ -17,7 +17,9 @@ enum ProcessInspector {
     static func signingIdentity(pid: pid_t) -> String? {
         var code: SecCode?; let attrs = [kSecGuestAttributePid as String: pid] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &code) == errSecSuccess, let code else { return nil }
-        var staticCode: SecStaticCode?; guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        guard SecCodeCheckValidity(code, [], nil) == errSecSuccess else { return nil }
+        var staticCode: SecStaticCode?; guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess else { return nil }
         var info: CFDictionary?; guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
               let values = info as? [String: Any] else { return nil }
         let team = values[kSecCodeInfoTeamIdentifier as String] as? String ?? "adhoc"

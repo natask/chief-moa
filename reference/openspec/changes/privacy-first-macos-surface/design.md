@@ -97,8 +97,13 @@ its panel, it binds the prior application PID/process generation/signing
 identity, focused window, focused AX element, role/subrole, secure/settable
 state, value digest, and selected range. The exact gateway final transcript is
 kept literal and displayed in a separate confirmation preview. After acceptance,
-Moa fsyncs a hash-linked pending receipt, synchronously revalidates every bound
-field immediately before one `AXValue` set, and writes a terminal receipt. Any
+Moa validates both the live and static code objects, then persists the complete
+hash-linked journal by cross-instance-locked same-directory temp write, file
+fsync, atomic rename, and directory fsync. It synchronously re-reads code
+validity, process generation/signing identity, and every bound field immediately
+before one `AXValue` set, then writes a terminal receipt through the same atomic
+path. A required rejected terminal receipt failure is surfaced while the effect
+remains unexecuted. Any
 secure, non-settable, unsupported-role, stale, wrong-app, changed-window, or
 changed-focused-element condition rejects with no mutation. There is no click,
 focus steal, submit, key event, action fallback, raw transcript receipt, or model
@@ -119,6 +124,9 @@ private API fallback.
 
 Atomically and durably commit/fsync a pending local receipt before execution; if
 durability fails, do not execute. Write the terminal receipt directly afterward.
+Journal replacement must serialize across app instances, preserve the last valid
+hash chain across a short write or crash, and durably commit by same-directory
+temp-file fsync, atomic rename, and directory fsync (or an equivalent primitive).
 Store hashes and bounded outcomes, not raw labels, values, AX trees, or
 screenshots. Each record includes the previous-receipt hash, forming a
 hash-linked sequence only—not independent tamper evidence, attestation, or a

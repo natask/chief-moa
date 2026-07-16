@@ -164,6 +164,47 @@ public enum TranscriptInsertionPolicy {
     }
 }
 
+public struct TranscriptMutationInspection: Sendable {
+    public let state: TranscriptTargetState
+    public let rawValue: String
+    public let signingValid: Bool
+
+    public init(state: TranscriptTargetState, rawValue: String, signingValid: Bool) {
+        self.state = state
+        self.rawValue = rawValue
+        self.signingValid = signingValid
+    }
+}
+
+/// Deterministic two-check executor. The injected inspector must independently
+/// re-read verified process identity and target state on every call. No await or
+/// other suspension exists between the second inspection and the effect closure.
+public enum TranscriptMutationExecutor {
+    public static func execute(
+        preview: TranscriptInsertionPreview,
+        binding: TranscriptTargetBinding,
+        inspect: () throws -> TranscriptMutationInspection,
+        setValue: (String) throws -> Void
+    ) throws {
+        let first = try inspect()
+        guard first.signingValid else { throw TranscriptInsertionError.wrongApplication }
+        try TranscriptInsertionPolicy.validate(binding: binding, current: first.state)
+        let range = NSRange(location: first.state.selection.location, length: first.state.selection.length)
+        guard NSMaxRange(range) <= (first.rawValue as NSString).length else {
+            throw TranscriptInsertionError.invalidSelection
+        }
+        let nextValue = (first.rawValue as NSString).replacingCharacters(
+            in: range,
+            with: preview.literalTranscript
+        )
+        let final = try inspect()
+        guard final.signingValid else { throw TranscriptInsertionError.wrongApplication }
+        try TranscriptInsertionPolicy.validate(binding: binding, current: final.state)
+        guard final.rawValue == first.rawValue else { throw TranscriptInsertionError.staleState }
+        try setValue(nextValue)
+    }
+}
+
 public enum TranscriptReceiptStage: String, Codable, Sendable { case pending, terminal }
 public enum TranscriptReceiptOutcome: String, Codable, Sendable {
     case pending, inserted, rejected, interrupted
@@ -244,52 +285,33 @@ public final class InMemoryTranscriptReceiptJournal: TranscriptReceiptJournaling
 public final class FsyncTranscriptReceiptJournal: TranscriptReceiptJournaling, @unchecked Sendable {
     public static let maximumJournalBytes = 4 * 1024 * 1024
     private let url: URL
-    private let lock = NSLock()
+    private let writer: POSIXAtomicReceiptWriter
 
-    public init(url: URL) { self.url = url }
+    public init(url: URL) {
+        self.url = url
+        writer = POSIXAtomicReceiptWriter()
+    }
+
+    init(url: URL, writer: POSIXAtomicReceiptWriter) {
+        self.url = url
+        self.writer = writer
+    }
 
     public func append(_ draft: TranscriptReceiptDraft) throws -> TranscriptInsertionReceipt {
-        try lock.withLock {
+        try withFileLock {
             let current = try readUnlocked()
             let receipt = TranscriptReceiptFactory.make(draft, previous: current.last?.receiptHash)
-            var bytes = try Self.encoder.encode(receipt)
-            bytes.append(0x0a)
-            let existingSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            guard existingSize + bytes.count <= Self.maximumJournalBytes else {
+            let next = current + [receipt]
+            let bytes = try Self.encode(next)
+            guard bytes.count <= Self.maximumJournalBytes else {
                 throw TranscriptInsertionError.journalFailure
             }
-            let directory = url.deletingLastPathComponent()
-            do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let descriptor = open(url.path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)
-                guard descriptor >= 0 else { throw TranscriptInsertionError.journalFailure }
-                defer { close(descriptor) }
-                try bytes.withUnsafeBytes { buffer in
-                    guard let base = buffer.baseAddress else { return }
-                    var written = 0
-                    while written < buffer.count {
-                        let count = Darwin.write(descriptor, base.advanced(by: written), buffer.count - written)
-                        guard count > 0 else { throw TranscriptInsertionError.journalFailure }
-                        written += count
-                    }
-                }
-                guard fsync(descriptor) == 0, chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
-                    throw TranscriptInsertionError.journalFailure
-                }
-                let parent = open(directory.path, O_RDONLY)
-                guard parent >= 0 else { throw TranscriptInsertionError.journalFailure }
-                defer { close(parent) }
-                guard fsync(parent) == 0 else { throw TranscriptInsertionError.journalFailure }
-            } catch let error as TranscriptInsertionError {
-                throw error
-            } catch {
-                throw TranscriptInsertionError.journalFailure
-            }
+            try writer.replace(bytes, at: url)
             return receipt
         }
     }
 
-    public func receipts() throws -> [TranscriptInsertionReceipt] { try lock.withLock { try readUnlocked() } }
+    public func receipts() throws -> [TranscriptInsertionReceipt] { try withFileLock { try readUnlocked() } }
 
     public func recoverInterrupted(at date: Date) throws -> [TranscriptInsertionReceipt] {
         let pending = try receipts().reduce(into: [UUID: TranscriptInsertionReceipt]()) { latest, receipt in
@@ -335,12 +357,96 @@ public final class FsyncTranscriptReceiptJournal: TranscriptReceiptJournaling, @
         }
     }
 
+    private func withFileLock<T>(_ body: () throws -> T) throws -> T {
+        let directory = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let lockURL = directory.appendingPathComponent(".\(url.lastPathComponent).lock")
+            let descriptor = open(lockURL.path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR)
+            guard descriptor >= 0 else { throw TranscriptInsertionError.journalFailure }
+            defer { close(descriptor) }
+            guard flock(descriptor, LOCK_EX) == 0 else { throw TranscriptInsertionError.journalFailure }
+            defer { _ = flock(descriptor, LOCK_UN) }
+            return try body()
+        } catch let error as TranscriptInsertionError {
+            throw error
+        } catch {
+            throw TranscriptInsertionError.journalFailure
+        }
+    }
+
+    private static func encode(_ receipts: [TranscriptInsertionReceipt]) throws -> Data {
+        var result = Data()
+        for receipt in receipts {
+            result.append(try encoder.encode(receipt))
+            result.append(0x0a)
+        }
+        return result
+    }
+
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }()
+}
+
+/// Same-directory atomic replacement used by the receipt journal. The existing
+/// valid journal remains untouched until a complete temp file is fsynced. The
+/// directory fsync makes the rename durable across a crash.
+struct POSIXAtomicReceiptWriter: Sendable {
+    let maximumWriteSize: Int?
+    let failAfterBytes: Int?
+
+    init(maximumWriteSize: Int? = nil, failAfterBytes: Int? = nil) {
+        self.maximumWriteSize = maximumWriteSize
+        self.failAfterBytes = failAfterBytes
+    }
+
+    func replace(_ data: Data, at url: URL) throws {
+        let directory = url.deletingLastPathComponent()
+        let temporary = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw TranscriptInsertionError.journalFailure }
+        var descriptorOpen = true
+        defer {
+            if descriptorOpen { close(descriptor) }
+            try? FileManager.default.removeItem(at: temporary)
+        }
+        do {
+            try data.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                var written = 0
+                while written < buffer.count {
+                    if let failAfterBytes, written >= failAfterBytes {
+                        throw TranscriptInsertionError.journalFailure
+                    }
+                    var requested = buffer.count - written
+                    if let maximumWriteSize { requested = min(requested, max(1, maximumWriteSize)) }
+                    if let failAfterBytes { requested = min(requested, max(1, failAfterBytes - written)) }
+                    let count = Darwin.write(descriptor, base.advanced(by: written), requested)
+                    guard count > 0 else { throw TranscriptInsertionError.journalFailure }
+                    written += count
+                }
+            }
+            guard fsync(descriptor) == 0, chmod(temporary.path, S_IRUSR | S_IWUSR) == 0 else {
+                throw TranscriptInsertionError.journalFailure
+            }
+            let closeStatus = close(descriptor)
+            descriptorOpen = false
+            guard closeStatus == 0 else { throw TranscriptInsertionError.journalFailure }
+            guard rename(temporary.path, url.path) == 0 else { throw TranscriptInsertionError.journalFailure }
+            let parent = open(directory.path, O_RDONLY)
+            guard parent >= 0 else { throw TranscriptInsertionError.journalFailure }
+            defer { close(parent) }
+            guard fsync(parent) == 0 else { throw TranscriptInsertionError.journalFailure }
+        } catch let error as TranscriptInsertionError {
+            throw error
+        } catch {
+            throw TranscriptInsertionError.journalFailure
+        }
+    }
 }
 
 private enum TranscriptReceiptFactory {
