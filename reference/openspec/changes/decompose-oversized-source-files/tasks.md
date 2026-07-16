@@ -196,6 +196,41 @@
       functions for the artifact store. Preserve every corrupt-state snapshot
       with collision-resistant archive names and reduce `server.js` to 14,654
       lines.
+- [x] 2.38 Extract authenticated UI-spec read, replace, and reset routing from
+      `server.js`; add exhaustive authorization, wrapper, error, persistence,
+      corruption-fallback, clone, reset, component, control, coordinate, tone,
+      action, sanitization, and collection-bound tests. Enforce focused 90%
+      line/branch/function gates, verified at 100% for handlers and 99.68%
+      lines, 93.75% branches, and 100% functions for the declarative store.
+      Reduce `server.js` to 14,626 lines.
+- [x] 2.39 Extract the fail-closed billing runtime authorize and usage routes
+      from `server.js`; add exhaustive authorization, configuration, denial,
+      receipt, immutable-price, budget, numeric-bound, approval-window,
+      signature, signer, profile-effect, rollback-effect, idempotency, and
+      persistence-recovery tests. Enforce focused 90% line/branch/function
+      gates, verified at 100% lines, 95.24% branches, and 100% functions for
+      handlers and 100% lines, 93.40% branches, and 100% functions for runtime
+      authority. Reduce `server.js` to 14,613 lines.
+- [x] 2.40 Extract authenticated work-graph node, event, artifact, item-read,
+      and action routing from `server.js`; add exhaustive route, authorization,
+      query-alias, filter-default, collection, creation, and exact path-remainder
+      tests. Enforce a focused 90% line/branch/function gate, verified at 100%
+      for all three metrics, while retaining the existing above-90% JSON and
+      PostgreSQL store gates. Reduce `server.js` to 14,534 lines.
+- [x] 2.41 Extract product-event and project routing plus the durable project
+      store from `server.js`; add exhaustive authorization, status-fallback,
+      query-alias, reserved-event, create/update, persistence, corrupt-state,
+      normalization, bound, and project-brief prompt tests. Enforce focused 90%
+      line/branch/function gates, verified at 100% lines, 96.30% branches, and
+      100% functions for handlers and 100% for all three store metrics. Reduce
+      `server.js` to 14,335 lines.
+- [x] 2.42 Extract authenticated device-client and tool-request list,
+      heartbeat, create, claim, and receipt routing from `server.js`; add
+      exhaustive authorization, query-alias, validation, optional-registration,
+      availability, target/claimant binding, result, receipt, and default-clock
+      tests plus the end-to-end device-hub smoke. Enforce a focused 90%
+      line/branch/function gate, verified at 100% lines, 98.86% branches, and
+      100% functions. Reduce `server.js` to 14,179 lines.
 
 ## 3. Other Oversized Surfaces
 

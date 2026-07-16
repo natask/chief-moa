@@ -13,9 +13,13 @@ const {
 } = require("./voice-providers");
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
 const { canonicalVoice } = require("./profile-options");
+const {
+  hasPartialEndpointPlayback, normalizeAssistantAudioSegment: normalizeSegmentRaw,
+  normalizePlaybackProgress: normalizeProgressRaw, normalizeProgressStage,
+} = require("./voice-playback-progress");
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
-
+const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -25,12 +29,12 @@ const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
 const PROVIDER_EVENT_ERROR_MAX_CHARS = 240;
 const PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
-
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const sessionsDir = path.join(dataDir, "voice-sessions");
   const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
   const connections = new Set();
+  const heartbeat = startVoiceSessionHeartbeat({ connections, intervalMs: options?.heartbeatIntervalMs });
   const pendingReplacements = new Map();
   const steeringCoordinator = createVoiceTurnSteeringCoordinator({ connections, pending: pendingReplacements });
   const agentProfile = options?.agentProfile || null;
@@ -47,13 +51,12 @@ function createVoiceSessionServer(options) {
     }),
   });
   fs.mkdirSync(sessionsDir, { recursive: true });
-
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: Number(options?.maxPayloadBytes || 2 * 1024 * 1024),
   });
-
   wss.on("connection", (ws, request) => {
+    heartbeat.track(ws);
     const connection = new VoiceSessionConnection(ws, {
       request,
       sessionsDir,
@@ -65,6 +68,7 @@ function createVoiceSessionServer(options) {
       steeringCoordinator,
       turnProgressIntervalMs: options?.turnProgressIntervalMs,
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
+      blobStore: options?.blobStore || null,
     });
     connections.add(connection);
     ws.once("close", () => {
@@ -89,6 +93,7 @@ function createVoiceSessionServer(options) {
       });
     },
     close(callback) {
+      heartbeat.close();
       wss.close(callback);
     },
   };
@@ -107,6 +112,7 @@ class VoiceSessionConnection {
     this.contextProvider = options.contextProvider || null;
     this.toolHandler = options.toolHandler || null;
     this.onTurnCompleted = options.onTurnCompleted || null;
+    this.blobStore = options.blobStore || null;
     this.steeringCoordinator = options.steeringCoordinator || createVoiceTurnSteeringCoordinator(
       { connections: options.peerConnections || new Set(), pending: options.pendingReplacements || new Map() });
     this.turn = null;
@@ -340,6 +346,11 @@ class VoiceSessionConnection {
       pcmPath: path.join(turnDir, `${turnId}.pcm`),
       assistantPcmPath: path.join(turnDir, `${turnId}.assistant.pcm`),
       metadataPath: path.join(turnDir, `${turnId}.json`),
+      // Blob-store handles for write-behind upload once each stream closes.
+      // The .pcm files above stay the live spool: STT reads them mid-turn.
+      blobStore: this.blobStore,
+      userAudioKey: `voice-sessions/${sessionId}/${turnId}.pcm`,
+      assistantAudioKey: `voice-sessions/${sessionId}/${turnId}.assistant.pcm`,
       startedAt,
       lastAudioAt: null,
       lastAssistantAudioAt: null,
@@ -1116,7 +1127,7 @@ class VoiceSessionConnection {
       transcription_only: providerResult?.transcription_only === true,
       ...(typeof doneTtsSpoke === "boolean" ? { tts_spoke: doneTtsSpoke } : {}),
       // Language visibility: ALWAYS report the reply (spoken) language and the
-      // restricted input (heard) languages so a client overlay can render a live
+      // configured input-prompt languages so a client overlay can render a live
       // "hears X / speaks Y" indicator. reply_language falls back to the turn's
       // effective profile when the provider result omits it.
       reply_language: turnReplyLanguage(turn, providerResult, canonicalRecord),
@@ -1613,17 +1624,17 @@ class VoiceSessionConnection {
   }
 }
 
-// The restricted INPUT (STT) language codes for a turn, captured at session
-// start. Always an array so clients can render a live "hears X" indicator.
+// The configured INPUT prompt-language codes for a turn, captured at session
+// start, so clients render "hears X" without mistaking auto-detection for a preference.
 function turnInputLanguages(turn) {
-  const codes = turn?.providerStatus?.language_codes;
+  const codes = turn?.providerStatus?.prompt_language_codes || turn?.providerStatus?.language_codes;
   return Array.isArray(codes) ? codes.filter(Boolean).map((code) => String(code)) : [];
 }
 
 // The reply (OUTPUT) language for a turn, so turn_done and the profile-control
 // confirmation TTS always carry a language code even when the provider result
 // omits it: provider result -> canonical record -> the turn's effective profile
-// reply language -> the first restricted STT input language. This keeps the
+// reply language -> the first configured STT prompt language. This keeps the
 // spoken text's language and its TTS language tag from ever diverging, and lets
 // clients show "speaks Y" every turn.
 function turnReplyLanguage(turn, providerResult, canonicalRecord) {
@@ -1795,6 +1806,14 @@ async function closeAudioStream(turn) {
     stream.once("error", reject);
     stream.end(resolve);
   });
+  // Spool is final for this turn — hand it to the write-behind uploader.
+  // Fire-and-forget: the uploader owns retries, and incognito deletion later
+  // tombstones any pending upload.
+  if (turn.blobStore && turn.audioBytes > 0) {
+    turn.blobStore.finalizeSpool(turn.userAudioKey, {
+      contentType: "audio/L16; rate=16000; channels=1",
+    });
+  }
 }
 
 async function commitLiveSession(turn) {
@@ -1852,6 +1871,11 @@ async function closeAssistantAudioStream(turn) {
     stream.once("error", reject);
     stream.end(resolve);
   });
+  if (turn.blobStore && turn.assistantAudioBytes > 0) {
+    turn.blobStore.finalizeSpool(turn.assistantAudioKey, {
+      contentType: "audio/L16; rate=16000; channels=1",
+    });
+  }
 }
 
 function writeTurnMetadata(turn, patch) {
@@ -2102,168 +2126,20 @@ function normalizeTurnProgressIntervalMs(value) {
   return DEFAULT_TURN_PROGRESS_INTERVAL_MS;
 }
 
+// Bind the extracted playback-progress helpers to this server's audio format
+// and provider-event text cap.
 function normalizeAssistantAudioSegment(segment, existingSegments) {
-  if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
-    return null;
-  }
-  const fallbackIndex = Array.isArray(existingSegments) ? existingSegments.length : 0;
-  const segmentIndex = Number(segment.segment_index);
-  const textStart = Math.max(0, Math.round(Number(segment.text_start) || 0));
-  const textEnd = Math.max(textStart, Math.round(Number(segment.text_end) || textStart));
-  const audioBytes = Math.max(0, Math.round(Number(segment.audio_bytes) || 0));
-  const pcmMs = Math.max(0, Math.round(Number(segment.pcm_ms) || estimatePcmMs(audioBytes, ASSISTANT_AUDIO_FORMAT)));
-  const text = String(segment.text || "").replace(/\s+/g, " ").trim().slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS);
-  return {
-    segment_index: Number.isFinite(segmentIndex) && segmentIndex >= 0 ? Math.round(segmentIndex) : fallbackIndex,
-    text_start: textStart,
-    text_end: textEnd,
-    ...(text ? { text } : {}),
-    audio_bytes: audioBytes,
-    pcm_ms: pcmMs,
-  };
+  return normalizeSegmentRaw(segment, existingSegments, {
+    format: ASSISTANT_AUDIO_FORMAT,
+    maxTextChars: PROVIDER_EVENT_VALUE_MAX_CHARS,
+  });
 }
 
 function normalizePlaybackProgress(event, turn) {
-  const segments = Array.isArray(turn?.assistantAudioSegments) ? turn.assistantAudioSegments : [];
-  const describedBytes = segments.length > 0
-    ? segments.reduce((sum, segment) => sum + Math.max(0, Number(segment.audio_bytes) || 0), 0)
-    : Math.max(0, Number(turn?.assistantAudioBytes) || 0);
-  // Segment metadata is deliberately sent immediately before its binary PCM
-  // frame. During that small window it describes queued audio, not emitted
-  // audio, so never let a client checkpoint exceed bytes actually written.
-  const maxBytes = Math.min(describedBytes, Math.max(0, Number(turn?.assistantAudioBytes) || 0));
-  const describedPcmMs = segments.length > 0
-    ? segments.reduce((sum, segment) => sum + Math.max(0, Number(segment.pcm_ms) || 0), 0)
-    : estimatePcmMs(maxBytes, ASSISTANT_AUDIO_FORMAT);
-  const maxPcmMs = Math.min(describedPcmMs, estimatePcmMs(maxBytes, ASSISTANT_AUDIO_FORMAT));
-  const rawPlayedBytes = Number(event.played_audio_bytes ?? event.played_bytes);
-  const rawPlayedPcmMs = Number(event.played_pcm_ms);
-  if (maxBytes <= 0 || ((!Number.isFinite(rawPlayedBytes) || rawPlayedBytes < 0)
-      && (!Number.isFinite(rawPlayedPcmMs) || rawPlayedPcmMs < 0))) {
-    return null;
-  }
-  const segmentIndex = Number(event.segment_index);
-  const maxIndex = segments.length > 0 ? segments.length - 1 : -1;
-  const boundedIndex = Number.isFinite(segmentIndex) && segmentIndex >= 0
-    ? Math.min(maxIndex >= 0 ? maxIndex : Math.round(segmentIndex), Math.round(segmentIndex))
-    : maxIndex;
-  const segmentCeiling = boundedIndex >= 0
-    ? cumulativeSegmentProgress(segments, boundedIndex)
-    : { audioBytes: maxBytes, pcmMs: maxPcmMs };
-  const emittedBytes = Math.max(0, Math.min(maxBytes, segmentCeiling.audioBytes));
-  const emittedPcmMs = Math.max(0, Math.min(maxPcmMs, segmentCeiling.pcmMs));
-  const bytesFromMs = Number.isFinite(rawPlayedPcmMs) && rawPlayedPcmMs >= 0
-    ? estimatePcmBytes(rawPlayedPcmMs, ASSISTANT_AUDIO_FORMAT)
-    : null;
-  const playedAudioBytes = Math.max(0, Math.min(
-    emittedBytes,
-    Number.isFinite(rawPlayedBytes) && rawPlayedBytes >= 0
-      ? Math.round(rawPlayedBytes)
-      : (Number.isFinite(bytesFromMs) ? bytesFromMs : emittedBytes)
-  ));
-  const playedPcmMs = Math.max(0, Math.min(
-    emittedPcmMs,
-    Number.isFinite(rawPlayedPcmMs) && rawPlayedPcmMs >= 0
-      ? Math.round(rawPlayedPcmMs)
-      : estimatePcmMs(playedAudioBytes, ASSISTANT_AUDIO_FORMAT)
-  ));
-  const textEstimate = estimatePlayedTextFromSegments(segments, playedAudioBytes, playedPcmMs);
-  return {
-    endpoint_observed: true,
-    updated_at: nowIso(),
-    ...(boundedIndex >= 0 ? { segment_index: boundedIndex } : {}),
-    played_audio_bytes: playedAudioBytes,
-    played_pcm_ms: playedPcmMs,
-    emitted_audio_bytes: emittedBytes,
-    emitted_pcm_ms: emittedPcmMs,
-    estimated_text_chars: textEstimate.textChars,
-    estimated_text: textEstimate.text,
-  };
-}
-
-function hasPartialEndpointPlayback(turn) {
-  const progress = turn?.playbackProgress;
-  if (!progress?.endpoint_observed) {
-    return false;
-  }
-  const emitted = Math.max(0, Number(progress.emitted_audio_bytes) || 0);
-  const played = Math.max(0, Number(progress.played_audio_bytes) || 0);
-  return emitted > 0 && played < emitted;
-}
-
-function cumulativeSegmentProgress(segments, uptoIndex) {
-  let audioBytes = 0;
-  let pcmMs = 0;
-  for (const segment of segments) {
-    const index = Math.max(0, Number(segment?.segment_index) || 0);
-    if (index > uptoIndex) {
-      break;
-    }
-    audioBytes += Math.max(0, Number(segment?.audio_bytes) || 0);
-    pcmMs += Math.max(0, Number(segment?.pcm_ms) || 0);
-  }
-  return { audioBytes, pcmMs };
-}
-
-function estimatePlayedTextFromSegments(segments, playedAudioBytes, playedPcmMs) {
-  let textChars = 0;
-  const textParts = [];
-  let remainingBytes = Math.max(0, Number(playedAudioBytes) || 0);
-  let remainingMs = Math.max(0, Number(playedPcmMs) || 0);
-  for (const segment of segments) {
-    const segmentBytes = Math.max(0, Number(segment?.audio_bytes) || 0);
-    const segmentMs = Math.max(0, Number(segment?.pcm_ms) || 0);
-    const textStart = Math.max(0, Number(segment?.text_start) || 0);
-    const textEnd = Math.max(textStart, Number(segment?.text_end) || textStart);
-    const segmentText = String(segment?.text || "");
-    const segmentTextChars = Math.max(0, textEnd - textStart);
-    if (remainingBytes <= 0 && remainingMs <= 0) {
-      break;
-    }
-    const ratioByBytes = segmentBytes > 0 ? Math.min(1, remainingBytes / segmentBytes) : 0;
-    const ratioByMs = segmentMs > 0 ? Math.min(1, remainingMs / segmentMs) : 0;
-    const ratio = Math.max(ratioByBytes, ratioByMs, (segmentBytes === 0 && segmentMs === 0 && segmentTextChars > 0) ? 1 : 0);
-    if (ratio <= 0) {
-      break;
-    }
-    const takeChars = ratio >= 1
-      ? segmentTextChars
-      : Math.max(0, Math.min(segmentTextChars, Math.floor(segmentTextChars * ratio)));
-    textChars = Math.max(textChars, textStart + takeChars);
-    if (segmentText) {
-      const relativeChars = Math.min(segmentText.length, Math.max(0, textChars - textStart));
-      if (ratio >= 1) {
-        textParts.push(segmentText);
-      } else if (relativeChars > 0) {
-        textParts.push(segmentText.slice(0, relativeChars));
-      }
-    }
-    remainingBytes = Math.max(0, remainingBytes - segmentBytes);
-    remainingMs = Math.max(0, remainingMs - segmentMs);
-  }
-  return {
-    textChars,
-    text: textParts.join(" ").replace(/\s+/g, " ").trim().slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS),
-  };
-}
-
-function estimatePcmMs(audioBytes, format) {
-  const bytes = Math.max(0, Number(audioBytes) || 0);
-  const sampleRate = Math.max(1, Number(format?.sample_rate) || 16000);
-  const channels = Math.max(1, Number(format?.channels) || 1);
-  return Math.round((bytes / (sampleRate * channels * 2)) * 1000);
-}
-
-function estimatePcmBytes(pcmMs, format) {
-  const ms = Math.max(0, Number(pcmMs) || 0);
-  const sampleRate = Math.max(1, Number(format?.sample_rate) || 16000);
-  const channels = Math.max(1, Number(format?.channels) || 1);
-  return Math.round((ms / 1000) * sampleRate * channels * 2);
-}
-
-function normalizeProgressStage(stage) {
-  const value = String(stage || "").trim().toLowerCase();
-  return value === "reasoning" || value === "tts" ? value : "";
+  return normalizeProgressRaw(event, turn, {
+    format: ASSISTANT_AUDIO_FORMAT,
+    maxTextChars: PROVIDER_EVENT_VALUE_MAX_CHARS,
+  });
 }
 
 function nowIso() {

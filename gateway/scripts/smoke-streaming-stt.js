@@ -127,7 +127,7 @@ function chirpProviderEnv(extra = {}) {
     GCP_PROJECT_ID: "test-project",
     CHIRP_ACCESS_TOKEN: "test-token",
     CHIRP_MODEL: "chirp_3",
-    CHIRP_LANGUAGE_CODES: "en-US",
+    CHIRP_PROMPT_LANGUAGE_CODES: "en-US",
     ...extra,
   };
 }
@@ -162,6 +162,10 @@ async function testV2BidiMethodSelection() {
   assert.equal(generatedCalls, 1, "Speech v2 generated bidi method is selected");
   assert.equal(publicCalls, 0, "the live-broken public streamingRecognize method is not called");
   assert.equal(opened.length, 1, "one generated bidi stream opens");
+  const config = opened[0].written[0].streamingConfig.config;
+  assert.deepEqual(config.languageCodes, ["auto"], "streaming Chirp recognition remains automatic");
+  assert.match(config.features.customPromptConfig.customPrompt, /English/,
+    "streaming config carries the profile-derived transcription prompt");
   session.abort();
   console.log("  B Speech v2 generated bidi method selection: ok");
 }
@@ -170,8 +174,10 @@ async function testBatchFallbackOnStreamingError() {
   resetVoiceStreamingBreakerForTests();
   const previousFetch = global.fetch;
   let recognizeCalls = 0;
-  global.fetch = async () => {
+  let fallbackConfig = null;
+  global.fetch = async (_url, options) => {
     recognizeCalls += 1;
+    fallbackConfig = JSON.parse(String(options?.body || "{}")).config || null;
     return {
       ok: true,
       status: 200,
@@ -204,6 +210,7 @@ async function testBatchFallbackOnStreamingError() {
       pcmPath,
       audioBytes: 3200,
       format: { sample_rate: 16000, channels: 1 },
+      effectiveProfile: { input_languages: "am-ET,en-US", input_language_primary: "am-ET" },
     };
 
     const session = provider.createStreamingSttSession(turn, { onTranscriptPartial: () => {} });
@@ -218,6 +225,9 @@ async function testBatchFallbackOnStreamingError() {
     assert.equal(result.streaming, undefined, "a failed stream must not report a streaming result");
     assert.equal(result.text, "batch recovery transcript", "STT degraded to the batch :recognize path");
     assert.ok(recognizeCalls >= 1, "batch recognize was invoked as the fallback");
+    assert.deepEqual(fallbackConfig.languageCodes, ["auto"]);
+    assert.match(fallbackConfig.features.customPromptConfig.customPrompt, /Amharic.*English/,
+      "batch fallback preserves the same turn-pinned prompt contract");
     console.log("  C batch fallback on streaming error: ok");
   } finally {
     global.fetch = previousFetch;

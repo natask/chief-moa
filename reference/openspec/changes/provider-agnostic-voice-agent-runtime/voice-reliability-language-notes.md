@@ -16,12 +16,12 @@ Implemented as part of the cross-surface fixes lane split
   case), surfaces `no_speech` and error statuses audibly and visibly, shows a
   message on a mid-turn socket drop, and re-arms its turn watchdog on every
   streaming event.
-- Chirp STT input restriction derives per turn from the agent profile's
-  `input_languages` (primary + at most one alternate, explicit decoding);
-  `CHIRP_LANGUAGE_CODES` is only the boot-time fallback when no profile store
-  is wired. Recognize results whose language is outside the active restricted
-  set are dropped and flagged (`transcript_language_rejected`) instead of
-  surfacing a foreign transcript.
+- Chirp STT now recognizes with `languageCodes:["auto"]` for batch and
+  streaming. The agent profile's `input_languages` (primary plus at most one
+  alternate) become a bounded custom transcription prompt;
+  `CHIRP_PROMPT_LANGUAGE_CODES` is only the boot-time fallback when no profile
+  store is wired. Provider-reported language is evidence only and does not
+  reject or drop a transcript.
 - End-to-end replay eval: `gateway/scripts/eval-voice-e2e.js`
   (`npm run eval:voice:e2e`) boots the real server, mints a voice-session
   ticket, drives the real WS upgrade, replays PCM (fixtures or any recorded

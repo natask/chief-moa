@@ -109,11 +109,13 @@ async function profileDerivedSttLanguages(tempDir) {
     },
   });
 
-  assert.deepEqual(provider.status().language_codes, ["am-ET"], "profile input_languages must override env for Chirp STT");
+  assert.deepEqual(provider.status().language_codes, ["auto"]);
+  assert.deepEqual(provider.status().prompt_language_codes, ["am-ET"], "profile input_languages must override the env prompt");
   const events = [];
   await provider.processTurn(makeTurn(tempDir, "profile-am"), recordingHooks(events));
   const sttCall = calls.find((c) => c.kind === "stt");
-  assert.deepEqual(sttCall.body.config.languageCodes, ["am-ET"], "recognize request must be restricted to profile input language");
+  assert.deepEqual(sttCall.body.config.languageCodes, ["auto"]);
+  assert.match(sttCall.body.config.features.customPromptConfig.customPrompt, /Amharic/);
 
   const turnScopedCalls = [];
   stubFetch({ sttTranscript: "hello", calls: turnScopedCalls });
@@ -134,7 +136,8 @@ async function profileDerivedSttLanguages(tempDir) {
       }),
     },
   });
-  assert.deepEqual(turnScopedProvider.status().language_codes, ["en-US"], "global status stays based on the global profile");
+  assert.deepEqual(turnScopedProvider.status().language_codes, ["auto"]);
+  assert.deepEqual(turnScopedProvider.status().prompt_language_codes, ["en-US"], "global prompt status stays based on the global profile");
   await turnScopedProvider.processTurn(makeTurn(tempDir, "profile-turn-am", {
     effectiveProfile: {
       input_languages: "am-ET,en-US",
@@ -146,15 +149,15 @@ async function profileDerivedSttLanguages(tempDir) {
   const turnScopedSttCall = turnScopedCalls.find((c) => c.kind === "stt");
   assert.deepEqual(
     turnScopedSttCall.body.config.languageCodes,
-    ["am-ET", "en-US"],
-    "recognize request must prefer the per-turn effective profile over the global profile",
+    ["auto"],
+    "recognize request must stay automatic for a per-turn effective profile",
   );
+  assert.match(turnScopedSttCall.body.config.features.customPromptConfig.customPrompt, /Amharic.*English/,
+    "custom prompt must prefer the per-turn effective profile over the global profile");
 }
 
-// Explicit switching ("right now I want to speak X"): the recognizer is
-// constrained to EXACTLY the stored understood set, and input_language_primary
-// reorders it so the chosen language leads. Same two-language set, different
-// leading code, driven only by the profile.
+// Explicit switching ("right now I want to speak X") reorders the prompt so
+// the chosen language leads. Recognition remains automatic.
 async function sttPrimaryFollowsProfilePrimary(tempDir) {
   const makeProvider = (inputPrimary) => createVoiceProvider({
     env: {
@@ -176,18 +179,18 @@ async function sttPrimaryFollowsProfilePrimary(tempDir) {
 
   const englishLead = makeProvider("en-US");
   assert.deepEqual(
-    englishLead.status().language_codes,
+    englishLead.status().prompt_language_codes,
     ["en-US", "am-ET"],
-    "with en-US primary, the constrained set must lead with en-US",
+    "with en-US primary, the prompt must lead with en-US",
   );
 
   // "right now I want to speak Amharic": the model set input_language_primary to
-  // am-ET (already in the set); the recognizer now leads with am-ET, same set.
+  // am-ET (already in the set); the prompt now leads with am-ET, same set.
   const amharicLead = makeProvider("am-ET");
   assert.deepEqual(
-    amharicLead.status().language_codes,
+    amharicLead.status().prompt_language_codes,
     ["am-ET", "en-US"],
-    "with am-ET primary, the same constrained set must lead with am-ET",
+    "with am-ET primary, the same prompt set must lead with am-ET",
   );
 
   const calls = [];
@@ -197,9 +200,11 @@ async function sttPrimaryFollowsProfilePrimary(tempDir) {
   const sttCall = calls.find((c) => c.kind === "stt");
   assert.deepEqual(
     sttCall.body.config.languageCodes,
-    ["am-ET", "en-US"],
-    "recognize request must lead with the profile's understood primary",
+    ["auto"],
+    "recognize request must remain automatic",
   );
+  assert.match(sttCall.body.config.features.customPromptConfig.customPrompt, /Amharic.*English/,
+    "recognize prompt must lead with the profile's understood primary");
 }
 
 async function turnDoneCarriesCascadedMetadata(tempDir) {
@@ -208,7 +213,8 @@ async function turnDoneCarriesCascadedMetadata(tempDir) {
       provider: "chirp-cascaded",
       model: "test-model",
       configured: true,
-      language_codes: ["am-ET"],
+      language_codes: ["auto"],
+      prompt_language_codes: ["am-ET"],
       assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
     }),
     async processTurn(_turn, hooks) {
@@ -239,7 +245,8 @@ async function errorContractEmitsTurnDoneAndCanonicalRecord(tempDir) {
       provider: "chirp-cascaded",
       model: "test-model",
       configured: true,
-      language_codes: ["en-US"],
+      language_codes: ["auto"],
+      prompt_language_codes: ["en-US"],
       assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
     }),
     async processTurn() {
@@ -385,9 +392,11 @@ async function enUsCascade(tempDir) {
   );
   assert.ok(events.find((e) => e.type === "audio").bytes > 0, "hosted TTS must stream audio bytes");
   assert.ok(calls.some((c) => c.kind === "tts"), "Cloud TTS synthesize must be called for en-US");
-  // STT leg still restricts to the two configured languages + chirp_3.
+  // STT recognition stays automatic while the two configured languages shape
+  // the bounded custom prompt.
   const sttCall = calls.find((c) => c.kind === "stt");
-  assert.deepEqual(sttCall.body.config.languageCodes, ["en-US", "am-ET"]);
+  assert.deepEqual(sttCall.body.config.languageCodes, ["auto"]);
+  assert.match(sttCall.body.config.features.customPromptConfig.customPrompt, /English.*Amharic/);
   assert.equal(sttCall.body.config.model, "chirp_3");
   assert.ok(sttCall.body.config.explicitDecodingConfig, "STT must use explicit decoding, not auto");
 }
@@ -713,7 +722,8 @@ async function spokenProfileControlConfirmation(tempDir) {
       provider: "chirp-cascaded",
       model: "test-model",
       configured: true,
-      language_codes: ["am-ET"],
+      language_codes: ["auto"],
+      prompt_language_codes: ["am-ET"],
       assistant_audio_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
     }),
     async processTurn(_turn, hooks) {
@@ -973,7 +983,11 @@ async function turnProgressStopsAfterCancel(tempDir) {
   const { connection, events } = await setupHungLiveConnection(tempDir, "progress-cancel", 20);
   // Do NOT await: the committed Live turn parks forever on the hung provider done.
   connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_progress-cancel" }).catch(() => {});
-  await delayMs(80);
+  await waitFor(
+    () => events.some((event) => event.type === "turn_progress"),
+    1000,
+    "hung committed Live turn to emit turn_progress",
+  );
   assert.ok(
     events.filter((e) => e.type === "turn_progress").length >= 1,
     "a hung committed Live turn must emit turn_progress keepalives",
@@ -1002,7 +1016,11 @@ async function turnProgressStopsAfterCancel(tempDir) {
 async function turnProgressStopsAfterClose(tempDir) {
   const { connection, events } = await setupHungLiveConnection(tempDir, "progress-close", 20);
   connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_progress-close" }).catch(() => {});
-  await delayMs(80);
+  await waitFor(
+    () => events.some((event) => event.type === "turn_progress"),
+    1000,
+    "hung committed Live turn to emit turn_progress before close",
+  );
   assert.ok(
     events.filter((e) => e.type === "turn_progress").length >= 1,
     "a hung committed Live turn must emit turn_progress before the socket closes",

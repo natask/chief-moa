@@ -21,6 +21,10 @@ function createVideoNotesStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
   const notesDir = path.join(dataDir, "video-notes");
   fs.mkdirSync(notesDir, { recursive: true });
+  // Optional blob store: when present (BLOB_STORE=gcs), the on-disk note file
+  // is a spool that gets write-behind-uploaded to the bucket, and reads fall
+  // through to the bucket once the spool is pruned. Metadata JSON stays local.
+  const blobStore = options.blobStore || null;
   const maxTotalBytes = normalizeMaxTotalBytes(options.maxTotalBytes);
   // Quota refuses new notes instead of pruning old ones: stored notes are
   // user screen recordings and must never be silently deleted. Explicit
@@ -66,6 +70,11 @@ function createVideoNotesStore(options = {}) {
     fs.renameSync(bytesTmp, bytesPath);
     writeNote(notesDir, note);
     totalBytes += bytes.length;
+    if (blobStore) {
+      // Respond as soon as the spool write lands; the uploader owns retries
+      // and the janitor re-enqueues after a crash.
+      blobStore.finalizeSpool(noteBlobKey(note), { contentType });
+    }
     return clone(note);
   }
 
@@ -94,11 +103,15 @@ function createVideoNotesStore(options = {}) {
     return fs.existsSync(filePath) ? filePath : "";
   }
 
-  function readBytes(id) {
-    const filePath = videoPath(id);
-    if (!filePath) return null;
+  // Dual read: spool first, then the bucket.
+  async function readBytes(id) {
+    const note = get(id);
+    if (!note) return null;
+    if (blobStore) {
+      return blobStore.readBytes(noteBlobKey(note));
+    }
     try {
-      return fs.readFileSync(filePath);
+      return fs.readFileSync(videoPathForNote(notesDir, note));
     } catch {
       return null;
     }
@@ -109,15 +122,41 @@ function createVideoNotesStore(options = {}) {
     return filePath ? fs.createReadStream(filePath) : null;
   }
 
+  // Dual read returning { stream, size, contentType } or null.
+  async function stream(id) {
+    const note = get(id);
+    if (!note) return null;
+    const contentType = note.content_type || "application/octet-stream";
+    if (blobStore) {
+      const found = await blobStore.getReadStream(noteBlobKey(note));
+      return found ? { stream: found.stream, size: found.size, contentType } : null;
+    }
+    const filePath = videoPathForNote(notesDir, note);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile()) return null;
+    return { stream: fs.createReadStream(filePath), size: stat.size, contentType };
+  }
+
   // Screen recordings are sensitive: unlike audio notes, users get an explicit
-  // delete path. Removal frees quota immediately.
-  function remove(id) {
+  // delete path. Removal frees quota immediately — and deletes the bucket
+  // object, not just the spool.
+  async function remove(id) {
     const note = get(id);
     if (!note) return false;
-    const blobPath = videoPathForNote(notesDir, note);
-    try {
-      fs.rmSync(blobPath, { force: true });
-    } catch {}
+    if (blobStore) {
+      try {
+        await blobStore.delete(noteBlobKey(note));
+      } catch {}
+    } else {
+      try {
+        fs.rmSync(videoPathForNote(notesDir, note), { force: true });
+      } catch {}
+    }
     try {
       fs.rmSync(path.join(notesDir, `${note.id}.json`), { force: true });
     } catch {}
@@ -143,6 +182,7 @@ function createVideoNotesStore(options = {}) {
     videoPath,
     readBytes,
     readStream,
+    stream,
     remove,
     status,
   };
@@ -204,36 +244,37 @@ function createVideoNoteHandlers(options = {}) {
     sendJson(response, 200, { note });
   }
 
-  function sendVideo(response, url) {
+  async function sendVideo(response, url) {
     const id = videoNoteIdFromPath(url.pathname.replace(/\/video$/, ""));
     const note = id ? store.get(id) : null;
     if (!note) {
       sendJson(response, 404, { error: "video note not found" });
       return;
     }
-    const filePath = store.videoPath(id);
-    if (!filePath || !fs.existsSync(filePath)) {
-      sendJson(response, 404, { error: "video note video not found" });
+    let found;
+    try {
+      found = await store.stream(id);
+    } catch (error) {
+      sendJson(response, 502, { error: `video note read failed: ${cleanError(error)}` });
       return;
     }
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
+    if (!found) {
       sendJson(response, 404, { error: "video note video not found" });
       return;
     }
     response.writeHead(200, {
-      "content-type": note.content_type || "application/octet-stream",
-      "content-length": stat.size,
+      "content-type": found.contentType,
+      "content-length": found.size,
       "cache-control": "private, no-store",
       "x-moa-video-note-id": note.id,
       "x-moa-video-kind": "note",
     });
-    fs.createReadStream(filePath).pipe(response);
+    found.stream.pipe(response);
   }
 
-  function remove(response, url) {
+  async function remove(response, url) {
     const id = videoNoteIdFromPath(url.pathname);
-    const removed = id ? store.remove(id) : false;
+    const removed = id ? await store.remove(id) : false;
     if (!removed) {
       sendJson(response, 404, { error: "video note not found" });
       return;
@@ -295,6 +336,11 @@ function listNoteFiles(notesDir) {
 
 function videoPathForNote(notesDir, note) {
   return path.join(notesDir, `${cleanToken(note.id, 120)}${extensionForContentType(note.content_type)}`);
+}
+
+// DATA_DIR-relative blob-store key for a note's bytes.
+function noteBlobKey(note) {
+  return `video-notes/${cleanToken(note.id, 120)}${extensionForContentType(note.content_type)}`;
 }
 
 function createNoteId() {

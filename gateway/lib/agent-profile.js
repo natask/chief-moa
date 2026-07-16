@@ -655,9 +655,9 @@ function pickProfileFields(input) {
   if (typeof input.language_auto_switch === "boolean") {
     out.language_auto_switch = input.language_auto_switch;
   }
-  // Languages the USER speaks. Modular STT providers can use these as direct
-  // language hints; Gemini Live native audio infers input language and receives
-  // these through Moa-owned context instead.
+  // Languages the USER speaks. Chirp keeps provider recognition on `auto` and
+  // turns these into a custom transcription prompt; native-audio providers
+  // receive them through Moa-owned context.
   if (typeof input.input_languages === "string" && input.input_languages.trim()) {
     const list = normalizeLanguageList(input.input_languages);
     if (list.codes.length > 0 && list.invalid.length === 0) {
@@ -901,7 +901,8 @@ function withRequiredVoiceStyle(prompt, fallback = "") {
     const requiredRuleIndex = value.indexOf(REQUIRED_VOICE_STYLE_RULE);
     if (requiredRuleIndex >= 0) {
       const prefix = value.slice(0, requiredRuleIndex).trim();
-      return prefix ? [prefix, REQUIRED_VOICE_STYLE_RULE].join("\n\n") : REQUIRED_VOICE_STYLE_RULE;
+      const suffix = value.slice(requiredRuleIndex + REQUIRED_VOICE_STYLE_RULE.length).trim();
+      return [prefix, REQUIRED_VOICE_STYLE_RULE, suffix].filter(Boolean).join("\n\n");
     }
     return value;
   }

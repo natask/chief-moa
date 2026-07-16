@@ -6,7 +6,8 @@ ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
 run_case() {
-  local failure="$1" expected="$2" case_dir="$ROOT/$failure"
+  local failure="$1" expected="$2"
+  local case_dir="$ROOT/$failure"
   mkdir -p "$case_dir/scripts" "$case_dir/app" "$case_dir/backups" "$case_dir/bin"
   cp "$SCRIPT_DIR/update.sh" "$case_dir/scripts/update.sh"
   cp "$SCRIPT_DIR/recover-promotion.sh" "$case_dir/scripts/recover-promotion.sh"
@@ -33,6 +34,7 @@ wait_for_gateway_health() {
   printf 'health current=%s\n' "$(cat "$TEST_STATE/current")" >>"$TEST_STATE/log"
   if [ "$TEST_FAILURE" = health ] && grep -q '^c' "$TEST_STATE/current"; then return 45; fi
 }
+node_runtime() { node "$@"; }
 EOF
   cat >"$case_dir/scripts/backup.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -65,6 +67,7 @@ esac
 EOF
   cat >"$case_dir/bin/node" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" != -e ] || { cat >/dev/null; exit 0; }
 name="$(basename "$1")"
 if [ "$name" = validate-promotion-evidence.js ]; then
   count="$(cat "$TEST_STATE/validate-count" 2>/dev/null || echo 0)"; count=$((count + 1)); echo "$count" >"$TEST_STATE/validate-count"
@@ -101,6 +104,10 @@ if [ "$name" = record-promotion-receipt.js ]; then
   exit 0
 fi
 exit 91
+EOF
+  cat >"$case_dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '{"voice_stream":{"activity":{"drain_safe":true}}}\n'
 EOF
   cat >"$case_dir/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -153,6 +160,7 @@ EOF
       grep -q 'PROMOTION RECOVERY REQUIRED' "$case_dir/stderr"
       before="$(wc -l <"$case_dir/log")"
       PATH="$case_dir/bin:$PATH" TEST_STATE="$case_dir" TEST_FAILURE=recovery \
+        APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" BACKUP_DIR="$case_dir/backups" \
         bash "$case_dir/scripts/recover-promotion.sh" --journal "$case_dir/journal.json"
       [ "$(wc -l <"$case_dir/log")" -eq "$before" ]
       grep -qx receipted "$case_dir/m4"

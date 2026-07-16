@@ -39,6 +39,12 @@ services:
       ANDROID_OTA_DIR: /data/android-ota
       DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
       MOA_GATEWAY_TOKEN: ${MOA_GATEWAY_TOKEN:?set MOA_GATEWAY_TOKEN in the compose env file}
+      MOA_DEPLOY_REVIEWER_TOKEN: ${MOA_DEPLOY_REVIEWER_TOKEN:-}
+      MOA_PREVIEW_DEPLOYER_TOKEN: ${MOA_PREVIEW_DEPLOYER_TOKEN:-}
+      MOA_PRODUCTION_PROMOTER_TOKEN: ${MOA_PRODUCTION_PROMOTER_TOKEN:-}
+      MOA_DEPLOY_REVIEWER_ID: ${MOA_DEPLOY_REVIEWER_ID:-deployment-reviewer}
+      MOA_PREVIEW_DEPLOYER_ID: ${MOA_PREVIEW_DEPLOYER_ID:-preview-deployer}
+      MOA_PRODUCTION_PROMOTER_ID: ${MOA_PRODUCTION_PROMOTER_ID:-production-promoter}
       PUBLIC_GATEWAY_URL: ${PUBLIC_GATEWAY_URL:-}
       ALLOW_AGENT_WITHOUT_TOKEN: "0"
       # The remote gateway queues agent runs; harnesses run on the user's
@@ -70,6 +76,14 @@ services:
       GCP_LOCATION: ${GCP_LOCATION:-us}
       CHIRP_MODEL: ${CHIRP_MODEL:-chirp_3}
       CHIRP_LANGUAGE_CODES: ${CHIRP_LANGUAGE_CODES:-en-US}
+      # Blob storage for media bytes: local (default) keeps everything in the
+      # data volume; gcs spools locally and write-behind-uploads to the bucket.
+      BLOB_STORE: ${BLOB_STORE:-local}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      GCS_PREFIX: ${GCS_PREFIX:-}
+      GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
+      BLOB_SPOOL_MAX_AGE_MS: ${BLOB_SPOOL_MAX_AGE_MS:-}
+      BLOB_JANITOR_INTERVAL_MS: ${BLOB_JANITOR_INTERVAL_MS:-}
     volumes:
       - moa-gateway-data:/data
     healthcheck:

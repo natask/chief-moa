@@ -1,18 +1,17 @@
 name: Deploy VPS gateway
 
-# Candidate verification for the DigitalOcean gateway. This workflow does not
-# confer apply authority: runtime promotion requires an M4 evidence manifest.
+# Candidate verification and publication for the DigitalOcean gateway.
 #
-# GitHub runners cannot reach the isolated runtime preview or the droplet, so
-# CI stops at candidate verification. An operator/control-plane worker may
-# advance a candidate only after producing the exact-commit M4 evidence
-# manifest consumed by scripts/vps/update.sh.
+# Pull requests are verify-only. A successful master push atomically advances
+# `vps-deploy` to the exact verified commit. The droplet still requires the M4
+# evidence manifest consumed by scripts/vps/update.sh before active mutation.
 
 on:
   push:
     branches:
       - master
     paths:
+      - ".github/scripts/assert-deploy-vps-contract.rb"
       - ".github/workflows/deploy-vps.yml"
       - "gateway/**"
       - "docker-compose.yml"
@@ -22,6 +21,7 @@ on:
   # branch green before master ever moves; only the ref publish is push-gated.
   pull_request:
     paths:
+      - ".github/scripts/assert-deploy-vps-contract.rb"
       - ".github/workflows/deploy-vps.yml"
       - "gateway/**"
       - "docker-compose.yml"
@@ -38,9 +38,11 @@ permissions:
 
 jobs:
   deploy:
-    name: Verify gateway and mark deployable
+    name: Verify gateway
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Check out repository
@@ -51,10 +53,39 @@ jobs:
         with:
           node-version: 22
 
+      - name: Assert deployment workflow contract
+        shell: bash
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_COUNT: "0"
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+          RUBYOPT: ""
+          RUBYLIB: ""
+        run: ruby .github/scripts/assert-deploy-vps-contract.rb
+
       - name: Verify gateway
         shell: bash
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_COUNT: "0"
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+          RUBYOPT: ""
+          RUBYLIB: ""
         run: |
           set -euo pipefail
+          bash -n scripts/vps/*.sh
+          bash scripts/vps/test-node-runtime.sh
+          bash scripts/vps/test-preview-tls-proxy.sh
+          bash scripts/vps/test-install-promotion-control-plane.sh
+          bash scripts/vps/test-update-rollback.sh
           cd gateway
           # Same installer and lockfile as dev and the Docker image: what gets
           # verified is what ships.
@@ -63,11 +94,35 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run check
 
+  publish:
+    name: Publish verified gateway ref
+    needs: deploy
+    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out verified commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          # The publisher must prove vps-deploy is an ancestor. A depth-1
+          # checkout is rejected by GitHub as "fetch first" even when the
+          # server-side ref is actually fast-forwardable.
+          fetch-depth: 0
+
       - name: Publish vps-deploy ref
-        if: github.event_name != 'pull_request'
         shell: bash
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_COUNT: "0"
         run: |
           set -euo pipefail
-          mkdir -p candidate-evidence
-          printf '%s\n' "$(git rev-parse HEAD)" > candidate-evidence/commit-sha.txt
-          printf '%s\n' "Verification is not preview/apply authority." > candidate-evidence/README.txt
+          git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
+          test "$(git rev-parse refs/remotes/origin/master)" = "$GITHUB_SHA"
+          git push --atomic origin "${GITHUB_SHA}:refs/heads/vps-deploy"

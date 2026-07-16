@@ -17,7 +17,7 @@ function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "video-notes-test-"));
 }
 
-test("create stores bytes and metadata, get and readBytes round-trip", () => {
+test("create stores bytes and metadata, get and readBytes round-trip", async () => {
   const dataDir = tempDataDir();
   const store = createVideoNotesStore({ dataDir });
   const bytes = Buffer.from("webm-bytes-placeholder");
@@ -36,7 +36,7 @@ test("create stores bytes and metadata, get and readBytes round-trip", () => {
 
   const loaded = store.get(note.id);
   assert.strictEqual(loaded.id, note.id);
-  assert.deepStrictEqual(store.readBytes(note.id), bytes);
+  assert.deepStrictEqual(await store.readBytes(note.id), bytes);
   // codecs parameter maps to the .webm extension
   assert.ok(store.videoPath(note.id).endsWith(".webm"));
   assert.strictEqual(store.list().length, 1);
@@ -56,21 +56,49 @@ test("empty body is refused and quota refuses instead of pruning", () => {
   assert.strictEqual(store.list().length, 1);
 });
 
-test("remove deletes blob and metadata and frees quota", () => {
+test("remove deletes blob and metadata and frees quota", async () => {
   const dataDir = tempDataDir();
   const store = createVideoNotesStore({ dataDir, maxTotalBytes: 10 });
   const note = store.create({ bytes: Buffer.alloc(8), content_type: "video/webm" });
   const blobPath = store.videoPath(note.id);
   assert.ok(fs.existsSync(blobPath));
 
-  assert.strictEqual(store.remove(note.id), true);
+  assert.strictEqual(await store.remove(note.id), true);
   assert.strictEqual(store.get(note.id), null);
   assert.ok(!fs.existsSync(blobPath));
-  assert.strictEqual(store.remove(note.id), false);
+  assert.strictEqual(await store.remove(note.id), false);
 
   // Quota was freed: a new note fits again.
   const next = store.create({ bytes: Buffer.alloc(8), content_type: "video/webm" });
   assert.ok(next.id);
+});
+
+test("blob-backed notes finalize, read, stream, and delete through the blob store", async () => {
+  const dataDir = tempDataDir();
+  const calls = { finalized: [], read: [], streamed: [], deleted: [] };
+  let streamResult = { stream: { id: "remote-stream" }, size: 12 };
+  const blobStore = {
+    finalizeSpool: (key, options) => calls.finalized.push({ key, options }),
+    readBytes: async (key) => { calls.read.push(key); return Buffer.from("remote"); },
+    getReadStream: async (key) => { calls.streamed.push(key); return streamResult; },
+    delete: async (key) => { calls.deleted.push(key); },
+  };
+  const store = createVideoNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from("spool"), content_type: "video/mp4" });
+
+  assert.equal(calls.finalized.length, 1);
+  assert.equal(calls.finalized[0].options.contentType, "video/mp4");
+  assert.deepEqual(await store.readBytes(note.id), Buffer.from("remote"));
+  assert.deepEqual(await store.stream(note.id), {
+    stream: { id: "remote-stream" },
+    size: 12,
+    contentType: "video/mp4",
+  });
+  streamResult = null;
+  assert.equal(await store.stream(note.id), null);
+  assert.equal(await store.remove(note.id), true);
+  assert.equal(calls.deleted.length, 1);
+  assert.equal(store.get(note.id), null);
 });
 
 test("store reloads existing totals from disk", () => {

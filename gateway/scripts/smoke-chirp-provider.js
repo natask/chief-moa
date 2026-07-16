@@ -28,17 +28,19 @@ async function main() {
     assert.equal(options.headers.Authorization, "Bearer test-chirp-token");
     assert.match(String(url), /^https:\/\/us-speech\.googleapis\.com\/v2\/projects\/test-project\/locations\/us\/recognizers\/_:recognize$/);
     assert.equal(body.config.model, state.expected.model);
-    assert.deepEqual(body.config.languageCodes, state.expected.languageCodes);
+    assert.deepEqual(body.config.languageCodes, ["auto"], "Chirp recognition must stay automatic");
     assert.deepEqual(body.config.explicitDecodingConfig, {
       encoding: "LINEAR16",
       sampleRateHertz: 16000,
       audioChannelCount: 1,
     });
-    // Restricted recognition never carries the "auto" sentinel, and it never
-    // exceeds a primary + one alternative — either would flip Chirp 3 back to
-    // auto language detection where languageCodes are only hints.
-    assert.ok(!body.config.languageCodes.includes("auto"), "restricted config must not send the auto sentinel");
-    assert.ok(body.config.languageCodes.length <= 2, "restricted config keeps primary + at most one alternative");
+    const customPrompt = body.config.features?.customPromptConfig?.customPrompt || "";
+    for (const expectedText of state.expected.promptIncludes || []) {
+      assert.ok(customPrompt.includes(expectedText), `custom prompt must include ${expectedText}`);
+    }
+    for (const excludedText of state.expected.promptExcludes || []) {
+      assert.ok(!customPrompt.includes(excludedText), `custom prompt must exclude ${excludedText}`);
+    }
     assert.ok(body.content.length > 0, "request must carry base64 audio content");
     return {
       ok: true,
@@ -70,8 +72,9 @@ async function main() {
   };
 
   try {
-    // Case 1: the documented restricted config restricts to exactly en-US,am-ET.
-    state.expected = { model: "chirp_3", languageCodes: ["en-US", "am-ET"] };
+    // Case 1: provider recognition stays auto while env/profile languages shape
+    // the custom prompt.
+    state.expected = { model: "chirp_3", promptIncludes: ["English", "Amharic", "verbatim"] };
     const provider = createVoiceProvider({
       env: {
         VOICE_PROVIDER: "chirp",
@@ -90,7 +93,9 @@ async function main() {
     assert.equal(status.selected_providers.tts, "android-tts");
     assert.equal(status.configuration.configured, true);
     assert.equal(status.capabilities.transcription_only, true);
-    assert.deepEqual(status.language_codes, ["en-US", "am-ET"]);
+    assert.deepEqual(status.language_codes, ["auto"]);
+    assert.deepEqual(status.prompt_language_codes, ["en-US", "am-ET"]);
+    assert.equal(status.custom_prompt_configured, true);
 
     const events = [];
     const result = await provider.processTurn(turn, {
@@ -105,14 +110,21 @@ async function main() {
     assert.equal(result.assistant_text, "");
     assert.equal(result.transcription_only, true);
 
-    // Language restriction: status must report restricted recognition and the
-    // chirp_3 requirement for am-ET.
-    assert.equal(status.language_recognition, "restricted", "en-US,am-ET must be a restricted language list, not auto");
-    assert.equal(status.requires_chirp_3, true, "am-ET must require chirp_3");
-    assert.deepEqual(status.chirp_3_only_languages, ["am-ET"]);
+    assert.equal(status.language_recognition, "auto");
+    assert.equal(status.requires_chirp_3, true);
+    assert.deepEqual(status.chirp_3_only_languages, []);
 
-    // More than two codes is demoted to primary + one alternate so the request
-    // truly restricts recognition instead of hinting it.
+    // A turn-pinned profile change changes only the prompt, never the provider
+    // recognition language code.
+    state.expected = { model: "chirp_3", promptIncludes: ["Amharic", "Ethiopic"], promptExcludes: ["English"] };
+    await provider.processTurn({
+      ...turn,
+      effectiveProfile: { input_languages: "am-ET", input_language_primary: "am-ET" },
+    }, { onTranscriptFinal: async () => {} });
+    assert.equal(calls.length, 2, "profile-prompt turn should issue a second Chirp recognize call");
+
+    // More than two prompt languages is capped at primary + one alternate so
+    // the transcription instruction stays focused and bounded.
     const capped = createVoiceProvider({
       env: {
         VOICE_PROVIDER: "chirp",
@@ -122,7 +134,8 @@ async function main() {
         CHIRP_LANGUAGE_CODES: "en-US,am-ET,es-ES,fr-FR",
       },
     });
-    assert.deepEqual(capped.status().language_codes, ["en-US", "am-ET"], "language codes must cap at primary + one alternate");
+    assert.deepEqual(capped.status().language_codes, ["auto"]);
+    assert.deepEqual(capped.status().prompt_language_codes, ["en-US", "am-ET"], "prompt languages cap at primary + one alternate");
 
     // auto stays language-agnostic.
     const auto = createVoiceProvider({
@@ -134,7 +147,8 @@ async function main() {
         CHIRP_LANGUAGE_CODES: "auto",
       },
     });
-    assert.equal(auto.status().language_recognition, "auto", "CHIRP_LANGUAGE_CODES=auto must stay language-agnostic");
+    assert.equal(auto.status().language_recognition, "auto");
+    assert.deepEqual(auto.status().prompt_language_codes, ["auto"]);
 
     // am-ET on a non-chirp_3 model must refuse rather than degrade silently.
     const wrongModel = createVoiceProvider({
@@ -148,8 +162,8 @@ async function main() {
     });
     await assert.rejects(
       () => wrongModel.processTurn({ pcmPath, audioBytes: 10, format: { sample_rate: 16000, channels: 1 } }, {}),
-      /require model=chirp_3/,
-      "am-ET with model=chirp_2 must be rejected",
+      /requires model=chirp_3/,
+      "prompt-based automatic recognition must reject non-Chirp-3 models",
     );
 
     console.log("smoke-chirp-provider: ok");

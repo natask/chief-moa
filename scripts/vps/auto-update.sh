@@ -35,4 +35,12 @@ if [ "$target" = "$current" ]; then
 fi
 
 echo "auto-update: promoting $current -> $target (origin/vps-deploy)"
-exec bash "$APP_DIR/scripts/vps/update.sh" --ref vps-deploy
+set +e
+bash "$APP_DIR/scripts/vps/promote-candidate.sh" vps-deploy
+status=$?
+set -e
+if [ "$status" -eq 75 ]; then
+  echo "auto-update: promotion safely deferred; the timer will retry."
+  exit 0
+fi
+exit "$status"
