@@ -1,0 +1,163 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const p = require("../lib/surface-program-protocol");
+
+const NOW = Date.parse("2026-07-16T12:00:00.000Z");
+const hex = (letter) => letter.repeat(64);
+const clone = (value) => JSON.parse(JSON.stringify(value));
+
+function advertisement(overrides = {}, options = {}) {
+  const value = {
+    version: 1, type: "surface.runtime.advertised", advertisement_id: "ad-1",
+    target: { surface_type: "browser_extension", device_id: "browser-1" },
+    runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
+    catalog: { version: 7, sha256: hex("a"), capability_ids: ["browser.observe", "browser.click"] },
+    limits: { source_bytes: 4096, wall_ms: 30000, memory_bytes: 32 * 1024 * 1024, tool_calls: 100, parallel_calls: 8, result_bytes: 65536, log_bytes: 32768 },
+    issued_at: new Date(NOW - 1000).toISOString(), expires_at: new Date(NOW + 60000).toISOString(),
+    ...overrides,
+  };
+  return p.sanitizeExecutionRuntime(value, options);
+}
+
+function selection(ad = advertisement()) {
+  return { device: { device_id: "browser-1", surface_type: "browser_extension", online: true }, advertisement: ad, runtime: ad.runtime };
+}
+
+function proposal(overrides = {}, options = {}) {
+  const source = "const page = await tools.browser.observe({}); return page;";
+  return p.createSurfaceProgramEnvelope({
+    source, session_id: "session-1", turn_id: "turn-1",
+    bindings: { kind: "browser_document", tab_id: 7, window_id: 3, frame_id: 0, origin: "https://fixture.test", document_id: "doc-1", page_epoch: 9, observation_id: "obs-1", observation_digest: hex("b"), state_sha256: hex("c"), allowed_frames: [0, 4], allowed_worlds: ["ISOLATED"], site_grant_id: "grant-1" },
+    limits: { wall_ms: 5000, memory_bytes: 2 * 1024 * 1024, tool_calls: 8, parallel_calls: 2, result_bytes: 4096, log_bytes: 0 },
+    approval_policy: { program: "local_policy", always_ask: ["external_side_effect"] },
+    expires_in_ms: 30000, idempotency_key: "idem-1", ...overrides,
+  }, selection(), { nowMs: NOW, executionId: "exec-1", ...options });
+}
+
+function receipt(envelope, overrides = {}) {
+  return {
+    version: 1, type: "surface.execution.receipt", receipt_id: "receipt-1",
+    execution_id: envelope.execution_id, session_id: envelope.session_id, turn_id: envelope.turn_id,
+    claimant: { surface_type: "browser_extension", device_id: "browser-1", client_instance_id: "client-1" },
+    runtime_id: envelope.runtime.runtime_id, ...p.surfaceProgramReceiptBindings(envelope),
+    started_at: new Date(NOW + 100).toISOString(), finished_at: new Date(NOW + 200).toISOString(), status: "completed",
+    tool_attempts: { count: 1, first_receipt_sha256: null, last_receipt_sha256: null },
+    result: { summary: "Fixture complete", data_sha256: null, artifact_refs: [] },
+    final_state_sha256: hex("d"), error: { code: null, message: null }, previous_receipt_sha256: null, receipt_sha256: hex("e"),
+    ...overrides,
+  };
+}
+
+test("closed runtime advertisements are normalized and exact-target filtered", () => {
+  const ad = advertisement({}, { device_id: "browser-1", surface_type: "browser_extension" });
+  assert.equal(ad.runtime.runtime_id, "browser.javascript.v1");
+  assert.equal(ad.catalog.version, 7);
+  assert.equal(Object.isFrozen(ad), true);
+  assert.equal(advertisement({}, { device_id: "other" }), null);
+  assert.equal(advertisement({}, { surface_type: "android" }), null);
+  assert.equal(advertisement({ extra: true }), null);
+  assert.equal(advertisement({ version: 2 }), null);
+  assert.equal(advertisement({ catalog: { version: 7, sha256: "bad", capability_ids: [] } }), null);
+  assert.equal(advertisement({ catalog: { version: 7, sha256: hex("a"), capability_ids: ["browser.observe", "browser.observe"] } }), null);
+  assert.equal(advertisement({ expires_at: new Date(NOW - 2000).toISOString() }), null);
+  assert.deepEqual(p.sanitizeExecutionRuntimes({}), []);
+  assert.equal(p.sanitizeExecutionRuntimes([ad, ad]).length, 1);
+});
+
+test("selection honors live exact device, surface, runtime, language, and newest advertisement", () => {
+  const older = advertisement({ advertisement_id: "old", issued_at: new Date(NOW - 2000).toISOString() });
+  const newer = advertisement({ advertisement_id: "new" });
+  const devices = [
+    { device_id: "browser-1", surface_type: "browser_extension", online: true, execution_runtimes: [older, newer] },
+    { device_id: "off", surface_type: "browser_extension", online: false, execution_runtimes: [newer] },
+  ];
+  assert.equal(p.selectSurfaceRuntime(devices, { nowMs: NOW }).advertisement.advertisement_id, "old"); // duplicate runtime ids preserve first
+  assert.ok(p.selectSurfaceRuntime(devices, { nowMs: NOW, target_device_id: "browser-1", target_surface_type: "browser_extension", runtime_id: "browser.javascript.v1", language: "javascript" }));
+  assert.equal(p.selectSurfaceRuntime(devices, { nowMs: NOW, device_id: "missing" }), null);
+  assert.equal(p.selectSurfaceRuntime(devices, { nowMs: NOW, surface_type: "android" }), null);
+  assert.equal(p.selectSurfaceRuntime(devices, { nowMs: NOW, runtime_id: "other" }), null);
+  assert.equal(p.selectSurfaceRuntime({}, {}), null);
+});
+
+test("proposal preserves typed browser bindings and validates exact advertisement", () => {
+  const value = proposal();
+  assert.equal(value.runtime.entrypoint, "main");
+  assert.equal(typeof value.bindings.tab_id, "number");
+  assert.equal(typeof value.bindings.window_id, "number");
+  assert.equal(typeof value.bindings.page_epoch, "number");
+  assert.deepEqual(value.bindings.allowed_frames, [0, 4]);
+  assert.deepEqual(value.bindings.allowed_worlds, ["ISOLATED"]);
+  assert.equal(value.program.sha256, p.sha256(value.program.source));
+  assert.equal(value.limits.source_bytes, Buffer.byteLength(value.program.source));
+  assert.equal(p.validateSurfaceProgramEnvelope(value, { nowMs: NOW + 1, target_device_id: "browser-1", advertisement: advertisement() }), value);
+  assert.equal(p.canonicalJson({ b: 1, a: [true, null] }), '{"a":[true,null],"b":1}');
+  assert.equal(p.sha256({ b: 1, a: 2 }), p.sha256({ a: 2, b: 1 }));
+});
+
+test("proposal creation rejects escalation, malformed bindings, limits, and source", () => {
+  assert.throws(() => p.createSurfaceProgramEnvelope({}, null), { code: "runtime_unavailable" });
+  assert.throws(() => proposal({ source: "" }), { code: "invalid_program_source" });
+  assert.throws(() => proposal({ source: "x".repeat(5000) }), { code: "invalid_program_source" });
+  assert.throws(() => proposal({ extra: true }), { code: "unknown_request_field" });
+  assert.throws(() => proposal({ allowed_capability_ids: ["browser.shell"] }), { code: "capability_escalation" });
+  assert.throws(() => proposal({ expires_in_ms: 10 }), { code: "invalid_expires_in_ms" });
+  assert.throws(() => proposal({ limits: { wall_ms: 1 } }), { code: "invalid_wall_ms" });
+  assert.throws(() => proposal({ bindings: { kind: "other" } }), { code: "invalid_binding_kind" });
+  assert.throws(() => proposal({ bindings: { kind: "browser_document", tab_id: "7" } }), { code: "invalid_tab_id" });
+  assert.throws(() => proposal({ bindings: { kind: "browser_document", observation_digest: "bad" } }), { code: "invalid_observation_digest" });
+  assert.throws(() => proposal({ bindings: { kind: "browser_document", allowed_frames: "all" } }), { code: "invalid_allowed_frames" });
+  assert.throws(() => proposal({ bindings: { kind: "browser_document", unknown: true } }), { code: "unknown_bindings_field" });
+  assert.throws(() => proposal({ approval_policy: { program: "local", always_ask: "all" } }), { code: "invalid_always_ask" });
+});
+
+test("all binding variants preserve their authority-bearing types", () => {
+  const cases = [
+    { kind: "android_accessibility", package_name: "fixture.app", window_id: "window-1", observation_id: "obs", observation_generation: 2, state_sha256: hex("a"), app_grant_id: "grant" },
+    { kind: "macos_accessibility", bundle_id: "fixture.app", pid: 4, process_generation: 2, signing_identity: "fixture", window_id: "w", ax_snapshot_id: "ax", state_sha256: hex("a"), local_grant_id: "grant" },
+    { kind: "macos_apple_events", target_bundle_id: "fixture.app", signing_identity: "fixture", suite_allowlist: ["core"], command_allowlist: ["open"], state_sha256: hex("a"), local_grant_id: "grant" },
+    { kind: "macos_shell", policy_id: "safe", argument_sha256: hex("a"), cwd_profile_id: "tmp", filesystem_profile_id: "fixture", network_profile_id: "none", environment_sha256: hex("b"), state_sha256: hex("c"), local_grant_id: "grant" },
+    { kind: "gateway_server", tenant_id: "t", project_id: "p", connection_id: "c", resource_id: "r", state_sha256: hex("a") },
+  ];
+  for (const bindings of cases) assert.equal(proposal({ bindings }).bindings.kind, bindings.kind);
+});
+
+test("proposal validation rejects tampering, expiry, target, and catalog drift", () => {
+  const value = proposal();
+  const cases = [
+    ["unsupported_envelope", (v) => { v.version = 2; }],
+    ["unknown_envelope_field", (v) => { v.extra = true; }],
+    ["program_hash_mismatch", (v) => { v.program.source += " "; }],
+    ["invalid_catalog_sha256", (v) => { v.catalog.sha256 = "bad"; }],
+    ["invalid_allowed_capability_ids", (v) => { v.catalog.allowed_capability_ids = ["Bad Name"]; }],
+    ["invalid_expiry", (v) => { v.expires_at = v.issued_at; }],
+  ];
+  for (const [code, mutate] of cases) { const copy = clone(value); mutate(copy); assert.throws(() => p.validateSurfaceProgramEnvelope(copy, { nowMs: NOW + 1 }), { code }); }
+  assert.throws(() => p.validateSurfaceProgramEnvelope(value, { nowMs: NOW + 30000 }), { code: "expired" });
+  assert.throws(() => p.validateSurfaceProgramEnvelope(value, { nowMs: NOW + 1, target_device_id: "other" }), { code: "target_mismatch" });
+  const drift = clone(advertisement()); drift.catalog.version = 8;
+  assert.throws(() => p.validateSurfaceProgramEnvelope(value, { nowMs: NOW + 1, advertisement: drift }), { code: "runtime_catalog_mismatch" });
+});
+
+test("terminal receipt is exact-claim bound and closed", () => {
+  const env = proposal(); const claim = { device_id: "browser-1", client_instance_id: "client-1" };
+  const valid = p.validateSurfaceProgramTerminalReceipt(env, receipt(env), claim, { nowMs: NOW + 300 });
+  assert.equal(valid.status, "completed"); assert.equal(valid.result.summary, "Fixture complete");
+  const cases = [
+    ["unsupported_terminal_receipt", (v) => { v.type = "other"; }],
+    ["invalid_terminal_status", (v) => { v.status = "running"; }],
+    ["execution_id_mismatch", (v) => { v.execution_id = "other"; }],
+    ["claimant_mismatch", (v) => { v.claimant.client_instance_id = "other"; }],
+    ["runtime_id_mismatch", (v) => { v.runtime_id = "other"; }],
+    ["program_sha256_mismatch", (v) => { v.program_sha256 = hex("f"); }],
+    ["invalid_receipt_timestamps", (v) => { v.finished_at = new Date(NOW).toISOString(); }],
+    ["invalid_tool_attempt_count", (v) => { v.tool_attempts.count = 9; }],
+    ["result_too_large", (v) => { v.result.summary = "x".repeat(3000); }],
+    ["invalid_final_state_sha256", (v) => { v.final_state_sha256 = "bad"; }],
+    ["unknown_terminal_receipt_field", (v) => { v.extra = true; }],
+  ];
+  for (const [code, mutate] of cases) { const copy = clone(receipt(env)); mutate(copy); assert.throws(() => p.validateSurfaceProgramTerminalReceipt(env, copy, claim, { nowMs: NOW + 300 }), { code }); }
+  const rejected = receipt(env, { status: "rejected", started_at: null, tool_attempts: { count: 0, first_receipt_sha256: null, last_receipt_sha256: null }, result: { summary: "Denied", data_sha256: null, artifact_refs: [] }, error: { code: "denied", message: "Local policy denied" }, final_state_sha256: null });
+  assert.equal(p.validateSurfaceProgramTerminalReceipt(env, rejected, claim, { nowMs: NOW + 60000 }).started_at, null);
+});

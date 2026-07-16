@@ -23,9 +23,13 @@ const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "surface-skills-smoke-token";
 const {
   resolveTurnSurface,
+  executeSurfaceProgram,
   surfaceExecuteCapabilities,
   surfaceClassicTools,
 } = require(path.join(GATEWAY_DIR, "lib", "surface-skills"));
+const {
+  surfaceProgramReceiptBindings,
+} = require(path.join(GATEWAY_DIR, "lib", "surface-program-protocol"));
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -56,6 +60,7 @@ async function main() {
     await step("phone_open_app capability brokers an android app.launch and resolves with the receipt", () => assertPhoneOpenApp(baseUrl, deps, call));
     await step("classic phone_action tool brokers url.open the same way", () => assertClassicPhoneAction(baseUrl, deps, call));
     await step("browser_agent_task capability creates a browser agent-loop task", () => assertBrowserAgentTask(baseUrl, deps, call));
+    await step("whole program is delivered once to an exact fake browser runtime", () => assertSurfaceProgram(baseUrl, call));
     await step("no device claims -> capability returns queued", () => assertQueuedOnTimeout(baseUrl, call));
 
     console.log(JSON.stringify({
@@ -67,6 +72,7 @@ async function main() {
         "a heartbeated android client claims + receipts it and the capability resolves with the receipt",
         "the classic phone_action tool brokers url.open through the same path",
         "browser_agent_task creates a browser agent-loop task and returns task_id + agent_run_id",
+        "one exact advertised browser runtime claims the complete program and returns one bound terminal receipt",
         "a brokered action with no claiming device returns { queued: true, request_id }",
       ],
     }, null, 2));
@@ -77,6 +83,69 @@ async function main() {
     }
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+async function assertSurfaceProgram(baseUrl, call) {
+  const now = Date.now();
+  const advertisement = {
+    version: 1,
+    type: "surface.runtime.advertised",
+    advertisement_id: "surface_smoke_advertisement",
+    target: { surface_type: "browser_extension", device_id: "browser_surface_smoke" },
+    runtime: { runtime_id: "browser.javascript.v1", language: "javascript", bridge_version: 1, entrypoint: "main" },
+    catalog: { version: 1, sha256: "a".repeat(64), capability_ids: ["browser.observe", "browser.click"] },
+    limits: { source_bytes: 65536, wall_ms: 30000, memory_bytes: 32 * 1024 * 1024, tool_calls: 100, parallel_calls: 8, result_bytes: 65536, log_bytes: 32768 },
+    issued_at: new Date(now - 1000).toISOString(),
+    expires_at: new Date(now + 120000).toISOString(),
+  };
+  const heartbeat = await postJson(`${baseUrl}/v1/device-clients/heartbeat`, {
+    device_id: "browser_surface_smoke",
+    client_instance_id: "browser_surface_smoke_instance",
+    surface_type: "browser_extension",
+    execution_runtimes: [advertisement],
+  });
+  assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
+  assert.equal(heartbeat.json.device.execution_runtimes[0].runtime.runtime_id, "browser.javascript.v1");
+
+  const deps = {
+    ...makeDeps(baseUrl),
+    listDeviceClients: () => [heartbeat.json.device],
+  };
+  const source = "const page = await tools.browser.observe({}); return page;";
+  const programPromise = executeSurfaceProgram({ ...call, device_id: "browser_surface_smoke", turn_id: "surface_smoke_turn" }, deps, {
+    source,
+    bindings: {
+      kind: "browser_document", tab_id: 99, window_id: 3, frame_id: 0,
+      origin: "https://fixture.test", document_id: "fixture-document", page_epoch: 1,
+      observation_id: "fixture-observation", observation_digest: "b".repeat(64), state_sha256: "c".repeat(64),
+      allowed_frames: [0], allowed_worlds: ["ISOLATED"], site_grant_id: "fixture-grant",
+    },
+    approval_policy: { program: "local_policy", always_ask: [] },
+  });
+  const request = await waitForPendingToolRequest(baseUrl, "surface.program.execute");
+  const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "browser_surface_smoke" });
+  assert.equal(claim.status, 200, JSON.stringify(claim.json));
+  const envelope = claim.json.request.input;
+  assert.equal(envelope.program.source, source, "validated source must reach the fake client without truncation");
+  assert.equal(envelope.bindings.tab_id, 99);
+  assert.equal(claim.json.request.claimed_client_instance_id, "browser_surface_smoke_instance");
+  const terminal = {
+    version: 1, type: "surface.execution.receipt", receipt_id: "surface_smoke_receipt",
+    execution_id: envelope.execution_id, session_id: envelope.session_id, turn_id: envelope.turn_id,
+    claimant: { surface_type: "browser_extension", device_id: "browser_surface_smoke", client_instance_id: "browser_surface_smoke_instance" },
+    runtime_id: envelope.runtime.runtime_id, ...surfaceProgramReceiptBindings(envelope),
+    started_at: new Date().toISOString(), finished_at: new Date().toISOString(), status: "completed",
+    tool_attempts: { count: 2, first_receipt_sha256: null, last_receipt_sha256: null },
+    result: { summary: "Fixture page observed and validated.", data_sha256: null, artifact_refs: [] },
+    final_state_sha256: "d".repeat(64), error: { code: null, message: null }, previous_receipt_sha256: null,
+    receipt_sha256: "e".repeat(64),
+  };
+  const posted = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, terminal);
+  assert.equal(posted.status, 200, JSON.stringify(posted.json));
+  const result = await programPromise;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.queued, false);
+  assert.equal(result.receipt.local_receipt.result.summary, "Fixture page observed and validated.");
 }
 
 function assertSurfaceResolution() {

@@ -77,6 +77,12 @@ const { createWorkGraphHandlers } = require("./lib/work-graph-handlers");
 const { createProjectStore, promptWithProjectBrief } = require("./lib/project-store");
 const { createEventProjectHandlers } = require("./lib/event-project-handlers");
 const { createDeviceToolHandlers } = require("./lib/device-tool-handlers");
+const {
+  PROGRAM_TOOL,
+  canonicalJson,
+  sanitizeExecutionRuntimes,
+  validateSurfaceProgramEnvelope,
+} = require("./lib/surface-program-protocol");
 const { createBrowserTaskHandlers } = require("./lib/browser-task-handlers");
 const { createBrowserTurnHandlers } = require("./lib/browser-turn-handlers");
 const { createAccountConnectionHandlers } = require("./lib/account-connection-handlers");
@@ -134,9 +140,11 @@ const {
   validateMacosProactiveBody,
 } = require("./lib/macos-proactive-turn");
 const {
+  executeSurfaceProgram,
   resolveTurnSurface,
   surfaceExecuteCapabilities,
   surfaceClassicTools,
+  surfaceRuntimeCatalog,
 } = require("./lib/surface-skills");
 const { createExaSearchTool } = require("./lib/exa-search");
 
@@ -8533,6 +8541,7 @@ function surfaceSkillDeps() {
   return {
     createToolRequest,
     readToolRequest: (id) => (fs.existsSync(toolRequestPath(id)) ? readToolRequest(id) : null),
+    listDeviceClients,
     launchBrowserAgentTask: ({ instruction, url, call, delegation_envelope }) => {
       const created = launchBrowserAgentTaskInternal({
         instruction,
@@ -8602,26 +8611,42 @@ function cascadedExecuteCapabilities(call) {
 
 function cascadedExecuteToolDef(call) {
   const capabilities = cascadedExecuteCapabilities(call);
+  const surfaceDeps = surfaceSkillDeps();
+  const surfaceRuntimes = surfaceRuntimeCatalog(call, surfaceDeps);
   const catalog = Object.entries(capabilities)
     .map(([name, cap]) => `tools.moa.${name}(args) - ${cap.description}`)
     .join("\n");
   return {
     name: "execute",
     description: [
-      "Run a short JavaScript script in a sandbox to read or change your own configuration in ONE call instead of chaining tools.",
-      "Available functions (all async; each resolves to { ok, data } where data is the payload):",
+      "Run one whole program in the selected execution environment. Use environment=gateway for gateway-owned JavaScript orchestration, or environment=surface to send the complete program once to one exact client runtime so its local tools can observe, branch, act, and validate without per-action model/gateway round trips.",
+      "Gateway functions (all async; each resolves to { ok, data } where data is the payload):",
       catalog,
-      "Use console.log for debug output and `return` for the final value. No fs, no network, no other globals.",
+      `Live client runtimes: ${JSON.stringify(surfaceRuntimes)}`,
+      "Gateway JavaScript uses console.log and return; it has no fs, network, or other globals. A surface program may use only the exact local capability catalog advertised above; the client revalidates effects and returns one terminal receipt.",
       "Example: const p = await tools.moa.profile_get({}); if (p.data.profile.voice !== \"Aoede\") { await tools.moa.profile_patch({ profile: { voice: \"Aoede\" }, reason: \"user asked\" }); } return p.data.profile.voice;",
     ].join("\n"),
     parameters: {
       type: "object",
       properties: {
-        code: { type: "string", description: "The JavaScript to run. `tools.moa.*` and console.log are the only APIs." },
+        environment: { type: "string", enum: ["gateway", "surface"], description: "gateway for gateway-owned orchestration; surface for one whole client-local program." },
+        code: { type: "string", description: "Complete program source. For gateway this is JavaScript using tools.moa.*; for surface it uses the selected runtime language and advertised local functions." },
+        target_device_id: { type: "string", description: "Exact advertised client device id for surface execution. Defaults to the originating client device." },
+        target_surface_type: { type: "string", description: "Advertised client surface type for surface execution." },
+        runtime_id: { type: "string", description: "Exact advertised surface runtime id." },
+        language: { type: "string", description: "Exact advertised surface runtime language." },
+        bindings: { type: "object", description: "Fresh client-state bindings such as observation/document/tab/window/page epoch and allowed worlds." },
+        limits: { type: "object", description: "Requested limits, bounded again by the gateway and client." },
+        approval_policy: { type: "object", description: "Local approval policy binding; never bypasses client policy." },
+        expires_in_ms: { type: "integer", description: "Short proposal lifetime in milliseconds." },
+        idempotency_key: { type: "string", description: "Optional retry key for this exact program envelope." },
       },
-      required: ["code"],
+      required: ["environment", "code"],
     },
     handler: async (args) => {
+      if (args?.environment === "surface") {
+        return executeSurfaceProgram(call, surfaceDeps, { ...args, source: args.code });
+      }
       const { runExecuteCode } = require("./lib/execute-engine");
       return runExecuteCode({ code: String(args?.code || ""), capabilities });
     },
@@ -11078,15 +11103,21 @@ function upsertDeviceClient(body) {
   const now = new Date().toISOString();
   const clients = readDeviceClientsMap();
   const previous = clients[deviceId] || {};
+  const surfaceType = sanitizeSurfaceType(body.surface_type || body.surfaceType || previous.surface_type || "unknown");
   const device = {
     id: deviceId,
     device_id: deviceId,
-    surface_type: sanitizeSurfaceType(body.surface_type || body.surfaceType || previous.surface_type || "unknown"),
+    surface_type: surfaceType,
+    client_instance_id: normalizeDeviceId(body.client_instance_id || body.clientInstanceId || previous.client_instance_id || ""),
     session_id: body.session_id ? sanitizeOptionalId(body.session_id, previous.session_id || "default") : previous.session_id || "",
     status: sanitizeDeviceStatus(body.status || "online"),
     online: body.online !== false,
     local_tool_manifest: sanitizeLocalToolManifest(
       body.local_tool_manifest || body.localToolManifest || body.tool_manifest || body.capabilities || previous.local_tool_manifest || [],
+    ),
+    execution_runtimes: sanitizeExecutionRuntimes(
+      body.execution_runtimes || body.executionRuntimes || previous.execution_runtimes || [],
+      { device_id: deviceId, surface_type: surfaceType },
     ),
     metadata: sanitizeToolJson(body.metadata || body.client || {}),
     last_heartbeat_at: now,
@@ -11130,10 +11161,15 @@ function summarizeDeviceClient(device) {
     id: device.device_id || device.id,
     device_id: device.device_id || device.id,
     surface_type: device.surface_type || "unknown",
+    client_instance_id: device.client_instance_id || "",
     session_id: device.session_id || "",
     status: stale ? "stale" : device.status || "online",
     online: device.online !== false && !stale,
     local_tool_manifest: sanitizeLocalToolManifest(device.local_tool_manifest || []),
+    execution_runtimes: sanitizeExecutionRuntimes(device.execution_runtimes || [], {
+      device_id: device.device_id || device.id,
+      surface_type: device.surface_type,
+    }),
     metadata: sanitizeToolJson(device.metadata || {}),
     first_seen_at: device.first_seen_at || "",
     last_heartbeat_at: device.last_heartbeat_at || "",
@@ -11190,6 +11226,16 @@ function sanitizeLocalToolManifestItem(item) {
     risk: String(item.risk || "unknown").slice(0, 80),
     approval: String(item.approval || item.approval_mode || "unknown").slice(0, 80),
     description: item.description ? truncate(String(item.description), 240) : undefined,
+    input_schema: item.input_schema || item.inputSchema || item.parameters
+      ? sanitizeToolJson(item.input_schema || item.inputSchema || item.parameters)
+      : undefined,
+    output_schema: item.output_schema || item.outputSchema
+      ? sanitizeToolJson(item.output_schema || item.outputSchema)
+      : undefined,
+    effect_class: item.effect_class ? truncate(String(item.effect_class), 80) : undefined,
+    idempotency: item.idempotency ? truncate(String(item.idempotency), 80) : undefined,
+    concurrency: item.concurrency ? truncate(String(item.concurrency), 80) : undefined,
+    restore_capability: item.restore_capability === true ? true : undefined,
   };
 }
 
@@ -11206,7 +11252,7 @@ function createToolRequest(body) {
   const sourceDeviceId = normalizeDeviceId(body.source_device_id || body.sourceDeviceId || body.device_id || body.deviceId || "");
   let targetDeviceId = normalizeDeviceId(body.target_device_id || body.targetDeviceId || "");
   const targetSurfaceRaw = body.target_surface_type || body.targetSurfaceType || body.surface_type || "";
-  const targetSurfaceType = targetSurfaceRaw ? sanitizeSurfaceType(targetSurfaceRaw) : "";
+  let targetSurfaceType = targetSurfaceRaw ? sanitizeSurfaceType(targetSurfaceRaw) : "";
   if (!targetDeviceId) {
     const device = findDeviceClientForTool({ surfaceType: targetSurfaceType, tool });
     targetDeviceId = device?.device_id || device?.id || "";
@@ -11215,11 +11261,26 @@ function createToolRequest(body) {
     throw new Error("target_device_id or target_surface_type is required");
   }
 
+  let input;
+  if (tool === PROGRAM_TOOL) {
+    input = validateSurfaceProgramEnvelope(body.input || body.arguments || {}, { target_device_id: targetDeviceId });
+    if (targetSurfaceType && targetSurfaceType !== input.target.surface_type) throw new Error("target_surface_type conflicts with surface program target");
+    targetSurfaceType = input.target.surface_type;
+    const replay = listAllToolRequests().find((candidate) => candidate.tool === PROGRAM_TOOL
+      && candidate.target_device_id === input.target.device_id
+      && (candidate.input?.idempotency_key === input.idempotency_key || candidate.input?.execution_id === input.execution_id));
+    if (replay) {
+      if (canonicalJson(replay.input) !== canonicalJson(input)) throw new Error("idempotency_key conflicts with a different surface program");
+      return replay;
+    }
+  } else {
+    input = sanitizeToolJson(body.input || body.arguments || {});
+  }
   const requestRecord = {
     id: randomId("treq"),
     status: "pending",
     tool,
-    input: sanitizeToolJson(body.input || body.arguments || {}),
+    input,
     source: String(body.source || "api").slice(0, 120),
     source_device_id: sourceDeviceId,
     source_surface_type: body.source_surface_type || body.sourceSurfaceType
@@ -11231,6 +11292,7 @@ function createToolRequest(body) {
     branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default",
     instruction: truncate(String(body.instruction || body.reason || ""), 2000),
     claimed_by: "",
+    claimed_client_instance_id: "",
     claimed_at: "",
     lease_expires_at: "",
     receipts: [],
@@ -11254,6 +11316,10 @@ function findDeviceClientForTool({ surfaceType, tool }) {
 
 function deviceSupportsTool(device, tool) {
   const safeTool = sanitizeToolName(tool);
+  if (safeTool === PROGRAM_TOOL) return sanitizeExecutionRuntimes(device.execution_runtimes || [], {
+    device_id: device.device_id || device.id,
+    surface_type: device.surface_type,
+  }).some((advertisement) => Date.parse(advertisement.expires_at) > Date.now());
   return sanitizeLocalToolManifest(device.local_tool_manifest || [])
     .some((item) => item.tool === safeTool);
 }
@@ -11267,8 +11333,11 @@ function claimNextToolRequest(device) {
   return updateToolRequest(task.id, {
     status: "claimed",
     claimed_by: device.device_id || device.id,
+    claimed_client_instance_id: device.client_instance_id || "",
     target_device_id: task.target_device_id || device.device_id || device.id,
     claimed_at: now,
+    claim_id: randomId("claim"),
+    claim_attempt: Number(task.claim_attempt || 0) + 1,
     lease_expires_at: new Date(nowMs + 60_000).toISOString(),
     updated_at: now,
   });
@@ -11281,6 +11350,32 @@ function claimableToolRequestsForDevice(device, nowMs = Date.now()) {
 
 function isToolRequestClaimableByDevice(requestRecord, device, nowMs) {
   if (!device || device.online === false) return false;
+  if (requestRecord.tool === PROGRAM_TOOL) {
+    if (!device.client_instance_id) return false;
+    const heartbeatMs = Date.parse(device.last_heartbeat_at || "");
+    if (!Number.isFinite(heartbeatMs) || nowMs - heartbeatMs > 90_000) return false;
+    let runtime;
+    try {
+      const envelope = validateSurfaceProgramEnvelope(requestRecord.input, {
+        nowMs,
+        target_device_id: device.device_id || device.id,
+      });
+      runtime = sanitizeExecutionRuntimes(device.execution_runtimes || [], {
+        device_id: device.device_id || device.id,
+        surface_type: device.surface_type,
+      }).find((candidate) => {
+        try {
+          validateSurfaceProgramEnvelope(envelope, { nowMs, target_device_id: device.device_id || device.id, advertisement: candidate });
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return false;
+    }
+    if (!runtime) return false;
+  }
   if (!deviceSupportsTool(device, requestRecord.tool)) return false;
   if (requestRecord.target_device_id && requestRecord.target_device_id !== (device.device_id || device.id)) {
     return false;
@@ -11328,7 +11423,9 @@ function summarizeToolRequest(requestRecord, options = {}) {
     id: requestRecord.id,
     status: requestRecord.status,
     tool: requestRecord.tool,
-    input: options.includeInput ? sanitizeToolJson(requestRecord.input || {}) : undefined,
+    input: options.includeInput
+      ? (requestRecord.tool === PROGRAM_TOOL ? requestRecord.input : sanitizeToolJson(requestRecord.input || {}))
+      : undefined,
     source: requestRecord.source || "",
     source_device_id: requestRecord.source_device_id || "",
     source_surface_type: requestRecord.source_surface_type || "",
@@ -11340,6 +11437,9 @@ function summarizeToolRequest(requestRecord, options = {}) {
     claimed_by: requestRecord.claimed_by || "",
     claimed_at: requestRecord.claimed_at || "",
     lease_expires_at: requestRecord.lease_expires_at || "",
+    claim_id: options.includeInput ? requestRecord.claim_id || "" : undefined,
+    claim_attempt: options.includeInput ? Number(requestRecord.claim_attempt || 0) : undefined,
+    claimed_client_instance_id: options.includeInput ? requestRecord.claimed_client_instance_id || "" : undefined,
     receipt_count: Array.isArray(requestRecord.receipts) ? requestRecord.receipts.length : 0,
     latest_receipt: Array.isArray(requestRecord.receipts) && requestRecord.receipts.length
       ? requestRecord.receipts[requestRecord.receipts.length - 1]
