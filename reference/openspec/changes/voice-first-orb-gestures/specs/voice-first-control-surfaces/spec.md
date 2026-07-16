@@ -1,42 +1,23 @@
 ## ADDED Requirements
 
-### Requirement: Android voice-first tap chords route continue, new, and chat
+### Requirement: Android voice-first tap chords retain reviewable drafts
 When the Android `voice_first_gestures` preference is enabled, the overlay SHALL
-map quick orb tap chords to distinct user intents: single tap continues the
-current voice thread, double tap starts a fresh voice thread, and triple tap
-opens the chat surface. The default flag-off Android contract SHALL remain tap
-for chat and double-click-and-hold for voice.
+retain its Android-owned reviewable-draft contract. The browser change SHALL NOT
+silently change Android behavior or its rollout boundary.
 
-#### Scenario: Single tap continues the current voice thread
-- **WHEN** the voice-first Android flag is enabled and the user single-taps the
-  orb while idle
-- **THEN** Android starts hands-free voice on the current active thread
-- **AND** Android shows `X` to the left of the orb and `↑` to its right
-- **AND** a later single tap does not send the current utterance
-- **AND** only the visible `↑` commits the draft
+#### Scenario: Android reviewable draft remains separate
+- **WHEN** the Android voice-first preference is enabled and the user taps the orb
+- **THEN** Android uses its visible local draft controls
+- **AND** browser click-toggle semantics do not alter Android disposition
 
-#### Scenario: Double tap starts a fresh voice thread
-- **WHEN** the voice-first Android flag is enabled and the user double-taps the
-  orb
-- **THEN** Android cancels any just-started or pending current-thread voice loop
-- **AND** Android starts the next voice turn with the explicit fresh-thread
-  client context action
-
-#### Scenario: Triple tap opens chat without leaving a hot mic
-- **WHEN** the voice-first Android flag is enabled and the user triple-taps the
-  orb
-- **THEN** Android cancels any milliseconds-old fresh voice loop created by the
-  double tap
-- **AND** Android opens the chat surface
-
-#### Scenario: Flag off preserves the legacy contract
-- **WHEN** the voice-first Android flag is disabled
-- **THEN** a single tap opens chat
-- **AND** double-click-and-hold remains the voice capture gesture
+#### Scenario: Android legacy mode remains separate
+- **WHEN** the Android voice-first preference is disabled
+- **THEN** Android retains its existing legacy gesture behavior
 
 ### Requirement: Browser mark gestures directly control canonical capture
-The browser extension SHALL always map single, double, triple, and hold gestures
-to one canonical capture contract without a user-visible gesture setting.
+The browser extension SHALL always map single, double, triple, hold, and drag
+gestures to one canonical capture contract without a user-visible gesture
+setting or stored rollout preference.
 
 #### Scenario: Single click toggles current-thread capture
 - **WHEN** the user single-clicks the idle mascot
@@ -55,7 +36,29 @@ to one canonical capture contract without a user-visible gesture setting.
 - **THEN** the browser opens chat
 - **AND** does not cancel an active capture or provider generation
 
+#### Scenario: Hold and drag keep their distinct meanings
+- **WHEN** the user holds the still mascot and releases
+- **THEN** the browser performs push-to-talk and sends on release
+- **WHEN** movement crosses the drag threshold
+- **THEN** the browser repositions the mascot without submitting a voice turn
+
+### Requirement: Microphone recovery is explicit and guided
+The browser extension SHALL distinguish extension-runtime startup failure from
+actual microphone permission denial and SHALL keep recovery visible before any
+navigation.
+
+#### Scenario: Runtime receiver is not initially ready
+- **WHEN** the offscreen voice receiver is not ready at first contact
+- **THEN** the browser waits for the bounded readiness handshake and retries
+- **AND** does not label the receiver failure as denied microphone permission
+
 #### Scenario: Microphone failure stays in place
 - **WHEN** extension-owned microphone capture fails
-- **THEN** the browser reports the failure in the current surface
+- **THEN** the browser reports the truthful failure in the active surface
 - **AND** does not open Options automatically
+
+#### Scenario: User requests microphone setup
+- **WHEN** the visible recovery action is selected
+- **THEN** the browser opens or focuses Options on the microphone setup steps
+- **AND** highlights the user-operated Grant microphone control
+- **AND** never claims the agent can grant Chrome permission itself

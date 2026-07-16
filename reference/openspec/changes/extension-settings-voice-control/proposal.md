@@ -15,9 +15,19 @@ prompt and behavior) is one of the settings this surface reads and writes.
   (gateway URL/session token) and engine-owned runtime profile fields such as
   system prompt and model selection.
 - Let the user change settings by speaking/typing to the agent: a settings-intent
-  path that turns "make yourself terser", "set the system prompt to ...", or
-  "add a setting for X" into concrete settings changes applied via the gateway
-  profile / extension config.
+  path that turns "make yourself terser" or "set the system prompt to ..." into
+  concrete settings changes applied through the setting owner's validated
+  gateway-profile or extension-local path.
+- Give the agent a complete, queryable catalog of user-configurable settings so
+  the user can list, explain, semantically search, compare, and ask for useful
+  recommendations without already knowing exact setting labels.
+- Project catalog results as selectable visual controls in the existing command
+  or workspace surface. Options remains the deep configuration and Chrome
+  permission-remediation surface rather than the only place settings can be
+  discovered.
+- Never invent a setting, feature flag, or hidden preference while handling an
+  ordinary product request. Adding a new setting is explicit product-change
+  work, separate from reading or mutating a registered setting.
 - Reflect agent-applied changes live in the settings surface so spoken changes
   and the visible page stay in sync.
 - Keep provider API keys, subscriptions, model calls, and customization
@@ -31,7 +41,8 @@ prompt and behavior) is one of the settings this surface reads and writes.
 - `extension-settings-surface`: A settings surface for the extension's
   configuration, kept in sync with the gateway runtime profile.
 - `agent-controlled-settings`: A path where the user changes settings by talking
-  to the agent, and the agent applies them to the profile/config.
+  to the agent, and the agent reads or applies registered settings through their
+  owning profile/config boundary.
 
 ## Impact
 
