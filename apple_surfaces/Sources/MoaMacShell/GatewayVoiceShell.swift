@@ -167,9 +167,9 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
     }
 
     public func sendAudio(_ data: Data) async throws {
+        let frame = try GatewayVoiceAudioFrame(data)
         guard let webSocket else { throw VoiceCaptureError.notActive }
-        guard !data.isEmpty, data.count.isMultiple(of: 2) else { return }
-        try await webSocket.send(.data(data))
+        try await webSocket.send(.data(frame.data))
     }
 
     public func commit() async throws {

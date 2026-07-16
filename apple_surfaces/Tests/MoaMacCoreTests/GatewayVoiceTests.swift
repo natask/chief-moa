@@ -55,6 +55,20 @@ import MoaMacShell
     }
 }
 
+@Test func pcmFramesEnforceExactConservativeTransportBoundary() throws {
+    let exact = Data(repeating: 0x7f, count: GatewayVoiceAudioFrame.maximumBytes)
+    #expect(try GatewayVoiceAudioFrame(exact).data == exact)
+    #expect(throws: GatewayVoiceError.audioFrameTooLarge) {
+        try GatewayVoiceAudioFrame(Data(repeating: 0, count: GatewayVoiceAudioFrame.maximumBytes + 2))
+    }
+    #expect(throws: GatewayVoiceError.invalidAudioFrame) {
+        try GatewayVoiceAudioFrame(Data(repeating: 0, count: 3))
+    }
+    #expect(throws: GatewayVoiceError.emptyAudioFrame) {
+        try GatewayVoiceAudioFrame(Data())
+    }
+}
+
 @Test(arguments: [
     (#"{"type":"session_ready"}"#, GatewayVoiceServerEvent.sessionReady),
     (#"{"type":"transcript_partial","text":"  hello  "}"#, .transcriptPartial("hello")),
@@ -286,6 +300,22 @@ private struct UnusedChatSender: GatewayChatSending {
     #expect(microphone.starts == 0)
     #expect(await transport.starts.isEmpty)
     await #expect(throws: VoiceCaptureError.notActive) { try await controller.stopAndCommit() }
+}
+
+@Test func urlSessionTransportRejectsBadPCMBeforeSocketLookup() async {
+    let transport = URLSessionGatewayVoiceTransport()
+    await #expect(throws: GatewayVoiceError.emptyAudioFrame) {
+        try await transport.sendAudio(Data())
+    }
+    await #expect(throws: GatewayVoiceError.invalidAudioFrame) {
+        try await transport.sendAudio(Data(repeating: 0, count: 3))
+    }
+    await #expect(throws: GatewayVoiceError.audioFrameTooLarge) {
+        try await transport.sendAudio(Data(repeating: 0, count: GatewayVoiceAudioFrame.maximumBytes + 2))
+    }
+    await #expect(throws: VoiceCaptureError.notActive) {
+        try await transport.sendAudio(Data(repeating: 0, count: GatewayVoiceAudioFrame.maximumBytes))
+    }
 }
 
 @MainActor @Test func commandModelPresentsExactPartialAndFinalTranscriptWithoutInsertion() async {

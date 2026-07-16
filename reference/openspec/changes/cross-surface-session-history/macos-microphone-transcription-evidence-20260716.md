@@ -9,19 +9,22 @@
   gateway, and visible partial/final literal transcript state.
 - The session declares `delivery_intent: literal_text`. Assistant/action events
   are ignored by the transcript client. Provider credentials remain gateway-only.
+  The current gateway voice-session integration does not yet honor that field as
+  a semantic model/tool/memory/TTS bypass; literal bypass remains blocked on the
+  separately owned gateway integration candidate and is not claimed here.
 - Excludes AX/cursor insertion, notch changes, screenshots, local actions,
   installation, launch, and deployment.
 
 ## Deterministic evidence
 
-- `cd apple_surfaces && swift test`: passed, 56 tests.
+- `cd apple_surfaces && swift test`: passed, 58 tests.
 - `cd apple_surfaces && swift build --product MoaMac`: passed.
 - `cd apple_surfaces && bash scripts/coverage.sh --report-only`: new
-  `MoaMacCore/GatewayVoice.swift` reached 98.01% lines, 90.00% functions, and
-  95.74% regions. This LLVM toolchain emitted no branch counters.
+  `MoaMacCore/GatewayVoice.swift` reached 98.11% lines, 90.48% functions, and
+  96.04% regions. This LLVM toolchain emitted no branch counters.
 - The repository-wide Apple coverage gate remains below 90% because existing
-  production files outside this ticket are not covered: 65.74% lines, 74.21%
-  functions, and 66.06% regions. This is recorded as a pre-existing gate
+  production files outside this ticket are not covered: 68.97% lines, 76.00%
+  functions, and 68.64% regions. This is recorded as a pre-existing gate
   blocker, not a pass.
 - `cd apple_surfaces && bash scripts/package-moa-mac.sh`: passed and produced an
   ad-hoc-signed arm64 QA ZIP.
