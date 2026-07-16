@@ -395,8 +395,8 @@ async function main() {
     if (!overlayMetrics.pageIdentity.includes("localhost") || overlayMetrics.historyLabel.trim() !== "History") {
       throw new Error(`overlay did not visibly ground the current page and history path: ${JSON.stringify(overlayMetrics)}`);
     }
-    if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
-      throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);
+    if (overlayMetrics.panelWidth > Math.min(760, overlayMetrics.viewportWidth - 24) + 1) {
+      throw new Error(`overlay panel exceeded bounded composer width: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.panelHeight > 120 || overlayMetrics.panelOverflowX || overlayMetrics.inputOverflowX) {
       throw new Error(`overlay compact layout overflowed: ${JSON.stringify(overlayMetrics)}`);
@@ -1067,7 +1067,7 @@ async function main() {
       `extension smoke passed (REAL extension, headless Chrome for Testing): ` +
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
-        `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
+        `bounded overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );

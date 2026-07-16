@@ -1480,7 +1480,7 @@
   function resizeInput() {
     if (!input) return;
     input.style.height = "auto";
-    const max = Math.max(96, Math.round(window.innerHeight * 0.32));
+    const max = Math.max(96, Math.min(288, Math.round(window.innerHeight * 0.32)));
     input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
   }
 

@@ -925,6 +925,15 @@ const submitInstructionBody = sourceBetween(
   /function describePage\(/,
   "submitInstruction"
 );
+
+if (
+  !/#agee-panel\s*\{[\s\S]{0,260}width:\s*min\(760px,\s*calc\(100vw - 24px\)\);[\s\S]{0,80}max-width:\s*760px;/.test(overlayCssSource) ||
+  !/#agee-bar\s*\{[\s\S]{0,180}grid-template-columns:\s*minmax\(240px,\s*1fr\)\s+54px\s+34px\s+34px\s+34px;/.test(overlayCssSource) ||
+  !/max-height:\s*min\(288px,\s*32vh\);/.test(overlayCssSource) ||
+  !/Math\.min\(288,\s*Math\.round\(window\.innerHeight \* 0\.32\)\)/.test(contentSource)
+) {
+  throw new Error("the composer must expand left, give drafts the flexible column, and retain bounded width and height");
+}
 if (/setInputText\(\s*""/.test(submitInstructionBody)) {
   throw new Error("submitting a typed command must not clear the draft buffer");
 }
