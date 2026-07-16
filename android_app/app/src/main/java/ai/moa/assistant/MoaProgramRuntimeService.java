@@ -36,13 +36,19 @@ public final class MoaProgramRuntimeService extends Service {
     static final int FINISH = 103;
 
     private static final int MAX_PAYLOAD_BYTES = 131_072;
-    private static final String KEY_SOURCE = "source";
-    private static final String KEY_ALLOWED_CAPABILITY_IDS = "allowed_capability_ids";
-    private static final String KEY_PAYLOAD = "payload";
+    static final String KEY_SOURCE = "source";
+    static final String KEY_ALLOWED_CAPABILITY_IDS = "allowed_capability_ids";
+    static final String KEY_EXECUTION_NONCE = "execution_nonce";
+    static final String KEY_EXECUTION_GENERATION = "execution_generation";
+    static final String KEY_LOG_BYTES = "log_bytes";
+    static final String KEY_PAYLOAD = "payload";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper(), this::handleMessage);
     private final Messenger incoming = new Messenger(mainHandler);
     private Messenger client;
+    private String executionNonce;
+    private long executionGeneration;
+    private long highestExecutionGeneration;
     private WebView webView;
     private RuntimeBridge bridge;
 
@@ -74,7 +80,9 @@ public final class MoaProgramRuntimeService extends Service {
                 deliverResponse(message.getData());
                 return true;
             case STOP:
-                destroyRuntime();
+                if (message.getData() != null && executionNonce != null
+                        && executionNonce.equals(message.getData().getString(KEY_EXECUTION_NONCE))
+                        && executionGeneration == message.getData().getLong(KEY_EXECUTION_GENERATION, -1)) destroyRuntime();
                 return true;
             default:
                 return false;
@@ -83,20 +91,28 @@ public final class MoaProgramRuntimeService extends Service {
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     private void startRuntime(Bundle data, Messenger replyTo) {
-        destroyRuntime();
         if (Build.VERSION.SDK_INT < 29 || data == null || replyTo == null) {
             return;
         }
 
         String source = data.getString(KEY_SOURCE);
         String allowedJson = data.getString(KEY_ALLOWED_CAPABILITY_IDS);
+        String nonce = data.getString(KEY_EXECUTION_NONCE);
+        long generation = data.getLong(KEY_EXECUTION_GENERATION, -1);
+        int logBytes = data.getInt(KEY_LOG_BYTES, -1);
         JSONArray allowed = parseAllowedCapabilities(allowedJson);
-        if (!isBounded(source) || !isBounded(allowedJson) || allowed == null) {
-            sendFinish(replyTo, failurePayload());
+        if (!isBounded(source) || !isBounded(allowedJson) || allowed == null || !validNonce(nonce) || generation <= 0
+                || logBytes < 0 || logBytes > 32_768) {
+            if (validNonce(nonce) && generation > 0) sendFinish(replyTo, nonce, generation, failurePayload());
             return;
         }
+        if (generation <= highestExecutionGeneration) return;
 
+        destroyRuntime();
+        highestExecutionGeneration = generation;
         client = replyTo;
+        executionNonce = nonce;
+        executionGeneration = generation;
         bridge = new RuntimeBridge();
         webView = new WebView(getApplicationContext());
         WebSettings settings = webView.getSettings();
@@ -125,7 +141,7 @@ public final class MoaProgramRuntimeService extends Service {
                 return true;
             }
         });
-        bridge.startConfig = object("source", source, "allowed_capability_ids", allowed).toString();
+        bridge.startConfig = object("source", source, "allowed_capability_ids", allowed, "log_bytes", logBytes).toString();
         webView.loadDataWithBaseURL(
                 "about:blank",
                 readAsset("moa_program_runtime.html"),
@@ -138,6 +154,8 @@ public final class MoaProgramRuntimeService extends Service {
         if (webView == null || data == null) {
             return;
         }
+        if (!executionNonce.equals(data.getString(KEY_EXECUTION_NONCE))
+                || executionGeneration != data.getLong(KEY_EXECUTION_GENERATION, -1)) return;
         String payload = data.getString(KEY_PAYLOAD);
         if (!isBounded(payload)) {
             finishWithFailure();
@@ -153,8 +171,10 @@ public final class MoaProgramRuntimeService extends Service {
 
     private void finishWithFailure() {
         Messenger target = client;
+        String nonce = executionNonce;
+        long generation = executionGeneration;
         if (target != null) {
-            sendFinish(target, failurePayload());
+            sendFinish(target, nonce, generation, failurePayload());
         }
         destroyRuntime();
     }
@@ -164,6 +184,8 @@ public final class MoaProgramRuntimeService extends Service {
         webView = null;
         bridge = null;
         client = null;
+        executionNonce = null;
+        executionGeneration = 0;
         if (active == null) {
             return;
         }
@@ -185,7 +207,7 @@ public final class MoaProgramRuntimeService extends Service {
                 if (!isActive(this) || startConfig == null) {
                     return;
                 }
-                send(client, READY, null);
+                send(client, READY, executionNonce, executionGeneration, null);
                 webView.evaluateJavascript("window.__moaStart(" + startConfig + ")", null);
             });
         }
@@ -200,7 +222,7 @@ public final class MoaProgramRuntimeService extends Service {
                     finishWithFailure();
                     return;
                 }
-                send(client, CALL, payload);
+                send(client, CALL, executionNonce, executionGeneration, payload);
             });
         }
 
@@ -211,7 +233,7 @@ public final class MoaProgramRuntimeService extends Service {
                     return;
                 }
                 String closed = closeTerminalPayload(payload);
-                sendFinish(client, closed);
+                sendFinish(client, executionNonce, executionGeneration, closed);
                 destroyRuntime();
             });
         }
@@ -251,7 +273,9 @@ public final class MoaProgramRuntimeService extends Service {
             }
             boolean ok = (Boolean) okValue;
             if (!ok) {
-                return failurePayload();
+                String code = input.optString("code", "");
+                if (!"limit_exceeded".equals(code) && !"policy_denied".equals(code)) code = "runtime_failed";
+                return object("type", "terminal", "ok", false, "code", code).toString();
             }
             Object result = input.has("result") ? input.get("result") : JSONObject.NULL;
             String closed = object("type", "terminal", "ok", true, "result", result).toString();
@@ -265,17 +289,17 @@ public final class MoaProgramRuntimeService extends Service {
         return object("type", "terminal", "ok", false, "code", "runtime_failed").toString();
     }
 
-    private static void sendFinish(Messenger target, String payload) {
-        send(target, FINISH, payload);
+    private static void sendFinish(Messenger target, String nonce, long generation, String payload) {
+        send(target, FINISH, nonce, generation, payload);
     }
 
-    private static void send(Messenger target, int what, String payload) {
+    private static void send(Messenger target, int what, String nonce, long generation, String payload) {
         Message message = Message.obtain(null, what);
-        if (payload != null) {
-            Bundle data = new Bundle();
-            data.putString(KEY_PAYLOAD, payload);
-            message.setData(data);
-        }
+        Bundle data = new Bundle();
+        data.putString(KEY_EXECUTION_NONCE, nonce);
+        data.putLong(KEY_EXECUTION_GENERATION, generation);
+        if (payload != null) data.putString(KEY_PAYLOAD, payload);
+        message.setData(data);
         try {
             target.send(message);
         } catch (RemoteException ignored) {
@@ -285,6 +309,10 @@ public final class MoaProgramRuntimeService extends Service {
 
     private static boolean isBounded(String value) {
         return value != null && value.getBytes(StandardCharsets.UTF_8).length <= MAX_PAYLOAD_BYTES;
+    }
+
+    private static boolean validNonce(String value) {
+        return value != null && value.matches("^[A-Za-z0-9_-]{16,128}$");
     }
 
     private String readAsset(String name) {

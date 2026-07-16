@@ -1,7 +1,6 @@
 package ai.moa.assistant;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -11,15 +10,23 @@ final class MoaSurfaceProgramStore {
     private static final String PREFS = "moa_surface_programs_v1";
     private static final String KEY_ENTRIES = "entries";
     private static final int MAX_ENTRIES = 80;
-    private final SharedPreferences preferences;
+    interface Persistence { String read(); boolean write(String value); }
+    private final Persistence persistence;
 
-    MoaSurfaceProgramStore(Context context) { preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
+    MoaSurfaceProgramStore(Context context) {
+        this(new Persistence() {
+            public String read() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ENTRIES, "[]"); }
+            public boolean write(String value) { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_ENTRIES, value).commit(); }
+        });
+    }
+    MoaSurfaceProgramStore(Persistence persistence) { this.persistence = persistence; }
 
     synchronized JSONObject existing(String executionId, String idempotencyKey) {
         JSONArray entries = entries();
         for (int i = 0; i < entries.length(); i++) {
             JSONObject entry = entries.optJSONObject(i);
-            if (entry != null && (executionId.equals(entry.optString("execution_id")) || idempotencyKey.equals(entry.optString("idempotency_key")))) return MoaProgramJson.copy(entry);
+            if (entry != null && !entry.optBoolean("collision", false)
+                    && (executionId.equals(entry.optString("execution_id")) || idempotencyKey.equals(entry.optString("idempotency_key")))) return MoaProgramJson.copy(entry);
         }
         return null;
     }
@@ -39,13 +46,13 @@ final class MoaSurfaceProgramStore {
             long now = System.currentTimeMillis();
             JSONArray events = new JSONArray().put(MoaSurfaceProgramEvents.accepted(proposal, clientId, 1, now))
                     .put(MoaSurfaceProgramEvents.started(proposal, clientId, 2, now));
-            entries.put(new JSONObject().put("execution_id", proposal.executionId).put("idempotency_key", proposal.idempotencyKey)
+            entries.put(new JSONObject().put("execution_id", proposal.executionId).put("sync_key", proposal.executionId).put("idempotency_key", proposal.idempotencyKey)
                     .put("proposal_sha256", proposal.proposalSha256).put("status", "pending").put("program_sha256", proposal.programSha256).put("tool_receipts", new JSONArray())
                     .put("pending_attempts", new JSONArray()).put("pending_effects", new JSONArray()).put("events", events)
                     .put("request_id", requestId).put("sync", initialSync()));
         } catch (Exception error) { return false; }
         trim(entries);
-        return preferences.edit().putString(KEY_ENTRIES, entries.toString()).commit();
+        return commit(entries);
     }
 
     synchronized JSONObject recordRejected(MoaSurfaceProgramContract.Proposal proposal, String clientId, String errorCode) {
@@ -59,12 +66,40 @@ final class MoaSurfaceProgramStore {
             long now = System.currentTimeMillis();
             JSONObject terminal = MoaSurfaceProgramReceipts.terminal(proposal, clientId, "rejected", new JSONArray(), 0, now, null, errorCode);
             JSONArray events = new JSONArray().put(MoaSurfaceProgramEvents.terminal(proposal, clientId, 1, terminal, now));
-            entries.put(new JSONObject().put("execution_id", proposal.executionId).put("idempotency_key", proposal.idempotencyKey)
+            entries.put(new JSONObject().put("execution_id", proposal.executionId).put("sync_key", proposal.executionId).put("idempotency_key", proposal.idempotencyKey)
                     .put("proposal_sha256", proposal.proposalSha256).put("status", "rejected").put("program_sha256", proposal.programSha256)
                     .put("tool_receipts", new JSONArray()).put("pending_attempts", new JSONArray()).put("pending_effects", new JSONArray())
                     .put("events", events).put("terminal", terminal).put("request_id", requestId).put("sync", initialSync()));
             trim(entries);
             return commit(entries) ? terminal : null;
+        } catch (Exception error) { return null; }
+    }
+
+    synchronized String recordCollisionRejected(MoaSurfaceProgramContract.Proposal proposal, String clientId,
+                                                String requestId) {
+        JSONArray entries = entries();
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject prior = entries.optJSONObject(i);
+            if (prior != null && prior.optBoolean("collision", false)
+                    && requestId.equals(prior.optString("request_id"))
+                    && proposal.proposalSha256.equals(prior.optString("proposal_sha256"))) {
+                return prior.optString("sync_key", null);
+            }
+        }
+        try {
+            long now = System.currentTimeMillis();
+            JSONObject terminal = MoaSurfaceProgramReceipts.terminal(proposal, clientId, "rejected",
+                    new JSONArray(), 0, now, null, "proposal_rejected");
+            JSONArray events = new JSONArray().put(MoaSurfaceProgramEvents.terminal(proposal, clientId, 1, terminal, now));
+            String syncKey = proposal.executionId + "#" + proposal.proposalSha256 + "#" + requestId;
+            entries.put(new JSONObject().put("execution_id", proposal.executionId).put("sync_key", syncKey)
+                    .put("idempotency_key", proposal.idempotencyKey).put("proposal_sha256", proposal.proposalSha256)
+                    .put("collision", true).put("status", "rejected").put("program_sha256", proposal.programSha256)
+                    .put("tool_receipts", new JSONArray()).put("pending_attempts", new JSONArray())
+                    .put("pending_effects", new JSONArray()).put("events", events).put("terminal", terminal)
+                    .put("request_id", requestId).put("sync", initialSync()));
+            trim(entries);
+            return commit(entries) ? syncKey : null;
         } catch (Exception error) { return null; }
     }
 
@@ -78,7 +113,7 @@ final class MoaSurfaceProgramStore {
                 receipts.put(receipt);
                 try { entry.put("tool_receipts", receipts); }
                 catch (Exception error) { return false; }
-                return preferences.edit().putString(KEY_ENTRIES, entries.toString()).commit();
+                return commit(entries);
             }
         }
         return false;
@@ -131,7 +166,7 @@ final class MoaSurfaceProgramStore {
                 try { JSONArray events = array(entry, "events"); entry.put("status", terminal.optString("status")).put("terminal", terminal);
                     events.put(MoaSurfaceProgramEvents.terminal(proposal, clientId, events.length() + 1, terminal, System.currentTimeMillis())); }
                 catch (Exception error) { return false; }
-                return preferences.edit().putString(KEY_ENTRIES, entries.toString()).commit();
+                return commit(entries);
             }
         }
         return false;
@@ -172,7 +207,8 @@ final class MoaSurfaceProgramStore {
         JSONArray entries = entries();
         for (int i = 0; i < entries.length(); i++) {
             JSONObject entry = entries.optJSONObject(i);
-            if (entry == null || (!executionId.equals(entry.optString("execution_id")) && !idempotencyKey.equals(entry.optString("idempotency_key")))) continue;
+            if (entry == null || entry.optBoolean("collision", false)
+                    || (!executionId.equals(entry.optString("execution_id")) && !idempotencyKey.equals(entry.optString("idempotency_key")))) continue;
             String existing = entry.optString("request_id", "");
             if (!existing.isEmpty() && !existing.equals(requestId)) return false;
             try { entry.put("request_id", requestId); if (entry.optJSONObject("sync") == null) entry.put("sync", initialSync()); }
@@ -195,7 +231,7 @@ final class MoaSurfaceProgramStore {
         JSONArray entries = entries();
         for (int i = 0; i < entries.length(); i++) {
             JSONObject entry = entries.optJSONObject(i);
-            if (entry != null && executionId.equals(entry.optString("execution_id"))) return nextSyncDelivery(entry);
+            if (entry != null && executionId.equals(entry.optString("sync_key", entry.optString("execution_id")))) return nextSyncDelivery(entry);
         }
         return null;
     }
@@ -204,7 +240,7 @@ final class MoaSurfaceProgramStore {
         JSONArray entries = entries();
         for (int i = 0; i < entries.length(); i++) {
             JSONObject entry = entries.optJSONObject(i);
-            if (entry == null || !executionId.equals(entry.optString("execution_id"))) continue;
+            if (entry == null || !executionId.equals(entry.optString("sync_key", entry.optString("execution_id")))) continue;
             JSONObject delivery = nextSyncDelivery(entry);
             if (delivery == null || !deliveryId.equals(delivery.optString("delivery_id"))) return false;
             JSONObject sync = sync(entry);
@@ -234,7 +270,8 @@ final class MoaSurfaceProgramStore {
         if (prerequisite != null && payload == null) return null;
         try { return new JSONObject().put("delivery_id", (prerequisite == null ? "event:" : "prerequisite:") + index)
                 .put("kind", prerequisite == null ? "event" : prerequisite).put("request_id", requestId)
-                .put("execution_id", entry.optString("execution_id")).put("payload", prerequisite == null ? event : payload); }
+                .put("execution_id", entry.optString("execution_id")).put("sync_key", entry.optString("sync_key", entry.optString("execution_id")))
+                .put("payload", prerequisite == null ? event : payload); }
         catch (Exception impossible) { return null; }
     }
 
@@ -246,9 +283,9 @@ final class MoaSurfaceProgramStore {
 
     private static JSONObject findPending(JSONArray entries, String executionId) { for (int i = 0; i < entries.length(); i++) { JSONObject entry = entries.optJSONObject(i); if (entry != null && executionId.equals(entry.optString("execution_id")) && "pending".equals(entry.optString("status"))) return entry; } return null; }
     private static JSONArray array(JSONObject entry, String key) throws Exception { JSONArray result = entry.optJSONArray(key); if (result == null) { result = new JSONArray(); entry.put(key, result); } return result; }
-    private boolean commit(JSONArray entries) { return preferences.edit().putString(KEY_ENTRIES, entries.toString()).commit(); }
+    private boolean commit(JSONArray entries) { return persistence.write(entries.toString()); }
 
-    private JSONArray entries() { try { return new JSONArray(preferences.getString(KEY_ENTRIES, "[]")); } catch (Exception ignored) { return new JSONArray(); } }
+    private JSONArray entries() { try { return new JSONArray(persistence.read()); } catch (Exception ignored) { return new JSONArray(); } }
     private static void trim(JSONArray entries) {
         while (entries.length() > MAX_ENTRIES) {
             int removable = -1;

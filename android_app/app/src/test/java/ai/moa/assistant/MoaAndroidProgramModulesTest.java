@@ -62,10 +62,10 @@ public final class MoaAndroidProgramModulesTest {
         assertEquals("stale_state", host.call(proposal, MoaScriptExecutionCatalog.FIND, findInput()).status);
         fake.found = new JSONObject().put("nodes", new JSONArray());
         assertTrue(host.call(proposal, MoaScriptExecutionCatalog.FIND, findInput()).ok);
-        fake.action = MoaAccessibilityService.ProgramActionResult.success("clicked", new JSONObject());
+        fake.action = MoaAccessibilityProgramAdapter.ProgramActionResult.success("clicked", new JSONObject());
         assertTrue(host.call(proposal, MoaScriptExecutionCatalog.CLICK, nodeInput()).ok);
         assertEquals("capability_not_allowed", host.call(proposal, MoaScriptExecutionCatalog.SET_TEXT, nodeInput().put("text", "fixture")).code);
-        fake.action = MoaAccessibilityService.ProgramActionResult.rejected("no", "no");
+        fake.action = MoaAccessibilityProgramAdapter.ProgramActionResult.rejected("no", "no");
         assertFalse(host.call(proposal, MoaScriptExecutionCatalog.CLICK, nodeInput()).ok);
 
         assertTrue(MoaAndroidProgramHost.HostResult.success("ok", null).ok);
@@ -94,7 +94,7 @@ public final class MoaAndroidProgramModulesTest {
         assertEquals("invalid_input", host.call(proposal, MoaScriptExecutionCatalog.SCROLL, nodeInput().put("direction", "sideways")).code);
         assertEquals("capability_not_allowed", host.call(proposal, MoaScriptExecutionCatalog.SET_TEXT, nodeInput().put("text", "x".repeat(4097))).code);
         assertEquals("invalid_input", host.call(proposal, MoaScriptExecutionCatalog.FIND, nodeInput()).code);
-        fake.action = MoaAccessibilityService.ProgramActionResult.success("done", null, "1".repeat(64));
+        fake.action = MoaAccessibilityProgramAdapter.ProgramActionResult.success("done", null, "1".repeat(64));
         assertTrue(host.call(proposal, MoaScriptExecutionCatalog.SCROLL, nodeInput().put("direction", "forward")).ok);
         assertTrue(host.call(proposal, MoaScriptExecutionCatalog.SCROLL, nodeInput().put("direction", "backward")).ok);
         assertTrue(host.call(proposal, MoaScriptExecutionCatalog.BACK, new JSONObject()).ok);
@@ -228,7 +228,7 @@ public final class MoaAndroidProgramModulesTest {
         context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit();
         assertTrue(store.recordPending(proposal));
         runtime.execute(proposal, "client", (receipt, tools) -> results.add(receipt));
-        engine.call(new JSONObject().put("call_id", "call_1").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString());
+        engine.call(new JSONObject().put("type", "call").put("call_id", "call_1").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString());
         ShadowLooper.runUiThreadTasks();
         assertEquals(1, engine.responses.size());
         engine.finish("{\"type\":\"terminal\",\"ok\":true,\"result\":null}");
@@ -248,16 +248,16 @@ public final class MoaAndroidProgramModulesTest {
         MoaWebViewProgramRuntime runtime = new MoaWebViewProgramRuntime(new MoaAndroidProgramHost(ax), store, engine); List<JSONObject> terminal = new ArrayList<>();
 
         resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        engine.call(new JSONObject().put("call_id", "").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks();
+        engine.call(new JSONObject().put("type", "call").put("call_id", "").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks();
         assertEquals("runtime_failed", terminal.get(0).getJSONObject("error").getString("code"));
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        String observe = new JSONObject().put("call_id", "same").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString();
+        String observe = new JSONObject().put("type", "call").put("call_id", "same").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString();
         engine.call(observe); engine.call(observe); ShadowLooper.runUiThreadTasks(); assertEquals("runtime_failed", terminal.get(0).getJSONObject("error").getString("code"));
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        ax.action = MoaAccessibilityService.ProgramActionResult.success("done", null, "2".repeat(64));
-        engine.call(new JSONObject().put("call_id", "mutation").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
+        ax.action = MoaAccessibilityProgramAdapter.ProgramActionResult.success("done", null, "2".repeat(64));
+        engine.call(new JSONObject().put("type", "call").put("call_id", "mutation").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
         assertTrue(engine.responses.get(engine.responses.size() - 1).getBoolean("ok")); engine.finish("{\"type\":\"terminal\",\"ok\":true,\"result\":null}"); ShadowLooper.runUiThreadTasks();
         assertEquals("2".repeat(64), terminal.get(0).getString("final_state_sha256"));
 
@@ -274,28 +274,62 @@ public final class MoaAndroidProgramModulesTest {
 
         terminal.clear(); context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit();
         runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        engine.call(new JSONObject().put("call_id", "nostore").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty());
+        engine.call(new JSONObject().put("type", "call").put("call_id", "nostore").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty());
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        ax.action = MoaAccessibilityService.ProgramActionResult.success("missing post", null);
-        engine.call(new JSONObject().put("call_id", "missingpost").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
-        assertTrue(terminal.isEmpty());
-        assertEquals("indeterminate", store.recoverIndeterminate(proposal, "client").getString("status"));
+        ax.action = MoaAccessibilityProgramAdapter.ProgramActionResult.success("missing post", null);
+        engine.call(new JSONObject().put("type", "call").put("call_id", "missingpost").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
+        assertEquals("indeterminate", terminal.get(0).getString("status"));
+        assertTrue(terminal.get(0).isNull("final_state_sha256"));
+        engine.finish("{\"type\":\"terminal\",\"ok\":true,\"result\":null}"); ShadowLooper.runUiThreadTasks();
+        assertEquals(1, terminal.size());
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        ax.action = MoaAccessibilityService.ProgramActionResult.success("done", null, "3".repeat(64));
+        ax.action = MoaAccessibilityProgramAdapter.ProgramActionResult.indeterminate();
+        engine.call(new JSONObject().put("type", "call").put("call_id", "indeterminate").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
+        assertEquals("indeterminate", terminal.get(0).getString("status")); assertTrue(terminal.get(0).isNull("final_state_sha256"));
+
+        terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
+        ax.action = new MoaAccessibilityProgramAdapter.ProgramActionResult(false, "invalid_status", "invalid", "invalid", null, null);
+        engine.call(new JSONObject().put("type", "call").put("call_id", "badreceipt").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
+        assertEquals("indeterminate", terminal.get(0).getString("status"));
+
+        terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
+        ax.action = MoaAccessibilityProgramAdapter.ProgramActionResult.success("done", null, "3".repeat(64));
         ax.onAct = () -> context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit();
-        engine.call(new JSONObject().put("call_id", "lostfinish").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty()); ax.onAct = null;
+        engine.call(new JSONObject().put("type", "call").put("call_id", "lostfinish").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty()); ax.onAct = null;
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt)); runtime.stop("surface_shutdown"); assertEquals("surface_shutdown", terminal.get(0).getJSONObject("error").getString("code"));
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt)); runtime.stop("overlay_stopped"); assertEquals("surface_shutdown", terminal.get(0).getJSONObject("error").getString("code"));
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        engine.call(new JSONObject().put("call_id", "stale").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).toString()); ax.matches = false; ShadowLooper.runUiThreadTasks();
+        ax.matches = false; engine.call(new JSONObject().put("type", "call").put("call_id", "stale").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks();
         assertEquals("Bound state is stale.", engine.responses.get(engine.responses.size() - 1).getString("error")); ax.matches = true; runtime.stop("user_stop");
 
+        terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
+        int beforeMalformed = engine.responses.size();
+        for (Object badInput : new Object[]{JSONObject.NULL, "text", new JSONArray(), 7}) {
+            engine.call(new JSONObject().put("type", "call").put("call_id", "bad_input").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", badInput).toString());
+            ShadowLooper.runUiThreadTasks();
+            assertEquals("failed", terminal.get(0).getString("status"));
+            assertEquals(beforeMalformed, engine.responses.size());
+            terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
+        }
+        engine.call(new JSONObject().put("type", "call").put("call_id", "extra").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).put("unknown", true).toString());
+        ShadowLooper.runUiThreadTasks(); assertEquals("failed", terminal.get(0).getString("status")); assertEquals(beforeMalformed, engine.responses.size());
+
+        terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
+        engine.call(new JSONObject().put("type", "wrong").put("call_id", "wrongtype").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString());
+        ShadowLooper.runUiThreadTasks(); assertEquals("failed", terminal.get(0).getString("status"));
+
+        terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
+        int beforeStale = engine.responses.size();
+        engine.callAs("stale_execution_nonce", new JSONObject().put("type", "call").put("call_id", "forged").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString());
+        engine.finishAs("stale_execution_nonce", "{\"type\":\"terminal\",\"ok\":true,\"result\":null}"); ShadowLooper.runUiThreadTasks();
+        assertTrue(terminal.isEmpty()); assertEquals(beforeStale, engine.responses.size()); runtime.stop("user_stop");
+
         terminal.clear(); resetPending(store); ax.observation = null; runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        engine.call(new JSONObject().put("call_id", "unavailable").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks();
+        engine.call(new JSONObject().put("type", "call").put("call_id", "unavailable").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks();
         assertEquals("Local capability ended without success.", engine.responses.get(engine.responses.size() - 1).getString("error")); runtime.stop("user_stop"); ax.observation = new JSONObject();
 
         terminal.clear(); int responsesBeforeDenial = engine.responses.size();
@@ -304,7 +338,7 @@ public final class MoaAndroidProgramModulesTest {
         MoaSurfaceProgramContract.Proposal ask = MoaSurfaceProgramContract.parse(askEnvelope, "android_fixture", 1_800_000_000_000L);
         context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit(); assertTrue(store.recordPending(ask));
         runtime.execute(ask, "client", (receipt, tools) -> terminal.add(receipt));
-        engine.call(new JSONObject().put("call_id", "denied").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
+        engine.call(new JSONObject().put("type", "call").put("call_id", "denied").put("capability_id", MoaScriptExecutionCatalog.CLICK).put("input", nodeInput()).toString()); ShadowLooper.runUiThreadTasks();
         assertEquals("rejected", terminal.get(0).getString("status"));
         assertEquals("policy_denied", terminal.get(0).getJSONObject("error").getString("code"));
         assertEquals(responsesBeforeDenial, engine.responses.size());
@@ -315,12 +349,12 @@ public final class MoaAndroidProgramModulesTest {
         assertEquals("policy_denied", terminal.get(0).getJSONObject("error").getString("code"));
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
-        for (int i = 0; i <= proposal.limits.toolCalls; i++) engine.call(new JSONObject().put("call_id", "many_" + i).put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString());
+        for (int i = 0; i <= proposal.limits.toolCalls; i++) engine.call(new JSONObject().put("type", "call").put("call_id", "many_" + i).put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString());
         ShadowLooper.runUiThreadTasks(); assertEquals("limit_exceeded", terminal.get(0).getJSONObject("error").getString("code"));
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt));
         ax.onObserve = () -> context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit();
-        engine.call(new JSONObject().put("call_id", "lostread").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty()); ax.onObserve = null;
+        engine.call(new JSONObject().put("type", "call").put("call_id", "lostread").put("capability_id", MoaScriptExecutionCatalog.OBSERVE).put("input", new JSONObject()).toString()); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty()); ax.onObserve = null;
 
         terminal.clear(); resetPending(store); runtime.execute(proposal, "client", (receipt, tools) -> terminal.add(receipt)); context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit();
         engine.finish("{\"type\":\"terminal\",\"ok\":true,\"result\":null}"); ShadowLooper.runUiThreadTasks(); assertTrue(terminal.isEmpty());
@@ -333,7 +367,7 @@ public final class MoaAndroidProgramModulesTest {
         ShadowLooper.idleMainLooper(proposal.limits.wallMs + 1L, TimeUnit.MILLISECONDS);
         assertEquals("timed_out", results.get(0).optString("status")); assertTrue(engine.stopped);
         context.getSharedPreferences("moa_surface_programs_v1", Context.MODE_PRIVATE).edit().clear().commit(); assertTrue(store.recordPending(proposal)); results.clear();
-        runtime.execute(proposal, "client", (receipt, tools) -> results.add(receipt)); engine.listener.finish("{\"type\":\"terminal\",\"ok\":true,\"result\":null}"); ShadowLooper.runUiThreadTasks();
+        runtime.execute(proposal, "client", (receipt, tools) -> results.add(receipt)); engine.finish("{\"type\":\"terminal\",\"ok\":true,\"result\":null}"); ShadowLooper.runUiThreadTasks();
         assertEquals("completed", results.get(0).optString("status"));
     }
 
@@ -343,26 +377,29 @@ public final class MoaAndroidProgramModulesTest {
         boolean matches = true;
         JSONObject observation = new JSONObject();
         JSONObject found = new JSONObject();
-        MoaAccessibilityService.ProgramActionResult action = MoaAccessibilityService.ProgramActionResult.failed("failed"); Runnable onAct, onObserve;
+        MoaAccessibilityProgramAdapter.ProgramActionResult action = MoaAccessibilityProgramAdapter.ProgramActionResult.failed("failed"); Runnable onAct, onObserve;
         public boolean bindingMatches(MoaSurfaceProgramContract.Proposal ignored) { return matches; }
         public JSONObject observe(MoaSurfaceProgramContract.Proposal ignored) { if (onObserve != null) onObserve.run(); return observation; }
         public JSONObject find(MoaSurfaceProgramContract.Proposal proposal, JSONObject ignored) { return found; }
-        public MoaAccessibilityService.ProgramActionResult act(MoaSurfaceProgramContract.Proposal ignored, String capabilityId, JSONObject input) { if (onAct != null) onAct.run(); return action; }
+        public MoaAccessibilityProgramAdapter.ProgramActionResult act(MoaSurfaceProgramContract.Proposal ignored, String capabilityId, JSONObject input) { if (onAct != null) onAct.run(); return action; }
     }
 
     private static final class FakeEngine implements MoaWebViewProgramRuntime.Engine {
-        MoaWebViewProgramRuntime.EngineListener listener; int stops; final List<JSONObject> responses = new ArrayList<>();
-        public void start(String source, JSONArray allowed, MoaWebViewProgramRuntime.EngineListener listener) { this.listener = listener; }
-        public void respond(JSONObject payload) { responses.add(payload); }
-        public void stop() { stops++; }
-        void call(String payload) { listener.call(payload); }
-        void finish(String payload) { listener.finish(payload); }
+        MoaWebViewProgramRuntime.EngineListener listener; String nonce; long generation; int stops; final List<JSONObject> responses = new ArrayList<>();
+        public void start(String nonce, long generation, String source, JSONArray allowed, int logBytes, MoaWebViewProgramRuntime.EngineListener listener) { this.nonce = nonce; this.generation = generation; this.listener = listener; }
+        public void respond(String nonce, long generation, JSONObject payload) { if (this.nonce.equals(nonce) && this.generation == generation) responses.add(payload); }
+        public void stop(String nonce, long generation) { if (this.nonce != null && this.nonce.equals(nonce) && this.generation == generation) stops++; }
+        void call(String payload) { listener.call(nonce, generation, payload); }
+        void callAs(String staleNonce, String payload) { listener.call(staleNonce, generation - 1, payload); }
+        void finish(String payload) { listener.finish(nonce, generation, payload); }
+        void finishAs(String staleNonce, String payload) { listener.finish(staleNonce, generation - 1, payload); }
     }
     private static final class BlockingEngine implements MoaWebViewProgramRuntime.Engine {
-        volatile boolean stopped; MoaWebViewProgramRuntime.EngineListener listener; Thread loop;
-        public void start(String source, JSONArray allowed, MoaWebViewProgramRuntime.EngineListener listener) { this.listener = listener; stopped = false; loop = new Thread(() -> { while (!stopped) Thread.onSpinWait(); }); loop.start(); }
-        public void respond(JSONObject payload) {}
-        public void stop() { stopped = true; if (loop != null) try { loop.join(1000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); } }
+        volatile boolean stopped; MoaWebViewProgramRuntime.EngineListener listener; String nonce; long generation; Thread loop;
+        public void start(String nonce, long generation, String source, JSONArray allowed, int logBytes, MoaWebViewProgramRuntime.EngineListener listener) { this.nonce = nonce; this.generation = generation; this.listener = listener; stopped = false; loop = new Thread(() -> { while (!stopped) Thread.onSpinWait(); }); loop.start(); }
+        public void respond(String nonce, long generation, JSONObject payload) {}
+        public void stop(String nonce, long generation) { if (!nonce.equals(this.nonce) || this.generation != generation) return; stopped = true; if (loop != null) try { loop.join(1000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); } }
+        void finish(String payload) { listener.finish(nonce, generation, payload); }
     }
 
     private static JSONObject nodeInput() throws Exception { return new JSONObject().put("observation_id", "obs_1").put("observation_digest", "b".repeat(64)).put("node_id", "node_1"); }

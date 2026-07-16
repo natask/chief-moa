@@ -130,6 +130,10 @@ public final class MoaAccessibilityProgramAdapterTest {
         assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(proposal,
                 MoaScriptExecutionCatalog.CLICK, input).status);
 
+        input = nodeInput(observation, 1).put("observation_digest", "0".repeat(64));
+        assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(proposal,
+                MoaScriptExecutionCatalog.CLICK, input).status);
+
         input = nodeInput(observation, 1);
         button.setBoundsInScreen(new Rect(1, 1, 50, 50));
         assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(proposal,
@@ -154,6 +158,45 @@ public final class MoaAccessibilityProgramAdapterTest {
         assertNull(MoaAccessibilityProgramAdapter.currentObservation());
         assertNull(MoaAccessibilityProgramAdapter.currentBinding());
         assertFalse(MoaAccessibilityProgramAdapter.targetMatches(proposal));
+    }
+
+    @Test public void rejectsBackAndHomeWhenLiveStructureDriftsWithoutAnEvent() throws Exception {
+        MoaSurfaceProgramContract.Proposal proposal = proposal(MoaAccessibilityProgramAdapter.currentBinding());
+        editor.setEnabled(false);
+        assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(
+                proposal, MoaScriptExecutionCatalog.BACK, new JSONObject()).status);
+
+        MoaAccessibilityProgramAdapter.currentObservation();
+        proposal = proposal(MoaAccessibilityProgramAdapter.currentBinding());
+        button.setEnabled(false);
+        assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(
+                proposal, MoaScriptExecutionCatalog.HOME, new JSONObject()).status);
+
+        ShadowAccessibilityService shadowService = shadowOf(service);
+        assertFalse(shadowService.getGlobalActionsPerformed().contains(
+                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK));
+        assertFalse(shadowService.getGlobalActionsPerformed().contains(
+                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME));
+    }
+
+    @Test public void rejectsNodeEffectsWhenAnyBoundStructuralNodeDrifts() throws Exception {
+        JSONObject observation = MoaAccessibilityProgramAdapter.currentObservation();
+        MoaSurfaceProgramContract.Proposal proposal = proposal(MoaAccessibilityProgramAdapter.currentBinding());
+        editor.setEnabled(false);
+        assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(
+                proposal, MoaScriptExecutionCatalog.CLICK, nodeInput(observation, 1)).status);
+        assertFalse(shadowOf(button).getPerformedActions().contains(AccessibilityNodeInfo.ACTION_CLICK));
+
+        observation = MoaAccessibilityProgramAdapter.currentObservation();
+        proposal = proposal(MoaAccessibilityProgramAdapter.currentBinding());
+        button.setEnabled(false);
+        assertEquals("stale_state", MoaAccessibilityProgramAdapter.execute(
+                proposal,
+                MoaScriptExecutionCatalog.SCROLL,
+                nodeInput(observation, 4).put("direction", "forward")
+        ).status);
+        assertFalse(shadowOf(root.getChild(3)).getPerformedActions().contains(
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD));
     }
 
     @Test public void lifecycleExpiryBindingFieldsAndWindowFallbackFailClosed() throws Exception {
@@ -278,6 +321,7 @@ public final class MoaAccessibilityProgramAdapterTest {
 
         Method follow = MoaAccessibilityProgramAdapter.class.getDeclaredMethod("followPath", AccessibilityNodeInfo.class, java.util.List.class);
         follow.setAccessible(true);
+        assertNull(follow.invoke(null, null, java.util.List.of(0)));
         assertNull(follow.invoke(null, root, java.util.List.of(-1)));
         assertNull(follow.invoke(null, root, java.util.List.of(999)));
         Method normalize = MoaAccessibilityProgramAdapter.class.getDeclaredMethod("normalize", String.class);

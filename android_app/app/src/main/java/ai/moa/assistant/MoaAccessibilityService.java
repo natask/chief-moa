@@ -172,49 +172,6 @@ public final class MoaAccessibilityService extends AccessibilityService {
         return service != null && service.performGlobalAction(GLOBAL_ACTION_HOME);
     }
 
-    /** Builds a fresh, bounded and redacted Accessibility observation for local programs. */
-    static JSONObject currentProgramObservation() {
-        return MoaAccessibilityProgramAdapter.currentObservation();
-    }
-
-    static JSONObject currentProgramBinding() {
-        return MoaAccessibilityProgramAdapter.currentBinding();
-    }
-
-    static JSONObject boundProgramObservation(MoaSurfaceProgramContract.Proposal proposal) {
-        return MoaAccessibilityProgramAdapter.boundObservation(proposal);
-    }
-
-    static ProgramActionResult executeProgramAction(MoaSurfaceProgramContract.Proposal proposal, String capabilityId, JSONObject input) {
-        return ProgramActionResult.from(MoaAccessibilityProgramAdapter.execute(proposal, capabilityId, input));
-    }
-
-    static JSONObject findProgramNodes(JSONObject input) {
-        return MoaAccessibilityProgramAdapter.find(input);
-    }
-
-    static boolean programBindingMatches(MoaSurfaceProgramContract.Proposal proposal) {
-        return MoaAccessibilityProgramAdapter.bindingMatches(proposal);
-    }
-
-    static boolean programTargetMatches(MoaSurfaceProgramContract.Proposal proposal) {
-        return MoaAccessibilityProgramAdapter.targetMatches(proposal);
-    }
-
-    /** Compatibility facade for existing host fakes; implementation state lives in the adapter. */
-    static final class ProgramActionResult extends MoaAccessibilityProgramAdapter.ProgramActionResult {
-        private ProgramActionResult(boolean success, String status, String code, String summary, JSONObject data, String postStateSha256) {
-            super(success, status, code, summary, data, postStateSha256);
-        }
-        static ProgramActionResult from(MoaAccessibilityProgramAdapter.ProgramActionResult result) { return new ProgramActionResult(result.success, result.status, result.code, result.summary, result.data, result.postStateSha256); }
-        static ProgramActionResult success(String summary, JSONObject data) { return success(summary, data, null); }
-        static ProgramActionResult success(String summary, JSONObject data, String postState) { return new ProgramActionResult(true, "succeeded", "", summary, data, postState); }
-        static ProgramActionResult failed(String summary) { return new ProgramActionResult(false, "failed", "action_failed", summary, null, null); }
-        static ProgramActionResult stale(String summary) { return new ProgramActionResult(false, "stale_state", "stale_state", summary, null, null); }
-        static ProgramActionResult rejected(String code, String summary) { return new ProgramActionResult(false, "rejected", code, summary, null, null); }
-        static ProgramActionResult indeterminate() { return new ProgramActionResult(false, "indeterminate", "indeterminate", "Accessibility effect outcome is indeterminate.", null, null); }
-    }
-
     static String latestScreenSummary() {
         return latestSummary == null ? "" : latestSummary.trim();
     }

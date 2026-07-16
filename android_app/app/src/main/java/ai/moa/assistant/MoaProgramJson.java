@@ -36,14 +36,29 @@ final class MoaProgramJson {
     }
 
     private static void validate(Object value) {
-        if (value == null || value == JSONObject.NULL || value instanceof String || value instanceof Boolean) return;
+        if (value == null || value == JSONObject.NULL || value instanceof Boolean) return;
+        if (value instanceof String) { validateUnicode((String) value); return; }
         if (value instanceof Number) {
             double number = ((Number) value).doubleValue();
             if (!Double.isFinite(number) || (Math.rint(number) == number && Math.abs(number) > 9_007_199_254_740_991d)) throw new IllegalArgumentException("invalid_jcs_number");
             return;
         }
-        if (value instanceof JSONObject) { java.util.Iterator<String> keys = ((JSONObject) value).keys(); while (keys.hasNext()) validate(((JSONObject) value).opt(keys.next())); return; }
+        if (value instanceof JSONObject) { java.util.Iterator<String> keys = ((JSONObject) value).keys(); while (keys.hasNext()) { String key = keys.next(); validateUnicode(key); validate(((JSONObject) value).opt(key)); } return; }
         if (value instanceof JSONArray) { JSONArray array = (JSONArray) value; for (int i = 0; i < array.length(); i++) validate(array.opt(i)); return; }
         throw new IllegalArgumentException("unsupported_json_value");
+    }
+
+    private static void validateUnicode(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1))) {
+                    throw new IllegalArgumentException("invalid_jcs_unicode");
+                }
+                index++;
+            } else if (Character.isLowSurrogate(current)) {
+                throw new IllegalArgumentException("invalid_jcs_unicode");
+            }
+        }
     }
 }

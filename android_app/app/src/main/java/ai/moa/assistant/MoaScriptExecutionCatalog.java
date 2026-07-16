@@ -81,8 +81,8 @@ final class MoaScriptExecutionCatalog {
                 .put("catalog", new JSONObject().put("version", VERSION).put("sha256", sha256()).put("capability_ids", idsJson()))
                 .put("limits", new JSONObject().put("source_bytes", 65536).put("wall_ms", 30000).put("memory_bytes", JSONObject.NULL)
                         .put("tool_calls", 100).put("parallel_calls", 1).put("result_bytes", 65536).put("log_bytes", 32768))
-                .put("issued_at", java.time.Instant.ofEpochMilli(issuedAtMs).toString())
-                .put("expires_at", java.time.Instant.ofEpochMilli(issuedAtMs + 30_000L).toString());
+                .put("issued_at", MoaSurfaceProgramEvents.timestamp(issuedAtMs))
+                .put("expires_at", MoaSurfaceProgramEvents.timestamp(issuedAtMs + 30_000L));
         } catch (Exception error) { throw new IllegalStateException("Unable to encode Android runtime advertisement", error); }
     }
 
@@ -104,7 +104,7 @@ final class MoaScriptExecutionCatalog {
     }
 
     private static JSONObject objectSchema() { try { return new JSONObject().put("type", "object").put("additionalProperties", false); } catch (Exception e) { throw new IllegalStateException(e); } }
-    private static JSONObject nodeInput(boolean direction) { try { JSONObject properties = new JSONObject().put("observation_id", stringSchema()).put("observation_digest", digestSchema()).put("node_id", stringSchema()); if (direction) properties.put("direction", new JSONObject().put("type", "string").put("enum", new JSONArray().put("backward").put("forward"))); return new JSONObject().put("type", "object").put("properties", properties).put("required", new JSONArray().put("observation_id").put("observation_digest").put("node_id")).put("additionalProperties", false); } catch (Exception e) { throw new IllegalStateException(e); } }
+    private static JSONObject nodeInput(boolean direction) { try { JSONObject properties = new JSONObject().put("observation_id", stringSchema()).put("observation_digest", digestSchema()).put("node_id", stringSchema()); JSONArray required = new JSONArray().put("observation_id").put("observation_digest").put("node_id"); if (direction) { properties.put("direction", new JSONObject().put("type", "string").put("enum", new JSONArray().put("backward").put("forward"))); required.put("direction"); } return new JSONObject().put("type", "object").put("properties", properties).put("required", required).put("additionalProperties", false); } catch (Exception e) { throw new IllegalStateException(e); } }
     private static JSONObject findInput() { try { return new JSONObject().put("type", "object").put("properties", new JSONObject().put("observation_id", stringSchema()).put("observation_digest", digestSchema()).put("query", stringSchema())).put("required", new JSONArray().put("observation_id").put("observation_digest").put("query")).put("additionalProperties", false); } catch (Exception e) { throw new IllegalStateException(e); } }
     private static JSONObject nodesOutput() { try { return new JSONObject().put("type", "object").put("additionalProperties", true); } catch (Exception e) { throw new IllegalStateException(e); } }
     private static JSONObject stringSchema() { try { return new JSONObject().put("type", "string").put("minLength", 1); } catch (Exception e) { throw new IllegalStateException(e); } }

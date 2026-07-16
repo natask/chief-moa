@@ -100,6 +100,26 @@ final class MoaSurfaceProgramContract {
                 idempotencyKey, issuedAt, expiresAt, MoaProgramJson.sha256(MoaProgramJson.canonical(input)));
     }
 
+    /** Decodes only cryptographic receipt identity; never authorizes execution. */
+    static Proposal receiptIdentity(JSONObject input, String localDeviceId) {
+        try {
+            String executionId = id(input, "execution_id"), sessionId = id(input, "session_id");
+            String turnId = id(input, "turn_id"), idempotencyKey = id(input, "idempotency_key");
+            JSONObject target = object(input, "target");
+            String deviceId = id(target, "device_id");
+            rejectIf(!deviceId.equals(localDeviceId), "wrong_device");
+            JSONObject program = object(input, "program"), catalog = object(input, "catalog");
+            String programSha = digest(program, "sha256"), catalogSha = digest(catalog, "sha256");
+            JSONObject bindings = object(input, "bindings");
+            String bindingsSha = MoaProgramJson.sha256(MoaProgramJson.canonical(bindings));
+            String proposalSha = MoaProgramJson.sha256(MoaProgramJson.canonical(input));
+            return new Proposal(executionId, sessionId, turnId, deviceId, "", programSha, catalogSha,
+                    Collections.emptySet(), MoaProgramJson.copy(bindings), bindingsSha, "", "", "", 1,
+                    "", new Limits(1, 100, 1, 1, 1, 0), "local_policy", Collections.emptySet(),
+                    idempotencyKey, 0, 0, proposalSha);
+        } catch (Exception rejected) { return null; }
+    }
+
     private static Limits parseLimits(JSONObject input) {
         exact(input, set("source_bytes", "wall_ms", "memory_bytes", "tool_calls", "parallel_calls", "result_bytes", "log_bytes"), "invalid_limits_shape");
         rejectIf(input.opt("memory_bytes") != JSONObject.NULL, "invalid_memory_bytes");
