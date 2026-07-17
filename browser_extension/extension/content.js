@@ -692,6 +692,11 @@
       return;
     }
     if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) return;
+    // A mascot tap is also the write-surface affordance. Open it before
+    // gesture routing so voice-first mode cannot consume the click invisibly.
+    // Voice may start after this, but the user always gets a place to type and
+    // see the current turn.
+    openTextSurface({ fresh: false });
     if (voiceFirstGestures) {
       handleVoiceFirstTap(e, chainCount);
       return;

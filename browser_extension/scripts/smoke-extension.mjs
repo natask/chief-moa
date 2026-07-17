@@ -214,6 +214,9 @@ function assertVoicePlaybackStopContract() {
   if (!/createCue\(cueId, "Listening…", \{ presentation: "card", statusText: "listening…" \}\)/.test(source)) {
     throw new Error("live voice turns must materialize a visible card before the first event");
   }
+  if (!/openTextSurface\(\{ fresh: false \}\);[\s\S]{0,180}if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
+    throw new Error("mascot taps must open the writable surface before voice-first routing");
+  }
   if (!/\.agee-cue-dot\s*\{[\s\S]{0,260}animation:\s*agee-cue-pulse/.test(overlayCss)) {
     throw new Error("in-page cue cards must expose animated progress state");
   }
