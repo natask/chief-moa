@@ -660,6 +660,8 @@ class CascadedVoiceProvider {
     if (turnOrProfile && typeof turnOrProfile === "object" && !Buffer.isBuffer(turnOrProfile)) {
       const looksLikeProfile = "input_languages" in turnOrProfile
         || "input_language_primary" in turnOrProfile
+        || "stt_vocabulary" in turnOrProfile
+        || "speaker_context" in turnOrProfile
         || "language" in turnOrProfile
         || "response_modality" in turnOrProfile
         || "voice" in turnOrProfile;
@@ -695,7 +697,7 @@ class CascadedVoiceProvider {
   }
 
   sttCustomPrompt(turnOrProfile, promptCodes = this.sttPromptLanguageCodes(turnOrProfile)) {
-    return buildChirpTranscriptionPrompt(promptCodes);
+    return buildChirpTranscriptionPrompt(promptCodes, this.profileForTurn(turnOrProfile));
   }
 
   assertModelSupportsLanguages(codes = this.sttLanguageCodes()) {

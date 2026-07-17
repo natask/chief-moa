@@ -203,3 +203,16 @@
       Evidence: `chirp-auto-prompt-streaming-eval-20260715.md`.
 - [ ] 17.5 Before promotion, record an isolated preview, active-turn drain,
       rollback, fresh backup/restore, and active-profile evidence.
+
+## 18. User vocabulary and technical speaker context
+
+- [x] 18.1 Add bounded, versioned profile fields for preferred transcription
+      terms and optional speaker technical context; keep them gateway-owned.
+- [x] 18.2 Include those fields in the same Chirp 3 prompt for streaming and
+      batch recognition, with explicit instructions not to invent unsupported
+      words.
+- [x] 18.3 Expose both fields in the browser profile editor and add deterministic
+      coverage for prompt inclusion and profile normalization.
+- [ ] 18.4 Run gateway/browser verification and an isolated live replay using
+      technical terms such as OAuth; record preview, rollback, and active-turn
+      evidence before promotion.

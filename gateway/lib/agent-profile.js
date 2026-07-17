@@ -39,6 +39,8 @@ const PROFILE_FIELDS = [
   "language_auto_switch",
   "input_languages",
   "input_language_primary",
+  "stt_vocabulary",
+  "speaker_context",
   "response_modality",
   "voice_provider",
   "stt_provider",
@@ -673,6 +675,17 @@ function pickProfileFields(input) {
       out.input_language_primary = primary;
     }
   }
+  for (const field of ["stt_vocabulary", "speaker_context"]) {
+    if (typeof input[field] === "string") {
+      const value = input[field]
+        .replace(/[\x00-\x1F\x7F]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, field === "stt_vocabulary" ? 2000 : 1200)
+        .trim();
+      if (value) out[field] = value;
+    }
+  }
   // How the agent delivers replies: "speech" (speak), "text" (write, no audio),
   // or "auto" (match the input — typed turn -> text, spoken turn -> speech).
   if (typeof input.response_modality === "string" && input.response_modality.trim()) {
@@ -783,6 +796,8 @@ function normalizeProfile(defaults) {
     input_language_primary: picked.input_language_primary
       || (picked.input_languages ? picked.input_languages.split(",")[0].trim() : "")
       || "en-US",
+    stt_vocabulary: picked.stt_vocabulary || "",
+    speaker_context: picked.speaker_context || "",
     response_modality: picked.response_modality || "auto",
     voice_provider: picked.voice_provider || "",
     stt_provider: picked.stt_provider || "",

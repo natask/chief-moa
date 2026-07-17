@@ -286,8 +286,11 @@ Hold the orb (push-to-talk)
 Chirp 3 uses language-agnostic recognition for both streaming and batch STT.
 The gateway converts the turn-pinned Moa input-language profile into a bounded
 custom transcription prompt that asks for verbatim, non-translated text and
-preserves language switches and native scripts. Provider-detected language is
-diagnostic evidence only; it neither mutates the profile nor limits recognition.
+preserves language switches and native scripts. Users may also provide a bounded
+transcription vocabulary and speaker technical context in the gateway-owned
+profile; these are recognition hints only and never cause Chirp to invent text.
+Provider-detected language is diagnostic evidence only; it neither mutates the
+profile nor limits recognition.
 
 Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
 drag repositions the orb without starting voice, and double-click-and-hold is

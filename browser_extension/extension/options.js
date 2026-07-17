@@ -33,6 +33,8 @@ const voiceMaxCharsEl = document.getElementById("voiceMaxChars");
 const voiceNameEl = document.getElementById("voiceName");
 const languageEl = document.getElementById("language");
 const inputLanguagesEl = document.getElementById("inputLanguages");
+const sttVocabularyEl = document.getElementById("sttVocabulary");
+const speakerContextEl = document.getElementById("speakerContext");
 const languageOptionsEl = document.getElementById("languageOptions");
 const replyLanguageSelectedEl = document.getElementById("replyLanguageSelected");
 const replyLanguageSearchEl = document.getElementById("replyLanguageSearch");
@@ -611,6 +613,8 @@ function renderProfile(payload) {
   if (voiceNameEl) voiceNameEl.value = profile.voice || "";
   languageEl.value = profile.language || profile.language_primary || "";
   if (inputLanguagesEl) inputLanguagesEl.value = profile.input_languages || profile.input_language_primary || "";
+  if (sttVocabularyEl) sttVocabularyEl.value = profile.stt_vocabulary || "";
+  if (speakerContextEl) speakerContextEl.value = profile.speaker_context || "";
   renderLanguagePickers();
   const overridden = Boolean(payload?.is_overridden);
   profileStateEl.innerHTML =
@@ -840,6 +844,8 @@ function patchFromForm() {
   if (inputLanguages) {
     patch.input_languages = inputLanguages;
   }
+  if (sttVocabularyEl?.value.trim()) patch.stt_vocabulary = sttVocabularyEl.value.trim();
+  if (speakerContextEl?.value.trim()) patch.speaker_context = speakerContextEl.value.trim();
   return patch;
 }
 
