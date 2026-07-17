@@ -37,14 +37,11 @@ behaviors through its own contracts and code.
 
 Chief MOA's own `chief-moa.browser-automation.v1` capability remains exposed
 through the existing assistant tool catalog and generic device claim/receipt
-queue. An optional official Tweeks MCP adapter is also available for equivalent
-MCP operations: it is disabled by default and allowlists only
-`tweeks.get_system_info` (metadata-only) until an operator explicitly enables
-browser tools. Browser-action tools additionally require local approval. The
-gateway validates and dispatches MCP requests but does not read browser state,
-hold cookies/passwords/storage, or execute page actions outside the local MCP
-server. The deterministic fake adapter and the MCP adapter are tested without
-real browser operations.
+queue. The external Tweeks MCP package is prior art only and is not a Chief MOA
+runtime dependency, configuration option, shipped tool, or execution path.
+The gateway validates and queues typed requests; it does not read browser state,
+hold cookies/passwords/storage, or execute page actions. The deterministic fake
+adapter and extension-side contract tests cover the bounded capability.
 
 The useful shape is:
 

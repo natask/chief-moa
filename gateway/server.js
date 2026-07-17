@@ -99,8 +99,6 @@ const {
   classificationFromActions,
 } = require("./lib/voice-router");
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
-const { createTweeksMcpClient } = require("./lib/tweeks-mcp");
-const TWEEKS_MCP = createTweeksMcpClient();
 const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
 const {
   PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
@@ -130,6 +128,8 @@ const {
   surfaceExecuteCapabilities,
   surfaceClassicTools,
 } = require("./lib/surface-skills");
+const { createCascadedExecuteToolRuntime } = require("./lib/cascaded-execute-tools");
+const { createCompanionMotionTool } = require("./lib/companion-motion-tool");
 const { createExaSearchTool } = require("./lib/exa-search");
 
 // Deployment mode. One image, env-driven modes (see
@@ -11782,197 +11782,28 @@ function voiceExecuteToolEnabled() {
   return String(process.env.VOICE_EXECUTE_TOOL || "").trim() !== "0";
 }
 
-// Dependencies the surface-skills lib needs, kept here so that lib stays pure
-// and testable. createToolRequest/readToolRequest broker + poll cross-device
-// actions; launchBrowserAgentTask starts a background browser agent-loop task.
-function surfaceSkillDeps() {
-  return {
-    createToolRequest,
-    readToolRequest: (id) => (fs.existsSync(toolRequestPath(id)) ? readToolRequest(id) : null),
-    launchBrowserAgentTask: ({ instruction, url, call, delegation_envelope }) => {
-      const created = launchBrowserAgentTaskInternal({
-        instruction,
-        url,
-        source: (call && call.source) || "browser-agent-loop",
-        conversation_id: (call && (call.conversation_id || call.session_id)) || "",
-        branch_id: (call && call.branch_id) || "default",
-        profile_version: call && call.profile_version,
-        ...(delegation_envelope ? { delegation_envelope } : {}),
-      });
-      return { task_id: created.task.id, agent_run_id: created.run.id, task: created.task };
-    },
-    cleanError,
-    tweeksMcp: TWEEKS_MCP,
-  };
-}
+const cascadedExecuteToolRuntime = createCascadedExecuteToolRuntime({
+  createToolRequest,
+  readToolRequest,
+  toolRequestPath,
+  fs,
+  launchBrowserAgentTaskInternal,
+  cleanError,
+  surfaceExecuteCapabilities,
+  agentProfile,
+  gatewayProfileOptionsPayload,
+  liveToolProfilePatch,
+  applyAgentProfilePatch,
+  liveToolRevertAgentProfile,
+  languageControlPatch,
+  supportedLanguagesSentence,
+  liveToolLaunchAgentRun,
+  liveToolListAgentRuns,
+  liveToolCancelAgentRun,
+});
+const { surfaceSkillDeps, cascadedExecuteCapabilities, cascadedExecuteToolDef } = cascadedExecuteToolRuntime;
 
-function cascadedExecuteCapabilities(call) {
-  const profileOptions = call?.device_id ? { deviceId: call.device_id } : {};
-  return {
-    ...surfaceExecuteCapabilities(call, surfaceSkillDeps()),
-    profile_get: {
-      description: "Read the effective agent profile: identity (assistant_name, user_name, user_nickname, user_address), languages, voice, modality, model.",
-      run: () => ({ ok: true, profile: agentProfile.effective(profileOptions) }),
-    },
-    profile_options: {
-      description: "Catalog of valid voices, languages, and models. Read before setting voice/language/model.",
-      run: () => ({ ok: true, type: "profile_options", ...gatewayProfileOptionsPayload() }),
-    },
-    profile_patch: {
-      description: "Persist profile fields durably (same sanitizer as update_agent_profile). Args: { profile: { ...fields }, scope?: \"global\"|\"device\", reason?: string }.",
-      run: (args) => {
-        const patch = liveToolProfilePatch(args || {});
-        if (Object.keys(patch).length === 0) {
-          return { ok: false, error: "no supported profile fields provided", supported_fields: agentProfile.fields() };
-        }
-        return applyAgentProfilePatch(call, args || {}, patch, "voice-execute");
-      },
-    },
-    profile_revert: {
-      description: "Undo durable settings. Args: { mode?: \"previous\"|\"reset\", scope?: \"global\"|\"device\", reason?: string }.",
-      run: (args) => liveToolRevertAgentProfile(call, args || {}),
-    },
-    set_languages: {
-      description: "Set which languages you understand and reply in, in one call, from the supported catalog (call profile_options for codes). Args: { understand?: string|string[] (the FULL set of languages you understand — the STT recognizer is constrained to exactly this set, at most two), understand_primary?: string (a code already in `understand` to lead recognition right now, e.g. \"right now I want to speak Amharic\"), reply?: string|string[] (the language(s) you reply in), reply_primary?: string, lock?: boolean (true = do not auto-switch reply language), scope?: \"global\"|\"device\", reason?: string }. Persists through the same sanitizer as update_agent_profile; an unsupported code is dropped and the prior value kept.",
-      run: (args) => {
-        const patch = languageControlPatch(args || {});
-        if (Object.keys(patch).length === 0) {
-          return { ok: false, error: "no languages provided; set understand and/or reply", supported: supportedLanguagesSentence() };
-        }
-        return applyAgentProfilePatch(call, args || {}, patch, "voice-execute-languages");
-      },
-    },
-    agents_launch: {
-      description: "Start a background agent run in this session's work state. Args: { prompt: string, harness?: \"echo\"|\"gemini\"|\"codex\"|\"claude\" }. Only works when the user's words asked for agent work.",
-      run: (args) => liveToolLaunchAgentRun(call, args || {}),
-    },
-    agents_list: {
-      description: "Status and latest output of this session's agent runs. Args: {}.",
-      run: (args) => liveToolListAgentRuns(call, args || {}),
-    },
-    agents_cancel: {
-      description: "Cancel a queued or running agent run. Args: { run_id?: string } (defaults to this session's most recent active run).",
-      run: (args) => liveToolCancelAgentRun(call, args || {}),
-    },
-  };
-}
-
-function cascadedExecuteToolDef(call) {
-  const capabilities = cascadedExecuteCapabilities(call);
-  const catalog = Object.entries(capabilities)
-    .map(([name, cap]) => `tools.moa.${name}(args) - ${cap.description}`)
-    .join("\n");
-  return {
-    name: "execute",
-    description: [
-      "Run a short JavaScript script in a sandbox to read or change your own configuration in ONE call instead of chaining tools.",
-      "Available functions (all async; each resolves to { ok, data } where data is the payload):",
-      catalog,
-      "Use console.log for debug output and `return` for the final value. No fs, no network, no other globals.",
-      "Example: const p = await tools.moa.profile_get({}); if (p.data.profile.voice !== \"Aoede\") { await tools.moa.profile_patch({ profile: { voice: \"Aoede\" }, reason: \"user asked\" }); } return p.data.profile.voice;",
-    ].join("\n"),
-    parameters: {
-      type: "object",
-      properties: {
-        code: { type: "string", description: "The JavaScript to run. `tools.moa.*` and console.log are the only APIs." },
-      },
-      required: ["code"],
-    },
-    handler: async (args) => {
-      const { runExecuteCode } = require("./lib/execute-engine");
-      return runExecuteCode({ code: String(args?.code || ""), capabilities });
-    },
-  };
-}
-
-// Command-driven animation: expose the pet motion runtime as a validated,
-// proposal-only tool. The handler validates the verb (against the fixed
-// command-verb allowlist) and target, then returns a motion-plan proposal PLUS a
-// client-forwardable action { type: "companion_motion", plan }. Same authority
-// model as page_tweak: the gateway never executes motion — it forwards the plan
-// and the client-side runtime validates targets and animates. The action rides
-// out on the turn's actions[] (see runCascadedVoiceReasoning) and is forwarded
-// to the session socket by voice-session-server's forwardTurnAction.
-const COMPANION_MOTION_TARGETS = Object.freeze([
-  "corner_top_left",
-  "corner_top_right",
-  "corner_bottom_left",
-  "corner_bottom_right",
-  "center",
-  "pointer",
-]);
-const COMPANION_MOTION_MAX_DURATION_MS = 60_000;
-
-function validateCompanionMotion(args = {}) {
-  const verb = String(args?.verb || "").trim().toLowerCase();
-  if (!COMPANION_COMMAND_VERBS.includes(verb)) {
-    return {
-      ok: false,
-      error: `unsupported motion verb; use one of: ${COMPANION_COMMAND_VERBS.join(", ")}`,
-      supported_verbs: COMPANION_COMMAND_VERBS.slice(),
-    };
-  }
-  const rawTarget = args?.target;
-  let target = null;
-  if (rawTarget !== null && rawTarget !== undefined && String(rawTarget).trim() !== "") {
-    const candidate = String(rawTarget).trim().toLowerCase();
-    if (!COMPANION_MOTION_TARGETS.includes(candidate)) {
-      return {
-        ok: false,
-        error: `unsupported motion target; use one of: ${COMPANION_MOTION_TARGETS.join(", ")}, or null`,
-        supported_targets: COMPANION_MOTION_TARGETS.slice(),
-      };
-    }
-    target = candidate;
-  }
-  let durationMs = null;
-  const rawDuration = Number(args?.duration_ms ?? args?.durationMs);
-  if (Number.isFinite(rawDuration) && rawDuration > 0) {
-    durationMs = Math.min(Math.round(rawDuration), COMPANION_MOTION_MAX_DURATION_MS);
-  }
-  const plan = {
-    renderer: "shimeji-web",
-    verb,
-    target,
-    ...(durationMs !== null ? { duration_ms: durationMs } : {}),
-  };
-  return { ok: true, plan };
-}
-
-function companionMotionTool() {
-  return {
-    name: "companion_motion",
-    description: [
-      "Move the on-screen companion character. Call this when the user tells the character to move, e.g. \"walk to the top right corner\", \"go to the center\", \"come to my pointer\".",
-      `verb must be one of: ${COMPANION_COMMAND_VERBS.join(", ")}.`,
-      `target is where to move: one of ${COMPANION_MOTION_TARGETS.join(", ")}, or null for in-place motion.`,
-      "You do NOT execute the motion: you propose a bounded plan and the on-screen runtime validates the target and animates it. Confirm briefly in your reply after calling.",
-    ].join(" "),
-    parameters: {
-      type: "object",
-      properties: {
-        verb: { type: "string", description: `The motion verb. One of: ${COMPANION_COMMAND_VERBS.join(", ")}.` },
-        target: { type: "string", description: `Where to move: ${COMPANION_MOTION_TARGETS.join(", ")}, or null for in-place motion.` },
-        duration_ms: { type: "number", description: "Optional motion duration in milliseconds." },
-      },
-      required: ["verb"],
-    },
-    handler: (args) => {
-      const validated = validateCompanionMotion(args || {});
-      if (!validated.ok) {
-        return { ok: false, type: "companion_motion_rejected", error: validated.error, supported_verbs: validated.supported_verbs, supported_targets: validated.supported_targets };
-      }
-      const plan = validated.plan;
-      return {
-        ok: true,
-        type: "companion_motion",
-        action: { type: "companion_motion", plan },
-        plan,
-        message: `Proposed a ${plan.verb}${plan.target ? ` to ${plan.target}` : ""} motion for the companion; the on-screen runtime will animate it.`,
-      };
-    },
-  };
-}
+const companionMotionTool = () => createCompanionMotionTool(COMPANION_COMMAND_VERBS);
 
 // Agent-run tools for the cascaded reasoner - the same launch/list/cancel
 // handlers the Live path uses, so a spoken "have an agent do X" works on the

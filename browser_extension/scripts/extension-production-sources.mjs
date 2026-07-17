@@ -6,6 +6,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/background.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
+  "extension/browser-page-automation-runtime.js",
   "extension/browser-task-intent.js",
   "extension/browser-turn-protocol.js",
   "extension/config.js",

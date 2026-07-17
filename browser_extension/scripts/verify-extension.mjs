@@ -5,6 +5,7 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/background.js",
+  "extension/browser-page-automation-runtime.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-context-adapter.js",
   "extension/browser-task-intent.js",
@@ -75,6 +76,8 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const pageAutomationSource = readFileSync("extension/browser-page-automation-runtime.js", "utf8");
+const browserToolSource = `${backgroundSource}\n${pageAutomationSource}`;
 const browserTurnProtocolSource = readFileSync("extension/browser-turn-protocol.js", "utf8");
 const voiceSamplerSource = readFileSync("extension/voice-sampler.js", "utf8");
 const voiceSamplerRuntimeSource = readFileSync("extension/voice-sampler-runtime.js", "utf8");
@@ -601,13 +604,13 @@ if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.ta
 
 if (
   !/\/v1\/device-clients\/heartbeat/.test(backgroundSource) ||
-  !/function browserLocalToolManifest/.test(backgroundSource) ||
-  !/browser\.tab\.open/.test(backgroundSource) ||
-  !/browser\.tab\.list/.test(backgroundSource) ||
-  !/browser\.tab\.close/.test(backgroundSource) ||
-  !/browser\.tab\.activate/.test(backgroundSource) ||
-  !/browser\.tab\.reload/.test(backgroundSource) ||
-  !/browser\.cdp\.execute/.test(backgroundSource) ||
+  !/function browserLocalToolManifest/.test(browserToolSource) ||
+  !/browser\.tab\.open/.test(browserToolSource) ||
+  !/browser\.tab\.list/.test(browserToolSource) ||
+  !/browser\.tab\.close/.test(browserToolSource) ||
+  !/browser\.tab\.activate/.test(browserToolSource) ||
+  !/browser\.tab\.reload/.test(browserToolSource) ||
+  !/browser\.cdp\.execute/.test(browserToolSource) ||
   !/function executeCdpActionsOnTab/.test(backgroundSource) ||
   !/\/v1\/tool\/requests\/claim/.test(backgroundSource) ||
   !/function maybeRequestAndroidSpeak/.test(backgroundSource) ||
@@ -618,9 +621,10 @@ if (
 
 if (
   !/browser\.page_automation/.test(backgroundSource) ||
-  !/chief-moa\.browser-automation\.v1/.test(backgroundSource) ||
-  !/full-control browser operation requires explicit local approval/.test(backgroundSource) ||
-  !/tweak:applyRecord/.test(backgroundSource)
+  !/chief-moa\.browser-automation\.v1/.test(pageAutomationSource) ||
+  !/full-control browser operation requires explicit local extension consent/.test(pageAutomationSource) ||
+  !/operation === "apply_page_tweak"[\s\S]{0,300}isBackgroundAutomationEnabled\(\)/.test(pageAutomationSource) ||
+  !/tweak:applyRecord/.test(pageAutomationSource)
 ) {
   throw new Error("extension must expose the Chief MOA-owned page automation capability with local full-control gating");
 }

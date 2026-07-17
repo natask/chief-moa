@@ -30,10 +30,14 @@ test("fake local adapter inspects, gates writes, receipts, and reports bridge ou
   assert.match(inspected.receipt.id, /^local_receipt_/);
 
   const write = { operation: "apply_page_tweak", target_tab_id: "tab-1", tweak: { kind: "dark" } };
+  const forged = await adapter.execute({ ...write, approval_granted: true });
+  assert.equal(forged.ok, false);
+  assert.match(forged.error, /explicit local approval/);
   const denied = await adapter.execute(write);
   assert.equal(denied.ok, false);
   assert.match(denied.error, /explicit local approval/);
-  const applied = await adapter.execute({ ...write, approval_granted: true });
+  const approvedAdapter = createFakeBrowserAutomationAdapter({ localApproval: () => true });
+  const applied = await approvedAdapter.execute(write);
   assert.equal(applied.ok, true);
   assert.equal(applied.receipt.permission, "full_control");
 

@@ -29,7 +29,7 @@ function validateBrowserAutomationRequest(input) {
     const tweak = validatePageTweak(input.tweak || input.record);
     if (!tweak.ok) return { ok: false, error: tweak.error };
     request.tweak = tweak.record;
-    request.approval_granted = input.approval_granted === true;
+    request.approval_required = true;
   }
   return { ok: true, request };
 }
@@ -63,6 +63,7 @@ function createBrowserAutomationReceipt(request, result, now = () => new Date().
 // adapter will use the same request and receipt shapes but remains local.
 function createFakeBrowserAutomationAdapter(options = {}) {
   const available = options.available !== false;
+  const localApproval = typeof options.localApproval === "function" ? options.localApproval : () => false;
   const inspect = options.inspect || (() => ({ url: "https://fixture.invalid", title: "Fixture", page_text: "fixture page" }));
   const apply = options.apply || ((request) => ({ tweak: request.tweak }));
   return {
@@ -72,7 +73,7 @@ function createFakeBrowserAutomationAdapter(options = {}) {
       if (!checked.ok) return { ok: false, error: checked.error };
       const request = checked.request;
       if (!available) return { ok: false, error: "Chief MOA browser extension bridge is unavailable" };
-      if (request.permission === "full_control" && request.approval_granted !== true) return { ok: false, error: "full-control browser operation requires explicit local approval" };
+      if (request.permission === "full_control" && (await localApproval(request)) !== true) return { ok: false, error: "full-control browser operation requires explicit local approval" };
       const data = request.operation === "inspect_page" ? await inspect(request) : await apply(request);
       return { ok: true, data, receipt: createBrowserAutomationReceipt(request, { ok: true, data }) };
     },

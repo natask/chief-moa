@@ -47,3 +47,4 @@
 - Fixed Vertex Live voice to use regional endpoints instead of `global` — agent: Codex/GPT-5 — c6eb268
 - Audited gateway production LOC and ordered semantic reduction opportunities with behavior, runtime, performance, migration, and rollback evidence gates — agent: Codex/GPT-5 — a6e64c5
 - Added Chief MOA-owned browser automation capability contract, assistant catalog seam, fake local adapter, approval gating, and receipt smoke tests — agent: Codex — entire checkpoint: feat(browser): add owned page automation capability seam
+- Removed external Tweeks MCP runtime integration and bound page-tweak writes to extension-local consent; extracted gateway and extension capability helpers — agent: Codex — entire checkpoint: follow-up browser automation correction
