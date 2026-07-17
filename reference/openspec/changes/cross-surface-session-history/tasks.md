@@ -59,7 +59,7 @@ Acceptance: the Android process-refresh acceptance in `tickets.md` passes.
       checks, and strict OpenSpec validation.
 - [x] 4.2 Create a gateway preview with isolated state where supported and build
       collision-free extension and Android release artifacts.
-- [ ] 4.3 Promote, reload, or install only when rollback, compatibility,
+- [x] 4.3 Promote, reload, or install only when rollback, compatibility,
       no-interruption, drain, backup/restore, and post-change smoke evidence are
       all present; otherwise record the exact blocker and artifact paths.
 

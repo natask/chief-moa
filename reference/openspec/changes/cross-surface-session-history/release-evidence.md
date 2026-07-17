@@ -55,6 +55,24 @@ requires isolated preview, backup/restore, compatibility, drain/resume, rollback
 and post-apply smoke evidence. Task 4.3 remains open until that path either
 finishes or records its exact blocker.
 
+Release commit `2f9731f8613085b081aceadb83a5640970da9552` reached `master` and
+passed the master gateway, browser-extension, and Android verification
+workflows. The gateway workflow moved `vps-deploy` to that exact commit. The
+extension workflow uploaded its verified `0.1.78` release artifact but skipped
+Chrome Web Store submission because the publication gate was unavailable. The
+Android workflow uploaded its credential-free artifact but skipped the
+stable-signed VPS publish job.
+
+The droplet did not apply `vps-deploy` during 24 health polls over four minutes.
+Production remained healthy, idle, and drain-safe on
+`26f7384f1919f37b38840c72035a85797bbe5375`; the new unauthenticated session
+message path still returned `404`, confirming the candidate was not active.
+This is the exact gateway promotion blocker. No manual restart was forced, and
+the personal browser and phone were not reloaded or installed. Recovery is to
+audit the droplet's `auto-update` timer and its preview/backup/restore evidence,
+then let the same already-verified `vps-deploy` ref promote when that gate is
+healthy.
+
 `npm ci` reported two high-severity audit findings in the existing dependency
 lock; this change did not alter gateway dependencies. They require a separate
 dependency-review ticket rather than an unreviewed forced upgrade in this wave.
