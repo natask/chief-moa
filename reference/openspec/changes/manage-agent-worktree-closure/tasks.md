@@ -15,6 +15,8 @@
 
 ## 3. Integration And Promotion
 
-- [ ] 3.1 Commit the workflow unit with a Conventional Commit.
-- [ ] 3.2 Integrate through `scripts/release/push-master.sh`.
-- [ ] 3.3 Confirm remote master and deployment refs after promotion.
+- [x] 3.1 Commit the workflow unit with a Conventional Commit.
+- [x] 3.2 Integrate through `scripts/release/push-master.sh`.
+- [x] 3.3 Confirm remote master and deployment refs after promotion. PR #33
+      merged workflow commit `75b295ea`; the docs-only release left
+      `vps-deploy` at the already healthy application commit `2f9731f8`.
