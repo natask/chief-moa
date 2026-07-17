@@ -5,6 +5,36 @@ origin/master lineage); every file:line below was read in this checkout, not
 recalled. Line numbers drift with the ongoing server decomposition — symbol
 names are the durable anchors.
 
+**Anchor re-verification 2026-07-16 (rebase onto master@26f7384f):** after
+the fleet's route-extraction refactors, every load-bearing symbol below was
+re-grepped in the rebased tree. All exist; the design needs no structural
+change. Inline line numbers in this doc are the design-time ones; current
+locations of the load-bearing anchors:
+
+| Symbol | Design-time | At 26f7384f |
+| --- | --- | --- |
+| `createStreamingReplyPipeline` | voice-providers.js:1222 | :1231 |
+| `runCascadedVoiceReasoning` | server.js:12162 | :8302 (loop insertion point after the `callModelToolLoopStreaming` call at :8497) |
+| `callModelToolLoopStreaming` | (call site) | defined :5110 |
+| `AUTOCONTINUE_PROMPT` + MAX_TOKENS loops | server.js:8418-8430/:8426 | :5104; OpenAI loop :5244, Vertex loop :5408 (both check `isActive() !== false`) |
+| `stay_silent` tool (sibling for new tools) | server.js:12609 | :8948 |
+| staySilent detect in reasoner | server.js:12195 | :8525-8530 |
+| `streamingSpeakCap` | server.js:12310-12315 | :8644 (wired via `maxChars` :8470) |
+| `interruptedAssistantLabel` | server.js:13049 | :9389 |
+| `playbackContinuationLines` | server.js:9628 | :6205 |
+| `voiceLiveContextPrompt` | server.js:13096 | :9398 |
+| `durableSessionContextBlock` | server.js:13650 | :9831 |
+| `recordStreamingVoiceTurn` | server.js:538/12711 | :784 (onTurnCompleted) / :9050 |
+| `assertTurnActive` | voice-session-server.js:596 | :615 |
+| `spokenProgressForTurn` | voice-session-server.js:1150 | :1169 |
+| `recordIncompleteTurn` / `recordCompletedTurn` | :1186/:1255 | :1205/:1275 |
+| `failCommittedTurn` | :1343-1348 | :1360 |
+| `handleCancelTurn` | :1424-1431 | :1432 |
+| barge-in `closeCurrentTurn` on session_start | :296-301 | :306 |
+| `effectiveProfileForSession` merge | :1738-1765 | applied at :324 (`sessionAdmission.applyProfile` :323) |
+| liveSession bypass | :499 | :508 (audio path :262) |
+| `pipeline.finish()` / `cancel()` | voice-providers.js:1470/:1467 | :1002/:952 (session-server call sites), cancel def :1476 |
+
 Three of the four continuous-voice pieces are shipped and live
 (ancestors of `vps-deploy` 85c1d1ba):
 
@@ -269,8 +299,9 @@ mid-stream `ttsError` (`markFailed` `:1273`) ends the loop with
 Gateway-only, additive, flag-gated OFF: deploys as dead code until
 `VOICE_SPEAK_FOREVER=1` is set on the droplet. Rollback = unset the env (or
 ship-revert; no data migration in either direction). Promotion rides the
-normal master → `Deploy VPS gateway` path, currently frozen by the M4
-evidence requirement (in-xqz) — this change does not attempt to unfreeze it.
+normal master → `Deploy VPS gateway` path (the M4 evidence freeze noted at
+design time was resolved 2026-07-16 by e8ffdbd5's guarded promotion control
+plane; vps-deploy tracks master again).
 
 ## Open Questions
 

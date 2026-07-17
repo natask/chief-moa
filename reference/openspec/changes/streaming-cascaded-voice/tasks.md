@@ -63,9 +63,10 @@ stays unchecked until it runs.
 - [x] 1.13 Merge to master and push; `Deploy VPS gateway` + droplet
       auto-update timer promote behind the unchanged backup/restore-check
       gate. (Promotion factually happened for this lane: 3747dc00 is an
-      ancestor of live `vps-deploy` 85c1d1ba. The auto-update path itself has
-      since been frozen by 99e5bdd8's evidence requirement — tracked as
-      in-xqz, out of this change's scope.)
+      ancestor of live `vps-deploy` 85c1d1ba. The auto-update path was
+      briefly frozen by 99e5bdd8's evidence requirement — resolved 2026-07-16
+      by e8ffdbd5's guarded promotion control plane; vps-deploy tracks master
+      again, in-xqz closed.)
 
 ## 2. Android compatibility (lane: android-compat)
 
