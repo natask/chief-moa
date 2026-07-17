@@ -41,3 +41,9 @@ The system SHALL support explicit cancellation of active home-machine runs.
 - **WHEN** the user cancels an active run from Moa
 - **THEN** the gateway attempts to stop the underlying process
 - **AND** records a cancellation event and terminal run status
+
+#### Scenario: User closes an active agent from the overlay
+- **WHEN** the overlay shows an active agent run and the user taps its visible
+  close control before completion
+- **THEN** Android sends cancellation for that run instead of merely hiding it
+- **AND** keeps polling until the gateway reports a terminal state

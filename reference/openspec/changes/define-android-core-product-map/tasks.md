@@ -22,6 +22,9 @@
 - [x] 3.1 Add a cancellation endpoint for active agent runs.
 - [x] 3.2 Persist cancellation events in the agent-run event log.
 - [x] 3.3 Return lifecycle-safe summaries for queued, running, completed, failed, timed-out, and canceled runs.
+- [x] 3.5 Expose an Android overlay close control that cancels the current active
+      run through the gateway and rejects empty/punctuation-only capture artifacts
+      before turn admission.
 - [x] 3.4 Verify with a short fake or harmless harness command.
 
 ## 4. Session, Branch, And Voice Event Model

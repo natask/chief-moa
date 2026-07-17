@@ -135,6 +135,13 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject cancelAgentRun(String runId) throws Exception {
+        String id = safe(runId).replaceAll("[^a-zA-Z0-9_-]", "");
+        if (id.isEmpty()) throw new IllegalArgumentException("run id is required");
+        String responseText = postJson(apiEndpoint("/v1/agent/runs/" + id + "/cancel"), "{}", 15000);
+        return responseText.trim().isEmpty() ? new JSONObject() : new JSONObject(responseText);
+    }
+
     JSONObject latestAndroidUpdate() throws Exception {
         String responseText = getText(apiEndpoint("/v1/android/updates/latest"), 10000);
         return new JSONObject(responseText);

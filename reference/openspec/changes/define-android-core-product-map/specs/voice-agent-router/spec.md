@@ -36,6 +36,10 @@ The gateway SHALL store each accepted voice turn as a durable event associated w
 - **WHEN** the gateway receives a valid voice turn
 - **THEN** it writes a voice-turn record before performing downstream chat or agent work
 
+#### Scenario: Recognition yields no usable user text
+- **WHEN** voice recognition yields empty, whitespace-only, or punctuation-only text
+- **THEN** Android submits no turn and the gateway starts no agent run
+
 #### Scenario: Duplicate turn submitted
 - **WHEN** the gateway receives a repeated `turn_id` for an already completed voice turn
 - **THEN** it returns the existing response without starting duplicate agent runs

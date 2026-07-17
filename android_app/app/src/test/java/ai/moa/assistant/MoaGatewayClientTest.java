@@ -115,6 +115,16 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void cancelAgentRunPostsToSanitizedRunEndpoint() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+        JSONObject response = client.cancelAgentRun("run_stop/../bad");
+        assertEquals("canceled", response.getJSONObject("run").getString("status"));
+        assertEquals("POST", requests.get(0).method);
+        assertEquals("/v1/agent/runs/run_stopbad/cancel", requests.get(0).path);
+        assertEquals("Bearer secret-token", requests.get(0).authorization);
+    }
+
+    @Test
     public void agentRunFollowUpPostsToParentRun() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
 
@@ -191,6 +201,8 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"runs\":[{\"id\":\"run_789\",\"status\":\"running\"}]}");
         } else if ("/v1/agent/runs/run_abcbad".equals(request.path)) {
             return new TestResponse(200, "{\"run\":{\"id\":\"run_abcbad\",\"status\":\"completed\"},\"events\":[]}");
+        } else if ("/v1/agent/runs/run_stopbad/cancel".equals(request.path)) {
+            return new TestResponse(202, "{\"run\":{\"id\":\"run_stopbad\",\"status\":\"canceled\"}}");
         } else if ("/v1/agent/runs/run_parent/followups".equals(request.path)) {
             return new TestResponse(202, "{\"parent_run_id\":\"run_parent\",\"run\":{\"id\":\"run_child\",\"status\":\"queued\"}}");
         } else if ("/v1/agent/runs".equals(request.path) && request.body.contains("\"no_text\"")) {

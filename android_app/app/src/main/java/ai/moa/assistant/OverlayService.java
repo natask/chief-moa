@@ -107,6 +107,7 @@ public final class OverlayService extends Service {
     private LinearLayout voiceTranscriptColumn;
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
+    private TextView voiceRunCancelControl;
     private TextView voiceLanguageLine;
     private TextView voiceCancelControl;
     private TextView voiceSendControl;
@@ -926,6 +927,13 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+
+        voiceRunCancelControl = text("×", MoaColors.PAPER, 20, true);
+        voiceRunCancelControl.setContentDescription("Stop active agent");
+        voiceRunCancelControl.setGravity(Gravity.CENTER);
+        voiceRunCancelControl.setPadding(dp(10), 0, dp(2), 0);
+        voiceRunCancelControl.setOnClickListener(view -> cancelMostRecentAgentRun());
+        header.addView(voiceRunCancelControl, new LinearLayout.LayoutParams(dp(38), dp(38)));
         container.addView(header);
 
         // A dedicated line that ALWAYS shows the current hear (STT) / speak
@@ -1358,6 +1366,9 @@ public final class OverlayService extends Service {
             voiceMetaLine.setText(status);
             voiceMetaLine.setTextColor(voiceStateColor());
         }
+        if (voiceRunCancelControl != null) {
+            voiceRunCancelControl.setVisibility(agentRuns.hasRuns() ? View.VISIBLE : View.GONE);
+        }
         if (voiceLanguageLine != null) {
             voiceLanguageLine.setText(sessionLanguageStatus());
         }
@@ -1465,6 +1476,7 @@ public final class OverlayService extends Service {
         transcriptView = null;
         transcriptParams = null;
         voiceTranscriptColumn = null;
+        voiceRunCancelControl = null;
         voiceTranscriptScroll = null;
         voiceMetaLine = null;
         voiceLanguageLine = null;
@@ -1838,6 +1850,11 @@ public final class OverlayService extends Service {
     }
 
     private void sendUserMessage(String text, boolean fromVoice) {
+        if (!MoaTurnAdmissionPolicy.hasUserText(text)) {
+            if (fromVoice) setVoiceRuntimeState(VoiceRuntimeState.READY);
+            return;
+        }
+        text = text.trim();
         addMessage(false, text);
         if (fromVoice) {
             showTranscriptOverlay("");
@@ -2483,6 +2500,39 @@ public final class OverlayService extends Service {
             runStatusView.setText(overlayHeaderStatusText());
         }
         updateVoiceHeaderState();
+    }
+
+    private void cancelMostRecentAgentRun() {
+        final String runId = activeFollowUpRunId();
+        if (runId.isEmpty()) return;
+        if (voiceRunCancelControl != null) {
+            voiceRunCancelControl.setEnabled(false);
+            voiceRunCancelControl.setAlpha(0.45f);
+        }
+        new Thread(() -> {
+            try {
+                gatewayClient().cancelAgentRun(runId);
+                mainHandler.post(() -> {
+                    addMessage(true, "Stopping agent run " + shortRunId(runId) + ".");
+                    ensureAgentRunPolling();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> deliverReply(
+                        "Could not stop agent run " + shortRunId(runId) + ": " + cleanError(error), false));
+            } finally {
+                mainHandler.post(() -> {
+                    if (voiceRunCancelControl != null) {
+                        voiceRunCancelControl.setEnabled(true);
+                        voiceRunCancelControl.setAlpha(1f);
+                    }
+                });
+            }
+        }, "moa-agent-run-cancel").start();
+    }
+
+    private String shortRunId(String runId) {
+        String value = safe(runId);
+        return value.length() > 10 ? value.substring(0, 10) : value;
     }
 
     private String overlayHeaderStatusText() {
