@@ -617,6 +617,15 @@ if (
 }
 
 if (
+  !/browser\.page_automation/.test(backgroundSource) ||
+  !/chief-moa\.browser-automation\.v1/.test(backgroundSource) ||
+  !/full-control browser operation requires explicit local approval/.test(backgroundSource) ||
+  !/tweak:applyRecord/.test(backgroundSource)
+) {
+  throw new Error("extension must expose the Chief MOA-owned page automation capability with local full-control gating");
+}
+
+if (
   !/function currentBrowserSessionAdvertisement/.test(backgroundSource) ||
   !/context_descriptor:\s*sessionAdvertisement\.context_descriptor/.test(backgroundSource) ||
   !/execution_adapters:\s*sessionAdvertisement\.execution_adapters/.test(backgroundSource) ||

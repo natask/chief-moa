@@ -144,7 +144,7 @@ async function brokerToolRequest(call, deps, spec, value, options = {}) {
     request = await deps.createToolRequest({
       tool: spec.tool,
       target_surface_type: spec.surface,
-      input: { [spec.field]: value },
+      input: options.inputObject ? value : { [spec.field]: value },
       source: (call && call.source) || "surface-skill",
       source_surface_type: resolveTurnSurface(call),
       session_id: (call && (call.conversation_id || call.session_id)) || "",
@@ -204,6 +204,22 @@ async function launchBrowserAgentTask(call, deps, args) {
   }
 }
 
+async function browserPageAutomation(call, deps, args) {
+  const { BROWSER_AUTOMATION_TOOL, validateBrowserAutomationRequest } = require("./browser-automation-capability");
+  const checked = validateBrowserAutomationRequest(args || {});
+  if (!checked.ok) return { ok: false, error: checked.error };
+  return brokerToolRequest(call, deps, {
+    tool: BROWSER_AUTOMATION_TOOL,
+    surface: "browser_extension",
+    field: "request",
+    label: "run a Chief MOA browser page operation",
+  }, checked.request, {
+    inputObject: true,
+    timeoutMs: deps.browserToolReceiptTimeoutMs,
+    pollMs: deps.browserToolReceiptPollMs,
+  });
+}
+
 // The code-mode capabilities merged into cascadedExecuteCapabilities. Each phone
 // capability creates a brokered tool_request and awaits a receipt; browser_agent
 // _task starts a background browser agent-loop task.
@@ -218,6 +234,10 @@ function surfaceExecuteCapabilities(call, deps) {
   capabilities.browser_agent_task = {
     description: "Start a background browser agent only when the trusted turn carries a confirmed delegation envelope. Args: { instruction: string, url?: string }. Returns { task_id, agent_run_id }.",
     run: (args) => launchBrowserAgentTask(call, deps, args || {}),
+  };
+  capabilities.browser_page_automation = {
+    description: "Use Chief MOA's local browser extension to inspect a page (read_only) or apply a validated page tweak (full_control). The gateway queues; only the extension executes and receipts.",
+    run: (args) => browserPageAutomation(call, deps, args || {}),
   };
   return capabilities;
 }
@@ -267,6 +287,22 @@ function surfaceClassicTools(call, deps) {
       },
       handler: (args) => launchBrowserAgentTask(call, deps, args || {}),
     },
+    {
+      name: "browser_page_automation",
+      description: "Ask the connected Chief MOA browser extension to inspect a page or apply one validated page tweak. inspect_page is read_only; apply_page_tweak is full_control and requires explicit local approval. The gateway never executes page actions.",
+      parameters: {
+        type: "object",
+        properties: {
+          operation: { type: "string", enum: ["inspect_page", "apply_page_tweak"] },
+          target_tab_id: { type: "string" },
+          include: { type: "array", items: { type: "string" } },
+          tweak: { type: "object" },
+          approval_granted: { type: "boolean" },
+        },
+        required: ["operation", "target_tab_id"],
+      },
+      handler: (args) => browserPageAutomation(call, deps, args || {}),
+    },
   ];
 }
 
@@ -278,4 +314,5 @@ module.exports = {
   launchBrowserAgentTask,
   awaitToolReceipt,
   PHONE_CAPABILITIES,
+  browserPageAutomation,
 };

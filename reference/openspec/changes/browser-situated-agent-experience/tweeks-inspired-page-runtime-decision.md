@@ -35,6 +35,16 @@ It is useful behavioral prior art, but the package contains no license granting
 Moa permission to copy its implementation. Moa will reproduce selected product
 behaviors through its own contracts and code.
 
+Chief MOA does not depend on the external Tweeks MCP package at runtime. The
+Chief MOA-owned `chief-moa.browser-automation.v1` capability is exposed through
+the existing assistant tool catalog and generic device claim/receipt queue.
+`inspect_page` is explicitly read-only; `apply_page_tweak` is explicitly
+full-control and requires local approval. The gateway validates and queues the
+typed request but never executes page actions. The browser extension/local
+bridge remains the execution owner and emits the local receipt. The current
+implementation proves this contract with a deterministic fake adapter; wiring
+the live extension claim handler is a follow-up integration unit.
+
 The useful shape is:
 
 - persistent site-specific userscript records with separate metadata and code;
