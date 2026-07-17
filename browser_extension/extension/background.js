@@ -3440,7 +3440,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   throwIfAborted(signal);
   const snapshot = await collectBrowserSnapshot(tabId);
 
-  const delegationEnvelope = role === "delegate" && options.delegationConfirmed === true
+  const delegationEnvelope = role === "delegate"
     ? browserDelegationEnvelope(text, snapshot.url)
     : null;
   const sessionId = await getStableSessionId();
@@ -3617,7 +3617,6 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
       await runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, {
         input: "text",
         role: explicitRole,
-        delegationConfirmed: contextControls.delegationConfirmed === true,
         ...contextControls,
       });
       return;
@@ -4216,7 +4215,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     tasks.set(cueId, { controller, tabId });
     runAgent(tabId, msg.instruction, controller, cueId, {
       agentRole: msg.agentRole,
-      delegationConfirmed: msg.delegationConfirmed === true,
       contextAction: msg.contextAction,
       threadLabel: msg.threadLabel,
     });
@@ -4558,7 +4556,6 @@ async function handlePanelRequest(msg) {
         input: "text",
         role,
         delivery: "return",
-        delegationConfirmed: msg.delegationConfirmed === true,
       });
       return {
         ok: true,

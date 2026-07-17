@@ -2444,19 +2444,10 @@
       return;
     }
     const role = AgeeSteeringUi.roleForInstruction(instruction);
-    if (role === "delegate" && !isBrowserCommandTranscript(instruction)) {
-      const host = location.hostname || "this page";
-      askInlineConfirm(
-        `Delegate this task on ${host} for up to 20 steps? A.G. may click, type, select, scroll, press keys, wait, and capture page evidence. Navigation or sensitive or out-of-scope work stops for approval.`,
-      ).then((confirmed) => {
-        if (confirmed) dispatchInstruction(instruction, displayText, role, true);
-      });
-      return;
-    }
-    dispatchInstruction(instruction, displayText, role, false);
+    dispatchInstruction(instruction, displayText, role);
   }
 
-  function dispatchInstruction(instruction, displayText, role, delegationConfirmed) {
+  function dispatchInstruction(instruction, displayText, role) {
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, displayText, { presentation: "card" });
@@ -2476,7 +2467,6 @@
       instruction,
       cueId,
       agentRole: role,
-      delegationConfirmed,
       contextAction: context.action,
       threadLabel: context.label,
     }).then(() => {

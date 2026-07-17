@@ -124,33 +124,6 @@ function updateCard(state, { you, reply, error, pendingLabel } = {}) {
   state.ui.card.scrollIntoView({ block: "end" });
 }
 
-function confirmDelegation(state) {
-  return new Promise((resolve) => {
-    const message = document.createElement("p");
-    message.className = "delegation-confirm-copy";
-    message.textContent = "Delegate this task on the current site for up to 20 steps? A.G. may click, type, select, scroll, press keys, wait, and capture page evidence. Navigation or sensitive/out-of-scope work stops for approval.";
-    const actions = document.createElement("div");
-    actions.className = "delegation-confirm-actions";
-    const allow = document.createElement("button");
-    allow.type = "button";
-    allow.textContent = "Delegate task";
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    cancel.className = "secondary";
-    actions.append(allow, cancel);
-    state.ui.ag.className = "ag confirming";
-    state.ui.ag.replaceChildren(message, actions);
-    const finish = (confirmed) => {
-      allow.disabled = true;
-      cancel.disabled = true;
-      resolve(confirmed);
-    };
-    allow.addEventListener("click", () => finish(true), { once: true });
-    cancel.addEventListener("click", () => finish(false), { once: true });
-  });
-}
-
 // ---- Audio playback ---------------------------------------------------------
 
 function primeAudio() {
@@ -536,22 +509,12 @@ form.addEventListener("submit", async (e) => {
   turn = state;
   armWatchdog(state);
   const role = roleForInstruction(text);
-  let delegationConfirmed = false;
-  if (role === "delegate") {
-    delegationConfirmed = await confirmDelegation(state);
-    if (!delegationConfirmed) {
-      updateCard(state, { reply: "Delegation cancelled." });
-      finishTurn(state);
-      return;
-    }
-  }
   updateCard(state, { pendingLabel: `${role} is working…` });
   request({
     cmd: "browserRoleTurn",
     cueId: `panel_${state.turnId}`,
     text,
     role,
-    delegationConfirmed,
   }, TURN_WATCHDOG_MS).then((res) => {
     if (!res?.ok) {
       failTurn(state, String(res?.error || "The browser agent rejected the turn."));

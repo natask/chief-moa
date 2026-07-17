@@ -162,15 +162,18 @@ async function main() {
       throw new Error(`side-panel conversational roles are not selector-free: ${JSON.stringify(roleUi)}`);
     }
 
-    await evaluate(pageCdp, `(() => {
+    const submittedDelegate = await evaluate(pageCdp, `(() => {
       const input = document.getElementById("text");
       input.value = "organize this page";
       document.getElementById("form")?.requestSubmit();
-      return true;
+      return {
+        hasConfirmation: document.querySelector(".delegation-confirm-actions") !== null,
+        assistantText: [...document.querySelectorAll(".turn .ag")].at(-1)?.textContent || "",
+      };
     })()`);
-    await waitForEval(pageCdp, 'document.querySelector(".delegation-confirm-actions") && document.querySelector(".delegation-confirm-copy")?.textContent.includes("up to 20 steps")');
-    await evaluate(pageCdp, 'document.querySelector(".delegation-confirm-actions .secondary")?.click()');
-    await waitForEval(pageCdp, '[...document.querySelectorAll(".turn .ag")].some((node) => node.textContent === "Delegation cancelled.")');
+    if (submittedDelegate?.hasConfirmation || submittedDelegate?.assistantText !== "delegate is working…") {
+      throw new Error(`Delegate submission did not start immediately: ${JSON.stringify(submittedDelegate)}`);
+    }
 
     // Round-trip the panel bridge: an unsupported command must come back with
     // its reqId and a readable error, proving onConnect -> handlePanelRequest
@@ -194,7 +197,7 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "conversational roles had no selector, Delegate confirmation cancelled safely, chrome.sidePanel.open available.",
+        "conversational roles had no selector, Delegate submission started immediately, chrome.sidePanel.open available.",
     );
   } finally {
     workerCdp?.close();

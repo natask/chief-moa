@@ -122,6 +122,15 @@ make it stale; reflow either remeasures the same node or makes the anchor stale.
 
 ## 3. Bounded Delegated Browser Run
 
+- [x] 3.0 Treat submission of an imperative Delegate request as authorization
+      to start, remove the redundant delegation prompt, and derive a narrow
+      page/origin-bound action-class envelope from the submitted intent.
+
+Acceptance: overlay and side-panel Delegate turns start immediately; unit tests
+prove the envelope contains only intent-matched action classes (or the bounded
+fallback) and the current origin, while sensitive/destructive and scope-changing
+work remains checkpointed.
+
 - [ ] 3.1 Define and validate a delegation envelope with goal, tab/origin scope,
       allowed action classes, approval policy, checkpoints, stop conditions,
       and completion evidence.

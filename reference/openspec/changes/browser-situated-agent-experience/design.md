@@ -109,8 +109,11 @@ Collaborate and may contain an explicitly delegated subtask.
 
 ### Delegation envelope
 
-A Delegate run cannot start until the browser and gateway agree on a bounded,
-user-confirmed envelope:
+A Delegate run cannot start until the browser and gateway agree on a bounded
+envelope. Submitting an imperative Delegate request is the user's confirmation;
+the surface must not ask whether to delegate after the user has already sent it.
+The browser derives the smallest useful action-class set from that request and
+current page identity rather than granting the full browser action catalog:
 
 ```json
 {
@@ -133,6 +136,11 @@ action classes, approval policy, checkpoints, stop conditions, and completion
 evidence. The local browser policy intersects this envelope with packaged
 allowlists and current permissions. An envelope can narrow authority but cannot
 grant an action the extension does not already support.
+
+The submitted intent authorizes only what it expresses in context. It does not
+authorize unrelated origins, credentials, sensitive/destructive effects, or a
+new capability discovered later. Those require a checkpoint or a new request;
+the agent must not ask for a second generic delegation confirmation.
 
 ## Observation And Anchor Contract
 

@@ -107,11 +107,17 @@ typed selected-agent identity.
 ### Requirement: Bounded delegated browser work
 
 Delegate SHALL be the primary outcome-oriented browser agent. A delegated run
-SHALL start only from a user-confirmed envelope containing a goal, browser
+SHALL start only from a submission-authorized envelope containing a goal, browser
 scope, allowed action classes, approval policy, checkpoints, stop conditions,
 and required completion evidence. The browser SHALL intersect the envelope
 with packaged allowlists, current permissions, and fresh page evidence before
 each local effect.
+
+#### Scenario: User submits delegated intent
+- **WHEN** the user sends an imperative request routed to Delegate
+- **THEN** the browser starts the bounded run without asking whether to delegate
+- **AND** derives its action classes and page/origin scope from the request and current page context
+- **AND** does not acquire unrelated capabilities
 
 #### Scenario: Delegated task uses preauthorized actions
 

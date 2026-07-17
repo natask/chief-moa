@@ -481,14 +481,14 @@ if (
   /data-agent-mode-option/.test(sidepanelSource) ||
   !/function roleForInstruction/.test(steeringUiSource) ||
   !/agentRole: role/.test(contentSource) ||
-  !/delegationConfirmed/.test(contentSource) ||
+  !/dispatchInstruction\(instruction, displayText, role\)/.test(contentSource) ||
   !/agentRole: msg\.agentRole/.test(backgroundSource) ||
   !/role: explicitRole/.test(backgroundSource) ||
   !/msg\.cmd === "browserRoleTurn"/.test(backgroundSource) ||
   !/delegation_envelope: delegationEnvelope/.test(backgroundSource) ||
   !/moa\.browser-delegation\.v1/.test(browserAgentRoleRuntimeSource)
 ) {
-  throw new Error("browser role intent must have no selector and must route overlay and side-panel text turns through the typed role and confirmed delegation-envelope contract");
+  throw new Error("browser role intent must have no selector and must route overlay and side-panel text turns through the typed role and submission-authorized delegation-envelope contract");
 }
 
 if (!/function documentPageContext/.test(contentSource) || !/pageText:\s*documentContext\.pageText/.test(contentSource)) {
