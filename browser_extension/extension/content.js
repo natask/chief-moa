@@ -2090,7 +2090,7 @@
     setTimeout(() => revokedCueIds.delete(cueId), 30000);
   }
 
-  function createCue(cueId, label, { presentation = "card" } = {}) {
+  function createCue(cueId, label, { presentation = "card", statusText = "thinking..." } = {}) {
     retireResolvedCueCards();
     if (presentation === "icon") {
       currentCueId = cueId;
@@ -2099,7 +2099,7 @@
       refreshStatus();
       return;
     }
-    materializeCue(cueId, label, "thinking...");
+    materializeCue(cueId, label, statusText);
   }
 
   function materializeCue(cueId, label, statusText = "thinking...") {
@@ -2666,7 +2666,10 @@
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
-    createCue(cueId, "", { presentation: "icon" });
+    // Materialize the turn immediately. The launcher can stay compact, but the
+    // conversation surface must show the user's turn before STT or the gateway
+    // emits its first event.
+    createCue(cueId, "Listening…", { presentation: "card", statusText: "listening…" });
     setVoiceState(true);
     setAgentState("listening");
     setTranscript("");
@@ -2964,8 +2967,8 @@
     // inbound voice-session event for this turn resets it (see handleLiveVoiceMessage).
     armVoiceWatchdog(state);
     setTranscript(state.transcript || "");
-    ensureVoiceCueCard(state, state.transcript || "Voice", "processing...");
-    updateCue(state.cueId, "", "running");
+    ensureVoiceCueCard(state, state.transcript || "Voice", "sending…");
+    updateCue(state.cueId, "thinking…", "running");
     if (state.voiceSessionId) {
       safeRuntimeSendMessage({
         cmd: "voiceSessionControl",

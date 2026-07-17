@@ -1107,10 +1107,15 @@ button.agee-ui-list-row:hover {
   gap: 6px;
   margin-bottom: 6px;
 }
-/* Cue-card status dot removed: the "· thinking / · done / · error" text after
-   the assistant name carries the state on its own. */
 .agee-cue-dot {
-  display: none;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--agee-amber);
+  box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.12);
+  animation: agee-cue-pulse 1.25s ease-in-out infinite;
 }
 .agee-cue-name {
   font-size: 12px;
@@ -1130,6 +1135,20 @@ button.agee-ui-list-row:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-width: 34ch;
+}
+@keyframes agee-cue-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+.agee-cue-done .agee-cue-dot {
+  background: var(--agee-green);
+  box-shadow: 0 0 0 3px rgba(53, 199, 89, 0.12);
+  animation: none;
+}
+.agee-cue-error .agee-cue-dot {
+  background: var(--agee-red);
+  box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.12);
+  animation: none;
 }
 /* Thinking (before any streamed text): a two-line shimmer skeleton in place of
    the answer. As soon as real text arrives the card is marked streaming, the

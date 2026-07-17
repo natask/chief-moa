@@ -134,6 +134,21 @@
       .turn .ag.pending {
         color: var(--muted);
       }
+      .turn .ag.pending::after {
+        content: "";
+        display: inline-block;
+        width: 0.45em;
+        height: 0.45em;
+        margin-left: 0.45em;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: pending-pulse 1.1s ease-in-out infinite;
+        vertical-align: 0.08em;
+      }
+      @keyframes pending-pulse {
+        0%, 100% { opacity: 0.35; transform: scale(0.8); }
+        50% { opacity: 1; transform: scale(1); }
+      }
       .turn .ag.error {
         border-color: #5b2b2b;
         color: var(--error);

@@ -141,6 +141,8 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
 
 function assertVoicePlaybackStopContract() {
   const source = readFileSync(join(extensionPath, "content.js"), "utf8");
+  const overlayCss = readFileSync(join(extensionPath, "overlay.css"), "utf8");
+  const sidepanelHtml = readFileSync(join(extensionPath, "sidepanel.html"), "utf8");
   const background = readFileSync(join(extensionPath, "background.js"), "utf8");
   const offscreen = readFileSync(join(extensionPath, "offscreen.js"), "utf8");
   const offscreenWorklet = readFileSync(join(extensionPath, "offscreen-audio-worklet.js"), "utf8");
@@ -208,6 +210,15 @@ function assertVoicePlaybackStopContract() {
   }
   if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
     throw new Error("live voice transcript must render in cue cards above the input");
+  }
+  if (!/createCue\(cueId, "Listening…", \{ presentation: "card", statusText: "listening…" \}\)/.test(source)) {
+    throw new Error("live voice turns must materialize a visible card before the first event");
+  }
+  if (!/\.agee-cue-dot\s*\{[\s\S]{0,260}animation:\s*agee-cue-pulse/.test(overlayCss)) {
+    throw new Error("in-page cue cards must expose animated progress state");
+  }
+  if (!/\.turn \.ag\.pending::after\s*\{[\s\S]{0,260}animation:\s*pending-pulse/.test(sidepanelHtml)) {
+    throw new Error("side panel pending turns must expose animated progress state");
   }
   if (!/playback_policy:\s*\{\s*assistant_overlap:\s*assistantOverlap === true/.test(background)) {
     throw new Error("background.js must send assistant_overlap playback policy to the gateway");
