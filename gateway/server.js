@@ -92,6 +92,7 @@ const androidOta = require("./lib/android-ota");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
 const { createMediaBookmarkStore } = require("./lib/media-bookmarks");
 const { createMediaBookmarkHandlers } = require("./lib/media-bookmark-handlers");
+const { createHistoryArchiveHandlers } = require("./lib/history-archive-handlers");
 const { createBlobStore } = require("./lib/blob-store");
 const { createVoiceTurnAudio } = require("./lib/voice-turn-audio");
 const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = require("./lib/video-notes");
@@ -369,6 +370,11 @@ const videoNoteHandlers = createVideoNoteHandlers({
 const mediaBookmarks = createMediaBookmarkStore({ dataDir: DATA_DIR });
 const { routeMediaBookmarks } = createMediaBookmarkHandlers({
   authorized, sendJson, readJsonBody, principal: () => accountUserId(), store: mediaBookmarks,
+});
+// Encrypted browser-history batches: opaque blobs via the blob store, local
+// manifest JSON. Owns its own body reader (blobs exceed the 1 MB JSON cap).
+const { routeHistoryArchive } = createHistoryArchiveHandlers({
+  authorized, sendJson, blobStore, dataDir: DATA_DIR,
 });
 
 // Runtime-editable agent profile layered over the env defaults. On boot it loads
@@ -1419,6 +1425,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeMediaBookmarks(request, response, url)) {
+      return;
+    }
+
+    if (await routeHistoryArchive(request, response, url)) {
       return;
     }
 
