@@ -99,6 +99,8 @@ const {
   classificationFromActions,
 } = require("./lib/voice-router");
 const { validatePageTweak, TWEAK_KINDS } = require("./lib/page-tweaks");
+const { createTweeksMcpClient } = require("./lib/tweeks-mcp");
+const TWEEKS_MCP = createTweeksMcpClient();
 const { createBrowserAgentLoopStore, buildAgentToolDefs } = require("./lib/browser-agent-loop");
 const {
   PROACTIVE_PROVIDER_MAX_RESPONSE_BYTES,
@@ -11800,6 +11802,7 @@ function surfaceSkillDeps() {
       return { task_id: created.task.id, agent_run_id: created.run.id, task: created.task };
     },
     cleanError,
+    tweeksMcp: TWEEKS_MCP,
   };
 }
 

@@ -220,6 +220,19 @@ async function browserPageAutomation(call, deps, args) {
   });
 }
 
+async function tweeksMcpTool(call, deps, args) {
+  if (!deps.tweeksMcp) return { ok: false, status: "unavailable", error: "Tweeks MCP bridge is not configured" };
+  const operation = String(args?.operation || "call").trim().toLowerCase();
+  try {
+    if (operation === "discover") return { ok: true, type: "tweeks_mcp_tools", tools: await deps.tweeksMcp.listTools() };
+    if (operation !== "call") return { ok: false, error: "operation must be discover or call" };
+    const result = await deps.tweeksMcp.callTool(args || {});
+    return result.ok ? result : { ...result, status: "unavailable" };
+  } catch (error) {
+    return { ok: false, status: "unavailable", error: cleanErr(deps, error) };
+  }
+}
+
 // The code-mode capabilities merged into cascadedExecuteCapabilities. Each phone
 // capability creates a brokered tool_request and awaits a receipt; browser_agent
 // _task starts a background browser agent-loop task.
@@ -238,6 +251,10 @@ function surfaceExecuteCapabilities(call, deps) {
   capabilities.browser_page_automation = {
     description: "Use Chief MOA's local browser extension to inspect a page (read_only) or apply a validated page tweak (full_control). The gateway queues; only the extension executes and receipts.",
     run: (args) => browserPageAutomation(call, deps, args || {}),
+  };
+  capabilities.tweeks_mcp = {
+    description: "Discover or call an allowlisted official Tweeks MCP tool. Defaults to metadata-only tweeks.get_system_info; browser tools require explicit gateway configuration and approval.",
+    run: (args) => tweeksMcpTool(call, deps, args || {}),
   };
   return capabilities;
 }
@@ -303,6 +320,21 @@ function surfaceClassicTools(call, deps) {
       },
       handler: (args) => browserPageAutomation(call, deps, args || {}),
     },
+    {
+      name: "tweeks_mcp",
+      description: "Discover or call an allowlisted official Tweeks MCP tool. Defaults to metadata-only tweeks.get_system_info; browser tools require explicit gateway configuration and approval.",
+      parameters: {
+        type: "object",
+        properties: {
+          operation: { type: "string", enum: ["discover", "call"] },
+          tool_name: { type: "string" },
+          arguments: { type: "object" },
+          approval_granted: { type: "boolean" },
+        },
+        required: ["operation"],
+      },
+      handler: (args) => tweeksMcpTool(call, deps, args || {}),
+    },
   ];
 }
 
@@ -315,4 +347,5 @@ module.exports = {
   awaitToolReceipt,
   PHONE_CAPABILITIES,
   browserPageAutomation,
+  tweeksMcpTool,
 };

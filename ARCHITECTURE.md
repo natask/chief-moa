@@ -73,6 +73,15 @@ Execution machine
 External APIs
   Own: third-party systems such as email, calendar, repo hosts, docs, payments,
   and SaaS tools. Use official APIs where possible.
+
+Optional local MCP bridges
+  The gateway may launch a configured local MCP server as an adapter. The
+  official Tweeks MCP bridge is disabled by default and initially allowlists
+  only `tweeks.get_system_info` (metadata-only). Browser tools require an
+  explicit allowlist and browser-action tools additionally require local
+  approval. The gateway never receives cookies, passwords, tokens, or browser
+  storage and does not execute browser operations itself; the MCP server owns
+  its local browser authority.
 ```
 
 ## Context-to-capability boundary
