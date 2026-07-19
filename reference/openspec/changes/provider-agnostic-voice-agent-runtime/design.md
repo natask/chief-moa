@@ -266,8 +266,7 @@ language.mode = explicit
 language.primary = en-US | am-ET
 language.output = same_as_input | primary_only | configured_value
 language.auto_switch = false by default
-voice.stt_vocabulary = user-provided terms, acronyms, and spellings for Chirp
-voice.speaker_context = bounded description of the speaker's domain/vocabulary
+voice.speaker_context = bounded general description of the speaker's technical domains
 ```
 
 Voice commands such as "switch to Amharic" update the profile state and produce

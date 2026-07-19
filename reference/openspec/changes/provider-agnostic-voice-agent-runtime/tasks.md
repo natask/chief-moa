@@ -204,15 +204,28 @@
 - [ ] 17.5 Before promotion, record an isolated preview, active-turn drain,
       rollback, fresh backup/restore, and active-profile evidence.
 
-## 18. User vocabulary and technical speaker context
+## 18. Technical speaker context
 
-- [x] 18.1 Add bounded, versioned profile fields for preferred transcription
-      terms and optional speaker technical context; keep them gateway-owned.
-- [x] 18.2 Include those fields in the same Chirp 3 prompt for streaming and
+- [x] 18.1 Add a bounded, versioned general speaker technical-context field;
+      keep it gateway-owned and do not require a user-maintained dictionary.
+- [x] 18.2 Include that context in the same Chirp 3 prompt for streaming and
       batch recognition, with explicit instructions not to invent unsupported
       words.
-- [x] 18.3 Expose both fields in the browser profile editor and add deterministic
+- [x] 18.3 Expose the context in the browser profile editor and add deterministic
       coverage for prompt inclusion and profile normalization.
 - [ ] 18.4 Run gateway/browser verification and an isolated live replay using
-      technical terms such as OAuth; record preview, rollback, and active-turn
-      evidence before promotion.
+      identical PCM with neutral versus general technical context, including
+      OAuth, TTS, STT, authentication, and mathematical phrases; record preview,
+      rollback, and active-turn evidence before promotion.
+
+## 19. Browser capture quality parity
+
+- [x] 19.1 Prefer native 16 kHz Web Audio and use stateful area resampling as
+      the anti-aliasing fallback instead of point interpolation.
+- [x] 19.2 Disable browser noise suppression and automatic gain control for
+      voice turns, retain echo cancellation, and expose capture readiness before
+      the UI tells the user to speak.
+- [x] 19.3 Use a lower continuation threshold plus a bounded 950 ms endpointing
+      hangover so quiet technical-phrase tails and spelled acronyms are retained.
+- [ ] 19.4 Verify identical browser PCM against the pre-change and candidate
+      capture paths, then run one real browser turn before promotion.

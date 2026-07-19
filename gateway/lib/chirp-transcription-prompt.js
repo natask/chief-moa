@@ -21,7 +21,6 @@ function buildChirpTranscriptionPrompt(promptCodes, profile = {}) {
   if (codes.some((code) => code.toLowerCase().startsWith("en"))) {
     scriptDirections.push("Preserve English speech in Latin script.");
   }
-  const vocabulary = String(profile?.stt_vocabulary || "").trim();
   const speakerContext = String(profile?.speaker_context || "").trim();
   return [
     "Transcribe the speaker verbatim. Do not translate, omit, or rewrite speech.",
@@ -29,8 +28,7 @@ function buildChirpTranscriptionPrompt(promptCodes, profile = {}) {
     ...scriptDirections,
     "Preserve every language change and use each language's native writing system.",
     "When uncertain, mark or preserve the uncertain sound instead of substituting another language.",
-    vocabulary ? `Prefer these exact user-provided terms, names, and spellings when the audio supports them: ${vocabulary}.` : "",
-    speakerContext ? `The speaker's vocabulary/context is: ${speakerContext}. Use this only as recognition context; do not invent words that are not spoken.` : "",
+    speakerContext ? `Recognition context: ${speakerContext} Preserve acronyms, identifiers, protocol names, mathematical language, and other technical terms when the audio supports them. Use this only as recognition context; do not invent technical terms that are not spoken.` : "",
   ].filter(Boolean).join(" ").slice(0, 3000);
 }
 

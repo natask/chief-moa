@@ -19,6 +19,7 @@ const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
 const DEVICE_OVERRIDES_FILENAME = "agent-profile-device-overrides.json";
 const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Honor the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
+const DEFAULT_SPEAKER_CONTEXT = "The speaker frequently discusses software engineering, authentication, APIs and protocols, speech systems, cloud infrastructure, and mathematics. Bias recognition toward technical terminology and technical senses of ambiguous words.";
 // Only these fields may be patched/persisted/overridden; anything else is ignored.
 const PROFILE_FIELDS = [
   "system_prompt",
@@ -39,7 +40,6 @@ const PROFILE_FIELDS = [
   "language_auto_switch",
   "input_languages",
   "input_language_primary",
-  "stt_vocabulary",
   "speaker_context",
   "response_modality",
   "voice_provider",
@@ -675,16 +675,14 @@ function pickProfileFields(input) {
       out.input_language_primary = primary;
     }
   }
-  for (const field of ["stt_vocabulary", "speaker_context"]) {
-    if (typeof input[field] === "string") {
-      const value = input[field]
-        .replace(/[\x00-\x1F\x7F]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, field === "stt_vocabulary" ? 2000 : 1200)
-        .trim();
-      if (value) out[field] = value;
-    }
+  if (typeof input.speaker_context === "string") {
+    const value = input.speaker_context
+      .replace(/[\x00-\x1F\x7F]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1200)
+      .trim();
+    if (value) out.speaker_context = value;
   }
   // How the agent delivers replies: "speech" (speak), "text" (write, no audio),
   // or "auto" (match the input — typed turn -> text, spoken turn -> speech).
@@ -796,8 +794,7 @@ function normalizeProfile(defaults) {
     input_language_primary: picked.input_language_primary
       || (picked.input_languages ? picked.input_languages.split(",")[0].trim() : "")
       || "en-US",
-    stt_vocabulary: picked.stt_vocabulary || "",
-    speaker_context: picked.speaker_context || "",
+    speaker_context: picked.speaker_context || DEFAULT_SPEAKER_CONTEXT,
     response_modality: picked.response_modality || "auto",
     voice_provider: picked.voice_provider || "",
     stt_provider: picked.stt_provider || "",

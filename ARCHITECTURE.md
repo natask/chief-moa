@@ -286,11 +286,21 @@ Hold the orb (push-to-talk)
 Chirp 3 uses language-agnostic recognition for both streaming and batch STT.
 The gateway converts the turn-pinned Moa input-language profile into a bounded
 custom transcription prompt that asks for verbatim, non-translated text and
-preserves language switches and native scripts. Users may also provide a bounded
-transcription vocabulary and speaker technical context in the gateway-owned
-profile; these are recognition hints only and never cause Chirp to invent text.
+preserves language switches and native scripts. The gateway-owned profile also
+carries a bounded general description of the speaker's technical domains. It
+biases recognition toward technical senses, acronyms, protocols, and
+mathematical language without requiring a user-maintained term dictionary and
+without allowing Chirp to invent unsupported words.
 Provider-detected language is diagnostic evidence only; it neither mutates the
 profile nor limits recognition.
+
+Browser voice capture prefers a native 16 kHz Web Audio graph. When Chrome uses
+another device rate, the extension applies stateful area downsampling so
+high-frequency aliases do not erase short consonants or acronym boundaries.
+Noise suppression and automatic gain control are disabled for this path while
+echo cancellation remains enabled. The browser reports microphone readiness
+before inviting speech and uses a lower post-onset VAD threshold to preserve
+quiet phrase endings.
 
 Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
 drag repositions the orb without starting voice, and double-click-and-hold is

@@ -15,6 +15,7 @@ async function main() {
     throw new Error("usage: node scripts/eval-chirp-auto-streaming.js AUDIO.pcm [PROMPT_LANGUAGE_CODES]");
   }
   const promptLanguageCodes = String(process.argv[3] || "am-ET,en-US").trim() || "am-ET,en-US";
+  const speakerContext = String(process.env.CHIRP_EVAL_SPEAKER_CONTEXT || "").trim();
   const projectId = String(process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || "").trim();
   if (!projectId) {
     throw new Error("GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT is required");
@@ -41,6 +42,7 @@ async function main() {
     effectiveProfile: {
       input_languages: promptLanguageCodes,
       input_language_primary: promptLanguageCodes.split(",")[0],
+      speaker_context: speakerContext,
     },
   };
   const partials = [];
@@ -65,6 +67,7 @@ async function main() {
     model: "chirp_3",
     recognition_language_codes: ["auto"],
     prompt_language_codes: promptLanguageCodes.split(",").map((code) => code.trim()).filter(Boolean).slice(0, 2),
+    technical_context_configured: Boolean(speakerContext),
     transcript: result.text,
     provider_language_code: result.languageCode || "",
     partial_count: partials.length,

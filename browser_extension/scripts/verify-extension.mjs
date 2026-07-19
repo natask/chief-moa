@@ -24,6 +24,8 @@ const requiredFiles = [
   "extension/offscreen.js",
   "extension/offscreen-voice-bridge.js",
   "extension/offscreen-audio-worklet.js",
+  "extension/offscreen-audio-resampler.js",
+  "extension/browser-voice-activity.js",
   "extension/livekit-voice.js",
   "extension/media-confirm.html",
   "extension/media-confirm.css",
@@ -102,6 +104,7 @@ const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenHtmlSource = readFileSync("extension/offscreen.html", "utf8");
 const offscreenVoiceBridgeSource = readFileSync("extension/offscreen-voice-bridge.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
+const offscreenResamplerSource = readFileSync("extension/offscreen-audio-resampler.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const optionsRecoverySource = readFileSync("extension/options-recovery.js", "utf8");
@@ -301,6 +304,15 @@ if (
 ) {
   throw new Error("offscreen microphone capture must use AudioWorklet, not deprecated ScriptProcessorNode capture");
 }
+if (
+  !/sampleRate:\s*16000/.test(offscreenSource) ||
+  !/noiseSuppression:\s*false/.test(offscreenSource) ||
+  !/autoGainControl:\s*false/.test(offscreenSource) ||
+  !/createPcm16Resampler/.test(offscreenSource) ||
+  !/weightedSum/.test(offscreenResamplerSource)
+) {
+  throw new Error("offscreen voice capture must prefer native 16 kHz and use anti-aliasing fallback resampling without destructive speech enhancement");
+}
 
 if (
   !/function voiceSessionSocketOpen/.test(backgroundSource) ||
@@ -365,11 +377,11 @@ if (
 }
 
 if (
-  !/voiceSessions\.set\(id, session\);[\s\S]{0,320}startOffscreenVoiceCapture\(id\)/.test(backgroundSource) ||
+  !/voiceSessions\.set\(id, session\);[\s\S]{0,900}await startOffscreenVoiceCapture\(id\)[\s\S]{0,260}captureStarted = true/.test(backgroundSource) ||
   !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource) ||
   !/message\?\.type === "commit_turn"[\s\S]{0,220}sendOrQueueVoiceSessionCommit/.test(backgroundSource)
 ) {
-  throw new Error("extension-owned voice capture must start immediately, flush queued audio on session_ready, and send commit after the flush");
+  throw new Error("extension-owned voice capture must become ready before gateway setup, flush queued audio on session_ready, and send commit after the flush");
 }
 
 if (

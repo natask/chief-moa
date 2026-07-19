@@ -11,6 +11,7 @@ import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
+import { pcm16VoiceActivity } from "./browser-voice-activity.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
 import { browserLocalToolManifest as browserAutomationLocalToolManifest } from "./browser-automation-contract.js";
@@ -101,9 +102,9 @@ const BROWSER_AGENT_PROGRESS_TEXT = {
 const BROWSER_TURN_STATUS_TIMEOUT_MS = 30000;
 const BROWSER_TURN_STATUS_POLL_MS = 400;
 const VOICE_AUTO_COMMIT_ENABLED = true;
-// 750 (was 900): aligned toward Android's 700ms; this hold is a flat serial
-// add to every turn's time-to-first-audio, so keep it as tight as VAD allows.
-const VOICE_AUTO_COMMIT_SILENCE_MS = 750;
+// Technical phrases and spelled acronyms contain meaningful short pauses. A
+// modest hangover avoids splitting them while remaining responsive.
+const VOICE_AUTO_COMMIT_SILENCE_MS = 950;
 const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
 // NOT a product limit on how long the user may speak. Speech is streamed to the
 // gateway frame-by-frame, so an utterance can run indefinitely. This is only a
@@ -111,8 +112,6 @@ const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
 // end-of-speech silence — 30 minutes, far past any real turn. Normal turns end
 // on the VAD silence auto-commit or on push-to-talk release, not here.
 const VOICE_STUCK_VAD_BACKSTOP_MS = 1_800_000;
-const VOICE_ACTIVITY_RMS_THRESHOLD = 0.008;
-const VOICE_ACTIVITY_PEAK_THRESHOLD = 0.055;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
 const UI_SPEC_CACHE_KEY = "ageeUiSpec";
@@ -2216,6 +2215,7 @@ async function startOffscreenVoiceCapture(id) {
     error.code = response?.code || "microphone_capture_failed";
     throw error;
   }
+  return response.capture || null;
 }
 
 async function stopOffscreenVoiceCapture(id) {
@@ -2398,11 +2398,16 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
   }
   if (session.capture === "extension-offscreen") {
     session.captureStartRequested = true;
-    startOffscreenVoiceCapture(id)
-      .then(() => {
-        if (voiceSessions.get(id) === session && !session.closed) session.captureStarted = true;
-      })
-      .catch((error) => handleOffscreenVoiceError(id, error));
+    try {
+      session.captureDiagnostics = await startOffscreenVoiceCapture(id);
+      if (voiceSessions.get(id) !== session || session.closed) {
+        throw new Error(session.setupErrorMessage || "Microphone capture closed during setup.");
+      }
+      session.captureStarted = true;
+    } catch (error) {
+      if (voiceSessions.get(id) === session && !session.closed) handleOffscreenVoiceError(id, error);
+      throw new Error(session.setupErrorMessage || String(error?.message || error));
+    }
   }
 
   const abortSetup = (message) => {
@@ -2529,6 +2534,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         voiceSessionId: id,
         session_id: ticket.session_id,
         conversation_id: ticket.conversation_id || ticket.session_id,
+        capture_ready: session.capture !== "extension-offscreen" || session.captureStarted === true,
+        capture: session.captureDiagnostics || undefined,
       });
     };
 
@@ -2843,7 +2850,7 @@ function noteVoiceSessionAudio(session, buffer) {
   const durationMs = Math.max(1, Math.round((buffer.byteLength / 2 / 16000) * 1000));
   session.audioStartedAt ||= now;
   session.recordingMs = (session.recordingMs || 0) + durationMs;
-  const activity = pcm16VoiceActivity(buffer);
+  const activity = pcm16VoiceActivity(buffer, { continuing: Boolean(session.lastSpeechAt) });
   if (activity.speech) {
     session.lastSpeechAt = now;
     session.speechMs = (session.speechMs || 0) + durationMs;
@@ -2865,26 +2872,6 @@ function noteVoiceSessionAudio(session, buffer) {
       autoCommitVoiceSession(session.id, "stuck-VAD backstop reached").catch(() => {});
     }, VOICE_STUCK_VAD_BACKSTOP_MS);
   }
-}
-
-function pcm16VoiceActivity(buffer) {
-  const view = new DataView(buffer);
-  const samples = Math.floor(buffer.byteLength / 2);
-  if (!samples) return { speech: false, rms: 0, peak: 0 };
-  let sumSquares = 0;
-  let peak = 0;
-  for (let offset = 0; offset + 1 < buffer.byteLength; offset += 2) {
-    const sample = view.getInt16(offset, true) / 32768;
-    const abs = Math.abs(sample);
-    sumSquares += sample * sample;
-    if (abs > peak) peak = abs;
-  }
-  const rms = Math.sqrt(sumSquares / samples);
-  return {
-    speech: rms >= VOICE_ACTIVITY_RMS_THRESHOLD || peak >= VOICE_ACTIVITY_PEAK_THRESHOLD,
-    rms,
-    peak,
-  };
 }
 
 function scheduleVoiceAutoCommit(session, delayMs) {

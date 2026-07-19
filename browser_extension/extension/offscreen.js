@@ -1,3 +1,5 @@
+import { createPcm16Resampler } from "./offscreen-audio-resampler.js";
+
 // Extension-owned microphone capture for MV3.
 // The content script owns only page UI; this document owns getUserMedia so the
 // mic permission is granted to chrome-extension://..., not to every website.
@@ -24,26 +26,12 @@ function bytesToBase64(buffer) {
   return btoa(binary);
 }
 
-function resampleToPcm16(input, inputRate, outputRate, resample) {
-  if (!input?.length || !inputRate || inputRate <= 0) return new ArrayBuffer(0);
-  const ratio = inputRate / outputRate;
-  const samples = [];
-  let index = Math.max(0, Number(resample.offset || 0));
-  while (index < input.length) {
-    const left = Math.floor(index);
-    const right = Math.min(left + 1, input.length - 1);
-    const frac = index - left;
-    const value = input[left] + (input[right] - input[left]) * frac;
-    samples.push(Math.max(-1, Math.min(1, value)));
-    index += ratio;
+function createVoiceAudioContext(AudioContextCtor) {
+  try {
+    return new AudioContextCtor({ latencyHint: "interactive", sampleRate: 16000 });
+  } catch {
+    return new AudioContextCtor({ latencyHint: "interactive" });
   }
-  resample.offset = index - input.length;
-  const pcm = new Int16Array(samples.length);
-  for (let i = 0; i < samples.length; i += 1) {
-    const sample = samples[i];
-    pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return pcm.buffer;
 }
 
 function stopCapture(sessionId = null) {
@@ -82,36 +70,39 @@ async function startCapture(voiceSessionId) {
       audio: {
         channelCount: 1,
         echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        // Browser speech enhancement can smear unfamiliar consonants and
+        // acronyms. Preserve the mic signal; retain echo cancellation because
+        // assistant audio may still be playing through the speakers.
+        noiseSuppression: false,
+        autoGainControl: false,
       },
     });
     stage = "audio_runtime";
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextCtor) throw new Error("Web Audio is not available in this browser.");
 
-    audioCtx = new AudioContextCtor();
+    audioCtx = createVoiceAudioContext(AudioContextCtor);
     if (!audioCtx.audioWorklet?.addModule) {
       throw new Error("AudioWorklet microphone capture is not available in this browser.");
     }
     await audioCtx.audioWorklet.addModule(chrome.runtime.getURL("offscreen-audio-worklet.js"));
 
     const sampleRate = audioCtx.sampleRate;
-    const resample = { offset: 0 };
+    const resampler = createPcm16Resampler(sampleRate, 16000);
     const source = audioCtx.createMediaStreamSource(stream);
     const worklet = new AudioWorkletNode(audioCtx, "aggie-voice-capture", {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1],
     });
-    const capture = { voiceSessionId, stream, audioCtx, source, worklet, sampleRate, resample };
+    const capture = { voiceSessionId, stream, audioCtx, source, worklet, sampleRate, resampler };
     activeCapture = capture;
 
     worklet.port.onmessage = (event) => {
       if (activeCapture !== capture) return;
       const inputSamples = event.data?.samples;
       if (!(inputSamples instanceof Float32Array) || inputSamples.length <= 0) return;
-      const pcm = resampleToPcm16(inputSamples, sampleRate, 16000, resample);
+      const pcm = resampler.process(inputSamples);
       if (pcm.byteLength <= 0) return;
       chrome.runtime
         .sendMessage({
@@ -124,6 +115,14 @@ async function startCapture(voiceSessionId) {
 
     source.connect(worklet);
     worklet.connect(audioCtx.destination);
+    const settings = stream.getAudioTracks?.()[0]?.getSettings?.() || {};
+    return {
+      inputSampleRate: sampleRate,
+      outputSampleRate: 16000,
+      echoCancellation: settings.echoCancellation === true,
+      noiseSuppression: settings.noiseSuppression === true,
+      autoGainControl: settings.autoGainControl === true,
+    };
   } catch (error) {
     for (const track of stream?.getTracks?.() || []) {
       try {
@@ -368,7 +367,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.cmd === "offscreenVoiceCaptureStart") {
     startCapture(msg.voiceSessionId)
-      .then(() => sendResponse({ ok: true }))
+      .then((capture) => sendResponse({ ok: true, capture }))
       .catch((error) => {
         stopCapture(msg.voiceSessionId);
         chrome.runtime

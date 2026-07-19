@@ -211,8 +211,11 @@ function assertVoicePlaybackStopContract() {
   if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
     throw new Error("live voice transcript must render in cue cards above the input");
   }
-  if (!/createCue\(cueId, "Listening…", \{ presentation: "card", statusText: "listening…" \}\)/.test(source)) {
-    throw new Error("live voice turns must materialize a visible card before the first event");
+  if (
+    !/createCue\(cueId, "Starting microphone…", \{ presentation: "card", statusText: "starting…" \}\)/.test(source) ||
+    !/capture_ready === false[\s\S]{0,220}ensureVoiceCueCard\(state, "Listening…", "listening…"\)/.test(source)
+  ) {
+    throw new Error("live voice turns must materialize a visible startup card and invite speech only after microphone readiness");
   }
   if (!/openTextSurface\(\{ fresh: false \}\);[\s\S]{0,180}if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
     throw new Error("mascot taps must open the writable surface before voice-first routing");

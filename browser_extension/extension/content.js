@@ -2664,7 +2664,7 @@
     // Materialize the turn immediately. The launcher can stay compact, but the
     // conversation surface must show the user's turn before STT or the gateway
     // emits its first event.
-    createCue(cueId, "Listening…", { presentation: "card", statusText: "listening…" });
+    createCue(cueId, "Starting microphone…", { presentation: "card", statusText: "starting…" });
     setVoiceState(true);
     setAgentState("listening");
     setTranscript("");
@@ -2724,7 +2724,9 @@
       if (!session?.ok || !session.voiceSessionId) {
         throw new Error(session?.error || "gateway did not open a voice session");
       }
+      if (session.capture_ready === false) throw new Error("microphone capture did not become ready");
       attachLiveVoiceSession(state, session.voiceSessionId);
+      ensureVoiceCueCard(state, "Listening…", "listening…");
       if (state.commitWhenReady) commitLiveVoiceTurn(state);
     } catch (error) {
       finishLiveVoiceError(state, String(error?.message || error));

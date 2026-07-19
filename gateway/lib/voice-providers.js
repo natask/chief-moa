@@ -660,7 +660,6 @@ class CascadedVoiceProvider {
     if (turnOrProfile && typeof turnOrProfile === "object" && !Buffer.isBuffer(turnOrProfile)) {
       const looksLikeProfile = "input_languages" in turnOrProfile
         || "input_language_primary" in turnOrProfile
-        || "stt_vocabulary" in turnOrProfile
         || "speaker_context" in turnOrProfile
         || "language" in turnOrProfile
         || "response_modality" in turnOrProfile
@@ -1932,14 +1931,14 @@ class CascadedVoiceProvider {
     let windowBytes = Math.max(frameBytes, Math.floor(55 * bytesPerSecond));
     windowBytes -= windowBytes % frameBytes; // align to a whole sample frame
     if (audio.length <= windowBytes) {
-      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes);
+      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
     }
     const texts = [];
     let anyRejected = false;
     for (let offset = 0; offset < audio.length; offset += windowBytes) {
       const window = audio.subarray(offset, Math.min(offset + windowBytes, audio.length));
       if (window.length < frameBytes) break;
-      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes);
+      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
       if (part.text) texts.push(part.text);
       if (part.languageRejected) anyRejected = true;
     }
@@ -1951,13 +1950,13 @@ class CascadedVoiceProvider {
     const audio = fs.readFileSync(turn.pcmPath);
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
-    return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes);
+    return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
   }
 
-  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes()) {
+  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes(), effectiveProfile = null) {
     const token = await this.accessToken();
     const sttLanguageCodes = this.sttLanguageCodes();
-    const customPrompt = this.sttCustomPrompt(null, promptLanguageCodes);
+    const customPrompt = this.sttCustomPrompt(effectiveProfile, promptLanguageCodes);
     const sttHeaders = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",

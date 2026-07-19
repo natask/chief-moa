@@ -119,9 +119,30 @@ async function main() {
     state.expected = { model: "chirp_3", promptIncludes: ["Amharic", "Ethiopic"], promptExcludes: ["English"] };
     await provider.processTurn({
       ...turn,
-      effectiveProfile: { input_languages: "am-ET", input_language_primary: "am-ET" },
+      effectiveProfile: {
+        input_languages: "am-ET",
+        input_language_primary: "am-ET",
+        speaker_context: "The speaker discusses authentication, speech systems, and mathematics.",
+      },
     }, { onTranscriptFinal: async () => {} });
     assert.equal(calls.length, 2, "profile-prompt turn should issue a second Chirp recognize call");
+
+    // A streaming shortfall falls back to batch over the same stored PCM. That
+    // path must retain the immutable turn-pinned context instead of consulting
+    // a later global profile.
+    state.expected = {
+      model: "chirp_3",
+      promptIncludes: ["authentication, speech systems, and mathematics", "technical terms"],
+    };
+    await provider.transcribePcmWindowed({
+      ...turn,
+      effectiveProfile: {
+        input_languages: "en-US,am-ET",
+        input_language_primary: "en-US",
+        speaker_context: "The speaker discusses authentication, speech systems, and mathematics.",
+      },
+    });
+    assert.equal(calls.length, 3, "batch fallback should preserve the turn-pinned speaker context");
 
     // More than two prompt languages is capped at primary + one alternate so
     // the transcription instruction stays focused and bounded.
