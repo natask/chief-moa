@@ -76,7 +76,7 @@ final class MoaStreamingVoiceSessionController {
 
     private final String gatewayUrl;
     private final String gatewayToken;
-    private final boolean playbackEnabled;
+    private volatile boolean playbackEnabled;
     private final String requestedSessionId;
     private String requestedTurnId = "";
     private String deviceId = "";
@@ -143,6 +143,10 @@ final class MoaStreamingVoiceSessionController {
         synchronized (lock) {
             return active;
         }
+    }
+
+    void setPlaybackEnabled(boolean enabled) {
+        playbackEnabled = enabled;
     }
 
     String sessionId() {
