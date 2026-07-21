@@ -1,3 +1,4 @@
+- Adapted the low-opacity touch animation to the frame-coalesced orb listener now on master and reverified the isolated release build — agent: Codex/GPT-5 — efb4e980
 - Applied the overlay Text/Voice choice to the already-open streaming controller so audio delivery changes immediately and remains persisted — agent: Codex/GPT-5 — 4fcbd831
 - Stabilized the Android overlay with a ten-percent idle orb, inset-safe drag-to-remove target, fixed scrollable transcript, and first-class Text/Voice delivery toggle — agent: Codex/GPT-5 — 8542e57a
 - Added Android media and overlay parity: preferred YouTube variants, guarded MediaSession controls, valid-id saved spots, approved playlist actions, anchored drag/dismiss, neutral styling, and selection-safe swipe — agent: codex/gpt-5 — c9065a31
