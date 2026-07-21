@@ -143,6 +143,7 @@ local unpacked-extension reload signal completed without a client acknowledgemen
 - [x] 13.2 Keep the remove target fully inside the display and dim it when the
       orb leaves the active drop zone.
 - [x] 13.3 Give the transcript a fixed scrollable viewport and expose a durable
-      Text/Voice reply toggle in its header.
+      Text/Voice reply toggle in its header, including the open streaming
+      session rather than only future connections.
 - [ ] 13.4 Complete physical-phone QA for system-inset placement, scroll touch,
       low-opacity discoverability, TTS delivery, and drag-to-remove behavior.

@@ -173,7 +173,9 @@ of resizing the card for each partial or completed turn.
 #### Scenario: User controls reply delivery in the overlay
 - **WHEN** the transcript surface is visible
 - **THEN** its header exposes a Text/Voice delivery control
-- **AND** changing it persists the spoken-reply preference for the next turn
+- **AND** changing it immediately updates hosted-audio playback for the open
+  voice session
+- **AND** persists the spoken-reply preference for later sessions
 
 ### Requirement: Minimal Spoken Interruption
 The Android app SHALL separate displayed response text from spoken response text.

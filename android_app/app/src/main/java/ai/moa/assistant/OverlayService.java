@@ -898,6 +898,9 @@ public final class OverlayService extends Service {
         delivery.setOnClickListener(v -> {
             boolean enabled = !MoaPrefs.spokenRepliesEnabled(this);
             MoaPrefs.setSpokenRepliesEnabled(this, enabled);
+            if (streamingVoiceController != null) {
+                streamingVoiceController.setPlaybackEnabled(enabled);
+            }
             delivery.setText(enabled ? "Voice" : "Text");
             delivery.setTextColor(enabled ? MoaColors.GOLD : MoaColors.PAPER);
         });
