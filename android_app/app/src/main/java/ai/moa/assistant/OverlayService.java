@@ -56,6 +56,7 @@ public final class OverlayService extends Service {
     private static final int MAX_AGENT_PROMPT_CHARS = 12000;
     private static final int ORB_WINDOW_DP = 96;
     private static final int ORB_EDGE_MARGIN_DP = 16;
+    private static final float ORB_IDLE_ALPHA = 0.10f;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
@@ -537,6 +538,8 @@ public final class OverlayService extends Service {
                 this::finishOrbDrag
         ));
 
+        orbView.setAlpha(ORB_IDLE_ALPHA);
+
         windowManager.addView(orbView, orbParams);
     }
 
@@ -601,7 +604,7 @@ public final class OverlayService extends Service {
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
-        TextView target = text("Remove orb", MoaColors.PAPER, 14, true);
+        TextView target = text("Remove orb", MoaColors.MUTED, 14, true);
         target.setGravity(Gravity.CENTER);
         target.setBackground(MoaDrawables.rounded(0xF01B1C20, dp(28), MoaColors.PANEL_BORDER, dp(1)));
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
@@ -613,14 +616,17 @@ public final class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(34);
+        // Use top gravity and an explicit, fully measured rectangle. Bottom
+        // gravity can place an overlay partly behind gesture navigation bars on
+        // some devices, which made the release label look cut in half.
+        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        params.y = Math.max(dp(12), getResources().getDisplayMetrics().heightPixels - dp(58) - dp(34));
         windowManager.addView(target, params);
         orbRemoveTarget = target;
         target.setAlpha(0f);
         target.setScaleX(0.9f);
         target.setScaleY(0.9f);
-        target.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(140).start();
+        target.animate().alpha(0.10f).scaleX(1f).scaleY(1f).setDuration(140).start();
     }
 
     private void updateOrbDragSurfaces() {
@@ -648,7 +654,12 @@ public final class OverlayService extends Service {
                 active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
                 dp(1)
         ));
-        target.animate().scaleX(active ? 1.08f : 1f).scaleY(active ? 1.08f : 1f).setDuration(100).start();
+        target.animate()
+                .alpha(active ? 1f : 0.10f)
+                .scaleX(active ? 1.08f : 1f)
+                .scaleY(active ? 1.08f : 1f)
+                .setDuration(100)
+                .start();
     }
 
     private void finishOrbDrag(Boolean completedDrop) {
@@ -814,7 +825,8 @@ public final class OverlayService extends Service {
 
         card.addView(createVoiceHeader());
 
-        voiceTranscriptScroll = new CappedScrollView(this, dp(360));
+        int transcriptBodyHeight = transcriptBodyHeight();
+        voiceTranscriptScroll = new CappedScrollView(this, transcriptBodyHeight);
         voiceTranscriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
         voiceTranscriptScroll.setClipToPadding(false);
@@ -828,7 +840,7 @@ public final class OverlayService extends Service {
         ));
         card.addView(voiceTranscriptScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                transcriptBodyHeight
         ));
         renderVoiceTranscriptRows();
 
@@ -878,6 +890,19 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+        TextView delivery = pill(
+                MoaPrefs.spokenRepliesEnabled(this) ? "Voice" : "Text",
+                0x16FFFFFF,
+                MoaColors.PAPER);
+        delivery.setContentDescription("Toggle spoken replies");
+        delivery.setOnClickListener(v -> {
+            boolean enabled = !MoaPrefs.spokenRepliesEnabled(this);
+            MoaPrefs.setSpokenRepliesEnabled(this, enabled);
+            delivery.setText(enabled ? "Voice" : "Text");
+            delivery.setTextColor(enabled ? MoaColors.GOLD : MoaColors.PAPER);
+        });
+        delivery.setTextColor(MoaPrefs.spokenRepliesEnabled(this) ? MoaColors.GOLD : MoaColors.PAPER);
+        header.addView(delivery);
         TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
         hide.setContentDescription("Hide the A.G. orb");
         hide.setOnClickListener(v -> stopSelf());
@@ -1368,6 +1393,11 @@ public final class OverlayService extends Service {
                 voiceTranscriptScroll.fullScroll(View.FOCUS_DOWN);
             }
         }, 30);
+    }
+
+    private int transcriptBodyHeight() {
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        return Math.max(dp(220), Math.min(dp(360), Math.round(screenHeight * 0.36f)));
     }
 
     private String visibleVoiceContent(String text) {
