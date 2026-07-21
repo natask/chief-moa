@@ -14,7 +14,7 @@ final class MoaOrbRemoveTarget {
     static TextView show(Context context, WindowManager windowManager, int overlayType) {
         TextView target = new TextView(context);
         target.setText("Remove orb");
-        target.setTextColor(MoaColors.PAPER);
+        target.setTextColor(MoaColors.MUTED);
         target.setTextSize(14);
         target.setTypeface(Typeface.DEFAULT_BOLD);
         target.setGravity(Gravity.CENTER);
@@ -26,13 +26,16 @@ final class MoaOrbRemoveTarget {
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(context, 34);
+        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        params.y = Math.max(
+                dp(context, 12),
+                context.getResources().getDisplayMetrics().heightPixels
+                        - dp(context, 58) - dp(context, 34));
         windowManager.addView(target, params);
         target.setAlpha(0f);
         target.setScaleX(0.9f);
         target.setScaleY(0.9f);
-        target.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(140).start();
+        target.animate().alpha(0.10f).scaleX(1f).scaleY(1f).setDuration(140).start();
         return target;
     }
 
@@ -43,7 +46,8 @@ final class MoaOrbRemoveTarget {
                 active ? 0xF0B3261E : 0xF01B1C20,
                 dp(context, 28), active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
                 dp(context, 1)));
-        target.animate().scaleX(active ? 1.08f : 1f).scaleY(active ? 1.08f : 1f)
+        target.animate().alpha(active ? 1f : 0.10f)
+                .scaleX(active ? 1.08f : 1f).scaleY(active ? 1.08f : 1f)
                 .setDuration(100).start();
     }
 

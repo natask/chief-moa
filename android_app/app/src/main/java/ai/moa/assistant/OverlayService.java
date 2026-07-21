@@ -56,6 +56,7 @@ public final class OverlayService extends Service {
     private static final int MAX_AGENT_PROMPT_CHARS = 12000;
     private static final int ORB_WINDOW_DP = 96;
     private static final int ORB_EDGE_MARGIN_DP = 16;
+    private static final float ORB_IDLE_ALPHA = 0.10f;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
@@ -542,6 +543,8 @@ public final class OverlayService extends Service {
                 this::finishOrbDrag
         ));
 
+        orbView.setAlpha(ORB_IDLE_ALPHA);
+
         windowManager.addView(orbView, orbParams);
     }
 
@@ -828,7 +831,8 @@ public final class OverlayService extends Service {
 
         card.addView(createVoiceHeader());
 
-        voiceTranscriptScroll = new CappedScrollView(this, dp(360));
+        int transcriptBodyHeight = transcriptBodyHeight();
+        voiceTranscriptScroll = new CappedScrollView(this, transcriptBodyHeight);
         voiceTranscriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
         voiceTranscriptScroll.setClipToPadding(false);
@@ -842,7 +846,7 @@ public final class OverlayService extends Service {
         ));
         card.addView(voiceTranscriptScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                transcriptBodyHeight
         ));
         renderVoiceTranscriptRows();
 
@@ -893,6 +897,19 @@ public final class OverlayService extends Service {
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
+        TextView delivery = pill(
+                MoaPrefs.spokenRepliesEnabled(this) ? "Voice" : "Text",
+                0x16FFFFFF,
+                MoaColors.PAPER);
+        delivery.setContentDescription("Toggle spoken replies");
+        delivery.setOnClickListener(v -> {
+            boolean enabled = !MoaPrefs.spokenRepliesEnabled(this);
+            MoaPrefs.setSpokenRepliesEnabled(this, enabled);
+            delivery.setText(enabled ? "Voice" : "Text");
+            delivery.setTextColor(enabled ? MoaColors.GOLD : MoaColors.PAPER);
+        });
+        delivery.setTextColor(MoaPrefs.spokenRepliesEnabled(this) ? MoaColors.GOLD : MoaColors.PAPER);
+        header.addView(delivery);
         TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
         hide.setContentDescription("Hide the A.G. orb");
         hide.setOnClickListener(v -> stopSelf());
@@ -1384,6 +1401,11 @@ public final class OverlayService extends Service {
                 voiceTranscriptScroll.fullScroll(View.FOCUS_DOWN);
             }
         }, 30);
+    }
+
+    private int transcriptBodyHeight() {
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        return Math.max(dp(220), Math.min(dp(360), Math.round(screenHeight * 0.36f)));
     }
 
     private String visibleVoiceContent(String text) {

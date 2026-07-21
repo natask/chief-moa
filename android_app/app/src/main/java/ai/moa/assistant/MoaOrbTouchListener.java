@@ -154,7 +154,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     public boolean onTouch(View view, MotionEvent event) {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
+            orbView.animate().cancel();
+            orbView.setAlpha(1f);
             gestureUsesVoiceFirst = voiceFirstEnabled != null && voiceFirstEnabled.getAsBoolean();
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            orbView.animate().alpha(0.10f).setDuration(180).start();
         }
         if (gestureUsesVoiceFirst) {
             return onTouchVoiceFirst(view, event);

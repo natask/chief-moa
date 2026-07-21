@@ -161,6 +161,35 @@ The Android overlay SHALL provide discoverable local ways to remove the orb.
 - **WHEN** the user taps Hide in the chat header or overlay notification
 - **THEN** Android stops the overlay service and removes all overlay windows
 
+#### Scenario: Remove target stays unobtrusive and fully visible
+- **WHEN** the user begins dragging the orb
+- **THEN** Android shows a fully measured removal target above system navigation
+- **AND** keeps it barely visible until the orb enters the drop zone
+- **AND** moving the orb away disables and dims the target again
+
+### Requirement: Low-Interruption Orb Presence
+The Android overlay SHALL remain available without visually dominating the
+current app.
+
+#### Scenario: Idle orb is barely visible
+- **WHEN** the orb is idle and not touched
+- **THEN** Android renders it at approximately ten percent opacity
+- **AND** pressing or dragging the orb restores full opacity for the gesture
+
+### Requirement: Stable Scrollable Voice Transcript
+The Android overlay SHALL give the voice transcript a stable viewport instead
+of resizing the card for each partial or completed turn.
+
+#### Scenario: Transcript content grows
+- **WHEN** transcript rows exceed the fixed transcript viewport
+- **THEN** the card keeps the same measured height
+- **AND** the transcript scrolls to reveal the latest content
+
+#### Scenario: User controls reply delivery in the overlay
+- **WHEN** the transcript surface is visible
+- **THEN** its header exposes a Text/Voice delivery control
+- **AND** changing it persists the spoken-reply preference for the next turn
+
 ### Requirement: Minimal Spoken Interruption
 The Android app SHALL separate displayed response text from spoken response text.
 

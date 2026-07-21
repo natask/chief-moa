@@ -150,3 +150,13 @@ local unpacked-extension reload signal completed without a client acknowledgemen
       real voice round-trip QA.
 - [ ] 12.7 Publish collision-free Android OTA and browser-extension artifacts,
       then promote only if the no-interruption and rollback gates pass.
+
+## 13. Stable Mobile Overlay Presentation
+
+- [x] 13.1 Keep the idle orb at low opacity and reveal it while touched.
+- [x] 13.2 Keep the remove target fully inside the display and dim it when the
+      orb leaves the active drop zone.
+- [x] 13.3 Give the transcript a fixed scrollable viewport and expose a durable
+      Text/Voice reply toggle in its header.
+- [ ] 13.4 Complete physical-phone QA for system-inset placement, scroll touch,
+      low-opacity discoverability, TTS delivery, and drag-to-remove behavior.
