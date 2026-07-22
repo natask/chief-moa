@@ -162,3 +162,29 @@ channel, time, verifier, and evidence artifact.
   or a safe installation window is unavailable
 - **THEN** work stops at the highest evidenced state
 - **AND** records a plain blocker instead of asserting production readiness
+
+#### Scenario: QA evidence belongs to different artifact bytes
+- **WHEN** a device, browser, preview, signing, or smoke receipt names a digest
+  other than the candidate artifact digest
+- **THEN** the receipt does not satisfy any release gate for that candidate
+- **AND** the candidate remains at its prior evidenced state
+
+### Requirement: Every surface uses one release-state vocabulary
+The release operation SHALL evaluate Android, browser extension, web, gateway,
+macOS, and Windows evidence through one fail-closed state vocabulary while
+retaining surface-specific verification, signing, installation, and smoke
+requirements.
+
+#### Scenario: Operator plans a release without changing a channel
+- **WHEN** an operator supplies a bounded evidence document for one immutable
+  candidate to the repository deploy planner
+- **THEN** the planner reports the exact release id, artifact digest, channel,
+  highest continuously proven state, missing publication evidence, and missing
+  production-readiness evidence
+- **AND** performs no build, upload, channel movement, installation, or reload
+
+#### Scenario: Surface requires native trust or real-device evidence
+- **WHEN** Android, macOS, or Windows lacks platform-signing or device-QA
+  evidence, or the browser extension lacks browser-QA evidence
+- **THEN** the common planner reports the exact missing surface evidence
+- **AND** does not substitute CI, another platform's QA, or an unsigned build

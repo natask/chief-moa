@@ -126,6 +126,31 @@ be reported as a later one. macOS and Windows remain protocol/library seams
 until native application packaging, signing, installation, and recovery are
 proven on their respective platforms.
 
+The repository release planner consumes one bounded evidence document per
+immutable candidate. Every receipt must bind the same release id and artifact
+SHA-256; QA for rebuilt or different bytes is not transferable. The common
+planner is read-only and reports publication/readiness gaps for `android`,
+`browser_extension`, `web`, `gateway`, `macos`, and `windows`. It does not
+replace surface authority:
+
+```text
+immutable candidate bytes
+  -> shared built / verified evidence
+  -> surface QA (phone, real browser, isolated web preview, or desktop hardware)
+  -> native trust evidence where applicable
+  -> rollback + compatibility + no-interruption evidence
+  -> publication of those exact bytes
+  -> platform-owned activation or installation
+  -> post-activation smoke for those exact bytes
+```
+
+Android requires APK signer continuity and real-phone QA; browser extensions
+require package/version evidence and confirmation from a loaded browser; web and
+gateway require isolated preview evidence; macOS requires Developer ID signing,
+notarization/stapling, and supported-Mac QA; Windows requires publisher identity,
+package signing, and supported-Windows QA. Evidence from one lane never grants
+readiness to another.
+
 ## Billing and entitlement boundary
 
 Billing facts are gateway-owned, tenant-scoped and append-only. Price and budget
@@ -1876,6 +1901,12 @@ changes since each target's last successful deploy marker, and skips dirty
 target files so uncommitted work is not published. Explicit deploy targets
 remain available when a human or agent needs one surface: `gateway`, `android`,
 `extension`, or `all`.
+
+`scripts/deploy.sh plan <release-evidence.json>` is the non-mutating precursor
+for every surface. It fails closed on unknown fields, mismatched artifact
+digests, duplicate semantic states, unsupported surfaces, or malformed evidence,
+then reports whether the exact candidate is publishable or production-ready and
+which states are still missing.
 
 Each successful target deploy records a monotonic deploy sequence, git SHA, and
 target version metadata next to the existing deploy marker. Android OTA builds

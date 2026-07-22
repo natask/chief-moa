@@ -13,6 +13,7 @@
 #   scripts/deploy.sh android    # rebuild + sync the Android OTA artifact
 #   scripts/deploy.sh extension  # verify + package + poke loaded browser reload
 #   scripts/deploy.sh all        # gateway + android OTA + extension deployment
+#   scripts/deploy.sh plan FILE  # read-only cross-surface release evidence plan
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -392,11 +393,15 @@ deploy_auto() {
 }
 
 case "${1:-gateway}" in
+  plan)
+    [ -n "${2:-}" ] || { echo "usage: deploy.sh plan <release-evidence.json>" >&2; exit 2; }
+    node "$ROOT_DIR/scripts/release/release-evidence.mjs" plan "$2"
+    ;;
   auto)              deploy_auto ;;
   gateway|"")        deploy_target gateway; mark_deployed gateway ;;
   --force)           node "$VERSION_STATUS_SCRIPT" current gateway | while IFS= read -r line; do log "$line"; done; deploy_gateway --force; mark_deployed gateway ;;
   android)           deploy_target android; mark_deployed android ;;
   extension)         deploy_target extension; mark_deployed extension ;;
   all)               deploy_target gateway; mark_deployed gateway; deploy_target android; mark_deployed android; deploy_target extension; mark_deployed extension ;;
-  *) echo "usage: deploy.sh [auto|gateway|--force|android|extension|all]" >&2; exit 2 ;;
+  *) echo "usage: deploy.sh [plan FILE|auto|gateway|--force|android|extension|all]" >&2; exit 2 ;;
 esac

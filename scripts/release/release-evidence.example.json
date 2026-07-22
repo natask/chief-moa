@@ -1,0 +1,21 @@
+{
+  "version": "moa-release-evidence/v1",
+  "surface": "android",
+  "release_id": "android-candidate-example",
+  "channel": "development",
+  "artifact": {
+    "artifact_id": "android-apk-example",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "git_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "evidence": [
+    {
+      "state": "built",
+      "release_id": "android-candidate-example",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "verifier": "ci/android",
+      "evidence_ref": "actions/run/example",
+      "occurred_at": "2026-07-22T00:00:00Z"
+    }
+  ]
+}

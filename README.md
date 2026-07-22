@@ -113,5 +113,14 @@ Auto-deploy committed target changes:
 bash scripts/deploy.sh auto
 ```
 
+Plan a cross-surface release without publishing or installing anything:
+
+```sh
+bash scripts/deploy.sh plan scripts/release/release-evidence.example.json
+```
+
+The planner keeps build, QA, signing, publication, installation, and smoke
+evidence distinct and requires every receipt to name the exact candidate digest.
+
 Deploys record target version metadata under the git deploy marker directory, so
 `scripts/deploy.sh` output shows the deployed version and deploy sequence.

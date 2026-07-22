@@ -68,12 +68,12 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Verify Android unit tests
+      - name: Verify Android checks, coverage ratchet, and debug package
         shell: bash
         run: |
           set -euo pipefail
           cd android_app
-          ./gradlew testDebugUnitTest
+          ./gradlew check assembleDebug
 
       - name: Verify OTA publication safety
         shell: bash
