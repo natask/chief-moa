@@ -28,6 +28,8 @@ proposal before any platform-local action runs.
 - `browser_extension`: Chrome extension thin client.
 - `gateway`: self-hosted gateway for model routing, storage, voice, and agent
   runs.
+- `release_control_plane`: persistent release authority contract and domain
+  model above applications, clients, and build/QA runners.
 - `apple_surfaces`: shared Aggie authority library plus the native `MoaMac`
   observation/suggestion surface and unsigned QA bundle tooling.
 

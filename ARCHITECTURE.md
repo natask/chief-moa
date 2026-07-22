@@ -120,6 +120,14 @@ Store or App Installer/MSIX. Common metadata cannot replace APK signer
 continuity, Apple code signing/notarization, Authenticode/publisher identity, or
 store review.
 
+The persistent authority above this planning contract is the Release Control
+Plane (`release_control_plane`). It owns tenant-scoped release graphs, channel
+heads, assignments, delegation grants, promotion proposals, and release
+receipts. Development machines, hosted runners, Master-Orch workers, CI, and
+application clients are scoped actors of that plane rather than alternate
+sources of release truth. The gateway may serve artifacts or bridge product
+identity, but does not silently inherit release-administration authority.
+
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
 be reported as a later one. macOS and Windows remain protocol/library seams

@@ -6,6 +6,7 @@ on:
       - ".github/workflows/release-evidence.yml"
       - "scripts/deploy.sh"
       - "scripts/release/**"
+      - "release_control_plane/**"
       - "reference/openspec/changes/cross-surface-update-delivery/**"
       - "ARCHITECTURE.md"
   push:
@@ -15,6 +16,7 @@ on:
       - ".github/workflows/release-evidence.yml"
       - "scripts/deploy.sh"
       - "scripts/release/**"
+      - "release_control_plane/**"
       - "reference/openspec/changes/cross-surface-update-delivery/**"
       - "ARCHITECTURE.md"
 
@@ -33,6 +35,9 @@ jobs:
           node-version: "22"
       - name: Run deterministic cross-surface matrix
         run: node --test scripts/release/test-release-evidence.mjs
+      - name: Run persistent control-plane domain tests
+        working-directory: release_control_plane
+        run: npm run check
       - name: Verify deploy planner remains read-only and usable
         run: |
           bash -n scripts/deploy.sh
