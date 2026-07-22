@@ -1,3 +1,4 @@
+- Added a fail-closed release-evidence planner shared by Android, browser, web/gateway, macOS, and Windows; strengthened Android OTA CI to full check/coverage/lint/package verification and isolated its guarded pre-14 tile fallback — agent: Codex/GPT-5 — 686e6dc7
 - Adapted the low-opacity touch animation to the frame-coalesced orb listener now on master and reverified the isolated release build — agent: Codex/GPT-5 — efb4e980
 - Applied the overlay Text/Voice choice to the already-open streaming controller so audio delivery changes immediately and remains persisted — agent: Codex/GPT-5 — 4fcbd831
 - Stabilized the Android overlay with a ten-percent idle orb, inset-safe drag-to-remove target, fixed scrollable transcript, and first-class Text/Voice delivery toggle — agent: Codex/GPT-5 — 8542e57a
