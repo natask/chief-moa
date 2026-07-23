@@ -20,6 +20,11 @@ This composes existing Moa capabilities instead of building a second voice
 stack. Upload completion and transcription completion are distinct states, so a
 provider outage cannot turn a successfully stored recording into lost speech.
 
+The browser/macOS accelerator uses the same boundary in a smaller first slice:
+the browser requests a transcription-only voice turn and copies the final
+literal transcript locally. Reasoning, TTS, categorization, and agent dispatch
+are not on its clipboard critical path.
+
 ## Considered Shapes
 
 ### A. Treat every segment as a voice-chat turn

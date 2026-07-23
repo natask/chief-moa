@@ -103,6 +103,20 @@ capture SHALL NOT silently mutate the user's durable global language profile.
 - **AND** subsequent captures retain the same durable language configuration
   until the user explicitly changes it
 
+### Requirement: Browser desktop dictation skips assistant work
+The browser surface SHALL support an explicitly invoked dictation session that
+uses the configured speech-recognition languages, stores the canonical literal
+transcript, and performs no reasoning, TTS, or agent dispatch. On macOS the
+global summon SHALL start or finish this session and make a successful final
+transcript available on the clipboard.
+
+#### Scenario: Global macOS dictation produces paste-ready text
+- **WHEN** the user invokes global dictation, speaks English, Amharic, or both,
+  and invokes it again to finish
+- **THEN** the gateway returns the literal transcript without a model reply
+- **AND** the browser copies that transcript to the clipboard
+- **AND** no reasoning, TTS, or agent run begins
+
 ### Requirement: Voice delivery mode is canonical and device-scoped
 The gateway SHALL persist a versioned Ask, Note, or Coach selection per device
 without changing the device's saved base persona. It SHALL expose authenticated

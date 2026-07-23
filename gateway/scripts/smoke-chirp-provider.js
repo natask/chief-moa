@@ -114,6 +114,39 @@ async function main() {
     assert.equal(status.requires_chirp_3, true);
     assert.deepEqual(status.chirp_3_only_languages, []);
 
+    // A cascaded deployment still honors a per-turn dictation request. It runs
+    // Chirp and returns the literal transcript without touching reasoning or
+    // TTS, which is the browser/macOS Wispr Flow replacement path.
+    let reasonerCalls = 0;
+    const dictationProvider = createVoiceProvider({
+      env: {
+        VOICE_PROVIDER: "chirp",
+        VOICE_REASONING_PROVIDER: "gateway",
+        VOICE_TTS_PROVIDER: "cloud-tts",
+        GCP_PROJECT_ID: "test-project",
+        CHIRP_ACCESS_TOKEN: "test-chirp-token",
+        CHIRP_LOCATION: "us",
+        CHIRP_MODEL: "chirp_3",
+        CHIRP_LANGUAGE_CODES: "en-US,am-ET",
+      },
+      reasoner: async () => {
+        reasonerCalls += 1;
+        return { speak: "must not run" };
+      },
+    });
+    state.expected = { model: "chirp_3", promptIncludes: ["English", "Amharic", "verbatim"] };
+    const dictation = await dictationProvider.processTurn({
+      ...turn,
+      transcriptionOnly: true,
+    }, {
+      onTranscriptFinal: async (text) => events.push({ type: "dictation_final", text }),
+    });
+    assert.equal(calls.length, 2, "dictation should issue only one additional Chirp request");
+    assert.equal(reasonerCalls, 0, "dictation must not run the reasoner");
+    assert.equal(dictation.transcript, "hello from chirp");
+    assert.equal(dictation.assistant_text, "");
+    assert.equal(dictation.transcription_only, true);
+
     // A turn-pinned profile change changes only the prompt, never the provider
     // recognition language code.
     state.expected = { model: "chirp_3", promptIncludes: ["Amharic", "Ethiopic"], promptExcludes: ["English"] };
@@ -125,7 +158,7 @@ async function main() {
         speaker_context: "The speaker discusses authentication, speech systems, and mathematics.",
       },
     }, { onTranscriptFinal: async () => {} });
-    assert.equal(calls.length, 2, "profile-prompt turn should issue a second Chirp recognize call");
+    assert.equal(calls.length, 3, "profile-prompt turn should issue another Chirp recognize call");
 
     // A streaming shortfall falls back to batch over the same stored PCM. That
     // path must retain the immutable turn-pinned context instead of consulting
@@ -142,7 +175,7 @@ async function main() {
         speaker_context: "The speaker discusses authentication, speech systems, and mathematics.",
       },
     });
-    assert.equal(calls.length, 3, "batch fallback should preserve the turn-pinned speaker context");
+    assert.equal(calls.length, 4, "batch fallback should preserve the turn-pinned speaker context");
 
     // More than two prompt languages is capped at primary + one alternate so
     // the transcription instruction stays focused and bounded.

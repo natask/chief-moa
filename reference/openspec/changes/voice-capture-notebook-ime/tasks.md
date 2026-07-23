@@ -20,6 +20,20 @@ alignment.
 - Deferred: conversational mode switching, client admission preflight and
   capture mechanics, capture blocks and notebook, video routing, and deployment.
 
+## 0B. Authorized Browser/macOS Dictation Slice
+
+- [x] 0B.1 Let a browser voice session request literal transcription only, with
+  no reasoning or TTS stage.
+- [x] 0B.2 Route the existing macOS global summon to start/finish dictation and
+  copy the final transcript to the clipboard.
+- [x] 0B.3 Preserve explicit configured input-language evidence and the canonical
+  retained voice turn while keeping agent dispatch out of this path.
+- Acceptance: double-tap Command starts capture, a second double-tap commits it,
+  the final English/Amharic transcript is paste-ready, and the gateway performs
+  zero reasoning and TTS calls for the turn.
+- Verification: gateway Chirp smoke, browser verify/smoke, and manual macOS
+  clipboard QA.
+
 ## 0. Reconcile Current State
 
 - [ ] 0.1 Build a claims ledger for raw audio notes, streaming transcription,

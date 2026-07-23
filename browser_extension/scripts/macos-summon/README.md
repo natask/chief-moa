@@ -1,7 +1,9 @@
-# Summon A.G. from anywhere on macOS (double-tap Command)
+# Dictate with A.G. from anywhere on macOS (double-tap Command)
 
-This raises Chrome and opens the A.G. overlay when you tap the left Command key
-twice quickly, from any application, even when Chrome is not focused.
+This raises Chrome and starts A.G. dictation when you tap the left Command key
+twice quickly, from any application, even when Chrome is not focused. Double-tap
+Command again to stop. A.G. copies the literal mixed-language transcript to the
+clipboard without running the reasoning or text-to-speech stages.
 
 Two pieces work together:
 
@@ -9,7 +11,7 @@ Two pieces work together:
    `open-agee-global` with `"global": true` at Command+Shift+9. Chrome routes a
    global command to the extension even when Chrome is not the focused app (since
    Chrome 35). The background worker resolves an injectable tab in the
-   last-focused window, focuses it, and opens the overlay. If the active tab is a
+   last-focused window, focuses it, and starts dictation. If the active tab is a
    page the overlay cannot inject into (a `chrome://` page, the Web Store, a PDF),
    it picks another web tab, or creates one.
 
@@ -85,8 +87,9 @@ that ever bites.
 4. Run `./install.sh`. Karabiner-Elements > Complex Modifications should now list
    the enabled A.G. rule.
 5. Focus a different app (Finder, Notes, a terminal). Double-tap the left Command
-   key. Chrome should come forward and the A.G. overlay should open on the active
-   web tab.
+   key. Chrome should come forward and A.G. should start listening on the active
+   web tab. Speak, double-tap Command again, return to the original app, and
+   paste the copied transcript.
 6. Switch Chrome's active tab to a `chrome://` page (for example
    `chrome://settings`). From another app, double-tap Command again. A.G. should
    open on another web tab, or open a new tab, instead of failing on the

@@ -112,7 +112,7 @@ const optionsSource = readFileSync("extension/options.js", "utf8");
 const optionsRecoverySource = readFileSync("extension/options-recovery.js", "utf8");
 const coverageSource = readFileSync("scripts/coverage-extension.mjs", "utf8");
 const extensionSmokeSource = readFileSync("scripts/smoke-extension.mjs", "utf8");
-const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "userScripts"];
+const requiredPermissions = ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "userScripts", "clipboardWrite"];
 const requiredHostPermissions = ["http://*/*", "https://*/*", "wss://api.agee.app/*"];
 
 if (!/MAX_SAMPLES = 16/.test(voiceSamplerSource) || !/voice-sampler\/v1/.test(voiceSamplerSource)) {
@@ -473,6 +473,15 @@ if (
   !/summonOverlay\(tab, "open"\)/.test(backgroundSource)
 ) {
   throw new Error("per-tab shortcuts must fall back to summonOverlay on restricted pages (chrome://, Web Store, PDF viewer) instead of failing silently");
+}
+if (
+  !/summonOverlay\(tab, "toggleDictation"\)/.test(backgroundSource) ||
+  !/case "toggleDictation":/.test(contentSource) ||
+  !/transcriptionOnly: state\.dictation/.test(contentSource) ||
+  !/transcription_only: true/.test(backgroundSource) ||
+  !/copyTextToClipboard\(transcript\)/.test(contentSource)
+) {
+  throw new Error("global macOS summon must run transcription-only dictation and copy the literal transcript");
 }
 
 // The side panel is the extension-owned agent surface: it renders on every
@@ -945,10 +954,10 @@ if (
 if (
   !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
   !/startLivekitVoiceSession\(/.test(backgroundSource) ||
-  !/if \(!opts\.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/if \(!opts\.transcriptionOnly && !opts\.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
   !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
 ) {
-  throw new Error("background.js must gate LiveKit voice behind the flag and fall back to the WS startVoiceSessionProxy path");
+  throw new Error("background.js must gate LiveKit voice behind the flag, keep dictation on WS, and fall back to startVoiceSessionProxy");
 }
 if (!/id="livekitVoice"\s+type="checkbox"/.test(optionsHtmlSource)) {
   throw new Error("options page must expose the LiveKit voice (experimental) checkbox");

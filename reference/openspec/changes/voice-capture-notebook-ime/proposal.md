@@ -33,12 +33,14 @@ review without making any of those features prerequisites for reliable capture.
 1. Never lose spoken content.
 2. Produce editable, copyable transcript blocks quickly.
 3. Make repeated press/hold segments cheap and independent.
-4. Let the same speech insert into any focused Android text field through a real
+4. Make the same mixed-language literal dictation globally invocable on macOS
+   through the browser surface and immediately copyable for paste.
+5. Let the same speech insert into any focused Android text field through a real
    keyboard.
-5. Apply user-selected writing skills without overwriting the literal transcript.
-6. Launch one or more agents only when the user explicitly dispatches a block or
+6. Apply user-selected writing skills without overwriting the literal transcript.
+7. Launch one or more agents only when the user explicitly dispatches a block or
    selects an opt-in routing policy.
-7. Add speaking/writing drills and richer media capture after the capture loop is
+8. Add speaking/writing drills and richer media capture after the capture loop is
    dependable.
 
 ## What Changes
@@ -117,4 +119,3 @@ not change it implicitly.
 - Reuses `define-android-core-product-map`: overlay remains capture, full app
   remains inspection, Android owns local UI/permissions/insertion, and the
   gateway owns provider routing and durable records.
-

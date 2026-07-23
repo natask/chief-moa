@@ -2717,6 +2717,7 @@
       assistantSpeechOverlap: preserveAssistantPlayback,
       assistantSpeechSuppressed: false,
       steeringBoundaryText: "",
+      dictation: options.dictation === true,
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -2735,6 +2736,7 @@
         contextAction: context.action,
         threadLabel: context.label,
         warmCaptureId: options.warmCaptureId || null,
+        transcriptionOnly: state.dictation,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -2887,6 +2889,7 @@
       // by its canonical id.
       state.turnStatus = status;
       state.ttsSpoke = msg.tts_spoke === true;
+      state.transcriptionOnly = msg.transcription_only === true;
       if (msg.reply_language) {
         state.replyLanguage = String(msg.reply_language);
         // Live-update the "Speaks" side of the language chip from this turn,
@@ -3308,6 +3311,26 @@
     // never holds capture open.
     stopLiveCapture(state);
 
+    if (state.dictation && state.transcriptionOnly) {
+      conversationActive = false;
+      const transcript = String(state.transcript || "").trim();
+      const copied = transcript ? await copyTextToClipboard(transcript) : false;
+      const summary = copied
+        ? "Copied transcript to clipboard."
+        : transcript
+          ? "Transcript ready. Select the text above to copy it."
+          : "Didn't catch that.";
+      if (!isLiveVoiceStateActive(state)) return;
+      ensureVoiceCueCard(state, transcript || "Dictation", summary);
+      updateCue(state.cueId, summary, copied ? "done" : "error");
+      reactLauncher(copied ? "done" : "error");
+      closeLiveVoiceSession(state, "dictation complete");
+      untrackLiveVoiceState(state);
+      setVoiceState(false);
+      if (agentState !== "idle") setAgentState("idle");
+      return;
+    }
+
     // Native-audio Live models reply with audio only (assistant_text stays
     // empty). When that happens, ask the gateway for the stored turn so the cue
     // shows the real reply instead of the misleading "Done."/"Replied out loud."
@@ -3406,6 +3429,42 @@
     startLiveVoiceTurn({
       preserveAssistantPlayback: assistantSpeechOverlap === true,
       warmCaptureId: options.warmCaptureId || null,
+    });
+  }
+
+  async function copyTextToClipboard(text) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {}
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    document.documentElement.appendChild(textarea);
+    textarea.select();
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch {}
+    textarea.remove();
+    return copied;
+  }
+
+  function toggleDictation() {
+    if (liveVoice?.dictation && listening) {
+      commitLiveVoiceTurn(liveVoice);
+      return;
+    }
+    if (liveVoice) stopLiveVoiceTurn("cancel");
+    startLiveVoiceTurn({
+      conversation: false,
+      dictation: true,
+      preserveAssistantPlayback: false,
     });
   }
 
@@ -4184,6 +4243,11 @@
         } else {
           toggleManualVoiceSession();
         }
+        reply({ ok: true });
+        return true;
+      case "toggleDictation":
+        if (!root) build();
+        toggleDictation();
         reply({ ok: true });
         return true;
       case "snapshot":

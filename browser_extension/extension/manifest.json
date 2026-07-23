@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "A.G.",
-  "version": "0.1.84",
+  "version": "0.1.85",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -9,7 +9,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "desktopCapture", "userScripts"],
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "desktopCapture", "userScripts", "clipboardWrite"],
   "host_permissions": [
     "http://*/*",
     "https://*/*",
@@ -72,7 +72,7 @@
         "mac": "Command+Shift+9",
         "default": "Ctrl+Shift+9"
       },
-      "description": "Open A.G. overlay from any app while Chrome is running",
+      "description": "Start or finish A.G. dictation from any app while Chrome is running",
       "global": true
     }
   },

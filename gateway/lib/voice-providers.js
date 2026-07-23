@@ -841,9 +841,9 @@ class CascadedVoiceProvider {
       await hooks.onTranscriptFinal(transcript);
     }
 
-    // STT-only path: hand the transcript back; the gateway records it and the
-    // device speaks the reply. Preserves the legacy switchable setup.
-    if (!this.cascaded()) {
+    // STT-only and explicit dictation hand the transcript back without spending
+    // a reasoning or TTS call. The gateway still records the literal turn.
+    if (turn.transcriptionOnly === true || !this.cascaded()) {
       return {
         provider: "chirp",
         model: this.model,

@@ -2355,7 +2355,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   // Gesture-warmed PCM can only be adopted by the standard offscreen/WebSocket
   // path. Keep that turn on the path that can preserve its pre-roll; immediate
   // non-warmed starts may continue using the experimental LiveKit transport.
-  if (!opts.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
+  if (!opts.transcriptionOnly && !opts.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
     try {
       const cfg = await getConfig();
       const sessionId = await getStableSessionId();
@@ -2379,7 +2379,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, onSessionCreated } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2389,7 +2389,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, onSessionCreated });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2415,7 +2415,7 @@ async function activeThreadBranch(cfg) {
   const data = await callGateway(cfg, path, { method: "GET" });
   return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
 }
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, onSessionCreated } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2561,6 +2561,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         branch_id: branchForSession,
         turn_id: turnId,
         all_branches_context: false,
+        ...(transcriptionOnly === true ? { transcription_only: true } : {}),
         ...(action ? { context_action: action } : {}),
         client: {
           platform: "browser",
@@ -4176,6 +4177,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       contextAction: msg.contextAction,
       threadLabel: msg.threadLabel,
       warmCaptureId: msg.warmCaptureId || null,
+      transcriptionOnly: msg.transcriptionOnly === true,
     })
       .then((session) => {
         if (session?.voiceSessionId) {
@@ -4548,7 +4550,7 @@ function summonOverlay(firedTab, cmd = "open") {
 
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "open-agee-global") return;
-  summonOverlay(tab, "open");
+  summonOverlay(tab, "toggleDictation");
 });
 
 // ---- Side panel agent surface ----------------------------------------------
