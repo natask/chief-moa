@@ -90,10 +90,24 @@
       stable fallback, exact-release feedback, and explicit APK install review.
 - [x] V0.2.8 Add a browser side-panel release card for stable/preview selection,
       stable fallback, exact-release feedback, and binary-reload-pending status.
+- [x] V0.2.8a Add hash-only, device-bound release credentials with stable tenant
+      identity, narrow device authority, Android backup exclusion, and
+      Device-only release-route authentication.
+- [x] V0.2.8b Package the gateway runtime, additive database bootstrap,
+      health state, and release-database backup/restore path with the feature
+      disabled for the first schema rollout.
+- [x] V0.2.8c Add the least-authority repository publisher with exact source,
+      artifact, evidence, sequence, and stable-promotion binding.
 - [ ] V0.2.9 Run all release-control, Android, and browser verification. Fix any
       failure before creating release artifacts. Add one shared contract test
       that feeds the HTTP projection into both strict client parsers. Align
       Android lifecycle receipts with the service's accepted states.
+      - [x] Release-control, gateway, Android unit/build, browser verify, and
+        real-extension smoke checks pass; Android `activated` now matches the
+        service lifecycle vocabulary.
+      - [ ] One fixture must still be consumed directly by both the Java and
+        JavaScript strict parsers, rather than only being compared with the HTTP
+        projection in service tests.
 - [ ] V0.2.10 Host the control-plane service behind production authentication,
       apply the migration to its separate database, seed immutable bundles and
       channel heads, and prove backup/restore and rollback.

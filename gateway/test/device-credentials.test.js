@@ -1,0 +1,145 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const test = require("node:test");
+const {
+  createDeviceCredentialRegistry,
+  createMemoryDeviceCredentialStore,
+  createPostgresDeviceCredentialStore,
+} = require("../lib/device-credentials");
+
+const nowMs = Date.parse("2026-07-23T12:00:00.000Z");
+const deviceToken = `moa_dev_v1.${Buffer.alloc(32, 7).toString("base64url")}`;
+
+function registry(overrides = {}) {
+  return createDeviceCredentialRegistry({
+    store: createMemoryDeviceCredentialStore(),
+    now: () => nowMs,
+    ...overrides,
+  });
+}
+
+const registration = {
+  tenant_id: "usr_owner",
+  device_id: "phone_1",
+  surface_id: "android",
+  idempotency_key: "register-phone-1-20260723",
+  credential_token: deviceToken,
+};
+
+test("registers only a token hash and authenticates its exact Device credential", async () => {
+  const records = [];
+  const store = {
+    findByBinding: async (_tenant, key) => records.find((item) => item.binding_key === key) || null,
+    findByTokenHash: async (hash) => records.find((item) => item.token_hash === hash) || null,
+    insert: async (record) => (records.push(record), true),
+  };
+  const credentials = registry({ store });
+  const created = await credentials.register(registration);
+  assert.equal(created.replay, false);
+  assert.deepEqual(created.receipt, {
+    credential_id: `devc_${crypto.createHash("sha256").update(deviceToken).digest("hex").slice(0, 32)}`,
+    device_id: "phone_1",
+    surface_id: "android",
+    status: "active",
+    created_at: "2026-07-23T12:00:00.000Z",
+  });
+  assert.equal(records.length, 1);
+  assert.equal(JSON.stringify(records).includes(deviceToken), false);
+
+  const principal = await credentials.authenticateRequest({
+    headers: {
+      authorization: `Device ${deviceToken}`,
+      "x-moa-device-id": "phone_1",
+      "x-moa-surface": "android",
+    },
+  });
+  assert.equal(principal.tenant_id, "usr_owner");
+  assert.equal(principal.device_id, "phone_1");
+  assert.equal(principal.surface_id, "android");
+});
+
+test("exact retry verifies the same hash while any changed secret or key conflicts", async () => {
+  const credentials = registry();
+  const first = await credentials.register(registration);
+  const replay = await credentials.register(registration);
+  assert.equal(replay.replay, true);
+  assert.deepEqual(replay.receipt, first.receipt);
+
+  await assert.rejects(
+    credentials.register({ ...registration, idempotency_key: "different-register-key-20260723" }),
+    (error) => error.code === "device_already_registered",
+  );
+  await assert.rejects(
+    credentials.register({
+      ...registration,
+      credential_token: `moa_dev_v1.${Buffer.alloc(32, 8).toString("base64url")}`,
+    }),
+    (error) => error.code === "device_already_registered",
+  );
+});
+
+test("rejects caller-forged assertions, bearer fallback, tampering, and malformed headers", async () => {
+  const credentials = registry();
+  await credentials.register(registration);
+  const auth = `Device ${deviceToken}`;
+  assert.equal(await credentials.authenticateRequest({ headers: { authorization: `Bearer ${deviceToken}` } }), null);
+  assert.equal(await credentials.authenticateRequest({
+    headers: { authorization: auth, "x-moa-device-id": "phone_2" },
+  }), null);
+  assert.equal(await credentials.authenticateRequest({
+    headers: { authorization: auth, "x-moa-surface": "browser_extension" },
+  }), null);
+  assert.equal(await credentials.authenticateRequest({
+    headers: { authorization: `${auth.slice(0, -1)}A` },
+  }), null);
+  assert.equal(await credentials.authenticateRequest({
+    headers: { authorization: auth, "x-moa-device-id": ["phone_1", "phone_2"] },
+  }), null);
+});
+
+test("validates registration input and store configuration", async () => {
+  assert.throws(() => createDeviceCredentialRegistry(), /store is required/);
+  for (const bad of [
+    { ...registration, tenant_id: "../owner" },
+    { ...registration, device_id: "" },
+    { ...registration, surface_id: "web_page" },
+    { ...registration, idempotency_key: "short" },
+    { ...registration, credential_token: "not-a-device-token" },
+  ]) {
+    await assert.rejects(registry().register(bad), (error) => error.code === "invalid_device_registration");
+  }
+});
+
+test("Postgres adapter queries exact hashes and inserts no plaintext secret", async () => {
+  const calls = [];
+  const client = {
+    async query(sql, args) {
+      calls.push({ sql, args });
+      if (sql.startsWith("insert")) return { rowCount: 1, rows: [{ credential_id: args[0] }] };
+      return { rowCount: 0, rows: [] };
+    },
+    release() {},
+  };
+  const pool = {
+    async query(sql, args) {
+      calls.push({ sql, args });
+      return { rowCount: 0, rows: [] };
+    },
+    async connect() { return client; },
+  };
+  const store = createPostgresDeviceCredentialStore(pool);
+  await store.findByBinding("owner", "a".repeat(64));
+  await store.findByTokenHash("b".repeat(64));
+  await store.insert({
+    credential_id: "devc_123", binding_key: "a".repeat(64), tenant_id: "owner",
+    device_id: "phone", surface_id: "android", token_hash: "b".repeat(64),
+    idempotency_hash: "c".repeat(64), status: "active",
+    created_at: "2026-07-23T12:00:00.000Z",
+  });
+  assert.equal(calls.filter((call) => call.sql.includes("release_device_credentials")).length, 2);
+  assert.equal(JSON.stringify(calls).includes(deviceToken), false);
+  assert.equal(calls.some((call) => call.sql.includes("release_authenticate_device_credential")), true);
+  assert.equal(calls.some((call) => call.sql.includes("on conflict do nothing")), true);
+});

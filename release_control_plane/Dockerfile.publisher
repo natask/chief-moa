@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/release_control_plane
+COPY release_control_plane/package.json release_control_plane/package-lock.json ./
+RUN npm ci --omit=dev
+
+WORKDIR /app
+COPY release_control_plane ./release_control_plane
+COPY scripts/release/release-evidence.mjs ./scripts/release/release-evidence.mjs
+
+RUN chown -R node:node /app
+USER node
+WORKDIR /workspace
+
+# The image has one administrative purpose. Compose supplies only the
+# repository-relative manifest and the explicit confirmation flag.
+ENTRYPOINT ["node", "/app/release_control_plane/bin/release-publisher.mjs", "publish-manifest"]

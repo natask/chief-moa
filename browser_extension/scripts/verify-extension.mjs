@@ -563,9 +563,11 @@ if (
   !/case "toggleVoice":[\s\S]{0,220}beginVoiceCommandHotkey\(\)/.test(contentSource) ||
   !/function beginManualVoiceGesture\(/.test(contentSource) ||
   !/function finishManualPushToTalk\(/.test(contentSource) ||
+  !/if \(state\.action === "started" && state\.hold\) finishManualPushToTalk\(\)/.test(contentSource) ||
+  /heldLongEnough/.test(contentSource) ||
   !/autoCommit:\s*false/.test(contentSource)
 ) {
-  throw new Error("Cmd/Ctrl+Period must support repeat-safe tap toggle and held push-to-talk through the manual voice gesture path");
+  throw new Error("Cmd/Ctrl+Period must support repeat-safe tap toggle and timer-confirmed held push-to-talk through the manual voice gesture path");
 }
 
 if (/case "done":[\s\S]{0,180}setInputText\(msg\.summary/.test(contentSource)) {

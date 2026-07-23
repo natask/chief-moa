@@ -119,7 +119,7 @@ final class MoaReleaseCardController {
         buttons(false, false);
         new Thread(() -> {
             try {
-                MoaReleaseControlClient client = new MoaReleaseControlClient(gateway, token);
+                MoaReleaseControlClient client = releaseClient(gateway, token);
                 MoaReleaseSelectionPolicy.View next =
                         MoaReleaseSelectionPolicy.parseView(client.view(host.deviceId()));
                 String installedSha = host.installedArtifactSha256();
@@ -189,7 +189,7 @@ final class MoaReleaseCardController {
             if (view == null || view.assignment == null) return;
             JSONObject body = MoaReleaseSelectionPolicy.installReceipt(
                     host.deviceId(), view.assignment, candidate, state, detail, requestId("install"));
-            new MoaReleaseControlClient(pinnedGatewayUrl, pinnedGatewayToken).installReceipt(body);
+            releaseClient(pinnedGatewayUrl, pinnedGatewayToken).installReceipt(body);
         } catch (Exception ignored) {
             // Receipt transport never changes Android's installation authority.
         }
@@ -241,8 +241,7 @@ final class MoaReleaseCardController {
                                 host.deviceId(), sequence, requestId("assignment"))
                         : MoaReleaseSelectionPolicy.assignmentRequest(
                                 host.deviceId(), channel, candidate, sequence, requestId("assignment"));
-                MoaReleaseControlClient client =
-                        new MoaReleaseControlClient(gateway, token);
+                MoaReleaseControlClient client = releaseClient(gateway, token);
                 JSONObject response = fallback
                         ? client.fallback(body) : client.assign(body);
                 MoaReleaseSelectionPolicy.Candidate offered =
@@ -290,7 +289,7 @@ final class MoaReleaseCardController {
             try {
                 JSONObject body = MoaReleaseSelectionPolicy.feedbackRequest(
                         host.deviceId(), current.assignment, candidate, comment, requestId("feedback"));
-                new MoaReleaseControlClient(gateway, token).feedback(body);
+                releaseClient(gateway, token).feedback(body);
                 main.post(() -> {
                     if (!active(operationGeneration)) return;
                     feedbackInput.setText("");
@@ -322,6 +321,11 @@ final class MoaReleaseCardController {
 
     private boolean active(int expectedGeneration) {
         return !disposed && generation == expectedGeneration && !activity.isFinishing();
+    }
+
+    private MoaReleaseControlClient releaseClient(String gateway, String token) {
+        return new MoaReleaseControlClient(
+                gateway, token, host.deviceId(), new MoaDeviceCredentialStore(activity));
     }
 
     private void renderCandidate(TextView target, MoaReleaseSelectionPolicy.Candidate candidate) {

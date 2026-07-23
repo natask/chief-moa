@@ -287,7 +287,7 @@ final class MoaReleaseSelectionPolicy {
             throw new IllegalArgumentException("install receipt requires an exact artifact");
         }
         String normalized = safe(state).toLowerCase(Locale.US);
-        if (!List.of("download_verified", "installer_opened", "installed", "smoked", "refused", "failed")
+        if (!List.of("download_verified", "installer_opened", "installed", "activated", "smoked", "refused", "failed")
                 .contains(normalized)) {
             throw new IllegalArgumentException("install receipt state is unsupported");
         }

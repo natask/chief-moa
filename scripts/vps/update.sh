@@ -174,6 +174,10 @@ git -C "$APP_DIR" checkout --force --detach "$candidate_sha"
 new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 
 # 3. Rebuild and recreate only the gateway. Volumes and other services stay.
+# The guarded updater normally uses --no-deps for the active gateway, so run
+# the candidate's one-shot additive release-control migration explicitly first.
+# This occurs after backup/restore proof and before the active gateway effect.
+compose run --rm --no-deps release-control-db-init
 MOA_BUILD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)" \
 MOA_BUILD_REF="$REF" \
 MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

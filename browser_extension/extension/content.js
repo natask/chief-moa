@@ -3705,9 +3705,8 @@
   }
 
   function armVoiceHotkeyGesture() {
-    const startedAt = Date.now();
     const action = beginManualVoiceGesture();
-    voiceHotkeyState = { action, hold: false, startedAt };
+    voiceHotkeyState = { action, hold: false };
     clearVoiceHotkeyHoldTimer();
     if (action !== "started") return;
     voiceHotkeyHoldTimer = setTimeout(() => {
@@ -3735,8 +3734,11 @@
     const state = voiceHotkeyState;
     voiceHotkeyState = null;
     clearVoiceHotkeyHoldTimer();
-    const heldLongEnough = state.startedAt && Date.now() - state.startedAt >= DOUBLE_CLICK_HOLD_MS;
-    if (state.action === "started" && (state.hold || heldLongEnough)) finishManualPushToTalk();
+    // A quick keydown handler can occasionally spend longer than the hold
+    // threshold starting audio on a loaded machine. Wall-clock time would then
+    // misclassify the same-task keyup as a hold and commit the turn immediately.
+    // Only the hold timer crossing an event-loop boundary proves a real hold.
+    if (state.action === "started" && state.hold) finishManualPushToTalk();
   }
 
   function cancelVoiceHotkey() {

@@ -61,6 +61,31 @@ test("owner is authorized and scoped administrator cannot escape application sco
   assert.equal(authorizeReleaseAction({ ...base, resource: { application_id: "other-app", channel: "stable", cohort_id: "all" } }).allowed, false);
 });
 
+test("device role can operate its release surface but cannot administer releases", () => {
+  const base = {
+    actor_id: "devc_phone_1",
+    owner_id: "nat",
+    tenant_id: "personal",
+    role_bindings: [{
+      tenant_id: "personal",
+      principal_id: "devc_phone_1",
+      role: "device",
+      scope: { application_id: "chief-moa", channel: "*" },
+    }],
+    resource: { application_id: "chief-moa", channel: "preview", cohort_id: "all" },
+  };
+  for (const action of [
+    "read", "assign_channel", "record_install_receipt", "record_release_feedback",
+  ]) {
+    assert.equal(authorizeReleaseAction({ ...base, action }).allowed, true);
+  }
+  for (const action of [
+    "propose_promotion", "approve_promotion", "record_evidence", "delegate_administration",
+  ]) {
+    assert.equal(authorizeReleaseAction({ ...base, action }).allowed, false);
+  }
+});
+
 test("delegation is revocable, expiring, scoped, and never self-issued", () => {
   assert.throws(() => createDelegationGrant({
     grant_id: "g-1", tenant_id: "personal", grantor_id: "nat", grantee_id: "nat",

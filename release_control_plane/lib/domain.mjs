@@ -2,7 +2,7 @@
 
 const ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const ROLES = new Set(["owner", "administrator", "release_manager", "tester", "viewer"]);
+const ROLES = new Set(["owner", "administrator", "release_manager", "tester", "viewer", "device"]);
 const ACTIONS = new Set([
   "read", "assign_channel", "propose_promotion", "approve_promotion",
   "record_evidence", "record_install_receipt", "record_release_feedback",
@@ -15,6 +15,7 @@ const ROLE_ACTIONS = Object.freeze({
   release_manager: new Set(["read", "assign_channel", "propose_promotion", "approve_promotion"]),
   tester: new Set(["read", "record_evidence", "record_install_receipt", "record_release_feedback"]),
   viewer: new Set(["read"]),
+  device: new Set(["read", "assign_channel", "record_install_receipt", "record_release_feedback"]),
 });
 
 function cleanId(value, field) {

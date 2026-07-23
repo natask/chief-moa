@@ -55,6 +55,12 @@ function harness(overrides = {}) {
     browserAgentLoop: { dir: "/browser", healthCounts: () => ({ queued: 2 }) },
     accountConnections: { status: () => ({ count: 1 }) },
     accountHealthIntervalMs: 300000,
+    releaseControlStatus: () => ({
+      configured: true,
+      ready: true,
+      storage: "postgres",
+      endpoint: "/v1/release-control/apps/{application_id}/view",
+    }),
     brain: {
       available: () => true,
       mode: () => "gbrain",
@@ -96,6 +102,12 @@ test("health projection reports configured runtime dependencies", async () => {
   assert.equal(payload.web_search.exa_fallback_configured, true);
   assert.deepEqual(payload.browser_agent_tasks, { dir: "/browser", queued: 2 });
   assert.equal(payload.account_connections.health_interval_ms, 300000);
+  assert.deepEqual(payload.release_control, {
+    configured: true,
+    ready: true,
+    storage: "postgres",
+    endpoint: "/v1/release-control/apps/{application_id}/view",
+  });
   assert.equal(payload.brain.available, true);
   assert.equal(payload.brain.gbrain_home, "/gbrain");
 });
@@ -131,4 +143,16 @@ test("health projection preserves safe fallbacks for optional configuration", as
   assert.equal(payload.brain.available, true);
   assert.equal(payload.brain.gbrain_available, false);
   assert.equal(payload.brain.gbrain_home, "default (~/.gbrain)");
+});
+
+test("health does not expose release-control credentials", async () => {
+  const payload = await harness({
+    releaseControlStatus: undefined,
+  }).healthPayload();
+  assert.deepEqual(payload.release_control, {
+    configured: false,
+    ready: false,
+    storage: "disabled",
+  });
+  assert.equal(JSON.stringify(payload).includes("postgres://"), false);
 });

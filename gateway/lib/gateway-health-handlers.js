@@ -12,7 +12,7 @@ function createGatewayHealthHandlers(deps) {
     harnessWorkdir, defaultHarness, harnessStatus, allowAgentWithoutToken,
     workerPullAgentRuns, workerPull, browserAgentLoop, accountConnections,
     accountHealthIntervalMs, brain, brainRecallLimit, nativeWebSearchEnabled,
-    exaApiKey,
+    exaApiKey, releaseControlStatus,
   } = deps;
 
   async function healthPayload() {
@@ -95,6 +95,9 @@ function createGatewayHealthHandlers(deps) {
         health_interval_ms: accountHealthIntervalMs,
         endpoint: "/v1/account-connections",
       },
+      release_control: typeof releaseControlStatus === "function"
+        ? releaseControlStatus()
+        : { configured: false, ready: false, storage: "disabled" },
       brain: {
         available: brain.available() || brain.mode() === "file",
         mode: brain.mode(),

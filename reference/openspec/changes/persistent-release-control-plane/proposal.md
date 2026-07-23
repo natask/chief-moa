@@ -76,14 +76,27 @@ client restarts, Git branches, and individual deployments.
   evidence vocabulary, but it is read-only and does not persist receipts.
 - `release_control_plane/` now contains a persistence-neutral domain and service,
   an authenticated HTTP boundary, a memory adapter, a Postgres adapter, and an
-  additive SQL migration. The implemented write path appends device assignment,
-  install-state, and exact-release feedback records. It uses sequence checks to
-  reject stale assignment writes.
+  additive migration chain. The implemented write path appends device
+  assignments, install-state, and exact-release feedback records. It uses
+  sequence checks to reject stale assignment writes.
+- The gateway candidate packages and mounts that runtime against a separate
+  logical database. It includes schema-first initialization, health state, and
+  release-database backup/restore handling. The feature remains disabled by
+  default until the staged production gate is complete.
+- Device registration uses the existing account Bearer only for bootstrap. The
+  client generates and durably stores a 256-bit opaque credential first; the
+  database stores only its hash. Release routes accept only the bound Device
+  credential, and the device role cannot publish, promote, approve, or delegate.
+- A least-authority repository publisher validates committed source, exact
+  artifact bytes, surface evidence, and monotonic channel state before one
+  atomic bundle/head/receipt append. Stable also requires exact committed
+  promotion evidence.
 - The Android full app and browser extension side panel now contain release
   selection clients. They define strict stable/preview parsing, device
   assignment, stable fallback, and feedback bound to an assignment, bundle,
-  release, surface, and artifact digest. A shared service-to-client contract
-  test has not passed yet.
+  release, surface, and artifact digest. Both bootstrap and use device-bound
+  release credentials; Android excludes its credential from backup and device
+  transfer.
 - Assignment remains separate from install, activation, and smoke state.
   Android requires a second user-approved installer step for an offered APK.
   The browser reports that a binary reload is required. Neither client treats an
@@ -94,14 +107,16 @@ client restarts, Git branches, and individual deployments.
   persistent product/API boundary and tenant authority model are not defined in
   this repository.
 
-The new slice is not active in production. No hosted service currently mounts
-the HTTP handler or applies the Postgres migration. No production identity
-provider supplies its authentication context. Stable and preview bundle/head
-records are not published into this store. The Android and browser clients
-therefore have no deployed release-control endpoint to use. The HTTP projection
-and strict client projections also need one shared schema and integration test.
-Promotion, signed channel movement, runner evidence ingestion, backup/restore
-proof, and active client deployment remain open.
+The new slice is not active in production. Source now contains the host,
+migration, device-authentication, and publisher paths, but their Docker runtime
+and Postgres behavior have not been exercised on a Docker host. Production
+still needs separate role credentials, a schema-first disabled rollout, a
+backup and scratch restore that includes the release database, exact stable and
+preview publication receipts, route enablement, and endpoint smoke before the
+Android and browser clients are deployed. One shared fixture-to-both-client-
+parsers contract test also remains open. Signed heads, promotion proposal and
+approval persistence, runner evidence ingestion, and delegated administration
+remain later work.
 
 ## First Milestone
 

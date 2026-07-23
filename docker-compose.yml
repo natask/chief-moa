@@ -14,8 +14,8 @@
 services:
   gateway:
     build:
-      context: ./gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: gateway/Dockerfile
       args:
         MOA_BUILD_SHA: ${MOA_BUILD_SHA:-unknown}
         MOA_BUILD_REF: ${MOA_BUILD_REF:-unknown}
@@ -26,6 +26,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      release-control-db-init:
+        condition: service_completed_successfully
     # Loopback publish by default: on a VPS only Caddy (same compose network)
     # should reach the gateway. Set GATEWAY_BIND=0.0.0.0 only for a trusted
     # private network without the TLS overlay.
@@ -38,6 +40,14 @@ services:
       DATA_DIR: /data
       ANDROID_OTA_DIR: /data/android-ota
       DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
+      # First rollout remains disabled until the new database has one complete
+      # backup/restore cycle. Enabling later exposes already-migrated routes.
+      MOA_RELEASE_CONTROL_ENABLED: ${MOA_RELEASE_CONTROL_ENABLED:-0}
+      MOA_RELEASE_CONTROL_MIGRATE_AT_BOOT: "0"
+      MOA_RELEASE_CONTROL_TENANT_ID: ${MOA_RELEASE_CONTROL_TENANT_ID:-}
+      MOA_RELEASE_CONTROL_OWNER_ID: ${MOA_RELEASE_CONTROL_OWNER_ID:-}
+      RELEASE_CONTROL_DATABASE_URL: ${RELEASE_CONTROL_DATABASE_URL:-postgres://moa_release_app:${RELEASE_CONTROL_POSTGRES_PASSWORD:?set RELEASE_CONTROL_POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_release_control}
+      RELEASE_CONTROL_POOL_MAX: ${RELEASE_CONTROL_POOL_MAX:-8}
       MOA_GATEWAY_TOKEN: ${MOA_GATEWAY_TOKEN:?set MOA_GATEWAY_TOKEN in the compose env file}
       MOA_DEPLOY_REVIEWER_TOKEN: ${MOA_DEPLOY_REVIEWER_TOKEN:-}
       MOA_PREVIEW_DEPLOYER_TOKEN: ${MOA_PREVIEW_DEPLOYER_TOKEN:-}
@@ -115,7 +125,100 @@ services:
       retries: 5
       start_period: 10s
     stop_grace_period: 30s
+    networks:
+      - default
+      - release-publisher-db
+
+  # Existing Postgres volumes predate release control, so docker-entrypoint
+  # initialization is insufficient. This one-shot service creates the separate
+  # database, applies every additive migration, and leaves the runtime with only
+  # SELECT/INSERT authority.
+  release-control-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: moa
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}
+      RELEASE_CONTROL_APP_PASSWORD: ${RELEASE_CONTROL_POSTGRES_PASSWORD:?set RELEASE_CONTROL_POSTGRES_PASSWORD in the compose env file}
+      RELEASE_CONTROL_PUBLISHER_PASSWORD: ${RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD:?set RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD in the compose env file}
+    volumes:
+      - ./gateway/deploy/vps/bootstrap-release-control.sql:/bootstrap/bootstrap.sql:ro
+      - ./release_control_plane/migrations:/bootstrap/migrations:ro
+    command:
+      - /bin/sh
+      - -eu
+      - -c
+      - >-
+        psql -d postgres -v app_password="$$RELEASE_CONTROL_APP_PASSWORD"
+        -v publisher_password="$$RELEASE_CONTROL_PUBLISHER_PASSWORD"
+        -f /bootstrap/bootstrap.sql;
+        for migration in /bootstrap/migrations/[0-9]*.sql; do
+          psql -d moa_release_control -f "$$migration";
+        done;
+        psql -d moa_release_control -v ON_ERROR_STOP=1 -c
+        "grant usage on schema public to moa_release_app;
+        grant select on release_bundles, release_channel_head_events,
+        release_assignment_events, release_install_receipts, release_feedback,
+        release_device_credentials to moa_release_app;
+        grant insert on release_assignment_events, release_install_receipts,
+        release_feedback, release_device_credentials to moa_release_app;
+        grant usage, select on sequence release_assignment_events_event_order_seq,
+        release_install_receipts_event_order_seq, release_feedback_event_order_seq,
+        release_device_credentials_event_order_seq to moa_release_app;
+        grant execute on function release_authenticate_device_credential(text)
+        to moa_release_app;
+        grant usage on schema public to moa_release_publisher;
+        grant select, insert on release_bundles, release_channel_head_events,
+        release_publication_receipts to moa_release_publisher;
+        grant usage, select on sequence release_bundles_event_order_seq,
+        release_channel_head_events_event_order_seq,
+        release_publication_receipts_event_order_seq to moa_release_publisher;"
+
+  release-publisher:
+    profiles: ["release-admin"]
+    build:
+      context: .
+      dockerfile: release_control_plane/Dockerfile.publisher
+    image: chief-moa-release-publisher:${GATEWAY_IMAGE_TAG:-local}
+    restart: "no"
+    depends_on:
+      release-control-db-init:
+        condition: service_completed_successfully
+    working_dir: /workspace
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    environment:
+      RELEASE_CONTROL_DATABASE_URL: postgres://moa_release_publisher:${RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD:?set RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_release_control
+      RELEASE_PUBLICATION_MANIFEST: ${RELEASE_PUBLICATION_MANIFEST:-}
+      MOA_REPOSITORY_RELEASE_AUTHORITY_ID: ${MOA_REPOSITORY_RELEASE_AUTHORITY_ID:-}
+      MOA_REPOSITORY_RELEASE_GIT_SHA: ${MOA_REPOSITORY_RELEASE_GIT_SHA:-}
+      MOA_REPOSITORY_RELEASE_SOURCE_REF: ${MOA_REPOSITORY_RELEASE_SOURCE_REF:-}
+      MOA_REPOSITORY_RELEASE_CHANNELS: ${MOA_REPOSITORY_RELEASE_CHANNELS:-}
+      MOA_REPOSITORY_RELEASE_PROMOTION_BUNDLE_ID: ${MOA_REPOSITORY_RELEASE_PROMOTION_BUNDLE_ID:-}
+      MOA_REPOSITORY_RELEASE_PROMOTION_EVIDENCE_REF: ${MOA_REPOSITORY_RELEASE_PROMOTION_EVIDENCE_REF:-}
+    volumes:
+      - .:/workspace:ro
+    networks:
+      - release-publisher-db
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >-
+        exec node /app/release_control_plane/bin/release-publisher.mjs
+        publish-manifest "$$RELEASE_PUBLICATION_MANIFEST"
+        --confirm-publish-exact-release
 
 volumes:
   moa-gateway-data:
   moa-postgres-data:
+
+networks:
+  release-publisher-db:
+    internal: true

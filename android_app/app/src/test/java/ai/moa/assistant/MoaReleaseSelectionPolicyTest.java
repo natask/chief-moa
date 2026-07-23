@@ -97,6 +97,10 @@ public final class MoaReleaseSelectionPolicyTest {
         assertEquals("installer_opened", MoaReleaseSelectionPolicy.installReceipt(
                 "android_1", MoaReleaseSelectionPolicy.parseView(baseView()).assignment,
                 candidate, "installer_opened", "", "receipt-1").getString("status"));
+        assertEquals("activated", MoaReleaseSelectionPolicy.installReceipt(
+                "android_1", MoaReleaseSelectionPolicy.parseView(baseView()).assignment,
+                candidate, "activated", "exact digest and version match", "receipt-activated-1")
+                .getString("status"));
         try {
             MoaReleaseSelectionPolicy.installReceipt(
                     "android_1", MoaReleaseSelectionPolicy.parseView(baseView()).assignment,

@@ -37,6 +37,17 @@ mkdir -p "$tmp_dir"
 echo "Dumping Postgres..."
 compose exec -T postgres pg_dump -U moa -d moa_gateway > "$tmp_dir/postgres-dump.sql"
 
+echo "Dumping release-control Postgres..."
+if compose exec -T postgres psql -tA -U moa -d postgres \
+  -c "select 1 from pg_database where datname = 'moa_release_control'" \
+  | grep -qx 1; then
+  compose exec -T postgres pg_dump -U moa -d moa_release_control \
+    > "$tmp_dir/release-control-postgres-dump.sql"
+else
+  printf '%s\n' 'database=moa_release_control' 'state=absent' \
+    > "$tmp_dir/release-control-absent.txt"
+fi
+
 echo "Snapshotting DATA_DIR..."
 # GNU tar exits 1 (warning) when a file changes while being read, which is
 # routine against a live gateway that appends to /data. The archive is still
@@ -53,10 +64,16 @@ fi
 
 (
   cd "$tmp_dir"
+  checksum_files=(postgres-dump.sql data-dir.tar.gz)
+  if [ -f release-control-postgres-dump.sql ]; then
+    checksum_files+=(release-control-postgres-dump.sql)
+  else
+    checksum_files+=(release-control-absent.txt)
+  fi
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum postgres-dump.sql data-dir.tar.gz > SHA256SUMS
+    sha256sum "${checksum_files[@]}" > SHA256SUMS
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 postgres-dump.sql data-dir.tar.gz > SHA256SUMS
+    shasum -a 256 "${checksum_files[@]}" > SHA256SUMS
   fi
 )
 
@@ -65,6 +82,7 @@ cat > "$tmp_dir/manifest.txt" <<MANIFEST
 created_utc=$stamp
 git_sha=$git_sha
 postgres_dump=postgres-dump.sql
+release_control_state=$([ -f "$tmp_dir/release-control-postgres-dump.sql" ] && echo release-control-postgres-dump.sql || echo release-control-absent.txt)
 data_dir_snapshot=data-dir.tar.gz
 checksums=$([ -f "$tmp_dir/SHA256SUMS" ] && echo SHA256SUMS || echo unavailable)
 compose_project=$COMPOSE_PROJECT

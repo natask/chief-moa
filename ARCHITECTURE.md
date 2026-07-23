@@ -143,6 +143,31 @@ application clients are scoped actors of that plane rather than alternate
 sources of release truth. The gateway may serve artifacts or bridge product
 identity, but does not silently inherit release-administration authority.
 
+The gateway candidate can host the release-control HTTP protocol while the
+control plane remains in a separate logical Postgres database. The runtime
+starts only after additive migrations and a device-credential verifier are
+ready. Account Bearer authentication may bootstrap one client-generated,
+device-bound credential; release routes then accept only that `Device`
+credential. The database stores its hash, and stable tenant/owner identifiers
+do not derive from the rotatable gateway token. A narrow device role may read,
+select a channel, and append exact install or feedback receipts. It cannot
+publish, promote, approve, ingest release evidence, or delegate authority.
+
+Bundle publication is a separate repository-release job. Its one-shot container
+has a publisher-only database role, an internal database network, and a
+read-only repository mount. It rechecks the committed source, artifact bytes,
+surface evidence, and expected channel sequence before atomically appending a
+bundle, channel head, and publication receipt. Stable additionally requires a
+committed, exact-bundle promotion-evidence document covering preview, restore,
+N/N-1 compatibility, drain/no-interruption, rollback, and exact-artifact smoke.
+Application and device credentials never grant this publisher authority.
+
+Production rollout is staged. The first gateway release creates the additive
+schema with release routes disabled. A backup and scratch restore must then
+cover the new database. Exact stable and preview bundles are published before
+the routes are enabled and before Android or browser clients depend on them.
+Assignment remains distinct from native installation throughout this sequence.
+
 A cross-surface release bundle binds one immutable release to the exact artifact
 digest for each included surface. Stable and preview are views over those
 bundles, not mutable binaries. A device assignment records the requested bundle

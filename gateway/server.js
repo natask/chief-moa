@@ -117,6 +117,13 @@ const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers
 const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
 const { createVoiceControlHandlers } = require("./lib/voice-control-handlers");
 const { createGatewayHealthHandlers } = require("./lib/gateway-health-handlers");
+const { createReleaseControlRuntime } = require("./lib/release-control-runtime");
+const {
+  createDeviceCredentialRegistry,
+  createPostgresDeviceCredentialStore,
+} = require("./lib/device-credentials");
+const { createDeviceCredentialHandlers } = require("./lib/device-credential-handlers");
+const { createReleaseControlPrincipalResolver } = require("./lib/release-control-principal");
 const {
   normalizeSpeech,
   isStopLike,
@@ -238,6 +245,7 @@ const PET_ENABLE_VERTEX_GENERATION = process.env.MOA_PET_ENABLE_VERTEX_GENERATIO
 // Decoded-bytes cap on reference audio for a voice-clone enrollment job.
 const VOICE_CLONE_MAX_AUDIO_BYTES = Number(process.env.MOA_VOICE_CLONE_MAX_AUDIO_BYTES || 8_000_000);
 const MOA_GATEWAY_TOKEN = process.env.MOA_GATEWAY_TOKEN || "";
+const RELEASE_CONTROL_CONFIGURED = process.env.MOA_RELEASE_CONTROL_ENABLED === "1";
 const MOA_DEPLOY_REVIEWER_TOKEN = process.env.MOA_DEPLOY_REVIEWER_TOKEN || "";
 const MOA_PREVIEW_DEPLOYER_TOKEN = process.env.MOA_PREVIEW_DEPLOYER_TOKEN || "";
 const MOA_PRODUCTION_PROMOTER_TOKEN = process.env.MOA_PRODUCTION_PROMOTER_TOKEN || "";
@@ -306,6 +314,9 @@ const ECHO_HARNESS_SCRIPT =
   "console.log('Intent: ' + (oneLine || '(empty)'));" +
   "console.log('Action: acknowledged + classified the intent; no external side effects.');";
 let cachedVertexToken = { value: "", expiresAt: 0 };
+let releaseControlRuntime = null;
+let routeDeviceCredentialRegistration = async () => false;
+let releaseControlReady = false;
 
 fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true });
 fs.mkdirSync(AGENT_RUNS_DIR, { recursive: true });
@@ -828,6 +839,14 @@ const { routeHealth } = createGatewayHealthHandlers({
   accountConnections, accountHealthIntervalMs: ACCOUNT_HEALTH_INTERVAL_MS,
   brain, brainRecallLimit: BRAIN_RECALL_LIMIT, nativeWebSearchEnabled,
   exaApiKey: process.env.EXA_API_KEY,
+  releaseControlStatus: () => ({
+    configured: RELEASE_CONTROL_CONFIGURED,
+    ready: releaseControlReady,
+    storage: releaseControlReady ? "postgres" : "disabled",
+    endpoint: RELEASE_CONTROL_CONFIGURED
+      ? "/v1/release-control/apps/{application_id}/view"
+      : undefined,
+  }),
 });
 
 const server = http.createServer(async (request, response) => {
@@ -861,6 +880,15 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeAndroidOta(request, response, url)) {
+      return;
+    }
+
+    if (await routeDeviceCredentialRegistration(request, response, url.pathname)) {
+      return;
+    }
+
+    if (releaseControlRuntime
+        && await releaseControlRuntime.route(request, response, url, { readJsonBody, sendJson })) {
       return;
     }
 
@@ -1056,8 +1084,20 @@ server.on("upgrade", (request, socket, head) => {
   }
 });
 
-function startServer() {
-  server.listen(PORT, HOST, () => {
+async function startServer() {
+  await initializeReleaseControl();
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve(server);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(PORT, HOST, () => {
     console.log(`A.G. gateway listening on http://${HOST}:${PORT}`);
     console.log(
       `Mode: ${MOA_MODE} trust_proxy=${TRUST_PROXY} database=${process.env.DATABASE_URL ? "postgres" : "file-fallback"}${WORKER_PULL_AGENT_RUNS ? " worker-pull=on" : ""}`
@@ -1081,11 +1121,43 @@ function startServer() {
         console.warn(`Intent runtime rehydration warm failed (will rebuild on demand): ${cleanError(error)}`);
       });
     scheduleCaptureBlockReconciliation();
+    });
   });
 }
 
 if (require.main === module) {
-  startServer();
+  startServer().catch((error) => {
+    console.error(`Gateway startup failed: ${cleanError(error)}`);
+    process.exitCode = 1;
+  });
+}
+
+async function initializeReleaseControl() {
+  releaseControlRuntime = await createReleaseControlRuntime({
+    enabled: RELEASE_CONTROL_CONFIGURED,
+    migrate: process.env.MOA_RELEASE_CONTROL_MIGRATE_AT_BOOT !== "0",
+    createAuthentication: async (pool, authority) => {
+      const registry = createDeviceCredentialRegistry({
+        store: createPostgresDeviceCredentialStore(pool),
+      });
+      return {
+        authenticate: createReleaseControlPrincipalResolver({
+          authenticateDevice: registry.authenticateRequest,
+          ownerId: () => authority.owner_id,
+        }),
+        registrationAuthority: registry,
+      };
+    },
+  });
+  if (!releaseControlRuntime.enabled) return;
+  routeDeviceCredentialRegistration = createDeviceCredentialHandlers({
+    registry: releaseControlRuntime.registrationAuthority,
+    authorized,
+    tenantId: () => releaseControlRuntime.authority.tenant_id,
+    readJsonBody,
+    sendJson,
+  });
+  releaseControlReady = true;
 }
 
 module.exports = {

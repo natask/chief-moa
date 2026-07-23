@@ -6,6 +6,7 @@
 // getUserMedia permission prompt).
 
 import { getEffectiveGatewayConfig } from "./config.js";
+import { createDeviceCredentialRuntime } from "./device-credential-runtime.js";
 import {
   buildAssignmentRequest,
   buildFallbackRequest,
@@ -56,6 +57,12 @@ const releaseFeedbackBindingEl = document.getElementById("releaseFeedbackBinding
 const releaseFeedbackTextEl = document.getElementById("releaseFeedbackText");
 const releaseFeedbackSubmitBtn = document.getElementById("releaseFeedbackSubmit");
 const RELEASE_CONTROL_BASE = "/v1/release-control/apps/chief-moa";
+const releaseDeviceCredentials = createDeviceCredentialRuntime({
+  storage: {
+    get: (key) => chrome.storage.local.get(key),
+    set: (key, value) => chrome.storage.local.set({ [key]: value }),
+  },
+});
 
 let releaseView = null;
 let releaseDeviceId = "";
@@ -111,15 +118,16 @@ async function releaseControlRequest(path, { method = "GET", body = null } = {})
     throw new Error("Release control requires HTTPS, except for an explicit loopback development gateway.");
   }
   releaseDeviceId ||= await stableReleaseDeviceId();
-  const headers = { accept: "application/json" };
-  if (config.gatewayToken) headers.authorization = `Bearer ${config.gatewayToken}`;
-  if (body) headers["content-type"] = "application/json";
   let response;
   try {
-    response = await fetch(`${config.gatewayUrl}${RELEASE_CONTROL_BASE}${path}`, {
+    response = await releaseDeviceCredentials.request({
+      gatewayUrl: config.gatewayUrl,
+      gatewayToken: config.gatewayToken,
+      deviceId: releaseDeviceId,
+      surfaceId: "browser_extension",
+      path: `${RELEASE_CONTROL_BASE}${path}`,
       method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body,
     });
   } catch (error) {
     throw new Error(`Release control could not reach the configured gateway: ${String(error?.message || error)}`);

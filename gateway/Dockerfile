@@ -26,17 +26,21 @@ WORKDIR /app
 # and this image identically. corepack pins pnpm from package.json's
 # packageManager field. package-lock.json remains in-repo only as the npm-ci
 # rollback path for this switch.
-COPY package.json pnpm-lock.yaml ./
+COPY gateway/package.json gateway/pnpm-lock.yaml ./
 RUN corepack enable \
   && corepack prepare --activate \
   && pnpm install --frozen-lockfile --prod \
   && pnpm store prune
 
-COPY server.js schema.sql agent-launcher-profiles.json ./
-COPY lib ./lib
-COPY public ./public
-COPY scripts ./scripts
-COPY agent-workflows ./agent-workflows
+COPY gateway/server.js gateway/schema.sql gateway/agent-launcher-profiles.json ./
+COPY gateway/lib ./lib
+COPY gateway/public ./public
+COPY gateway/scripts ./scripts
+COPY gateway/agent-workflows ./agent-workflows
+# Release control is a separately persisted authority, but it is hosted by this
+# runtime. Copy its reviewed library and additive migration; never bake release
+# records, credentials, or mutable database state into the image.
+COPY release_control_plane ./release_control_plane
 
 RUN mkdir -p /data/android-ota \
   && chown -R node:node /app /data

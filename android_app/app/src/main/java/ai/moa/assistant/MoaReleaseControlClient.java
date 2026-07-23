@@ -11,37 +11,57 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.UUID;
+import java.util.regex.Pattern;
 
 /** Narrow HTTP client for the release-control projection exposed by the gateway. */
 final class MoaReleaseControlClient {
     private static final String BASE_PATH = "/v1/release-control/apps/chief-moa";
+    private static final String REGISTRATION_PATH = "/v1/device-credentials/registrations";
+    private static final String SURFACE = "android";
+    private static final Pattern DEVICE_TOKEN =
+            Pattern.compile("^moa_dev_v1\\.[A-Za-z0-9_-]{43}$");
     private final String baseUrl;
-    private final String token;
+    private final String gatewayToken;
+    private final String deviceId;
+    private final DeviceCredentialState credentialState;
 
     MoaReleaseControlClient(String baseUrl, String token) {
+        this(baseUrl, token, "", null);
+    }
+
+    MoaReleaseControlClient(
+            String baseUrl, String token, String deviceId,
+            DeviceCredentialState credentialState) {
         this.baseUrl = normalizeBase(baseUrl);
-        this.token = safe(token);
+        this.gatewayToken = safe(token);
+        this.deviceId = safe(deviceId).toLowerCase();
+        this.credentialState = credentialState;
+        if (credentialState != null) requireSecureCredentialOrigin(this.baseUrl);
     }
 
     JSONObject view(String deviceId) throws Exception {
-        return json("GET", BASE_PATH + "/view?device_id=" + encode(deviceId)
+        requireConfiguredDevice(deviceId);
+        return releaseJson("GET", BASE_PATH + "/view?device_id=" + encode(deviceId)
                 + "&surface=android", null);
     }
 
     JSONObject assign(JSONObject body) throws Exception {
-        return json("POST", BASE_PATH + "/assignments", body);
+        return releaseJson("POST", BASE_PATH + "/assignments", body);
     }
 
     JSONObject fallback(JSONObject body) throws Exception {
-        return json("POST", BASE_PATH + "/fallback", body);
+        return releaseJson("POST", BASE_PATH + "/fallback", body);
     }
 
     JSONObject installReceipt(JSONObject body) throws Exception {
-        return json("POST", BASE_PATH + "/install-receipts", body);
+        return releaseJson("POST", BASE_PATH + "/install-receipts", body);
     }
 
     JSONObject feedback(JSONObject body) throws Exception {
-        return json("POST", BASE_PATH + "/feedback", body);
+        return releaseJson("POST", BASE_PATH + "/feedback", body);
     }
 
     void downloadArtifact(String downloadUrl, long expectedSize, File destination) throws Exception {
@@ -56,8 +76,8 @@ final class MoaReleaseControlClient {
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(120000);
-        if (gatewayOrigin && !token.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + token);
+        if (gatewayOrigin && !gatewayToken.isEmpty()) {
+            connection.setRequestProperty("Authorization", "Bearer " + gatewayToken);
         }
         int status = connection.getResponseCode();
         if (status < 200 || status >= 300) {
@@ -103,14 +123,72 @@ final class MoaReleaseControlClient {
         }
     }
 
-    private JSONObject json(String method, String path, JSONObject body) throws Exception {
+    private JSONObject releaseJson(String method, String path, JSONObject body) throws Exception {
+        DeviceCredential credential = ensureRegistered(false);
+        try {
+            return json(method, path, body, "Device " + credential.token, true);
+        } catch (HttpStatusException error) {
+            if (error.status != 401) throw error;
+            credential = ensureRegistered(true);
+            return json(method, path, body, "Device " + credential.token, true);
+        }
+    }
+
+    private DeviceCredential ensureRegistered(boolean force) throws Exception {
+        if (credentialState == null || deviceId.isEmpty()) {
+            throw new IllegalStateException("release-control device credential is not configured");
+        }
+        DeviceCredential credential = credentialState.load(baseUrl, deviceId, SURFACE);
+        if (credential == null) {
+            byte[] bytes = new byte[32];
+            new SecureRandom().nextBytes(bytes);
+            credential = new DeviceCredential(
+                    "moa_dev_v1." + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes),
+                    "device-register-" + UUID.randomUUID(), false);
+            credentialState.save(baseUrl, deviceId, SURFACE, credential);
+        }
+        validateCredential(credential);
+        if (!credential.registered || force) {
+            if (gatewayToken.isEmpty()) {
+                throw new IllegalStateException("gateway bearer token is required to register this device");
+            }
+            JSONObject response = json(
+                    "POST", REGISTRATION_PATH,
+                    new JSONObject()
+                            .put("device_id", deviceId)
+                            .put("surface_id", SURFACE)
+                            .put("idempotency_key", credential.idempotencyKey)
+                            .put("credential_token", credential.token),
+                    "Bearer " + gatewayToken, false);
+            JSONObject receipt = response.optJSONObject("registration_receipt");
+            if (response.optInt("schema_version", 0) != 1 || receipt == null
+                    || !deviceId.equals(safe(receipt.optString("device_id")).toLowerCase())
+                    || !SURFACE.equals(safe(receipt.optString("surface_id")).toLowerCase())
+                    || !"active".equals(safe(receipt.optString("status")).toLowerCase())) {
+                throw new IllegalStateException("device registration returned an invalid receipt");
+            }
+            credential = new DeviceCredential(credential.token, credential.idempotencyKey, true);
+            credentialState.save(baseUrl, deviceId, SURFACE, credential);
+        }
+        return credential;
+    }
+
+    private JSONObject json(
+            String method, String path, JSONObject body,
+            String authorization, boolean assertDevice) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setRequestMethod(method);
         connection.setConnectTimeout(3500);
         connection.setReadTimeout(15000);
         connection.setRequestProperty("Accept", "application/json");
-        if (!token.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + token);
+        if (!safe(authorization).isEmpty()) {
+            connection.setRequestProperty("Authorization", authorization);
+        }
+        if (assertDevice) {
+            connection.setRequestProperty("X-Moa-Device-Id", deviceId);
+            connection.setRequestProperty("X-Moa-Surface", SURFACE);
+        }
         if (body != null) {
             byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
             connection.setDoOutput(true);
@@ -129,7 +207,8 @@ final class MoaReleaseControlClient {
             connection.disconnect();
         }
         if (status < 200 || status >= 300) {
-            throw new IllegalStateException("HTTP " + status + (text.isEmpty() ? "" : " " + text));
+            throw new HttpStatusException(status,
+                    "HTTP " + status + (text.isEmpty() ? "" : " " + text));
         }
         return text.trim().isEmpty() ? new JSONObject() : new JSONObject(text);
     }
@@ -161,11 +240,76 @@ final class MoaReleaseControlClient {
         return base;
     }
 
+    private static void requireSecureCredentialOrigin(String value) {
+        try {
+            URI uri = new URI(value);
+            if (uri.getRawUserInfo() != null) {
+                throw new IllegalArgumentException(
+                        "release-control gateway URL must not contain user information");
+            }
+            String scheme = safe(uri.getScheme()).toLowerCase();
+            String host = safe(uri.getHost()).toLowerCase();
+            boolean loopback = "localhost".equals(host)
+                    || "127.0.0.1".equals(host)
+                    || "::1".equals(host)
+                    || "[::1]".equals(host);
+            if (!"https".equals(scheme) && !("http".equals(scheme) && loopback)) {
+                throw new IllegalArgumentException(
+                        "release-control device credentials require HTTPS except on loopback");
+            }
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (Exception error) {
+            throw new IllegalArgumentException("release-control gateway URL is invalid");
+        }
+    }
+
     private static String encode(String value) throws Exception {
         return URLEncoder.encode(safe(value), StandardCharsets.UTF_8.name());
     }
 
     private static String safe(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private void requireConfiguredDevice(String requested) {
+        if (credentialState == null || deviceId.isEmpty()
+                || !deviceId.equals(safe(requested).toLowerCase())) {
+            throw new IllegalStateException("release-control device identity is not configured");
+        }
+    }
+
+    private static void validateCredential(DeviceCredential credential) {
+        if (!DEVICE_TOKEN.matcher(safe(credential.token)).matches()
+                || safe(credential.idempotencyKey).length() < 16
+                || safe(credential.idempotencyKey).length() > 128) {
+            throw new IllegalStateException("stored release-control device credential is invalid");
+        }
+    }
+
+    interface DeviceCredentialState {
+        DeviceCredential load(String origin, String deviceId, String surfaceId);
+        void save(String origin, String deviceId, String surfaceId, DeviceCredential credential);
+    }
+
+    static final class DeviceCredential {
+        final String token;
+        final String idempotencyKey;
+        final boolean registered;
+
+        DeviceCredential(String token, String idempotencyKey, boolean registered) {
+            this.token = safe(token);
+            this.idempotencyKey = safe(idempotencyKey);
+            this.registered = registered;
+        }
+    }
+
+    private static final class HttpStatusException extends IllegalStateException {
+        final int status;
+
+        HttpStatusException(int status, String message) {
+            super(message);
+            this.status = status;
+        }
     }
 }

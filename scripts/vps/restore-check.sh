@@ -15,8 +15,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 backup_dir="${1:-}"
-if [ -z "$backup_dir" ] || [ ! -f "$backup_dir/postgres-dump.sql" ] || [ ! -f "$backup_dir/data-dir.tar.gz" ]; then
-  echo "Usage: restore-check.sh <backup dir containing postgres-dump.sql and data-dir.tar.gz>" >&2
+release_dump="$backup_dir/release-control-postgres-dump.sql"
+release_absent="$backup_dir/release-control-absent.txt"
+if [ -z "$backup_dir" ] || [ ! -f "$backup_dir/postgres-dump.sql" ] \
+  || [ ! -f "$backup_dir/data-dir.tar.gz" ] \
+  || { [ ! -f "$release_dump" ] && [ ! -f "$release_absent" ]; } \
+  || { [ -f "$release_dump" ] && [ -f "$release_absent" ]; }; then
+  echo "Usage: restore-check.sh <backup with gateway dump, DATA_DIR, and exactly one release-control dump/absent marker>" >&2
+  exit 1
+fi
+if [ -f "$release_absent" ] \
+  && [ "$(cat "$release_absent")" != $'database=moa_release_control\nstate=absent' ]; then
+  echo "Release-control absent marker is malformed." >&2
   exit 1
 fi
 
@@ -44,6 +54,13 @@ scratch_compose up -d --wait postgres
 echo "Restoring Postgres dump..."
 scratch_compose exec -T postgres psql -q -U moa -d moa_gateway < "$backup_dir/postgres-dump.sql" >/dev/null
 
+echo "Restoring release-control Postgres dump..."
+if [ -f "$release_dump" ]; then
+  scratch_compose exec -T postgres createdb -U moa moa_release_control
+  scratch_compose exec -T postgres psql -q -U moa -d moa_release_control \
+    < "$release_dump" >/dev/null
+fi
+
 echo "Restoring DATA_DIR snapshot into the scratch volume..."
 scratch_compose run --rm --no-deps -T gateway tar -xzf - -C /data < "$backup_dir/data-dir.tar.gz"
 
@@ -58,5 +75,11 @@ curl -fsS --max-time 5 -H "Authorization: Bearer $token" \
   "http://127.0.0.1:$SCRATCH_PORT/v1/supervisor/status" >/dev/null
 
 count="$(scratch_compose exec -T postgres psql -tA -U moa -d moa_gateway -c 'select count(*) from nodes;')"
-echo "Restore check passed: /health ok, supervisor status ok, nodes=$count"
+if [ -f "$release_dump" ]; then
+  release_count="$(scratch_compose exec -T postgres psql -tA -U moa -d moa_release_control \
+    -c 'select count(*) from release_assignment_events;')"
+else
+  release_count=0
+fi
+echo "Restore check passed: /health ok, supervisor status ok, nodes=$count, release_assignments=$release_count"
 echo "Scratch stack removed; the active stack was not touched."

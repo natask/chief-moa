@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "pg": "^8.22.0"
+  },
   "scripts": {
-    "check": "node --test test/*.test.mjs"
+    "check": "node --test test/*.test.mjs",
+    "check:publisher": "node --test test/publisher.test.mjs"
   }
 }

@@ -165,6 +165,16 @@ The current repository slice implements these parts:
 - The Android full app and browser side panel contain strict release-view
   parsers and actions for preview/stable assignment, last-known-good fallback,
   and exact-release feedback.
+- The gateway candidate packages the component and can mount its routes only
+  after the separate release database and Device verifier are ready.
+- Account Bearer authentication bootstraps a client-generated opaque device
+  credential. Only its hash is stored. Release calls use the Device credential,
+  stable tenant identity survives gateway-token rotation, and the narrow device
+  role cannot publish or administer releases.
+- A one-shot, internal-network publisher uses a publisher-only database role and
+  a read-only repository mount. It verifies committed source, artifact bytes,
+  surface evidence, expected sequence, and—when moving stable—committed
+  exact-bundle promotion evidence before one atomic append.
 
 The service tracks platform state as separate receipts:
 
@@ -202,25 +212,31 @@ conflict and does not change the assignment. Channel assignment retries use an
 idempotency key. Install and feedback records use immutable receipt ids.
 Feedback must match the active assignment and exact artifact bytes.
 
-The handler is a library boundary. It does not open a port, create a Postgres
-pool, apply migrations, issue credentials, or seed bundle/channel records.
+The handler remains a framework-neutral library boundary. Gateway integration
+now supplies its port, separate Postgres pool, additive migration/bootstrap
+path, and Device authentication. Bundle/channel publication remains outside the
+gateway process in the least-authority publisher job; no startup path creates
+fake seed records.
 
 ## Deployment Blockers
 
-The V0.2 code cannot become an active product surface until a deployable host
-does this work:
+The V0.2 source is coherent but cannot become an active product surface until
+the staged production gate is completed:
 
-- Mount the HTTP handler behind the production identity boundary.
-- Create a separate control-plane database, apply the migration, and prove
-  backup and restore.
-- Publish immutable bundle records and monotonic stable/preview head events.
-- Bind published download URLs to the exact artifact digests in each bundle.
-- Align the HTTP release view with both strict client projections and pass one
-  shared service-to-client contract test.
-- Align Android lifecycle receipt names with the service's accepted states.
-- Add health, smoke, rollback, and state-compatibility checks for the hosted
-  service.
-- Deploy the Android and browser client changes after their surface checks pass.
+- Build and run the gateway and publisher images on a Docker host; local Docker
+  execution is currently unavailable.
+- Provision separate application and publisher database-role credentials plus
+  stable tenant and owner identifiers.
+- Deploy schema-first with release routes disabled, then prove backup and
+  scratch restore of the release database.
+- Stage the exact current-stable and candidate artifacts/evidence in the
+  publisher workspace and append immutable stable/preview bundles and heads.
+- Enable the routes and smoke Bearer bootstrap, Device authentication, strict
+  view parsing, assignment conflicts, and exact receipts.
+- Add one shared contract test that feeds the HTTP projection into both the
+  Android and browser strict parsers.
+- Deploy Android OTA and the browser package only after the endpoint and both
+  channel heads are usable; record install, activation, and smoke separately.
 
 Signed channel heads, promotion proposals, approval receipts, runner tokens,
 exact-artifact QA ingestion, feature profiles, and delegated administration
