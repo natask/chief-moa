@@ -66,6 +66,8 @@ public final class MainActivity extends Activity {
     private TextView updateStatus;
     private TextView requirementsSummary;
     private TextView sessionsStatus;
+    private TextView sessionHistoryStatus;
+    private LinearLayout sessionHistoryColumn;
     private TextView runsStatus;
     private TextView receiptsStatus;
     private TextView settingsStatus;
@@ -90,6 +92,7 @@ public final class MainActivity extends Activity {
     private boolean autoStartedOverlay;
     private boolean requestedMicOnStartup;
     private int gatewayHealthGeneration;
+    private int controlCenterGeneration;
     private int updateCheckGeneration;
     private long updateDialogVersionCode;
     private boolean reviewUpdateOnNextCheck;
@@ -238,11 +241,31 @@ public final class MainActivity extends Activity {
         LinearLayout card = card();
         addCardTitle(card, "Control center");
 
-        sessionsStatus = statRow(card, "Sessions", "Checking...");
+        sessionsStatus = statRow(card, "Shared session", "Checking...");
         runsStatus = statRow(card, "Runs", "Checking...");
         receiptsStatus = statRow(card, "Receipts", "Checking...");
         settingsStatus = statRow(card, "Settings", settingsSummaryText());
         companionStatus = statRow(card, "Companion", MoaPrefs.companionStatus(this));
+
+        sessionHistoryStatus = label("Recent shared history", MoaColors.MUTED, 12, true);
+        sessionHistoryStatus.setPadding(0, dp(14), 0, dp(8));
+        card.addView(sessionHistoryStatus);
+
+        ScrollView historyScroll = new ScrollView(this);
+        historyScroll.setFillViewport(false);
+        historyScroll.setBackground(MoaDrawables.rounded(
+                MoaColors.COMPOSER_BG, dp(14), MoaColors.COMPOSER_BORDER, dp(1)));
+        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(420));
+        historyScroll.setLayoutParams(historyParams);
+
+        sessionHistoryColumn = new LinearLayout(this);
+        sessionHistoryColumn.setOrientation(LinearLayout.VERTICAL);
+        sessionHistoryColumn.setPadding(dp(12), dp(8), dp(12), dp(12));
+        historyScroll.addView(sessionHistoryColumn, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        card.addView(historyScroll);
+        renderSessionHistory(null, "Loading shared history...");
 
         Button refresh = secondaryButton("Refresh");
         refresh.setOnClickListener(v -> refreshControlCenter());
@@ -729,23 +752,51 @@ public final class MainActivity extends Activity {
         runsStatus.setText("Checking...");
         sessionsStatus.setTextColor(MoaColors.GOLD);
         runsStatus.setTextColor(MoaColors.GOLD);
+        if (sessionHistoryStatus != null) {
+            sessionHistoryStatus.setText("Loading shared history...");
+            sessionHistoryStatus.setTextColor(MoaColors.GOLD);
+        }
         if (companionStatus != null) {
             companionStatus.setText("Checking...");
             companionStatus.setTextColor(MoaColors.GOLD);
         }
 
+        final int generation = ++controlCenterGeneration;
         new Thread(() -> {
-            String sessionsLabel = "Unavailable";
+            String sharedSessionId = MoaPrefs.conversationId(this);
+            String sessionsLabel = sharedSessionId;
             String runsLabel = "Unavailable";
+            MoaSessionHistory fetchedHistory = null;
+            String historyError = "";
             String fetchedProfileJson = "";
             String fetchedCompanionJson = "";
             int sessionsColor = MoaColors.GOLD;
             int runsColor = MoaColors.GOLD;
             int companionColor = MoaColors.GOLD;
+            MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
             try {
-                MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
+                String canonicalSessionId = client.defaultSessionId();
+                if (canonicalSessionId != null && !canonicalSessionId.trim().isEmpty()) {
+                    sharedSessionId = canonicalSessionId.trim();
+                    sessionsLabel = sharedSessionId;
+                }
+            } catch (Exception ignored) {
+                // Older gateways may not expose the shared-session route. The
+                // device's stable conversation id remains a valid fallback.
+            }
+            try {
+                JSONObject historyPayload = client.sessionMessages(sharedSessionId, MoaSessionHistory.MAX_MESSAGES);
+                fetchedHistory = MoaSessionHistory.from(historyPayload, sharedSessionId);
+                if (!fetchedHistory.sessionId.isEmpty()) {
+                    sharedSessionId = fetchedHistory.sessionId;
+                    sessionsLabel = sharedSessionId;
+                }
+                sessionsColor = MoaColors.OK;
+            } catch (Exception ignored) {
+                historyError = "History unavailable. Tap Refresh to retry.";
+            }
+            try {
                 JSONObject context = client.latestContext();
-                JSONArray sessions = context.optJSONArray("sessions");
                 JSONArray runs = context.optJSONArray("recent_runs");
                 int activeRuns = 0;
                 if (runs != null) {
@@ -756,39 +807,45 @@ public final class MainActivity extends Activity {
                         }
                     }
                 }
-                int sessionCount = sessions == null ? 0 : sessions.length();
                 int runCount = runs == null ? 0 : runs.length();
-                sessionsLabel = sessionCount == 1 ? "1 session" : sessionCount + " sessions";
                 runsLabel = activeRuns > 0 ? activeRuns + " active / " + runCount + " recent" : runCount + " recent";
-                sessionsColor = MoaColors.OK;
                 runsColor = MoaColors.OK;
-                try {
-                    JSONObject profilePayload = client.agentProfile("device", androidDeviceId());
-                    JSONObject profile = profilePayload.optJSONObject("profile");
-                    if (profile != null) {
-                        fetchedProfileJson = profile.toString();
-                    }
-                } catch (Exception ignored) {
+            } catch (Exception ignored) {
+            }
+            try {
+                JSONObject profilePayload = client.agentProfile("device", androidDeviceId());
+                JSONObject profile = profilePayload.optJSONObject("profile");
+                if (profile != null) {
+                    fetchedProfileJson = profile.toString();
                 }
-                try {
-                    JSONObject companion = client.activeCompanionPet("device", androidDeviceId());
-                    if (companion != null && companion.length() > 0) {
-                        fetchedCompanionJson = companion.toString();
-                        companionColor = MoaColors.OK;
-                    }
-                } catch (Exception ignored) {
+            } catch (Exception ignored) {
+            }
+            try {
+                JSONObject companion = client.activeCompanionPet("device", androidDeviceId());
+                if (companion != null && companion.length() > 0) {
+                    fetchedCompanionJson = companion.toString();
+                    companionColor = MoaColors.OK;
                 }
             } catch (Exception ignored) {
             }
 
+            final String nextSharedSessionId = sharedSessionId;
             final String nextSessions = sessionsLabel;
             final String nextRuns = runsLabel;
+            final MoaSessionHistory nextHistory = fetchedHistory;
+            final String nextHistoryError = historyError;
             final String nextProfileJson = fetchedProfileJson;
             final String nextCompanionJson = fetchedCompanionJson;
             final int nextSessionsColor = sessionsColor;
             final int nextRunsColor = runsColor;
             final int nextCompanionColor = companionColor;
             mainHandler.post(() -> {
+                if (generation != controlCenterGeneration) {
+                    return;
+                }
+                if (!nextSharedSessionId.isEmpty()) {
+                    MoaPrefs.setConversationId(this, nextSharedSessionId);
+                }
                 if (!nextProfileJson.isEmpty()) {
                     MoaPrefs.setAgentProfileJson(this, nextProfileJson);
                 }
@@ -803,6 +860,7 @@ public final class MainActivity extends Activity {
                     runsStatus.setText(nextRuns);
                     runsStatus.setTextColor(nextRunsColor);
                 }
+                renderSessionHistory(nextHistory, nextHistoryError);
                 if (settingsStatus != null) {
                     settingsStatus.setText(settingsSummaryText());
                 }
@@ -815,6 +873,7 @@ public final class MainActivity extends Activity {
     }
 
     private void setControlCenterGatewayRequired() {
+        controlCenterGeneration++;
         if (sessionsStatus != null) {
             sessionsStatus.setText("Gateway required");
             sessionsStatus.setTextColor(MoaColors.GOLD);
@@ -834,6 +893,88 @@ public final class MainActivity extends Activity {
             companionStatus.setText(MoaPrefs.companionStatus(this));
             companionStatus.setTextColor(MoaColors.GOLD);
         }
+        renderSessionHistory(null, "Connect the gateway to load shared history.");
+    }
+
+    private void renderSessionHistory(MoaSessionHistory history, String statusMessage) {
+        if (sessionHistoryColumn == null || sessionHistoryStatus == null) {
+            return;
+        }
+        String error = statusMessage == null ? "" : statusMessage.trim();
+        if (history == null) {
+            sessionHistoryStatus.setText(error.isEmpty() ? "Shared history unavailable" : error);
+            sessionHistoryStatus.setTextColor(error.isEmpty() ? MoaColors.MUTED : MoaColors.WARN);
+            if (sessionHistoryColumn.getChildCount() == 0) {
+                sessionHistoryColumn.addView(historyPlaceholder("No shared messages loaded."));
+            }
+            return;
+        }
+
+        sessionHistoryColumn.removeAllViews();
+        if (history.turns.isEmpty()) {
+            sessionHistoryStatus.setText("Recent shared history");
+            sessionHistoryStatus.setTextColor(MoaColors.MUTED);
+            sessionHistoryColumn.addView(historyPlaceholder("No saved messages in this session yet."));
+            return;
+        }
+
+        sessionHistoryStatus.setText(history.turns.size() == 1
+                ? "1 recent shared turn" : history.turns.size() + " recent shared turns");
+        sessionHistoryStatus.setTextColor(MoaColors.OK);
+        for (MoaSessionHistory.Turn turn : history.turns) {
+            sessionHistoryColumn.addView(historyTurnView(turn));
+        }
+    }
+
+    private View historyTurnView(MoaSessionHistory.Turn turn) {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setTag(turn.stableId);
+        container.setPadding(dp(10), dp(10), dp(10), dp(12));
+        container.setBackground(MoaDrawables.rounded(
+                MoaColors.RAISED, dp(12), MoaColors.RAISED_BORDER, dp(1)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(8);
+        container.setLayoutParams(params);
+
+        TextView metadata = label(turn.metadataLine(), MoaColors.MUTED, 11, false);
+        metadata.setLineSpacing(dp(1), 1f);
+        container.addView(metadata);
+        if (!turn.userText.isEmpty()) {
+            container.addView(historySpeakerText("YOU", turn.userText, 0xFFBFA9FF));
+        }
+        if (!turn.assistantText.isEmpty()) {
+            container.addView(historySpeakerText("A.G.", turn.assistantText, MoaColors.GOLD));
+        } else {
+            TextView unavailable = label("No retained assistant text.", MoaColors.MUTED, 13, false);
+            unavailable.setPadding(0, dp(8), 0, 0);
+            container.addView(unavailable);
+        }
+        return container;
+    }
+
+    private View historySpeakerText(String speaker, String content, int speakerColor) {
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setPadding(0, dp(10), 0, 0);
+        TextView speakerLabel = label(speaker, speakerColor, 10, true);
+        speakerLabel.setLetterSpacing(0.08f);
+        block.addView(speakerLabel);
+        TextView body = label(content, MoaColors.PAPER, 14, false);
+        body.setLineSpacing(dp(3), 1f);
+        body.setPadding(0, dp(3), 0, 0);
+        body.setTextIsSelectable(true);
+        body.setContentDescription(speaker + " message");
+        block.addView(body);
+        return block;
+    }
+
+    private TextView historyPlaceholder(String message) {
+        TextView placeholder = label(message, MoaColors.MUTED, 13, false);
+        placeholder.setGravity(Gravity.CENTER);
+        placeholder.setPadding(dp(8), dp(24), dp(8), dp(24));
+        return placeholder;
     }
 
     private void checkGatewayHealth(String gatewayUrl) {

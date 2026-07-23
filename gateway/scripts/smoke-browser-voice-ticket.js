@@ -106,7 +106,7 @@ function assertBrowserVoiceSourceContract() {
 
   const offscreen = sources["offscreen.js"];
   assert.match(offscreen, /navigator\.mediaDevices\.getUserMedia/, "offscreen document must capture microphone audio");
-  assert.match(offscreen, /resampleToPcm16/, "offscreen document must resample microphone audio to PCM16");
+  assert.match(offscreen, /createPcm16Resampler/, "offscreen document must resample microphone audio to PCM16");
   assert.match(offscreen, /bytesToBase64\(pcm\)/, "offscreen document must pass PCM frames to background without text/transcription APIs");
   assert.match(offscreen, /cmd:\s*["']offscreenVoiceAudio["']/, "offscreen document must send PCM frames through the background gateway proxy");
   return true;

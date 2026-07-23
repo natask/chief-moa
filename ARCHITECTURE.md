@@ -73,6 +73,13 @@ Moa Gateway
   browser still store only that gateway URL plus a token; voice uses the matching
   `wss://.../v1/voice/sessions` URL.
 
+  `GET /v1/sessions/:id/messages` is the canonical bounded read model for
+  cross-surface conversation history. It merges gateway-owned chat, voice,
+  browser, and broker records into stable user/assistant messages, preserves
+  source and completeness metadata, and removes duplicates only when records
+  carry an explicit shared identity. Android and browser clients may cache or
+  render this projection, but do not become conversation stores.
+
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
   build/test commands, desktop/browser/server automation.
@@ -113,11 +120,44 @@ Store or App Installer/MSIX. Common metadata cannot replace APK signer
 continuity, Apple code signing/notarization, Authenticode/publisher identity, or
 store review.
 
+The persistent authority above this planning contract is the Release Control
+Plane (`release_control_plane`). It owns tenant-scoped release graphs, channel
+heads, assignments, delegation grants, promotion proposals, and release
+receipts. Development machines, hosted runners, Master-Orch workers, CI, and
+application clients are scoped actors of that plane rather than alternate
+sources of release truth. The gateway may serve artifacts or bridge product
+identity, but does not silently inherit release-administration authority.
+
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
 be reported as a later one. macOS and Windows remain protocol/library seams
 until native application packaging, signing, installation, and recovery are
 proven on their respective platforms.
+
+The repository release planner consumes one bounded evidence document per
+immutable candidate. Every receipt must bind the same release id and artifact
+SHA-256; QA for rebuilt or different bytes is not transferable. The common
+planner is read-only and reports publication/readiness gaps for `android`,
+`browser_extension`, `web`, `gateway`, `macos`, and `windows`. It does not
+replace surface authority:
+
+```text
+immutable candidate bytes
+  -> shared built / verified evidence
+  -> surface QA (phone, real browser, isolated web preview, or desktop hardware)
+  -> native trust evidence where applicable
+  -> rollback + compatibility + no-interruption evidence
+  -> publication of those exact bytes
+  -> platform-owned activation or installation
+  -> post-activation smoke for those exact bytes
+```
+
+Android requires APK signer continuity and real-phone QA; browser extensions
+require package/version evidence and confirmation from a loaded browser; web and
+gateway require isolated preview evidence; macOS requires Developer ID signing,
+notarization/stapling, and supported-Mac QA; Windows requires publisher identity,
+package signing, and supported-Windows QA. Evidence from one lane never grants
+readiness to another.
 
 ## Billing and entitlement boundary
 
@@ -355,6 +395,10 @@ cascaded voice paths assemble that pack through a canonical context-artifact
 envelope with versioned cache identity, stable source ids, ranking rationale,
 and secret-like-text redaction before any provider call. History stays out of
 the transient cue stack and appears only when the user opens History.
+The browser side panel and Android full app hydrate that History view from the
+canonical session-message projection. They request a bounded latest window,
+preserve long message text within the API limit, and expose stale/retry state;
+overlay cue retirement remains independent of durable history.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
@@ -1721,6 +1765,9 @@ queues.
   claim -> receipt bridge, plus the panel route).
 - `gateway/lib/event-substrate.js`: product event substrate adapter for
   Postgres `product_events` or local `product-events.jsonl`.
+- `gateway/lib/session-messages.js`: canonical bounded cross-surface session
+  message projection with stable identities, provenance, and explicit-link
+  deduplication.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
   validators, active pointers, and runtime projection for conversational
   customization.
@@ -1875,6 +1922,12 @@ changes since each target's last successful deploy marker, and skips dirty
 target files so uncommitted work is not published. Explicit deploy targets
 remain available when a human or agent needs one surface: `gateway`, `android`,
 `extension`, or `all`.
+
+`scripts/deploy.sh plan <release-evidence.json>` is the non-mutating precursor
+for every surface. It fails closed on unknown fields, mismatched artifact
+digests, duplicate semantic states, unsupported surfaces, or malformed evidence,
+then reports whether the exact candidate is publishable or production-ready and
+which states are still missing.
 
 Each successful target deploy records a monotonic deploy sequence, git SHA, and
 target version metadata next to the existing deploy marker. Android OTA builds

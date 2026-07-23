@@ -231,6 +231,13 @@
       tests plus the end-to-end device-hub smoke. Enforce a focused 90%
       line/branch/function gate, verified at 100% lines, 98.86% branches, and
       100% functions. Reduce `server.js` to 14,179 lines.
+- [x] 2.43 Extract browser task/turn, account connection, Android OTA,
+      presentation, supervisor, session-read, thread-switch, broker research,
+      media-note, voice-control, and health HTTP routing into twelve bounded
+      injected-dependency modules. Preserve newer context-only browser evidence,
+      transactional OTA lock reporting, media bookmarks, awaited media/audio
+      streams, and blob-store health while adding focused 90% line/branch/
+      function gates. Reduce `server.js` to 12,595 lines.
 
 ## 3. Other Oversized Surfaces
 
@@ -274,6 +281,9 @@
 - [x] 4.7b Extract Android context-control state from overlay orchestration with
       a focused 90% gate. Verified at 100% lines, branches, and methods; reduce
       `OverlayService.java` to 3,959 lines.
+- [x] 4.7c Extract orb-removal-target rendering plus generic overlay animation
+      and detachment mechanics after the orb-drag integration, restoring the
+      `OverlayService.java` non-growth ceiling at 3,959 lines.
 - [x] 4.8 Repair Apple protocol drift, move executable shell behavior into
       test-linked modules, and add an exact, fail-closed coverage classifier.
       Current deterministic baseline: 84.60% lines, 85.42% functions, and

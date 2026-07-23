@@ -1893,16 +1893,41 @@ async function notifyBrowserAgentOwner(owner) {
   )));
 }
 
-// Read the persisted conversation's ordered turns from the gateway so the
-// overlay can render prior turns when it reopens. Returns [] when nothing is
-// configured/stored yet (a fresh conversation simply has no history).
+// Read the gateway-owned session projection. New gateways expose one canonical
+// user/assistant message stream across surfaces. During rollout, older gateways
+// still expose paired turn records; retain that route as a compatibility
+// fallback so a client release never makes already-saved history disappear.
 async function loadHistory(cfg) {
-  if (!cfg.gatewayUrl) return [];
   const sessionId = await getStableSessionId();
-  const data = await callGateway(cfg, `/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
+  const sessionPath = `/v1/sessions/${encodeURIComponent(sessionId)}`;
+  try {
+    const data = await callGateway(cfg, `${sessionPath}/messages?limit=200`, {
+      method: "GET",
+      maxResponseBytes: 1024 * 1024,
+    });
+    if (Array.isArray(data?.messages)) {
+      return {
+        messages: data.messages,
+        source: "messages",
+        metadata: data.metadata || data.page || null,
+      };
+    }
+  } catch (error) {
+    // Only an absent rollout route is compatible with the legacy read. Auth,
+    // network, and server failures stay visible instead of being misreported as
+    // an empty conversation.
+    if (error?.gatewayStatus !== 404 && error?.gatewayStatus !== 405) throw error;
+  }
+
+  const data = await callGateway(cfg, `${sessionPath}/turns`, {
     method: "GET",
+    maxResponseBytes: 1024 * 1024,
   });
-  return Array.isArray(data?.turns) ? data.turns : [];
+  return {
+    messages: Array.isArray(data?.turns) ? data.turns : [],
+    source: "turns",
+    metadata: null,
+  };
 }
 
 async function createVoiceSessionTicket(cfg, signal) {
@@ -4198,7 +4223,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "history") {
     getConfig()
       .then((cfg) => loadHistory(cfg))
-      .then((turns) => sendResponse({ ok: true, turns }))
+      .then((history) => sendResponse({
+        ok: true,
+        messages: history.messages,
+        // Compatibility alias for the compact overlay while gateway rollout is
+        // mixed. The side panel prefers `messages`.
+        turns: history.messages,
+        source: history.source,
+        metadata: history.metadata,
+      }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error), turns: [] }));
     return true;
   }
@@ -4648,8 +4681,14 @@ async function handlePanelRequest(msg) {
   }
   if (msg.cmd === "history") {
     const cfg = await getConfig();
-    const turns = await loadHistory(cfg);
-    return { ok: true, turns };
+    const history = await loadHistory(cfg);
+    return {
+      ok: true,
+      messages: history.messages,
+      turns: history.messages,
+      source: history.source,
+      metadata: history.metadata,
+    };
   }
   return { ok: false, error: `unsupported panel command: ${String(msg.cmd || "")}` };
 }

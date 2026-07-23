@@ -215,7 +215,7 @@ async function assertLiveModalityTool(wsUrl, fakeLive) {
 async function assertLiveSettingsRead(wsUrl, fakeLive) {
   const listed = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", { operation: "list" });
   assert.equal(listed.ok, true);
-  assert.equal(listed.count, 31);
+  assert.equal(listed.count, 32);
   assert.ok(listed.settings.every((setting) => setting.id && setting.readable === true));
   const recommended = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", {
     operation: "recommend",

@@ -107,6 +107,66 @@
         color: var(--accent);
         padding: 1px 5px;
       }
+      #history[data-stale="true"] {
+        opacity: 0.72;
+      }
+      #historyError {
+        align-items: flex-start;
+        background: #24191b;
+        border: 1px solid #5b2b2b;
+        border-radius: 10px;
+        color: var(--error);
+        display: flex;
+        font-size: 12px;
+        gap: 10px;
+        justify-content: space-between;
+        line-height: 1.4;
+        margin-bottom: 14px;
+        padding: 9px 10px;
+      }
+      #historyError[hidden] {
+        display: none;
+      }
+      #historyRetry {
+        background: transparent;
+        border: 1px solid #7b3b3b;
+        border-radius: 7px;
+        color: var(--error);
+        cursor: pointer;
+        flex: 0 0 auto;
+        font: inherit;
+        padding: 4px 8px;
+      }
+      .history-message {
+        margin-bottom: 12px;
+      }
+      .history-message .speaker {
+        color: #6d7078;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        margin-bottom: 4px;
+        text-transform: lowercase;
+      }
+      .history-message .body {
+        font-size: 14px;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+      .history-message[data-speaker="user"] .body {
+        color: var(--muted);
+      }
+      .history-message[data-speaker="assistant"] .body {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      .history-message .meta {
+        color: #777a82;
+        font-size: 10px;
+        margin-top: 4px;
+      }
       .turn {
         margin-bottom: 14px;
       }
@@ -250,13 +310,19 @@
       <div class="spacer"></div>
       <button id="floatBtn" type="button" title="Pop A.G. out into an always-on-top floating window">Float</button>
     </header>
-    <main id="log">
+    <main>
       <p class="hint">
         This panel is A.G.'s own surface. It works on every page, including
         <code>chrome://</code> pages where the in-page overlay cannot run, and it
         stays open while you switch tabs. Hold the button (or hold
         <code>Space</code>) to talk, release to send. Type below for a text turn.
       </p>
+      <div id="historyError" role="status" hidden>
+        <span id="historyErrorText"></span>
+        <button id="historyRetry" type="button">Retry</button>
+      </div>
+      <section id="history" aria-label="Saved conversation history"></section>
+      <section id="log" aria-label="Current interaction"></section>
     </main>
     <footer>
       <button id="talk" type="button" data-state="idle">Hold to talk</button>

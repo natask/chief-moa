@@ -3,14 +3,18 @@
 // Loads the REAL extension in Chrome for Testing, opens sidepanel.html as an
 // extension page, and proves the panel bridge end to end: the page boots, the
 // agee-panel port connects, and a request round-trips through the background's
-// handlePanelRequest with reqId correlation. Also asserts the open-agee-panel
-// command registered and chrome.sidePanel.open exists in the service worker.
+// handlePanelRequest with reqId correlation. It seeds the canonical mixed-
+// surface history endpoint and proves first-open hydration, stable-id
+// deduplication, panel reopen recovery, and full extension/background restart
+// recovery. Also asserts the open-agee-panel command registered and
+// chrome.sidePanel.open exists in the service worker.
 //
 // The panel is an extension page, so this exercises exactly what runs when the
 // panel is open over a chrome:// tab — no content script involved.
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { resolveChromeForTesting, quietChromeArgs } from "./chrome-for-testing.mjs";
 
@@ -19,6 +23,134 @@ const extensionPath = join(root, "extension");
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `sidepanel-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
+const GATEWAY_TOKEN = "sidepanel-history-smoke-token";
+const SESSION_ID = "shared-sidepanel-history-smoke";
+const LONG_ANDROID_TEXT = `Android product direction ${"kept complete across surfaces ".repeat(40)}`.trim();
+
+const SEEDED_MESSAGES = [
+  {
+    message_id: "msg_android_user",
+    session_id: SESSION_ID,
+    turn_id: "turn_android",
+    source_surface: "android",
+    source_kind: "voice",
+    speaker: "user",
+    text: LONG_ANDROID_TEXT,
+    completion_state: "completed",
+  },
+  {
+    message_id: "msg_android_assistant",
+    session_id: SESSION_ID,
+    turn_id: "turn_android",
+    source_surface: "android",
+    source_kind: "voice",
+    speaker: "assistant",
+    text: "I preserved that Android direction in the shared session.",
+    completion_state: "completed",
+  },
+  {
+    message_id: "msg_browser_user",
+    session_id: SESSION_ID,
+    turn_id: "turn_browser",
+    source_surface: "browser",
+    source_kind: "text",
+    speaker: "user",
+    text: "Show this browser turn after restart.",
+    completion_state: "completed",
+  },
+  {
+    message_id: "msg_browser_assistant",
+    session_id: SESSION_ID,
+    turn_id: "turn_browser",
+    source_surface: "browser",
+    source_kind: "text",
+    speaker: "assistant",
+    text: "This response is durable.",
+    completion_state: "completed",
+  },
+  // Exact canonical duplicate: the panel must render the identity only once.
+  {
+    message_id: "msg_browser_assistant",
+    session_id: SESSION_ID,
+    turn_id: "turn_browser",
+    source_surface: "browser",
+    source_kind: "text",
+    speaker: "assistant",
+    text: "This response is durable.",
+    completion_state: "completed",
+  },
+];
+
+function startGateway() {
+  let messageReads = 0;
+  let legacyReads = 0;
+  let canonicalAvailable = true;
+  let historyFailure = false;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    if (req.headers.authorization !== `Bearer ${GATEWAY_TOKEN}`) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (url.pathname === "/v1/sessions/default") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ session_id: SESSION_ID }));
+      return;
+    }
+    if (url.pathname === `/v1/sessions/${SESSION_ID}/messages`) {
+      messageReads += 1;
+      if (historyFailure) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "temporary history outage" }));
+        return;
+      }
+      if (!canonicalAvailable) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "messages route not deployed" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ messages: SEEDED_MESSAGES, has_more: false }));
+      return;
+    }
+    if (url.pathname === `/v1/sessions/${SESSION_ID}/turns`) {
+      legacyReads += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ turns: [
+        {
+          turn_id: "turn_android",
+          source: "android",
+          input_mode: "voice",
+          transcript: LONG_ANDROID_TEXT,
+          reply: "I preserved that Android direction in the shared session.",
+          status: "completed",
+        },
+        {
+          turn_id: "turn_browser",
+          source: "browser",
+          input_mode: "text",
+          transcript: "Show this browser turn after restart.",
+          reply: "This response is durable.",
+          status: "completed",
+        },
+      ] }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+  return new Promise((resolveServer) => {
+    server.listen(0, "127.0.0.1", () => resolveServer({
+      server,
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+      messageReads: () => messageReads,
+      legacyReads: () => legacyReads,
+      setCanonicalAvailable: (available) => { canonicalAvailable = available === true; },
+      setHistoryFailure: (failed) => { historyFailure = failed === true; },
+    }));
+  });
+}
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -109,9 +241,44 @@ async function waitForEval(cdp, expression, timeoutMs = 12000) {
   throw new Error(`Timed out waiting for expression: ${expression}; last=${JSON.stringify(lastValue)}`);
 }
 
+async function openPanel(browserCdp, devToolsPort, panelUrl) {
+  const { targetId } = await browserCdp.send("Target.createTarget", { url: panelUrl });
+  const pageTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === targetId);
+  const pageCdp = new Cdp(pageTarget.webSocketDebuggerUrl);
+  await pageCdp.send("Runtime.enable");
+  await waitForEval(pageCdp, 'document.readyState === "complete" && document.getElementById("status")');
+  return { targetId, pageCdp };
+}
+
+async function assertHydratedHistory(pageCdp, label) {
+  const history = await waitForEval(pageCdp, `(() => {
+    const rows = [...document.querySelectorAll("#history .history-message")];
+    if (rows.length !== 4) return null;
+    return {
+      ids: rows.map((row) => row.dataset.messageId),
+      speakers: rows.map((row) => row.dataset.speaker),
+      text: rows.map((row) => row.querySelector(".body")?.textContent || ""),
+      stale: document.getElementById("history")?.dataset.stale,
+      errorHidden: document.getElementById("historyError")?.hidden,
+    };
+  })()`);
+  if (new Set(history.ids).size !== 4) throw new Error(`${label}: canonical ids were duplicated: ${JSON.stringify(history)}`);
+  if (JSON.stringify(history.speakers) !== JSON.stringify(["user", "assistant", "user", "assistant"])) {
+    throw new Error(`${label}: message ordering/speakers drifted: ${JSON.stringify(history)}`);
+  }
+  if (history.text[0] !== LONG_ANDROID_TEXT || history.text[3] !== "This response is durable.") {
+    throw new Error(`${label}: seeded history text was truncated or reordered: ${JSON.stringify(history)}`);
+  }
+  if (history.stale !== "false" || history.errorHidden !== true) {
+    throw new Error(`${label}: reconciled history stayed stale/error: ${JSON.stringify(history)}`);
+  }
+  return history;
+}
+
 async function main() {
   const chromePath = resolveChromeForTesting();
   mkdirSync(profilePath, { recursive: true });
+  const gateway = await startGateway();
 
   const chrome = spawn(chromePath, quietChromeArgs({ extensionPath, profilePath }), {
     stdio: ["ignore", "pipe", "pipe"],
@@ -120,6 +287,7 @@ async function main() {
   let browserCdp;
   let pageCdp;
   let workerCdp;
+  let pageTargetId;
   try {
     const devToolsPort = Number((await waitForFile(join(profilePath, "DevToolsActivePort"))).split("\n")[0]);
     const workerTarget = await waitForTarget(
@@ -143,15 +311,37 @@ async function main() {
     const sidePanelApi = await waitForEval(workerCdp, 'typeof chrome.sidePanel?.open === "function"');
     if (!sidePanelApi) throw new Error("chrome.sidePanel.open is not available in the service worker");
 
+    await evaluate(workerCdp, `chrome.storage.local.set({
+      ageeGatewayUrl: ${JSON.stringify(gateway.baseUrl)},
+      ageeGatewayToken: ${JSON.stringify(GATEWAY_TOKEN)},
+      ageeGatewayUserSet: true,
+      ageeSessionId: ${JSON.stringify(SESSION_ID)}
+    }).then(() => true)`);
+
     const panelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
     const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
     browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
-    const { targetId } = await browserCdp.send("Target.createTarget", { url: panelUrl });
-    const pageTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === targetId);
+    ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
+    await assertHydratedHistory(pageCdp, "initial open");
 
-    pageCdp = new Cdp(pageTarget.webSocketDebuggerUrl);
-    await pageCdp.send("Runtime.enable");
-    await waitForEval(pageCdp, 'document.readyState === "complete" && document.getElementById("status")?.textContent === "Ready."');
+    // A failed refresh must preserve the last-good messages, mark them stale,
+    // and expose a user-triggered recovery instead of presenting an empty chat.
+    gateway.setHistoryFailure(true);
+    await evaluate(pageCdp, 'refreshHistory({ reason: "smoke outage" })');
+    const stale = await waitForEval(pageCdp, `(() => {
+      const history = document.getElementById("history");
+      const error = document.getElementById("historyError");
+      return history?.dataset.stale === "true" && error?.hidden === false
+        ? { count: history.children.length, error: error.textContent }
+        : null;
+    })()`);
+    if (stale.count !== 4 || !/not cleared|retry/i.test(stale.error)) {
+      throw new Error(`history outage did not preserve a recoverable last-good view: ${JSON.stringify(stale)}`);
+    }
+    gateway.setHistoryFailure(false);
+    await evaluate(pageCdp, 'document.getElementById("historyRetry").click(); true');
+    await waitForEval(pageCdp, 'document.getElementById("history")?.dataset.stale === "false" && document.getElementById("historyError")?.hidden === true');
+    await assertHydratedHistory(pageCdp, "manual history recovery");
 
     const roleUi = await evaluate(pageCdp, `(() => ({
       selectors: document.querySelectorAll("#agentModeSelector, [data-agent-mode-option]").length,
@@ -175,35 +365,55 @@ async function main() {
       throw new Error(`Delegate submission did not start immediately: ${JSON.stringify(submittedDelegate)}`);
     }
 
-    // Round-trip the panel bridge: an unsupported command must come back with
+    // Round-trip the existing panel bridge: an unsupported command must come back with
     // its reqId and a readable error, proving onConnect -> handlePanelRequest
     // -> reqId correlation against the REAL background worker.
-    const roundtrip = await evaluate(pageCdp, `new Promise((resolvePing) => {
-      const testPort = chrome.runtime.connect({ name: "agee-panel" });
-      const timer = setTimeout(() => resolvePing({ timeout: true }), 8000);
-      testPort.onMessage.addListener((msg) => {
-        if (msg && msg.reqId === 424242) {
-          clearTimeout(timer);
-          resolvePing(msg);
-        }
-      });
-      testPort.postMessage({ reqId: 424242, cmd: "panelSmokePing" });
-    })`);
-    if (roundtrip?.timeout) throw new Error("panel bridge round-trip timed out");
+    const roundtrip = await evaluate(pageCdp, `request({ cmd: "panelSmokePing" })`);
     if (roundtrip?.ok !== false || !/unsupported panel command/.test(String(roundtrip?.error || ""))) {
       throw new Error(`unexpected panel bridge reply: ${JSON.stringify(roundtrip)}`);
     }
 
+    // Closing and reopening the panel creates a new extension document. It must
+    // reconstruct the same projection without content-script memory. Disable
+    // the new route for this read to prove compatibility with a gateway whose
+    // promotion lags the extension package.
+    gateway.setCanonicalAvailable(false);
+    pageCdp.close();
+    await browserCdp.send("Target.closeTarget", { targetId: pageTargetId });
+    ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
+    await assertHydratedHistory(pageCdp, "panel reopen");
+    if (gateway.legacyReads() < 1) throw new Error("panel reopen did not exercise the legacy /turns fallback");
+
+    // Stop the isolated service-worker target while leaving the panel document
+    // alive. Its port disconnect/reconnect path must wake a new worker and
+    // reconcile the same stable identities without clearing last-good history.
+    const oldWorkerId = workerTarget.id;
+    gateway.setCanonicalAvailable(true);
+    await browserCdp.send("Target.closeTarget", { targetId: oldWorkerId });
+    workerCdp.close();
+    const restartedWorker = await waitForTarget(
+      devToolsPort,
+      (target) => target.type === "service_worker" && target.id !== oldWorkerId && target.url === `chrome-extension://${extensionId}/background.js`,
+    );
+    workerCdp = new Cdp(restartedWorker.webSocketDebuggerUrl);
+    await workerCdp.send("Runtime.enable");
+    await assertHydratedHistory(pageCdp, "extension/background restart");
+    if (gateway.messageReads() < 3) {
+      throw new Error(`expected canonical history to be re-read for each document/restart, got ${gateway.messageReads()}`);
+    }
+
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
-        "agee-panel port round-tripped through the background worker, open-agee-panel command registered, " +
-        "conversational roles had no selector, Delegate submission started immediately, chrome.sidePanel.open available.",
+        "canonical mixed-surface history hydrated and deduplicated on first open, panel reopen, and extension/background restart; " +
+        "agee-panel port round-tripped, conversational roles had no selector, Delegate confirmation cancelled safely, " +
+        "open-agee-panel and chrome.sidePanel.open remained available.",
     );
   } finally {
     workerCdp?.close();
     pageCdp?.close();
     browserCdp?.close();
     chrome.kill("SIGTERM");
+    gateway.server.close();
     await delay(300);
     try {
       rmSync(runDir, { recursive: true, force: true });

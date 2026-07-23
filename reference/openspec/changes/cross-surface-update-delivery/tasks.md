@@ -29,10 +29,18 @@
       manifest, then atomically advance a signed channel head.
       Acceptance: an interrupted upload never changes the visible channel head,
       and clients never observe a head pointing at missing bytes.
-- [ ] 2.4 Add typed evidence states and diagnostics that never infer a later
+- [x] 2.4 Add typed evidence states and diagnostics that never infer a later
       state from an earlier one.
       Acceptance: fixtures prove CI success is not publication, upload is not
       installation, and install without relaunch smoke is not production-ready.
+      Implemented by `scripts/release/release-evidence.mjs`; the first slice is
+      an intentionally read-only projection and does not yet persist receipts.
+      `.github/workflows/release-evidence.yml` runs the surface matrix on every
+      relevant branch, and Android OTA CI now runs the full Gradle `check`
+      (including the coverage ratchet) plus `assembleDebug` before packaging.
+      The first full run also forced the pre-Android-14 Quick Settings launch
+      fallback behind a narrowly annotated legacy helper while retaining the
+      required PendingIntent path on Android 14+.
 
 ## 3. Android Adapter — Primary Validation Lane
 
@@ -122,6 +130,10 @@
       Acceptance: dry-run output names exact release id, channel, artifact
       digest, evidence present, evidence missing, rollback plan, and whether the
       channel head would advance.
+      Progress: `scripts/deploy.sh plan <evidence.json>` now evaluates a single
+      immutable candidate across every named surface and reports exact digest,
+      publication/readiness booleans, and missing evidence without mutation.
+      Artifact discovery and signed channel advancement remain open.
 - [ ] 7.2 Add release pause, cohort expansion, supersession, and key-rotation
       runbooks.
       Acceptance: each operation creates a higher signed sequence, is auditable,

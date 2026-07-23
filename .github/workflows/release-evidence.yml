@@ -1,0 +1,49 @@
+name: Verify cross-surface release evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release-evidence.yml"
+      - "scripts/deploy.sh"
+      - "scripts/release/**"
+      - "release_control_plane/**"
+      - "reference/openspec/changes/cross-surface-update-delivery/**"
+      - "ARCHITECTURE.md"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/release-evidence.yml"
+      - "scripts/deploy.sh"
+      - "scripts/release/**"
+      - "release_control_plane/**"
+      - "reference/openspec/changes/cross-surface-update-delivery/**"
+      - "ARCHITECTURE.md"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release evidence contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run deterministic cross-surface matrix
+        run: node --test scripts/release/test-release-evidence.mjs
+      - name: Run persistent control-plane domain tests
+        working-directory: release_control_plane
+        run: npm run check
+      - name: Verify deploy planner remains read-only and usable
+        run: |
+          bash -n scripts/deploy.sh
+          bash scripts/deploy.sh plan scripts/release/release-evidence.example.json > "$RUNNER_TEMP/release-plan.json"
+          node -e '
+            const plan = require(process.argv[1]);
+            if (!plan.ok || plan.publication_ready || plan.channel_advance_allowed) process.exit(1);
+            if (!plan.missing_for_publication.includes("device_qa")) process.exit(1);
+          ' "$RUNNER_TEMP/release-plan.json"

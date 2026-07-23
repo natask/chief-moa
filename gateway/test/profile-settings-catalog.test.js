@@ -32,7 +32,7 @@ test("catalog describes every canonical profile field exactly once", () => {
   const { catalog } = catalogHarness();
   const settings = catalog.list({ scope: "global" });
   assert.deepEqual(settings.map((setting) => setting.id), PROFILE_FIELDS);
-  assert.equal(settings.length, 31);
+  assert.equal(settings.length, PROFILE_FIELDS.length);
   assert.ok(settings.every((setting) => setting.readable === true));
   assert.equal(catalog.get("made_up_setting"), null);
 });

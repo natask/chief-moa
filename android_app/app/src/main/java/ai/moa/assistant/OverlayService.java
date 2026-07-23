@@ -56,7 +56,6 @@ public final class OverlayService extends Service {
     private static final int MAX_AGENT_PROMPT_CHARS = 12000;
     private static final int ORB_WINDOW_DP = 96;
     private static final int ORB_EDGE_MARGIN_DP = 16;
-    private static final float ORB_IDLE_ALPHA = 0.10f;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
@@ -79,6 +78,7 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams orbParams;
     private WindowManager.LayoutParams panelParams;
     private WindowManager.LayoutParams transcriptParams;
+    private MoaFrameCoalescer orbDragFrameCoalescer;
     private View orbRemoveTarget;
     private boolean orbRemoveTargetActive;
     private View panelView;
@@ -309,6 +309,10 @@ public final class OverlayService extends Service {
         removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
+        if (orbDragFrameCoalescer != null) {
+            orbDragFrameCoalescer.cancel();
+            orbDragFrameCoalescer = null;
+        }
         removeOrb();
         agentRunPolling = false;
         cancelStreamingTurnWatchdog();
@@ -513,10 +517,10 @@ public final class OverlayService extends Service {
         orbParams.gravity = Gravity.TOP | Gravity.START;
         orbParams.x = getResources().getDisplayMetrics().widthPixels - size - dp(ORB_EDGE_MARGIN_DP);
         orbParams.y = dp(164);
+        orbDragFrameCoalescer = new MoaFrameCoalescer(
+                new MoaViewFrameScheduler(orbView), this::applyLatestOrbDragFrame);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
                 this,
-                windowManager,
-                orbView,
                 orbParams,
                 size,
                 ORB_EDGE_MARGIN_DP,
@@ -538,7 +542,7 @@ public final class OverlayService extends Service {
                 this::finishOrbDrag
         ));
 
-        orbView.setAlpha(ORB_IDLE_ALPHA);
+        orbView.setAlpha(0.10f);
 
         windowManager.addView(orbView, orbParams);
     }
@@ -557,40 +561,34 @@ public final class OverlayService extends Service {
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int margin = dp(10);
-        int gap = dp(12);
         int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
         int surfaceWidth = params.width > 0 ? params.width : Math.min(screenWidth - margin * 2, dp(380));
-        int measuredHeight = surface.getMeasuredHeight();
-        if (measuredHeight <= 0) {
-            measuredHeight = surface == panelView ? dp(430) : dp(180);
-        }
-
-        int orbCenterX = orbParams.x + orbSize / 2;
-        int minX = surfaceWidth + margin * 2 <= screenWidth ? margin : 0;
-        int maxX = Math.max(minX, screenWidth - surfaceWidth - minX);
-        params.x = Math.max(minX, Math.min(orbCenterX - surfaceWidth / 2, maxX));
-
-        int aboveY = orbParams.y - measuredHeight - gap;
-        int belowY = orbParams.y + orbSize + gap;
-        int aboveSpace = orbParams.y - gap - margin;
-        int belowSpace = screenHeight - belowY - margin;
-        boolean placeAbove = measuredHeight <= aboveSpace || aboveSpace >= belowSpace;
-        params.y = placeAbove ? aboveY : belowY;
-        params.y = Math.max(margin, Math.min(params.y, screenHeight - measuredHeight - margin));
-
-        if (surface.getParent() != null) {
-            try {
-                windowManager.updateViewLayout(surface, params);
-            } catch (IllegalArgumentException ignored) {
-                // The surface was removed between measurement and repositioning.
-            }
-        }
+        MoaOverlayWindowLayout.positionAnchored(
+                windowManager, surface, params, screenWidth, screenHeight, margin, dp(12),
+                orbView, orbParams, orbSize, surfaceWidth,
+                surface == panelView ? dp(430) : dp(180));
     }
 
+    // The card is always wholly above the orb, so a card that grows (streamed
+    // reply, appended transcript rows) must be re-anchored on every remeasure —
+    // otherwise a TOP-gravity window would expand downward over the orb.
+    private void keepSurfaceAnchoredOnRemeasure(View surface) {
+        surface.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                           oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (bottom - top == oldBottom - oldTop) {
+                return;
+            }
+            mainHandler.post(() -> {
+                if (v == panelView) {
+                    positionSurfaceNearOrb(panelView, panelParams);
+                } else if (v == transcriptView) {
+                    positionSurfaceNearOrb(transcriptView, transcriptParams);
+                }
+            });
+        });
+    }
     private void updateAnchoredSurfacePositions() {
-        positionSurfaceNearOrb(panelView, panelParams);
-        positionSurfaceNearOrb(transcriptView, transcriptParams);
-        updateVoiceDraftControlPositions();
+        applyLatestOrbDragFrame();
     }
 
     private void attachSurfaceHeaderDrag(View header) {
@@ -604,70 +602,97 @@ public final class OverlayService extends Service {
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
-        TextView target = text("Remove orb", MoaColors.MUTED, 14, true);
-        target.setGravity(Gravity.CENTER);
-        target.setBackground(MoaDrawables.rounded(0xF01B1C20, dp(28), MoaColors.PANEL_BORDER, dp(1)));
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                dp(150),
-                dp(58),
-                overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        // Use top gravity and an explicit, fully measured rectangle. Bottom
-        // gravity can place an overlay partly behind gesture navigation bars on
-        // some devices, which made the release label look cut in half.
-        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        params.y = Math.max(dp(12), getResources().getDisplayMetrics().heightPixels - dp(58) - dp(34));
-        windowManager.addView(target, params);
-        orbRemoveTarget = target;
-        target.setAlpha(0f);
-        target.setScaleX(0.9f);
-        target.setScaleY(0.9f);
-        target.animate().alpha(0.10f).scaleX(1f).scaleY(1f).setDuration(140).start();
+        orbRemoveTarget = MoaOrbRemoveTarget.show(this, windowManager, overlayType());
+    }
+    private void updateOrbDragSurfaces() {
+        if (orbDragFrameCoalescer != null) {
+            orbDragFrameCoalescer.request();
+        }
     }
 
-    private void updateOrbDragSurfaces() {
-        updateAnchoredSurfacePositions();
+    private void applyLatestOrbDragFrame() {
+        if (orbView == null || orbParams == null) {
+            return;
+        }
+        // Anchor the open surface FIRST: the always-above rule may push the orb
+        // down, and the draft controls and orb window below must lay out from
+        // that settled position so the whole ensemble moves as one frame.
+        if (panelView != null) {
+            positionSurfaceNearOrb(panelView, panelParams);
+        } else if (transcriptView != null) {
+            positionSurfaceNearOrb(transcriptView, transcriptParams);
+        }
+        prepareVoiceDraftControlPositions();
+        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+        updatePreparedVoiceDraftControlLayouts();
+        updateOrbRemoveTargetState();
+    }
+
+    private void updateOrbRemoveTargetState() {
         if (!(orbRemoveTarget instanceof TextView) || orbParams == null) {
             return;
         }
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
-        int centerX = orbParams.x + orbSize / 2;
-        int centerY = orbParams.y + orbSize / 2;
-        boolean active = centerY >= screenHeight - dp(170)
-                && Math.abs(centerX - screenWidth / 2) <= dp(135);
+        boolean active = MoaOrbOverlayGeometry.isInRemoveTarget(
+                screenWidth,
+                screenHeight,
+                orbParams.x,
+                orbParams.y,
+                orbSize,
+                dp(170),
+                dp(135)
+        );
         if (active == orbRemoveTargetActive) {
             return;
         }
         orbRemoveTargetActive = active;
-        TextView target = (TextView) orbRemoveTarget;
-        target.setText(active ? "Release to remove" : "Remove orb");
-        target.setTextColor(active ? MoaColors.PAPER : MoaColors.MUTED);
-        target.setBackground(MoaDrawables.rounded(
-                active ? 0xF0B3261E : 0xF01B1C20,
-                dp(28),
-                active ? 0x80FF8A80 : MoaColors.PANEL_BORDER,
-                dp(1)
-        ));
-        target.animate()
-                .alpha(active ? 1f : 0.10f)
-                .scaleX(active ? 1.08f : 1f)
-                .scaleY(active ? 1.08f : 1f)
-                .setDuration(100)
-                .start();
+        MoaOrbRemoveTarget.update(this, (TextView) orbRemoveTarget, active);
     }
-
     private void finishOrbDrag(Boolean completedDrop) {
+        if (orbDragFrameCoalescer != null) {
+            orbDragFrameCoalescer.flush();
+        }
         boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
         removeOrbRemoveTarget();
         if (remove) {
-            mainHandler.post(this::stopSelf);
+            // Dropping on the removal target dismisses the WHOLE overlay as one
+            // gesture: every window is detached in this same call — no exit
+            // animations, no posted teardown — so the orb never vanishes while a
+            // card or control visibly lingers behind it.
+            removeAllOverlayWindowsNow();
+            stopSelf();
         }
+    }
+
+    private void removeAllOverlayWindowsNow() {
+        hideKeyboard();
+        View panel = panelView;
+        panelView = null;
+        panelParams = null;
+        panelOpen = false;
+        messageColumn = null;
+        messageScroll = null;
+        composer = null;
+        runStatusView = null;
+        recordModePill = null;
+        newThreadPill = null;
+        incognitoPill = null;
+        contextControlsRow = null;
+        MoaOverlayWindowLayout.detach(windowManager, panel);
+        cancelAutoDismiss();
+        View transcript = transcriptView;
+        transcriptView = null;
+        transcriptParams = null;
+        voiceTranscriptColumn = null;
+        voiceTranscriptScroll = null;
+        voiceMetaLine = null;
+        voiceLanguageLine = null;
+        MoaOverlayWindowLayout.detach(windowManager, transcript);
+        removeVoiceDraftControls();
+        removeOrbRemoveTarget();
+        removeOrb();
     }
 
     private void removeOrbRemoveTarget() {
@@ -677,7 +702,7 @@ public final class OverlayService extends Service {
         }
         View target = orbRemoveTarget;
         orbRemoveTarget = null;
-        detachView(target);
+        MoaOverlayWindowLayout.detach(windowManager, target);
     }
 
     private void togglePanel() {
@@ -693,6 +718,7 @@ public final class OverlayService extends Service {
             return;
         }
 
+        removeTranscriptOverlay();
         loadSettings();
 
         panelView = createPanel();
@@ -706,6 +732,10 @@ public final class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT
         );
+        // The surface follows the orb and stays wholly above it; when there is
+        // not enough room the ORB is pushed down, never the card below. The IME
+        // does not resize overlay windows, so positioning is kept independent
+        // from keyboard animation.
         panelParams.gravity = Gravity.TOP | Gravity.START;
         panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
 
@@ -718,11 +748,12 @@ public final class OverlayService extends Service {
         });
 
         positionSurfaceNearOrb(panelView, panelParams);
+        keepSurfaceAnchoredOnRemeasure(panelView);
         windowManager.addView(panelView, panelParams);
         panelOpen = true;
         panelView.post(() -> positionSurfaceNearOrb(panelView, panelParams));
         renderMessages();
-        animateSurfaceIn(panelView);
+        MoaOverlayWindowLayout.animateIn(panelView, dp(18));
         mainHandler.postDelayed(() -> {
             if (composer == null) {
                 return;
@@ -733,21 +764,6 @@ public final class OverlayService extends Service {
                 inputMethodManager.showSoftInput(composer, InputMethodManager.SHOW_IMPLICIT);
             }
         }, 180);
-    }
-
-    private void animateSurfaceIn(View view) {
-        view.setAlpha(0f);
-        view.setTranslationY(dp(18));
-        view.setScaleX(0.97f);
-        view.setScaleY(0.97f);
-        view.animate()
-                .alpha(1f)
-                .translationY(0f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setDuration(170)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .start();
     }
 
     private void removePanel() {
@@ -774,19 +790,8 @@ public final class OverlayService extends Service {
                 .scaleY(0.97f)
                 .setDuration(130)
                 .setInterpolator(new android.view.animation.AccelerateInterpolator())
-                .withEndAction(() -> detachView(dying))
+                .withEndAction(() -> MoaOverlayWindowLayout.detach(windowManager, dying))
                 .start();
-    }
-
-    private void detachView(View view) {
-        if (view == null || view.getParent() == null) {
-            return;
-        }
-        try {
-            windowManager.removeView(view);
-        } catch (IllegalArgumentException ignored) {
-            // Already detached.
-        }
     }
 
     private void hideKeyboard() {
@@ -825,7 +830,9 @@ public final class OverlayService extends Service {
 
         card.addView(createVoiceHeader());
 
-        int transcriptBodyHeight = transcriptBodyHeight();
+        int transcriptBodyHeight = MoaOverlayWindowLayout.transcriptBodyHeight(
+                getResources().getDisplayMetrics().heightPixels,
+                getResources().getDisplayMetrics().density);
         voiceTranscriptScroll = new CappedScrollView(this, transcriptBodyHeight);
         voiceTranscriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
@@ -863,10 +870,11 @@ public final class OverlayService extends Service {
         );
         transcriptParams.gravity = Gravity.TOP | Gravity.START;
         positionSurfaceNearOrb(shell, transcriptParams);
+        keepSurfaceAnchoredOnRemeasure(shell);
         windowManager.addView(shell, transcriptParams);
         transcriptView = shell;
         shell.post(() -> positionSurfaceNearOrb(transcriptView, transcriptParams));
-        animateSurfaceIn(card);
+        MoaOverlayWindowLayout.animateIn(card, dp(18));
     }
 
     private View createVoiceHeader() {
@@ -894,24 +902,21 @@ public final class OverlayService extends Service {
                 MoaPrefs.spokenRepliesEnabled(this) ? "Voice" : "Text",
                 0x16FFFFFF,
                 MoaColors.PAPER);
-        delivery.setContentDescription("Toggle spoken replies");
-        delivery.setOnClickListener(v -> {
-            boolean enabled = !MoaPrefs.spokenRepliesEnabled(this);
-            MoaPrefs.setSpokenRepliesEnabled(this, enabled);
+        MoaVoiceDeliveryToggle.bind(this, delivery, enabled -> {
             if (streamingVoiceController != null) {
                 streamingVoiceController.setPlaybackEnabled(enabled);
             }
-            delivery.setText(enabled ? "Voice" : "Text");
-            delivery.setTextColor(enabled ? MoaColors.GOLD : MoaColors.PAPER);
         });
-        delivery.setTextColor(MoaPrefs.spokenRepliesEnabled(this) ? MoaColors.GOLD : MoaColors.PAPER);
         header.addView(delivery);
         TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
         hide.setContentDescription("Hide the A.G. orb");
         hide.setOnClickListener(v -> stopSelf());
         header.addView(hide);
+
+        // Discoverable whole-card dismiss, matching the chat panel's close pill.
+        // Swiping the rows away still works; this closes everything in one tap.
         TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
-        close.setContentDescription("Cancel voice and close transcript");
+        close.setContentDescription("Close voice card");
         close.setOnClickListener(v -> dismissOverlayUi());
         header.addView(close);
         attachSurfaceHeaderDrag(header);
@@ -967,6 +972,12 @@ public final class OverlayService extends Service {
     }
 
     private void updateVoiceDraftControlPositions() {
+        prepareVoiceDraftControlPositions();
+        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+        updatePreparedVoiceDraftControlLayouts();
+    }
+
+    private void prepareVoiceDraftControlPositions() {
         if (voiceCancelControl == null || voiceSendControl == null
                 || voiceCancelControlParams == null || voiceSendControlParams == null
                 || orbView == null || orbParams == null) {
@@ -982,14 +993,7 @@ public final class OverlayService extends Service {
         int minOrbX = margin + controlSize + gap;
         int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
         int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
-        if (safeOrbX != orbParams.x) {
-            orbParams.x = safeOrbX;
-            try {
-                windowManager.updateViewLayout(orbView, orbParams);
-            } catch (IllegalArgumentException ignored) {
-                return;
-            }
-        }
+        orbParams.x = safeOrbX;
 
         int controlY = orbParams.y + (orbSize - controlSize) / 2;
         controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
@@ -997,17 +1001,16 @@ public final class OverlayService extends Service {
         voiceCancelControlParams.y = controlY;
         voiceSendControlParams.x = orbParams.x + orbSize + gap;
         voiceSendControlParams.y = controlY;
-        try {
-            windowManager.updateViewLayout(voiceCancelControl, voiceCancelControlParams);
-            windowManager.updateViewLayout(voiceSendControl, voiceSendControlParams);
-        } catch (IllegalArgumentException ignored) {
-            // A state transition removed the controls while they were moving.
-        }
+    }
+
+    private void updatePreparedVoiceDraftControlLayouts() {
+        MoaOverlayWindowLayout.update(windowManager, voiceCancelControl, voiceCancelControlParams);
+        MoaOverlayWindowLayout.update(windowManager, voiceSendControl, voiceSendControlParams);
     }
 
     private void removeVoiceDraftControls() {
-        detachView(voiceCancelControl);
-        detachView(voiceSendControl);
+        MoaOverlayWindowLayout.detach(windowManager, voiceCancelControl);
+        MoaOverlayWindowLayout.detach(windowManager, voiceSendControl);
         voiceCancelControl = null;
         voiceSendControl = null;
         voiceCancelControlParams = null;
@@ -1398,11 +1401,6 @@ public final class OverlayService extends Service {
         }, 30);
     }
 
-    private int transcriptBodyHeight() {
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        return Math.max(dp(220), Math.min(dp(360), Math.round(screenHeight * 0.36f)));
-    }
-
     private String visibleVoiceContent(String text) {
         String value = safe(text);
         return isVoiceTransportText(value) ? "" : value;
@@ -1444,7 +1442,7 @@ public final class OverlayService extends Service {
                 .translationY(dp(12))
                 .setDuration(140)
                 .setInterpolator(new android.view.animation.AccelerateInterpolator())
-                .withEndAction(() -> detachView(dying))
+                .withEndAction(() -> MoaOverlayWindowLayout.detach(windowManager, dying))
                 .start();
     }
 
@@ -3890,28 +3888,11 @@ public final class OverlayService extends Service {
     }
 
     private TextView pill(String text, int background, int foreground) {
-        TextView pill = text(text, foreground, 11, true);
-        pill.setGravity(Gravity.CENTER);
-        pill.setPadding(dp(10), dp(5), dp(10), dp(5));
-        pill.setBackground(MoaDrawables.rounded(background, dp(999), 0x10FFFFFF, dp(1)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        params.rightMargin = dp(6);
-        pill.setLayoutParams(params);
-        return pill;
+        return MoaTextViews.pill(this, text, background, foreground);
     }
 
     private TextView text(String text, int color, int sp, boolean bold) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextColor(color);
-        view.setTextSize(sp);
-        if (bold) {
-            view.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        }
-        return view;
+        return MoaTextViews.text(this, text, color, sp, bold);
     }
 
     private int overlayType() {
