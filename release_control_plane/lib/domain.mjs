@@ -5,14 +5,15 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const ROLES = new Set(["owner", "administrator", "release_manager", "tester", "viewer"]);
 const ACTIONS = new Set([
   "read", "assign_channel", "propose_promotion", "approve_promotion",
-  "record_evidence", "delegate_administration",
+  "record_evidence", "record_install_receipt", "record_release_feedback",
+  "delegate_administration",
 ]);
 
 const ROLE_ACTIONS = Object.freeze({
   owner: new Set(ACTIONS),
-  administrator: new Set(["read", "assign_channel", "propose_promotion", "approve_promotion", "record_evidence", "delegate_administration"]),
+  administrator: new Set(["read", "assign_channel", "propose_promotion", "approve_promotion", "record_evidence", "record_install_receipt", "record_release_feedback", "delegate_administration"]),
   release_manager: new Set(["read", "assign_channel", "propose_promotion", "approve_promotion"]),
-  tester: new Set(["read", "record_evidence"]),
+  tester: new Set(["read", "record_evidence", "record_install_receipt", "record_release_feedback"]),
   viewer: new Set(["read"]),
 });
 
@@ -25,6 +26,18 @@ function cleanId(value, field) {
 function cleanDigest(value, field) {
   const text = String(value || "").trim().toLowerCase();
   if (!SHA256.test(text)) throw new Error(`${field} is invalid`);
+  return text;
+}
+
+function cleanInteger(value, field, minimum = 0) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < minimum) throw new Error(`${field} is invalid`);
+  return number;
+}
+
+function cleanText(value, field, maximum) {
+  const text = String(value || "").trim();
+  if (!text || text.length > maximum) throw new Error(`${field} is invalid`);
   return text;
 }
 
@@ -190,4 +203,137 @@ export function planPromotionProposal(input) {
     source_merge_required: input.source_merge_required === true,
     channel_moved: false,
   };
+}
+
+// These normalizers deliberately select known fields instead of rejecting
+// unknown additive fields. An N-1 reader can therefore consume records written
+// by a newer control-plane version without inheriting new semantics.
+export function normalizeReleaseBundle(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("bundle is invalid");
+  const artifacts = (input.artifacts || []).map((artifact, index) => Object.freeze({
+    surface_id: cleanId(artifact.surface_id, `artifacts[${index}].surface_id`),
+    release_id: cleanId(artifact.release_id, `artifacts[${index}].release_id`),
+    semantic_version: cleanText(artifact.semantic_version, `artifacts[${index}].semantic_version`, 80),
+    artifact_sha256: cleanDigest(artifact.artifact_sha256, `artifacts[${index}].artifact_sha256`),
+    artifact_size: cleanInteger(artifact.artifact_size, `artifacts[${index}].artifact_size`, 1),
+    git_sha: cleanText(artifact.git_sha, `artifacts[${index}].git_sha`, 64),
+    download_url: artifact.download_url == null ? null : cleanText(artifact.download_url, `artifacts[${index}].download_url`, 2048),
+    app_id: artifact.app_id == null ? null : cleanText(artifact.app_id, `artifacts[${index}].app_id`, 200),
+    version_code: artifact.version_code == null ? null : cleanInteger(artifact.version_code, `artifacts[${index}].version_code`, 1),
+    version_name: artifact.version_name == null ? null : cleanText(artifact.version_name, `artifacts[${index}].version_name`, 80),
+  }));
+  if (!artifacts.length) throw new Error("bundle.artifacts is invalid");
+  const surfaceIds = new Set();
+  for (const artifact of artifacts) {
+    if (surfaceIds.has(artifact.surface_id)) throw new Error("bundle has duplicate surface");
+    surfaceIds.add(artifact.surface_id);
+  }
+  return Object.freeze({
+    tenant_id: cleanId(input.tenant_id, "bundle.tenant_id"),
+    application_id: cleanId(input.application_id, "bundle.application_id"),
+    bundle_id: cleanId(input.bundle_id, "bundle.bundle_id"),
+    compatibility_version: cleanInteger(input.compatibility_version ?? 1, "bundle.compatibility_version", 1),
+    artifacts: Object.freeze(artifacts),
+    created_at: cleanText(input.created_at, "bundle.created_at", 80),
+  });
+}
+
+export function artifactForSurface(bundle, surfaceId) {
+  const normalized = normalizeReleaseBundle(bundle);
+  return normalized.artifacts.find((artifact) => artifact.surface_id === cleanId(surfaceId, "surface_id")) || null;
+}
+
+export function bindExactRelease(bundle, anchor) {
+  const normalized = normalizeReleaseBundle(bundle);
+  if (cleanId(anchor.bundle_id, "anchor.bundle_id") !== normalized.bundle_id) {
+    return { accepted: false, reason: "bundle_mismatch" };
+  }
+  const artifact = artifactForSurface(normalized, anchor.surface_id);
+  if (!artifact) return { accepted: false, reason: "surface_mismatch" };
+  if (cleanId(anchor.release_id, "anchor.release_id") !== artifact.release_id) {
+    return { accepted: false, reason: "release_mismatch" };
+  }
+  if (cleanDigest(anchor.artifact_sha256, "anchor.artifact_sha256") !== artifact.artifact_sha256) {
+    return { accepted: false, reason: "artifact_mismatch" };
+  }
+  return { accepted: true, reason: "exact_release_match", bundle: normalized, artifact };
+}
+
+export function normalizeChannelHead(input) {
+  return Object.freeze({
+    tenant_id: cleanId(input.tenant_id, "channel_head.tenant_id"),
+    application_id: cleanId(input.application_id, "channel_head.application_id"),
+    channel: cleanId(input.channel, "channel_head.channel"),
+    bundle_id: cleanId(input.bundle_id, "channel_head.bundle_id"),
+    sequence: cleanInteger(input.sequence, "channel_head.sequence", 1),
+    updated_at: cleanText(input.updated_at, "channel_head.updated_at", 80),
+  });
+}
+
+export function normalizeAssignmentEvent(input) {
+  return Object.freeze({
+    event_id: cleanId(input.event_id, "assignment.event_id"),
+    tenant_id: cleanId(input.tenant_id, "assignment.tenant_id"),
+    application_id: cleanId(input.application_id, "assignment.application_id"),
+    scope_type: cleanId(input.scope_type, "assignment.scope_type"),
+    scope_id: cleanId(input.scope_id, "assignment.scope_id"),
+    sequence: cleanInteger(input.sequence, "assignment.sequence", 1),
+    channel: cleanId(input.channel, "assignment.channel"),
+    bundle_id: cleanId(input.bundle_id, "assignment.bundle_id"),
+    stable_fallback_bundle_id: cleanId(input.stable_fallback_bundle_id, "assignment.stable_fallback_bundle_id"),
+    operation: cleanId(input.operation, "assignment.operation"),
+    idempotency_key: input.idempotency_key == null ? null : cleanText(input.idempotency_key, "assignment.idempotency_key", 200),
+    actor_id: cleanId(input.actor_id, "assignment.actor_id"),
+    created_at: cleanText(input.created_at, "assignment.created_at", 80),
+  });
+}
+
+export function normalizeInstallReceipt(input, options = {}) {
+  const incomingStatus = cleanId(input.status, "install_receipt.status");
+  const knownStatuses = [
+    "offered", "download_verified", "installer_opened", "installed", "activated",
+    "smoked", "refused", "failed",
+  ];
+  if (!knownStatuses.includes(incomingStatus) && options.allow_unknown_status !== true) {
+    throw new Error("install_receipt.status is invalid");
+  }
+  const status = knownStatuses.includes(incomingStatus) ? incomingStatus : "unknown";
+  return Object.freeze({
+    receipt_id: cleanId(input.receipt_id, "install_receipt.receipt_id"),
+    tenant_id: cleanId(input.tenant_id, "install_receipt.tenant_id"),
+    application_id: cleanId(input.application_id, "install_receipt.application_id"),
+    device_id: cleanId(input.device_id, "install_receipt.device_id"),
+    assignment_event_id: cleanId(input.assignment_event_id, "install_receipt.assignment_event_id"),
+    bundle_id: cleanId(input.bundle_id, "install_receipt.bundle_id"),
+    surface_id: cleanId(input.surface_id, "install_receipt.surface_id"),
+    release_id: cleanId(input.release_id, "install_receipt.release_id"),
+    artifact_sha256: cleanDigest(input.artifact_sha256, "install_receipt.artifact_sha256"),
+    status,
+    idempotency_key: cleanText(input.idempotency_key, "install_receipt.idempotency_key", 200),
+    created_at: cleanText(input.created_at, "install_receipt.created_at", 80),
+  });
+}
+
+export function normalizeReleaseFeedback(input) {
+  if (Array.isArray(input.evidence_refs) && input.evidence_refs.length > 20) {
+    throw new Error("feedback.evidence_refs is invalid");
+  }
+  const evidenceRefs = Array.isArray(input.evidence_refs)
+    ? input.evidence_refs.map((value, index) => cleanText(value, `feedback.evidence_refs[${index}]`, 1024))
+    : [];
+  return Object.freeze({
+    feedback_id: cleanId(input.feedback_id, "feedback.feedback_id"),
+    tenant_id: cleanId(input.tenant_id, "feedback.tenant_id"),
+    application_id: cleanId(input.application_id, "feedback.application_id"),
+    device_id: cleanId(input.device_id, "feedback.device_id"),
+    assignment_event_id: cleanId(input.assignment_event_id, "feedback.assignment_event_id"),
+    bundle_id: cleanId(input.bundle_id, "feedback.bundle_id"),
+    surface_id: cleanId(input.surface_id, "feedback.surface_id"),
+    release_id: cleanId(input.release_id, "feedback.release_id"),
+    artifact_sha256: cleanDigest(input.artifact_sha256, "feedback.artifact_sha256"),
+    text: cleanText(input.text, "feedback.text", 8000),
+    evidence_refs: Object.freeze(evidenceRefs),
+    idempotency_key: cleanText(input.idempotency_key, "feedback.idempotency_key", 200),
+    created_at: cleanText(input.created_at, "feedback.created_at", 80),
+  });
 }

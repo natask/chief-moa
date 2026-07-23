@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "tenant_id": "personal",
+  "application_id": "chief-moa",
+  "device_id": "phone-1",
+  "channels": {
+    "stable": {
+      "sequence": 1,
+      "bundle": {
+        "bundle_id": "stable-1",
+        "release_id": "android-stable-1",
+        "compatibility_version": 1,
+        "created_at": "2026-07-23T00:00:00.000Z"
+      }
+    },
+    "preview": {
+      "sequence": 2,
+      "bundle": {
+        "bundle_id": "preview-2",
+        "release_id": "android-preview-2",
+        "compatibility_version": 1,
+        "created_at": "2026-07-23T00:00:00.000Z"
+      }
+    }
+  },
+  "candidates": [
+    {
+      "channel": "stable",
+      "sequence": 1,
+      "bundle_id": "stable-1",
+      "compatibility_version": 1,
+      "release_id": "android-stable-1",
+      "source_ref": "1111111111111111111111111111111111111111",
+      "compatibility": { "eligible": true, "reasons": [] },
+      "readiness": { "status": "published", "ready": true },
+      "artifact": {
+        "surface": "android",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size_bytes": 100,
+        "download_url": "https://releases.example/android-stable-1",
+        "app_id": "ai.moa.assistant",
+        "version_code": 100,
+        "version_name": "1.0.0",
+        "version": "1.0.0",
+        "git_sha": "1111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "channel": "preview",
+      "sequence": 2,
+      "bundle_id": "preview-2",
+      "compatibility_version": 1,
+      "release_id": "android-preview-2",
+      "source_ref": "1111111111111111111111111111111111111111",
+      "compatibility": { "eligible": true, "reasons": [] },
+      "readiness": { "status": "published", "ready": true },
+      "artifact": {
+        "surface": "android",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size_bytes": 100,
+        "download_url": "https://releases.example/android-preview-2",
+        "app_id": "ai.moa.assistant",
+        "version_code": 100,
+        "version_name": "1.1.0",
+        "version": "1.1.0",
+        "git_sha": "1111111111111111111111111111111111111111"
+      }
+    }
+  ],
+  "effective_assignment": {
+    "assignment_id": "device-1",
+    "tenant_id": "personal",
+    "application_id": "chief-moa",
+    "scope_type": "device",
+    "scope": "device",
+    "scope_id": "phone-1",
+    "sequence": 1,
+    "channel": "preview",
+    "bundle_id": "preview-2",
+    "release_id": "android-preview-2",
+    "feature_profile_id": null,
+    "stable_fallback_bundle_id": "stable-1",
+    "operation": "assign_channel",
+    "actor_id": "nat",
+    "created_at": "2026-07-23T00:00:00.000Z",
+    "source": "device",
+    "install_confirmed": false
+  },
+  "installation": [
+    {
+      "surface": "android",
+      "release_id": "android-preview-2",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "assigned": true,
+      "installed": true,
+      "activated": true,
+      "smoked": false
+    }
+  ],
+  "feedback_count": 0,
+  "installed": {
+    "surface": "android",
+    "release_id": "android-preview-2",
+    "artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "app_id": "ai.moa.assistant",
+    "version_code": 100,
+    "version_name": "1.1.0",
+    "version": "1.1.0",
+    "git_sha": "1111111111111111111111111111111111111111",
+    "status": "activated"
+  },
+  "last_known_good": {
+    "assignment_id": "device-1",
+    "bundle_id": "stable-1",
+    "release_id": "android-stable-1"
+  }
+}
