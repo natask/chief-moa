@@ -41,6 +41,12 @@
       typed one-shot recovery target that shows permission state and focuses
       the existing user-operated Grant microphone control. No setting or
       automatic permission action is added. Verified by `npm run verify`.
+- [x] 1.19 Match Android gesture-time voice capture: warm the extension-owned
+      microphone on pointer-down when permission is already granted, retain the
+      newest 500 ms of PCM, and drain it into voice turns and audio notes before
+      connection-time audio. Do not prompt for microphone permission from an
+      ordinary mascot press. Verify with unit, extension-contract, and real
+      headless-Chrome smoke checks.
 
 ## 2. Unified Browser-Agent Turn Path
 

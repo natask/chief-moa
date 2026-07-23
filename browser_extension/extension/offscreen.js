@@ -1,10 +1,14 @@
 import { createPcm16Resampler } from "./offscreen-audio-resampler.js";
+import { createVoicePreRollBuffer } from "./voice-preroll-buffer.js";
 
 // Extension-owned microphone capture for MV3.
 // The content script owns only page UI; this document owns getUserMedia so the
 // mic permission is granted to chrome-extension://..., not to every website.
 
 let activeCapture = null;
+let captureOperation = Promise.resolve();
+const VOICE_PRE_ROLL_BYTES = 16000 * 2 * 500 / 1000;
+const VOICE_WARM_CAPTURE_TIMEOUT_MS = 2000;
 
 function captureFailure(error, stage) {
   const message = String(error?.message || error || "microphone capture failed");
@@ -37,7 +41,7 @@ function createVoiceAudioContext(AudioContextCtor) {
 function stopCapture(sessionId = null) {
   const capture = activeCapture;
   if (!capture) return;
-  if (sessionId && capture.voiceSessionId !== sessionId) return;
+  if (sessionId && capture.captureId !== sessionId) return;
   try {
     capture.worklet?.port?.close?.();
   } catch {}
@@ -55,11 +59,43 @@ function stopCapture(sessionId = null) {
   try {
     capture.audioCtx?.close();
   } catch {}
+  if (capture.warmTimeout) clearTimeout(capture.warmTimeout);
   activeCapture = null;
 }
 
-async function startCapture(voiceSessionId) {
-  if (!voiceSessionId) throw new Error("missing voice session id");
+function enqueueCaptureOperation(operation) {
+  const next = captureOperation.catch(() => {}).then(operation);
+  captureOperation = next.catch(() => {});
+  return next;
+}
+
+async function microphonePermissionGranted() {
+  if (!navigator.permissions?.query) return false;
+  try {
+    const status = await navigator.permissions.query({ name: "microphone" });
+    return status?.state === "granted";
+  } catch {
+    return false;
+  }
+}
+
+function forwardCaptureAudio(capture, pcm) {
+  if (!pcm?.byteLength || activeCapture !== capture) return;
+  if (capture.warming) {
+    capture.preRoll.append(new Uint8Array(pcm));
+    return;
+  }
+  chrome.runtime
+    .sendMessage({
+      cmd: "offscreenVoiceAudio",
+      voiceSessionId: capture.captureId,
+      audio: bytesToBase64(pcm),
+    })
+    .catch(() => {});
+}
+
+async function startCapture(captureId, { warming = false } = {}) {
+  if (!captureId) throw new Error("missing voice capture id");
   stopCapture();
 
   let stream = null;
@@ -95,8 +131,21 @@ async function startCapture(voiceSessionId) {
       numberOfOutputs: 1,
       outputChannelCount: [1],
     });
-    const capture = { voiceSessionId, stream, audioCtx, source, worklet, sampleRate, resampler };
+    const capture = {
+      captureId,
+      warming,
+      preRoll: createVoicePreRollBuffer(VOICE_PRE_ROLL_BYTES),
+      stream,
+      audioCtx,
+      source,
+      worklet,
+      sampleRate,
+      resampler,
+    };
     activeCapture = capture;
+    if (warming) {
+      capture.warmTimeout = setTimeout(() => stopCapture(capture.captureId), VOICE_WARM_CAPTURE_TIMEOUT_MS);
+    }
 
     worklet.port.onmessage = (event) => {
       if (activeCapture !== capture) return;
@@ -104,13 +153,7 @@ async function startCapture(voiceSessionId) {
       if (!(inputSamples instanceof Float32Array) || inputSamples.length <= 0) return;
       const pcm = resampler.process(inputSamples);
       if (pcm.byteLength <= 0) return;
-      chrome.runtime
-        .sendMessage({
-          cmd: "offscreenVoiceAudio",
-          voiceSessionId,
-          audio: bytesToBase64(pcm),
-        })
-        .catch(() => {});
+      forwardCaptureAudio(capture, pcm);
     };
 
     source.connect(worklet);
@@ -132,9 +175,45 @@ async function startCapture(voiceSessionId) {
     try {
       await audioCtx?.close();
     } catch {}
-    if (activeCapture?.voiceSessionId === voiceSessionId) activeCapture = null;
+    if (activeCapture?.captureId === captureId) activeCapture = null;
     throw captureFailure(error, stage);
   }
+}
+
+async function warmCapture(warmCaptureId) {
+  if (!warmCaptureId) throw new Error("missing warm capture id");
+  if (activeCapture?.captureId === warmCaptureId && activeCapture.warming) {
+    return { warmed: true, preRollBytes: activeCapture.preRoll.byteLength };
+  }
+  // Gesture warm-up must never create an unsolicited permission prompt when a
+  // normal mascot click resolves to text. The explicit voice/record start path
+  // retains the existing visible permission recovery behavior.
+  if (!(await microphonePermissionGranted())) {
+    return { warmed: false, reason: "microphone_permission_not_granted" };
+  }
+  if (activeCapture && !activeCapture.warming) {
+    return { warmed: false, reason: "capture_active" };
+  }
+  await startCapture(warmCaptureId, { warming: true });
+  return { warmed: true, preRollBytes: 0 };
+}
+
+async function promoteOrStartCapture(captureId, warmCaptureId = null) {
+  const capture = activeCapture;
+  if (capture?.warming && warmCaptureId && capture.captureId === warmCaptureId) {
+    if (capture.warmTimeout) clearTimeout(capture.warmTimeout);
+    capture.warmTimeout = null;
+    capture.captureId = captureId;
+    capture.warming = false;
+    const preRoll = capture.preRoll.drain();
+    forwardCaptureAudio(capture, preRoll);
+    return {
+      inputSampleRate: capture.sampleRate,
+      outputSampleRate: 16000,
+      adoptedPreRollBytes: preRoll.byteLength,
+    };
+  }
+  return startCapture(captureId);
 }
 
 // ---- Video note capture -----------------------------------------------------
@@ -366,7 +445,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "offscreenVoiceCaptureStart") {
-    startCapture(msg.voiceSessionId)
+    enqueueCaptureOperation(() => promoteOrStartCapture(msg.voiceSessionId, msg.warmCaptureId || null))
       .then((capture) => sendResponse({ ok: true, capture }))
       .catch((error) => {
         stopCapture(msg.voiceSessionId);
@@ -382,9 +461,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       });
     return true;
   }
+  if (msg.cmd === "offscreenVoiceCaptureWarm") {
+    enqueueCaptureOperation(() => warmCapture(msg.warmCaptureId))
+      .then((capture) => sendResponse({ ok: true, capture }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error), code: error?.code || "microphone_capture_failed" }));
+    return true;
+  }
   if (msg.cmd === "offscreenVoiceCaptureStop") {
-    stopCapture(msg.voiceSessionId || null);
-    sendResponse({ ok: true });
+    enqueueCaptureOperation(() => stopCapture(msg.voiceSessionId || null))
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: true }));
     return true;
   }
   return false;

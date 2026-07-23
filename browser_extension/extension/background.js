@@ -72,6 +72,7 @@ const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 // can cancel one cue or all cues on a tab without blocking new ones.
 const tasks = new Map();
 const voiceSessions = new Map();
+const gestureWarmStarts = new Map();
 const MAX_PENDING_VOICE_EVENTS = 50;
 const MAX_QUEUED_VOICE_AUDIO_BYTES = 16000 * 2 * 20;
 // Record mode buffers raw PCM16 in the worker until the user stops; cap the
@@ -2204,11 +2205,30 @@ async function openOptionsForTarget(target) {
   await chrome.runtime.openOptionsPage?.();
 }
 
-async function startOffscreenVoiceCapture(id) {
+async function warmOffscreenVoiceCapture(warmCaptureId) {
+  const captureBusy = [...voiceSessions.values()].some((session) => !session.closed && !session.committed && session.capture !== "none");
+  if (!warmCaptureId || voiceStartPending > 0 || captureBusy || activeRecordSession() || videoNoteSession) {
+    return { warmed: false, reason: "capture_busy" };
+  }
   const response = await sendToOffscreenReceiver(
     (message) => chrome.runtime.sendMessage(message),
     ensureOffscreenVoiceReceiver,
-    { cmd: "offscreenVoiceCaptureStart", voiceSessionId: id },
+    { cmd: "offscreenVoiceCaptureWarm", warmCaptureId },
+  );
+  if (!response?.ok) {
+    return { warmed: false, reason: response?.code || "microphone_capture_failed" };
+  }
+  return response.capture || { warmed: false };
+}
+
+async function startOffscreenVoiceCapture(id, warmCaptureId = null) {
+  if (warmCaptureId) {
+    await gestureWarmStarts.get(warmCaptureId)?.catch(() => {});
+  }
+  const response = await sendToOffscreenReceiver(
+    (message) => chrome.runtime.sendMessage(message),
+    ensureOffscreenVoiceReceiver,
+    { cmd: "offscreenVoiceCaptureStart", voiceSessionId: id, warmCaptureId },
   );
   if (!response?.ok) {
     const error = new Error(response?.error || "extension microphone capture did not start");
@@ -2227,6 +2247,12 @@ async function stopOffscreenVoiceCapture(id) {
       voiceSessionId: id || null,
     })
     .catch(() => {});
+}
+
+async function stopGestureWarmCapture(warmCaptureId) {
+  if (!warmCaptureId) return;
+  await gestureWarmStarts.get(warmCaptureId)?.catch(() => {});
+  await stopOffscreenVoiceCapture(warmCaptureId);
 }
 
 function handleOffscreenVoiceError(id, error, code = error?.code) {
@@ -2301,7 +2327,10 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
 async function startVoiceSessionWithMode(tabId, opts = {}) {
   // livekit-voice.js delivers straight to a tab's content script; panel
   // sessions must stay on the proxy path, whose events route through send().
-  if (tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
+  // Gesture-warmed PCM can only be adopted by the standard offscreen/WebSocket
+  // path. Keep that turn on the path that can preserve its pre-roll; immediate
+  // non-warmed starts may continue using the experimental LiveKit transport.
+  if (!opts.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
     try {
       const cfg = await getConfig();
       const sessionId = await getStableSessionId();
@@ -2325,7 +2354,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2335,7 +2364,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2361,7 +2390,7 @@ async function activeThreadBranch(cfg) {
   const data = await callGateway(cfg, path, { method: "GET" });
   return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
 }
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, onSessionCreated } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2399,7 +2428,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
   if (session.capture === "extension-offscreen") {
     session.captureStartRequested = true;
     try {
-      session.captureDiagnostics = await startOffscreenVoiceCapture(id);
+      session.captureDiagnostics = await startOffscreenVoiceCapture(id, warmCaptureId || null);
       if (voiceSessions.get(id) !== session || session.closed) {
         throw new Error(session.setupErrorMessage || "Microphone capture closed during setup.");
       }
@@ -2975,7 +3004,7 @@ function closeTabRecordSessions(tabId) {
   }
 }
 
-async function startRecordSession(tabId) {
+async function startRecordSession(tabId, warmCaptureId = null) {
   // The offscreen document has a single capture slot, so a record session and
   // a voice session must never run at once. Refuse instead of tearing down the
   // live voice turn under the user. voiceStartPending covers the async setup
@@ -3001,7 +3030,7 @@ async function startRecordSession(tabId) {
   };
   recordSessions.set(id, session);
   try {
-    await startOffscreenVoiceCapture(id);
+    await startOffscreenVoiceCapture(id, warmCaptureId);
   } catch (error) {
     recordSessions.delete(id);
     return { ok: false, error: extensionMicCaptureMessage(error) };
@@ -4023,6 +4052,26 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "voiceCaptureWarm" && sender.tab) {
+    const warmCaptureId = msg.warmCaptureId;
+    const pending = warmOffscreenVoiceCapture(warmCaptureId);
+    gestureWarmStarts.set(warmCaptureId, pending);
+    pending.then(() => {
+      if (gestureWarmStarts.get(warmCaptureId) === pending) gestureWarmStarts.delete(warmCaptureId);
+    }, () => {
+      if (gestureWarmStarts.get(warmCaptureId) === pending) gestureWarmStarts.delete(warmCaptureId);
+    });
+    pending
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch(() => sendResponse({ ok: true, warmed: false, reason: "warmup_failed" }));
+    return true;
+  }
+  if (msg.cmd === "voiceCaptureWarmCancel") {
+    stopGestureWarmCapture(msg.warmCaptureId || null)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: true }));
+    return true;
+  }
   if (msg.cmd === "offscreenVoiceAudio") {
     // Record-scoped capture ids buffer locally for /v1/audio-notes; everything
     // else is live voice audio for the gateway socket.
@@ -4044,7 +4093,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.cmd === "recordSessionStart" && sender.tab) {
-    startRecordSession(sender.tab.id)
+    startRecordSession(sender.tab.id, msg.warmCaptureId || null)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
@@ -4101,6 +4150,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       autoCommit: msg.autoCommit !== false,
       contextAction: msg.contextAction,
       threadLabel: msg.threadLabel,
+      warmCaptureId: msg.warmCaptureId || null,
     })
       .then((session) => {
         if (session?.voiceSessionId) {

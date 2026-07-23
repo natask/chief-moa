@@ -88,6 +88,7 @@
   // send a double-started turn, while a double-click during a single-started
   // turn can discard it before opening a fresh thread.
   let voiceFirstCaptureOrigin = null;
+  let gestureWarmCaptureId = null;
   // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
   // hit circle, the lion and every animation distance. Scroll on the lion
   // adjusts it; the value persists like the launcher position does.
@@ -432,8 +433,9 @@
       e.stopPropagation();
       openTextSurface({ fresh: false });
       primeAudio();
-      toggleVoice();
+      toggleVoice({ warmCaptureId: takeGestureVoiceWarmup() });
     });
+    voiceButton.addEventListener("pointerdown", beginGestureVoiceWarmup);
 
     recordButton.addEventListener("click", (e) => {
       e.preventDefault();
@@ -441,11 +443,13 @@
       // Shift+click records a video note (screen + narration); a plain click
       // keeps the audio note. A video recording in progress stops on any click.
       if (videoNoteActive || e.shiftKey) {
+        cancelGestureVoiceWarmup();
         toggleVideoNoteMode();
         return;
       }
       toggleRecordMode();
     });
+    recordButton.addEventListener("pointerdown", beginGestureVoiceWarmup);
 
     stopButton.addEventListener("click", (e) => {
       e.preventDefault();
@@ -604,6 +608,7 @@
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    beginGestureVoiceWarmup();
     const rect = launcher.getBoundingClientRect();
     dragState = {
       pointerId: e.pointerId,
@@ -651,6 +656,7 @@
       if (voiceFirstHoldStartedTurn) stopLiveVoiceTurn("cancel");
       voiceFirstHoldStartedTurn = false;
       dragState.moved = true;
+      cancelGestureVoiceWarmup();
     }
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
@@ -658,6 +664,7 @@
       dragState.moved = true;
       cancelLauncherDoubleClickHold({ cancelStartedVoice: true });
       clearVoiceFirstHoldTimer();
+      cancelGestureVoiceWarmup();
     }
     placeLauncher(dragState.left + dx, dragState.top + dy, false);
   }
@@ -691,7 +698,10 @@
       placeLauncher(rect.left, rect.top, true);
       return;
     }
-    if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) return;
+    if (e.type === "pointercancel" || downMs > LAUNCHER_TAP_MAX_MS) {
+      cancelGestureVoiceWarmup();
+      return;
+    }
     // A mascot tap is also the write-surface affordance. Open it before
     // gesture routing so voice-first mode cannot consume the click invisibly.
     // Voice may start after this, but the user always gets a place to type and
@@ -720,7 +730,10 @@
       clickTimer = null;
       const tap = lastLauncherTap;
       lastLauncherTap = null;
-      if (tap) openTextSurface({ fresh: false });
+      if (tap) {
+        cancelGestureVoiceWarmup();
+        openTextSurface({ fresh: false });
+      }
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
 
@@ -769,6 +782,7 @@
     openTextSurface({ fresh: false });
     primeAudio();
     if (liveVoice && listening) {
+      cancelGestureVoiceWarmup();
       commitLiveVoiceTurn();
       return "committed";
     }
@@ -779,6 +793,7 @@
       preserveAssistantPlayback: assistantSpeechOverlap === true,
       conversation: false,
       autoCommit: false,
+      warmCaptureId: takeGestureVoiceWarmup(),
     });
     return "started";
   }
@@ -894,9 +909,12 @@
     }
     if (chain.count === 3) {
       // Chat must never inherit a hot microphone or commit a pending capture.
+      cancelGestureVoiceWarmup();
       if (liveVoice && listening) cancelTalkMode();
       openTextSurface({ fresh: false });
+      return;
     }
+    cancelGestureVoiceWarmup();
   }
 
   function voiceFirstCaptureActive() {
@@ -924,6 +942,7 @@
       autoCommit: false,
       openText: false,
       turnId: replacement.turnId,
+      warmCaptureId: takeGestureVoiceWarmup(),
     });
     if (liveVoice) liveVoice.tapTalk = true;
     syncTalkModeUi();
@@ -959,6 +978,7 @@
   function cancelTalkMode() {
     conversationActive = false;
     voiceFirstCaptureOrigin = null;
+    cancelGestureVoiceWarmup();
     stopAllLiveVoiceTurns("cancel");
     syncTalkModeUi();
   }
@@ -2714,6 +2734,7 @@
         autoCommit: options.autoCommit !== false,
         contextAction: context.action,
         threadLabel: context.label,
+        warmCaptureId: options.warmCaptureId || null,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -3369,19 +3390,23 @@
     if (!shown && agentState !== "idle") setAgentState("idle");
   }
 
-  function toggleVoice() {
+  function toggleVoice(options = {}) {
     if (liveVoice && listening) {
+      cancelGestureVoiceWarmup();
       commitLiveVoiceTurn();
       return;
     }
     if (liveVoice) {
       if (assistantSpeechOverlap === true && liveVoice.committed) {
-        startLiveVoiceTurn({ preserveAssistantPlayback: true });
+        startLiveVoiceTurn({ preserveAssistantPlayback: true, warmCaptureId: options.warmCaptureId || null });
         return;
       }
       stopLiveVoiceTurn("cancel");
     }
-    startLiveVoiceTurn({ preserveAssistantPlayback: assistantSpeechOverlap === true });
+    startLiveVoiceTurn({
+      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      warmCaptureId: options.warmCaptureId || null,
+    });
   }
 
   function toggleVoiceSession() {
@@ -3401,6 +3426,29 @@
   let recordPending = false;
   let recordStartedAt = 0;
 
+  function beginGestureVoiceWarmup() {
+    if (gestureWarmCaptureId || (liveVoice && liveVoice.committed !== true) || listening || recordActive || recordPending || videoNoteActive) {
+      return gestureWarmCaptureId;
+    }
+    const warmCaptureId = `warm:${crypto.randomUUID()}`;
+    gestureWarmCaptureId = warmCaptureId;
+    safeRuntimeSendMessage({ cmd: "voiceCaptureWarm", warmCaptureId }).catch(() => {});
+    return warmCaptureId;
+  }
+
+  function takeGestureVoiceWarmup() {
+    const warmCaptureId = gestureWarmCaptureId;
+    gestureWarmCaptureId = null;
+    return warmCaptureId;
+  }
+
+  function cancelGestureVoiceWarmup() {
+    const warmCaptureId = takeGestureVoiceWarmup();
+    if (warmCaptureId) {
+      safeRuntimeSendMessage({ cmd: "voiceCaptureWarmCancel", warmCaptureId }).catch(() => {});
+    }
+  }
+
   function setRecordState(active) {
     recordActive = active;
     if (root) root.classList.toggle("agee-recording", active);
@@ -3415,6 +3463,7 @@
     if (recordPending) return;
     openTextSurface({ fresh: false });
     if (recordActive) {
+      cancelGestureVoiceWarmup();
       stopRecordMode();
       return;
     }
@@ -3426,14 +3475,15 @@
       const cueId = newCueId();
       materializeCue(cueId, "Audio note", "");
       updateCue(cueId, "Voice is active. Stop voice before recording a note.", "error");
+      cancelGestureVoiceWarmup();
       return;
     }
-    startRecordMode();
+    startRecordMode(takeGestureVoiceWarmup());
   }
 
-  function startRecordMode() {
+  function startRecordMode(warmCaptureId = null) {
     recordPending = true;
-    safeRuntimeSendMessage({ cmd: "recordSessionStart" }).then((res) => {
+    safeRuntimeSendMessage({ cmd: "recordSessionStart", warmCaptureId }).then((res) => {
       recordPending = false;
       if (!res && extensionContextInvalidated) return;
       if (!res?.ok) {

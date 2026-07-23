@@ -74,6 +74,7 @@ const requiredFiles = [
   "scripts/test-browser-turn-protocol.mjs",
   "scripts/test-extension-production-sources.mjs",
   "scripts/test-runtime-intent-modules.mjs",
+  "scripts/test-voice-preroll-buffer.mjs",
   "scripts/extension-production-sources.mjs",
   "scripts/coverage-extension.mjs",
   "scripts/coverage-ratchet.json",
@@ -105,6 +106,7 @@ const offscreenHtmlSource = readFileSync("extension/offscreen.html", "utf8");
 const offscreenVoiceBridgeSource = readFileSync("extension/offscreen-voice-bridge.js", "utf8");
 const offscreenWorkletSource = readFileSync("extension/offscreen-audio-worklet.js", "utf8");
 const offscreenResamplerSource = readFileSync("extension/offscreen-audio-resampler.js", "utf8");
+const voicePreRollSource = readFileSync("extension/voice-preroll-buffer.js", "utf8");
 const optionsHtmlSource = readFileSync("extension/options.html", "utf8");
 const optionsSource = readFileSync("extension/options.js", "utf8");
 const optionsRecoverySource = readFileSync("extension/options-recovery.js", "utf8");
@@ -315,6 +317,21 @@ if (
 }
 
 if (
+  !/VOICE_PRE_ROLL_BYTES\s*=\s*16000\s*\*\s*2\s*\*\s*500\s*\/\s*1000/.test(offscreenSource) ||
+  !/createVoicePreRollBuffer/.test(offscreenSource) ||
+  !/offscreenVoiceCaptureWarm/.test(offscreenSource) ||
+  !/promoteOrStartCapture/.test(offscreenSource) ||
+  !/microphonePermissionGranted/.test(offscreenSource) ||
+  !/while \(byteLength > maxBytes/.test(voicePreRollSource) ||
+  !/cmd:\s*"voiceCaptureWarm"/.test(contentSource) ||
+  !/cmd:\s*"voiceCaptureWarmCancel"/.test(contentSource) ||
+  !/warmCaptureId:\s*options\.warmCaptureId \|\| null/.test(contentSource) ||
+  !/startOffscreenVoiceCapture\(id, warmCaptureId/.test(backgroundSource)
+) {
+  throw new Error("browser gesture capture must warm a permission-safe 500 ms rolling pre-roll and adopt it into voice/record sessions");
+}
+
+if (
   !/function voiceSessionSocketOpen/.test(backgroundSource) ||
   !/function sendVoiceSessionJson/.test(backgroundSource) ||
   !/function sendVoiceSessionBinary/.test(backgroundSource)
@@ -359,10 +376,11 @@ const voiceStartBody = sourceBetween(
   /async function switchThreadBranch\(/,
   "voice proxy mutex wrapper"
 );
-if (voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id)") < 0) {
+const offscreenCaptureStartIndex = voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id, warmCaptureId");
+if (offscreenCaptureStartIndex < 0) {
   throw new Error("browser voice must start offscreen microphone capture during voice proxy setup");
 }
-if (voiceProxySetupBody.indexOf("createVoiceSessionTicket(cfg)") < voiceProxySetupBody.indexOf("startOffscreenVoiceCapture(id)")) {
+if (voiceProxySetupBody.indexOf("createVoiceSessionTicket(cfg)") < offscreenCaptureStartIndex) {
   throw new Error("browser voice must start offscreen capture before creating the gateway voice ticket");
 }
 
@@ -377,7 +395,7 @@ if (
 }
 
 if (
-  !/voiceSessions\.set\(id, session\);[\s\S]{0,900}await startOffscreenVoiceCapture\(id\)[\s\S]{0,260}captureStarted = true/.test(backgroundSource) ||
+  !/voiceSessions\.set\(id, session\);[\s\S]{0,1100}await startOffscreenVoiceCapture\(id, warmCaptureId \|\| null\)[\s\S]{0,260}captureStarted = true/.test(backgroundSource) ||
   !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource) ||
   !/message\?\.type === "commit_turn"[\s\S]{0,220}sendOrQueueVoiceSessionCommit/.test(backgroundSource)
 ) {
@@ -927,7 +945,7 @@ if (
 if (
   !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
   !/startLivekitVoiceSession\(/.test(backgroundSource) ||
-  !/if \(tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/if \(!opts\.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
   !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
 ) {
   throw new Error("background.js must gate LiveKit voice behind the flag and fall back to the WS startVoiceSessionProxy path");
@@ -995,7 +1013,7 @@ if (/setInputText\(\s*""/.test(startLiveVoiceTurnBody)) {
   throw new Error("starting browser voice must not clear an existing typed draft");
 }
 
-if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(contentSource)) {
+if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,180}toggleVoice\(\{\s*warmCaptureId: takeGestureVoiceWarmup\(\)\s*\}\);/.test(contentSource)) {
   throw new Error("voice button click must open the input surface and prime audio before starting live voice");
 }
 

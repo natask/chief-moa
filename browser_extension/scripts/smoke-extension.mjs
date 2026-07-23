@@ -187,7 +187,7 @@ function assertVoicePlaybackStopContract() {
   if (!/function safeRuntimeSendMessage/.test(source) || !/function safeStorageLocalGet/.test(source) || !/function safeStorageLocalSet/.test(source)) {
     throw new Error("content.js must guard runtime and storage calls against stale extension contexts");
   }
-  if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,120}toggleVoice\(\);/.test(source)) {
+  if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,180}toggleVoice\(\{\s*warmCaptureId: takeGestureVoiceWarmup\(\)\s*\}\);/.test(source)) {
     throw new Error("voice button click must open the input surface and prime audio before starting live voice");
   }
   if (!/origin === "single"\) beginCurrentThreadSteeringCapture\(replacement\)/.test(source)) {

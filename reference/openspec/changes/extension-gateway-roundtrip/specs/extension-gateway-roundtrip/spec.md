@@ -158,6 +158,17 @@ text-to-speech as the production voice path.
 - **AND** the background worker receives PCM chunks from the offscreen document
   before forwarding them to the gateway voice WebSocket
 
+#### Scenario: Browser gestures preserve utterance starts
+- **WHEN** microphone permission is already granted and the user presses a
+  browser voice or audio-note control before its click/hold gesture resolves
+- **THEN** the extension-owned offscreen microphone begins warming on pointer-down
+- **AND** it retains only the newest approximately 500 ms of PCM while warming
+- **AND** a confirmed voice turn or audio note adopts that capture and forwards
+  the retained PCM before newly captured audio
+- **AND** a gesture that resolves without capture stops and discards the warm mic
+- **AND** warm-up never prompts for microphone permission from an ordinary
+  mascot press; the explicit capture path keeps the visible recovery flow
+
 #### Scenario: Extension microphone capture is blocked
 - **WHEN** Chrome blocks microphone capture in the extension offscreen document
 - **THEN** the overlay renders a visible microphone permission error
