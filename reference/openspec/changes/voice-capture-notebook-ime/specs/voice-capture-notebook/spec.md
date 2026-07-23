@@ -110,12 +110,59 @@ transcript, and performs no reasoning, TTS, or agent dispatch. On macOS the
 global summon SHALL start or finish this session and make a successful final
 transcript available on the clipboard.
 
+The extension worker SHALL own the one active browser dictation lifecycle.
+Browser tabs SHALL be views of that shared state, not independent session
+authorities. A global finish invocation from a different tab SHALL commit the
+active dictation rather than creating a second recorder.
+
 #### Scenario: Global macOS dictation produces paste-ready text
 - **WHEN** the user invokes global dictation, speaks English, Amharic, or both,
   and invokes it again to finish
 - **THEN** the gateway returns the literal transcript without a model reply
 - **AND** the browser copies that transcript to the clipboard
 - **AND** no reasoning, TTS, or agent run begins
+
+#### Scenario: Another tab finishes the active dictation
+- **WHEN** dictation starts from one browser tab and the user invokes the global
+  command while another tab is active
+- **THEN** the extension commits the already-active dictation session
+- **AND** it does not start a competing voice session in the newly active tab
+- **AND** both tabs can render the same worker-owned lifecycle as passive views
+
+#### Scenario: A late tab hydrates shared dictation state
+- **WHEN** an extension surface loads while dictation is already active
+- **THEN** it reads the current worker-owned state
+- **AND** it does not claim microphone or session ownership solely by loading
+
+### Requirement: Completed browser dictation becomes a literal capture
+After storing a completed transcription-only browser voice turn, the gateway
+SHALL asynchronously project it into one deterministic queryable capture block.
+The block SHALL preserve the bounded literal transcript, transcript completeness,
+source surface, language/provider provenance, and retained audio reference when
+available. The projection SHALL NOT delay the terminal dictation event.
+
+The gateway SHALL append one idempotent routing proposal for that block with
+route `file_only`, classification `unclassified`, `executable: false`, and
+`model_used: false`. This proposal is durable evidence for later review, not an
+intent decision or execution request.
+
+#### Scenario: Clipboard delivery is independent of projection
+- **WHEN** a transcription-only browser turn completes successfully
+- **THEN** the canonical turn can finish and the browser can copy its literal
+  transcript without waiting for capture projection
+- **AND** the completed turn is subsequently queryable as one capture block
+
+#### Scenario: Capture routing remains inert
+- **WHEN** the gateway creates the routing proposal for a completed dictation
+- **THEN** the proposal is `file_only` and `unclassified`
+- **AND** it cannot execute an action or launch an agent
+- **AND** no model is invoked to derive the proposal
+
+#### Scenario: Reconciliation does not duplicate a capture
+- **WHEN** startup reconciliation observes a completed transcription-only turn
+  that was already projected
+- **THEN** the same deterministic capture identity is retained
+- **AND** no duplicate capture block or routing proposal is appended
 
 ### Requirement: Voice delivery mode is canonical and device-scoped
 The gateway SHALL persist a versioned Ask, Note, or Coach selection per device

@@ -86,6 +86,15 @@ Moa Gateway
   carry an explicit shared identity. Android and browser clients may cache or
   render this projection, but do not become conversation stores.
 
+  Completed capture-only dictation is also projected into a durable
+  `capture_block`. The block preserves the literal transcript, completeness,
+  retained-audio reference, surface, session/turn identity, language, and
+  provider provenance. Its first routing result is an append-only,
+  non-executable proposal (`file_only` / `unclassified` by default), not an
+  action, task, model invocation, or agent dispatch. Projection and routing run
+  after the latency-sensitive transcript/clipboard result and may reconcile
+  idempotently from completed turns after a restart.
+
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
   build/test commands, desktop/browser/server automation.
@@ -134,6 +143,15 @@ application clients are scoped actors of that plane rather than alternate
 sources of release truth. The gateway may serve artifacts or bridge product
 identity, but does not silently inherit release-administration authority.
 
+A cross-surface release bundle binds one immutable release to the exact artifact
+digest for each included surface. Stable and preview are views over those
+bundles, not mutable binaries. A device assignment records the requested bundle
+and channel; it does not claim that the bytes were downloaded, installed,
+activated, or smoked. Those transitions require separate platform receipts
+bound to the assignment, release id, surface, and artifact SHA-256. The control
+plane retains a last-known-good assignment so a client can request a bounded
+fallback without treating a UI selection as a completed rollback.
+
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
 be reported as a later one. macOS and Windows remain protocol/library seams
@@ -164,6 +182,14 @@ gateway require isolated preview evidence; macOS requires Developer ID signing,
 notarization/stapling, and supported-Mac QA; Windows requires publisher identity,
 package signing, and supported-Windows QA. Evidence from one lane never grants
 readiness to another.
+
+Feedback about a running candidate is immutable evidence, not a release
+mutation. It must bind the effective assignment, bundle, release, surface, and
+artifact SHA-256, plus bounded text and optional interaction evidence references.
+A video, screenshot, action sequence, or time range may enrich the comment, but
+derived model context remains a reviewable proposal. Feedback captured against
+one candidate cannot be silently reattached to master, a rebuilt artifact, or a
+different surface.
 
 ## Billing and entitlement boundary
 
@@ -880,6 +906,14 @@ soon as the extension owns a local voice-session id; PCM chunks captured before
 gateway `session_ready` are buffered in order and flushed before any pending
 commit so the start of the utterance is not dropped. The page overlay is only
 the control surface; websites must not receive microphone permission for Moa voice.
+Desktop dictation is one extension-wide capture lifecycle owned by the
+background worker/offscreen recorder, not one lifecycle per content script.
+Every tab is a passive view of the same worker-authoritative phase, turn id,
+transcript, and terminal result. A late-opened tab hydrates from that state, and
+an invocation from any tab stops or commits the already active dictation rather
+than starting a second recorder. Terminal cleanup is generation-bound so a late
+event from an older turn cannot clear or overwrite a newer turn.
+
 Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
 the user starts a manual mascot push-to-talk turn, the extension starts
@@ -1583,6 +1617,15 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 - `active_thread`: the durable pointer to the branch a session (and optionally a
   surface) is currently on, so every device resolves the same thread.
 - `turn`: one voice or chat input with optional screen context.
+- `capture_block`: an immutable, queryable projection of one completed
+  capture-only turn. It preserves the literal transcript and completeness,
+  retained media reference, surface/session/turn identity, language, and
+  provider provenance. It is evidence and grants no execution authority.
+- `capture_route_proposal`: an append-only classification attached to a
+  `capture_block`. The initial safe result is `file_only` / `unclassified` with
+  `executable=false` and `model_used=false`; later reflection, topic, or intent
+  derivation remains proposal data until the user explicitly accepts a separate
+  action.
 - `broker_event`: one inbound user message stored before routing to sessions,
   workflow packages, chat, voice, or agent runs.
 - `product_event`: one canonical append-only event in the self-hostable event
@@ -1664,11 +1707,20 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   exit code, status, and speakable summary, attached to a run.
 - `user_feedback`: a follow-up utterance stored as evidence against tasks,
   runs, or deployment records; non-interrupting unless explicitly cancellation.
+- `interaction_feedback`: immutable bounded text plus optional video,
+  screenshot, action, browser-state, and time-range evidence references, bound
+  to the exact assignment, bundle, release, surface, and artifact SHA-256 being
+  evaluated. Any generated summary or modification request is non-executable
+  proposal data.
 - `run_control_request`: a pause/cancel/redirect proposal the owning worker
   must claim and receipt before the run state changes.
 - `deployment_record`: preview/artifact/applied deployment state with URLs and
   commit sha; applied records require explicit promotion plus backup and
   restore-check evidence.
+- `release_assignment`: the control-plane decision that a device should use an
+  immutable stable or preview bundle. Assignment is distinct from download,
+  install, activation, and smoke, each of which requires its own exact-artifact
+  receipt; the last-known-good assignment is the bounded fallback target.
 - `tool_source`: an agent-callable integration source such as OpenAPI, MCP,
   GraphQL, or a custom gateway function.
 - `tool_request`: a gateway-queued request for a specific device or surface to
@@ -1871,6 +1923,16 @@ that is a preview, not a rollback of the active store. Promotion (update,
 active URL change, active-service restart) requires a Postgres dump, a
 `DATA_DIR` snapshot, and a passing scratch restore check first
 (`scripts/vps/backup.sh`, `scripts/vps/restore-check.sh`).
+
+Preview application runtimes never receive a direct connection to the active
+production database, queue, blob store, or worker pool. When a preview must show
+the user's current sessions or write compatible product data, it uses a stable,
+authenticated canonical data API whose additive contract is supported by both
+the active and candidate clients. Otherwise it uses an isolated state clone.
+Compatibility evidence must exercise old-client/new-server and
+new-client/old-server behavior before the control plane marks the candidate
+eligible; sharing a release-control view does not make preview storage shared
+production storage.
 
 Gateway-touching master pushes are verified in a read-only CI job. A separate,
 write-scoped job may atomically advance only `vps-deploy` to that exact verified

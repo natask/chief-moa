@@ -74,11 +74,34 @@ client restarts, Git branches, and individual deployments.
   hosted authority.
 - `scripts/release/release-evidence.mjs` now gives every surface one fail-closed
   evidence vocabulary, but it is read-only and does not persist receipts.
+- `release_control_plane/` now contains a persistence-neutral domain and service,
+  an authenticated HTTP boundary, a memory adapter, a Postgres adapter, and an
+  additive SQL migration. The implemented write path appends device assignment,
+  install-state, and exact-release feedback records. It uses sequence checks to
+  reject stale assignment writes.
+- The Android full app and browser extension side panel now contain release
+  selection clients. They define strict stable/preview parsing, device
+  assignment, stable fallback, and feedback bound to an assignment, bundle,
+  release, surface, and artifact digest. A shared service-to-client contract
+  test has not passed yet.
+- Assignment remains separate from install, activation, and smoke state.
+  Android requires a second user-approved installer step for an offered APK.
+  The browser reports that a binary reload is required. Neither client treats an
+  assignment receipt as proof that the selected bytes are active.
 - Android, browser extension, gateway/web, macOS, and Windows have different
   levels of build, signing, packaging, distribution, install, and smoke proof.
 - Master Orch is named as the repository deployment control plane, but its
   persistent product/API boundary and tenant authority model are not defined in
   this repository.
+
+The new slice is not active in production. No hosted service currently mounts
+the HTTP handler or applies the Postgres migration. No production identity
+provider supplies its authentication context. Stable and preview bundle/head
+records are not published into this store. The Android and browser clients
+therefore have no deployed release-control endpoint to use. The HTTP projection
+and strict client projections also need one shared schema and integration test.
+Promotion, signed channel movement, runner evidence ingestion, backup/restore
+proof, and active client deployment remain open.
 
 ## First Milestone
 

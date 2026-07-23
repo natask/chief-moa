@@ -66,6 +66,37 @@ Bitmap bytes are a separately bounded artifact, never base64 inside broker event
 or context packs. Screenshot and accessibility content cannot contain executable
 instructions for the gateway or worker.
 
+## Interaction Feedback Contract
+
+`interaction_feedback.v1` records feedback about one exact deployment
+candidate. It contains:
+
+- typed evidence refs, including an optional `video-note://` ref;
+- bounded time-range anchors within captured media;
+- bounded browser-snapshot anchors with snapshot ID, capture time, page ref,
+  element index, and label;
+- an exact release binding with surface, release ID, candidate ID, artifact
+  SHA-256, and optional channel and assignment ID;
+- a deterministic context proposal with status `unreviewed`.
+
+The parent feedback record keeps the bounded raw comment exactly as received,
+including whitespace. The derived context proposal adds release and anchor
+labels for review. It does not replace or rewrite the raw comment.
+
+The gateway accepts the feedback only when it targets one deployment and the
+surface, release ID, candidate ID, and artifact digest match that deployment's
+stored candidate. A release name or channel alone cannot establish this
+binding.
+
+Video bytes remain in the bounded video-note store. The feedback event keeps a
+typed ref. Time anchors point into that evidence. Browser anchors point to a
+captured snapshot and carry the capture time so later views can detect stale
+context.
+
+Submitting interaction feedback appends evidence to work history. The
+deterministic proposal remains unreviewed. No run, edit, release switch, or
+deployment starts from this event.
+
 ## Project Resolution
 
 Use a versioned `surface_project_binding` and resolve in this order:
@@ -86,6 +117,11 @@ A request stores evidence refs, resolved project and basis, user objective,
 authorization class (`architecture_only` or `implementation_authorized`), state,
 and idempotency identity. Broad or ambiguous requests default to architecture.
 Only an explicit current action may queue a worker proposal.
+
+An `interaction_feedback.v1` record is not that explicit action. A later user
+action may cite the feedback when it creates a modification request. The new
+request still passes through project resolution, authorization, and worker
+claim boundaries.
 
 The worker independently reads repo instructions and current source, records a
 before snapshot, and follows the existing verification, commit, preview,

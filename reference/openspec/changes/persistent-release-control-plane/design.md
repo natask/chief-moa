@@ -141,6 +141,91 @@ has its own API, database, identity boundary, and backups. Chief Moa clients and
 other applications integrate through the protocol rather than importing
 Master-Orch internals.
 
+## Implemented V0.2 Slice
+
+The current repository slice implements these parts:
+
+- The domain normalizes immutable multi-surface bundles, channel-head events,
+  assignment events, install receipts, and exact-release feedback.
+- The service resolves assignment precedence, records preview or stable device
+  assignments, records last-known-good stable fallback, and rejects stale
+  assignment sequences.
+- The memory adapter supports deterministic tests. The Postgres adapter reads
+  tenant/application-scoped bundles and heads, then appends assignments, install
+  receipts, and feedback.
+- The additive migration creates append-only bundle, channel-head, assignment,
+  install-receipt, and feedback tables. Triggers reject update, delete, and
+  truncate operations.
+- The framework-neutral HTTP handler requires an injected authentication
+  function. It takes tenant and actor identity from that trusted result rather
+  than request JSON.
+- The HTTP view exposes stable and preview candidates for one application and
+  device. Assignment and fallback responses set `install_confirmed` to false and
+  return a platform action.
+- The Android full app and browser side panel contain strict release-view
+  parsers and actions for preview/stable assignment, last-known-good fallback,
+  and exact-release feedback.
+
+The service tracks platform state as separate receipts:
+
+```text
+assignment recorded
+  -> installed
+  -> activated
+  -> smoked
+```
+
+A later receipt cannot prove an earlier state for different bytes. Each receipt
+must match the assignment event, bundle, surface, release, and artifact digest.
+The view reports each state separately.
+
+The Android client keeps package installation behind an explicit user review.
+It may download and verify an offered APK, then open the system installer. The
+browser client cannot replace extension code through this protocol. It reports
+that the selected extension binary still needs a platform-approved reload or
+store update.
+
+## V0.2 HTTP Boundary
+
+The implemented transport uses these routes:
+
+```text
+GET  /v1/release-control/apps/{application_id}/view
+POST /v1/release-control/apps/{application_id}/assignments
+POST /v1/release-control/apps/{application_id}/fallback
+POST /v1/release-control/apps/{application_id}/install-receipts
+POST /v1/release-control/apps/{application_id}/feedback
+```
+
+Assignment writes use `expected_assignment_sequence`. A stale value returns a
+conflict and does not change the assignment. Channel assignment retries use an
+idempotency key. Install and feedback records use immutable receipt ids.
+Feedback must match the active assignment and exact artifact bytes.
+
+The handler is a library boundary. It does not open a port, create a Postgres
+pool, apply migrations, issue credentials, or seed bundle/channel records.
+
+## Deployment Blockers
+
+The V0.2 code cannot become an active product surface until a deployable host
+does this work:
+
+- Mount the HTTP handler behind the production identity boundary.
+- Create a separate control-plane database, apply the migration, and prove
+  backup and restore.
+- Publish immutable bundle records and monotonic stable/preview head events.
+- Bind published download URLs to the exact artifact digests in each bundle.
+- Align the HTTP release view with both strict client projections and pass one
+  shared service-to-client contract test.
+- Align Android lifecycle receipt names with the service's accepted states.
+- Add health, smoke, rollback, and state-compatibility checks for the hosted
+  service.
+- Deploy the Android and browser client changes after their surface checks pass.
+
+Signed channel heads, promotion proposals, approval receipts, runner tokens,
+exact-artifact QA ingestion, feature profiles, and delegated administration
+persistence remain later slices.
+
 ## Delivery Order
 
 1. Personal V0 identity, tenant owner, applications/surfaces, immutable bundles.

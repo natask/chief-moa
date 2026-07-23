@@ -28,11 +28,38 @@ alignment.
   copy the final transcript to the clipboard.
 - [x] 0B.3 Preserve explicit configured input-language evidence and the canonical
   retained voice turn while keeping agent dispatch out of this path.
+- [x] 0B.4 Make the extension worker authoritative for the one active dictation
+  session so an invocation from another tab commits that session, late tabs
+  hydrate passive state, and tab activation cannot start a competing recorder.
 - Acceptance: double-tap Command starts capture, a second double-tap commits it,
   the final English/Amharic transcript is paste-ready, and the gateway performs
-  zero reasoning and TTS calls for the turn.
+  zero reasoning and TTS calls for the turn. Starting in one tab and finishing
+  from another still produces one canonical turn.
 - Verification: gateway Chirp smoke, browser verify/smoke, and manual macOS
   clipboard QA.
+- Acceptance status: source implementation is present in the current candidate.
+  Automated browser verification and smoke plus manual cross-tab macOS clipboard
+  QA are still required before this slice is accepted or promoted.
+
+## 0C. Authorized Literal Capture Projection Slice
+
+- [x] 0C.1 Project each completed transcription-only voice turn into one
+  deterministic, queryable capture block after canonical turn storage.
+- [x] 0C.2 Preserve the bounded literal transcript, completeness metadata,
+  language/provider provenance, source surface, and retained audio reference.
+- [x] 0C.3 Append one idempotent `file_only` / `unclassified` routing proposal
+  with `executable: false` and `model_used: false`.
+- [x] 0C.4 Reconcile completed dictation turns at startup without delaying the
+  terminal event or clipboard path.
+- [x] 0C.5 Add authenticated list, search, and detail reads plus deterministic
+  domain and handler tests.
+- Acceptance: a successful browser dictation remains immediately paste-ready,
+  becomes a durable literal capture, and creates no reasoning request, TTS
+  request, agent run, executable action, or inferred intent.
+- Acceptance status: the bounded candidate implementation and focused tests are
+  present. Full gateway verification, preview/state-compatibility evidence, and
+  production promotion have not yet been recorded. This slice does not satisfy
+  the full audio-note-first lifecycle in section 1.
 
 ## 0. Reconcile Current State
 
@@ -48,6 +75,9 @@ alignment.
 
 ## 1. Gateway Capture Block
 
+- Scope note: section 0C is only an additive projection from already-completed
+  browser dictation turns. The tasks below remain open for stored-audio-first
+  create, asynchronous STT lifecycle, retry, revision, retention, and deletion.
 - [ ] 1.1 Define bounded capture-block, transcript-revision, processing-event,
   retention, and dispatch schemas.
 - [ ] 1.2 Create a block idempotently from a stored audio note without invoking

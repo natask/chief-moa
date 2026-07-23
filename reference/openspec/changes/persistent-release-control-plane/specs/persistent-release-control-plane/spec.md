@@ -72,3 +72,53 @@ signing, distribution, install/activation, QA, and smoke authority.
   compatible and explicitly partial
 - **AND** macOS remains on its prior compatible assignment
 - **AND** no cross-surface “all deployed” claim is emitted
+
+### Requirement: Assignment writes are ordered and retry-safe
+The control plane SHALL record assignment changes as append-only events. A
+device write SHALL name its expected current sequence and an idempotency key.
+
+#### Scenario: Two surfaces select a channel for one device
+- **WHEN** two clients submit channel assignments from the same current sequence
+- **THEN** the control plane accepts at most one next sequence
+- **AND** rejects the stale write without replacing the accepted assignment
+- **AND** a retry with the accepted idempotency key returns the same event
+
+### Requirement: Platform state uses exact-release receipts
+The control plane SHALL track assignment, installation, activation, and smoke as
+separate states. A platform receipt SHALL name the assignment event, bundle,
+surface, release, and artifact digest.
+
+#### Scenario: Assignment succeeds before native installation
+- **WHEN** a device selects a preview bundle
+- **THEN** the assignment response reports that installation is unconfirmed
+- **AND** Android may ask the user to review a verified APK installation
+- **AND** the browser may report that a binary reload is required
+- **AND** the view reports installed, activated, or smoked only after a matching
+  platform receipt arrives
+
+#### Scenario: Receipt names different bytes
+- **WHEN** a client submits an install or smoke receipt with a digest that does
+  not match the assigned bundle artifact
+- **THEN** the control plane rejects the receipt
+- **AND** the assigned artifact remains unconfirmed
+
+### Requirement: Release feedback is bound to observed bytes
+The control plane SHALL bind release feedback to an assignment event, bundle,
+surface, release, and artifact digest. It SHALL reject feedback that does not
+match the assigned artifact.
+
+#### Scenario: User comments on the active preview
+- **WHEN** the Android full app or browser side panel submits feedback for the
+  selected preview
+- **THEN** the stored feedback retains the exact release binding and comment
+- **AND** later channel movement does not rewrite that binding
+
+### Requirement: Client identity comes from a trusted host boundary
+The HTTP boundary SHALL derive tenant and actor identity from authenticated host
+context. It SHALL ignore caller-supplied tenant and actor fields.
+
+#### Scenario: Caller forges another tenant
+- **WHEN** a request body names a tenant or actor that differs from the
+  authenticated context
+- **THEN** authorization uses the authenticated tenant and actor
+- **AND** the caller cannot read or write the other tenant's release records

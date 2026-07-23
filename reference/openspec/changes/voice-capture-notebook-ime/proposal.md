@@ -2,8 +2,12 @@
 
 ## Status
 
-Proposed for product alignment. This change records product direction only; it
-does not authorize implementation or promotion.
+Partially implemented. Ask/Note/Coach delivery state and the browser/macOS
+literal-dictation path exist. The current candidate also adds worker-authoritative
+cross-tab dictation state and an additive capture-block projection for completed
+browser dictation turns. These candidate changes are not a production promotion,
+and they do not complete the Android notebook, audio-first capture lifecycle, or
+IME described by this change.
 
 ## Why
 
@@ -34,7 +38,9 @@ review without making any of those features prerequisites for reliable capture.
 2. Produce editable, copyable transcript blocks quickly.
 3. Make repeated press/hold segments cheap and independent.
 4. Make the same mixed-language literal dictation globally invocable on macOS
-   through the browser surface and immediately copyable for paste.
+   through the browser surface and immediately copyable for paste. One extension
+   worker owns the active dictation session; tabs are interchangeable views of
+   that state rather than independent recorders.
 5. Let the same speech insert into any focused Android text field through a real
    keyboard.
 6. Apply user-selected writing skills without overwriting the literal transcript.
@@ -48,6 +54,10 @@ review without making any of those features prerequisites for reliable capture.
 - Introduce a gateway-owned `capture_block` record that links retained audio,
   literal transcript, language evidence, revisions, source surface, timestamps,
   and optional dispatch records.
+- As an additive first projection, turn each completed transcription-only
+  browser turn into a queryable literal capture block and append one inert
+  `file_only` / `unclassified` routing proposal. This proposal preserves the
+  thought without invoking a model, selecting an intent, or launching an agent.
 - Evolve Android record mode from storage-only audio into capture mode:
   upload safely, transcribe asynchronously, and show a copy/edit/share result.
 - Add a notebook/library to the full Android app for browsing, replaying,

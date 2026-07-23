@@ -20,11 +20,21 @@ and create a durable modification proposal. The proposal may enter an
 architecture-only or explicitly authorized implementation workflow through the
 existing gateway and execution-worker boundaries.
 
+While testing a stable or preview release, the user can also attach
+`interaction_feedback.v1` to the exact deployment candidate. The record keeps
+the bounded raw comment as entered. It may cite a video note and point to time
+ranges or browser snapshots. The gateway derives an inspectable, deterministic
+context proposal and marks it `unreviewed`.
+
 ## Invariant
 
 Screenshots, accessibility text, transcripts, and model interpretations are
 evidence, never instructions or authority. They cannot select a repository,
 approve an action, launch arbitrary shell work, or promote a deployment.
+
+Interaction feedback follows the same rule. Submitting feedback records
+evidence. It does not edit code, start a run, switch a release, or deploy a
+candidate.
 
 ## Recommendation
 
@@ -42,3 +52,4 @@ provenance and can capture its own rendered view without broad screen authority.
 - No project selection based only on screenshot pixels or visible text.
 - No provider or worker credentials on Android.
 - No automatic code edit, commit, deployment, or promotion from submission.
+- No model-written context that replaces the raw user comment.

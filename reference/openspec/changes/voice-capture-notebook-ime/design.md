@@ -25,6 +25,35 @@ the browser requests a transcription-only voice turn and copies the final
 literal transcript locally. Reasoning, TTS, categorization, and agent dispatch
 are not on its clipboard critical path.
 
+The extension worker is authoritative for the one active browser dictation
+session. A page starts capture through the worker, but the active tab is not the
+session authority. A global invocation from any tab commits the already-active
+dictation instead of starting a competing recorder. All extension pages hydrate
+the worker-owned state and may render passive status; only the owning capture
+surface handles microphone bytes. Tab navigation and activation therefore do
+not redefine the user's session or conversation.
+
+After the canonical transcription-only voice turn is stored and its terminal
+event can be delivered, the gateway projects it asynchronously into the product
+event substrate:
+
+```text
+completed transcription-only voice turn
+  -> deterministic literal capture_block
+  -> append-only capture.routing.proposed
+       route: file_only
+       classification: unclassified
+       executable: false
+       model_used: false
+```
+
+The projection retains transcript completeness, configured/observed language
+and provider provenance, and a reference to retained turn audio when available.
+It is idempotent and reconciled from canonical completed turns on startup. It
+does not delay clipboard delivery, infer a topic, mutate a conversation, or
+dispatch work. Later reflection, topic extraction, recurring-thought detection,
+and user-approved intent routing consume the literal block as derived work.
+
 ## Considered Shapes
 
 ### A. Treat every segment as a voice-chat turn
@@ -79,6 +108,8 @@ cover both audio and derived text.
 | Gateway audio-note store | Durable raw bytes and retention metadata | Canonical audio artifact |
 | Gateway voice providers | STT execution behind current provider registry | No canonical product state |
 | Gateway agent runtime | Explicit dispatch from selected block/revision and visible run lifecycle | Agent runs and dispatch receipts |
+| Browser extension worker | One active cross-tab dictation owner, lifecycle, and passive state broadcast | Ephemeral active browser capture state |
+| Browser pages | Microphone capture for the owning surface and passive rendering for all other views | Ephemeral page UI and audio buffer only |
 
 The Android app and IME store no provider credentials. Model output remains text
 or a proposal; it cannot insert into another app or launch an agent without the
@@ -163,21 +194,30 @@ surface. Any future ad model needs a separate privacy/threat-model decision.
 ## Rollout
 
 1. Reconcile shipped voice/audio-note work and create focused acceptance tests.
-2. Add capture-block lifecycle behind the gateway with migration/adaptation from
-   audio notes; deploy additively so old clients continue working.
-3. Add Android capture result and notebook list/detail; publish an OTA artifact
+2. Project completed browser dictation turns into literal capture blocks and
+   inert file-only routing proposals without changing the clipboard path.
+3. Add the full audio-first capture-block lifecycle behind the gateway with
+   migration/adaptation from audio notes; deploy additively so old clients
+   continue working.
+4. Add Android capture result and notebook list/detail; publish an OTA artifact
    only after loss/retry and phone QA pass.
-4. Add writing-skill candidates without automatic replacement.
-5. Add the IME in an opt-in build path and verify sensitive-field behavior on a
+5. Add writing-skill candidates without automatic replacement.
+6. Add the IME in an opt-in build path and verify sensitive-field behavior on a
    physical device.
-6. Add explicit block dispatch and multi-select dispatch.
-7. Consider Amharic character layout, drills, video, and gesture accelerators as
+7. Add explicit block dispatch and multi-select dispatch.
+8. Consider Amharic character layout, drills, video, and gesture accelerators as
    separate changes.
 
 ## Verification Strategy
 
 - Gateway: deterministic create/upload/transcribe/retry/query/delete fixtures;
   assert raw audio is stored before STT and provider failure cannot delete it.
+- Browser projection: assert one active worker-owned dictation across tabs,
+  late-tab hydration, commit from a different tab, terminal owner lifecycle, and
+  no page identity in gateway heartbeat metadata.
+- Gateway projection: assert deterministic block identity, exact bounded literal
+  text and provenance, one idempotent non-executable file-only proposal, query
+  behavior, and startup reconciliation.
 - Android unit: capture state reducer, editor sensitivity classifier, insertion
   session binding, gesture/drop-target decisions.
 - Android build: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew test assembleDebug`.

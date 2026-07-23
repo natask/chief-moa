@@ -67,3 +67,36 @@
       preview switch, stable fallback, proposal authorization, and exact-artifact
       evidence binding. No HTTP routes, database writes, Git merge, build,
       publish, or install in this ticket.
+
+## Second implementation ticket
+
+- [x] V0.2.1 Add immutable multi-surface bundle, channel-head, assignment,
+      install-receipt, and exact-release feedback records to the domain.
+- [x] V0.2.2 Add a persistence-neutral service with assignment precedence,
+      optimistic assignment sequences, idempotent channel assignments, and
+      last-known-good stable fallback.
+- [x] V0.2.3 Add memory and Postgres adapters for bundle/head reads and
+      append-only assignment, install-receipt, and feedback writes.
+- [x] V0.2.4 Add an additive Postgres migration for bundle, channel-head,
+      assignment, install-receipt, and feedback records. Reject update, delete,
+      and truncate operations.
+- [x] V0.2.5 Add an authenticated, framework-neutral HTTP handler for release
+      views, assignment, fallback, install receipts, and feedback. Derive tenant
+      and actor identity from the injected authentication result.
+- [x] V0.2.6 Keep assignment, install, activation, and smoke as separate states.
+      Require exact assignment, bundle, surface, release, and artifact-digest
+      binding for install receipts and feedback.
+- [x] V0.2.7 Add an Android full-app release card for stable/preview selection,
+      stable fallback, exact-release feedback, and explicit APK install review.
+- [x] V0.2.8 Add a browser side-panel release card for stable/preview selection,
+      stable fallback, exact-release feedback, and binary-reload-pending status.
+- [ ] V0.2.9 Run all release-control, Android, and browser verification. Fix any
+      failure before creating release artifacts. Add one shared contract test
+      that feeds the HTTP projection into both strict client parsers. Align
+      Android lifecycle receipts with the service's accepted states.
+- [ ] V0.2.10 Host the control-plane service behind production authentication,
+      apply the migration to its separate database, seed immutable bundles and
+      channel heads, and prove backup/restore and rollback.
+- [ ] V0.2.11 Deploy the verified Android and browser clients. Smoke each client
+      against the hosted endpoint and record installed, activated, and smoked
+      receipts separately.
