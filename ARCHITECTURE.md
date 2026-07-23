@@ -1402,6 +1402,13 @@ The gateway publishes update artifacts, but it does not install them on the
 phone. The Android app remains the local authority and the platform package
 installer is the final approval step.
 
+The current app uses direct distribution. Its first install is a debug APK sent
+over USB with ADB. OTA updates must keep the same package id and debug signing
+certificate. The continuity key lives on the development Mac. A GitHub runner's
+temporary debug key produces a verification artifact that cannot update the
+installed app. `DEPLOYMENT.md` records the current certificate digest and the
+gates for moving signing into GitHub Actions.
+
 VPS publication is a transaction over an immutable release directory. The
 publisher first validates the local `current` pointer and byte-consistent
 release/legacy metadata, acquires an owner lock, and snapshots the prior

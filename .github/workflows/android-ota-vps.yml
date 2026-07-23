@@ -1,9 +1,13 @@
 name: Build and publish Android OTA
 
-# Pushes produce an installable CI artifact without requiring production
-# credentials. Publishing is deliberately manual and additionally gated on the
-# exact master SHA, an explicit active-promotion acknowledgement, stable Android
-# signing identity, a protected GitHub environment, and explicit VPS details.
+# Pushes produce a credential-free verification artifact. A runner-generated
+# debug signer does not match the current USB-installed app. Treat that artifact
+# as installable only after its signer matches the continuity certificate in
+# DEPLOYMENT.md.
+#
+# The manual publisher is the migration target for formal GitHub-runner
+# releases. Keep it inactive until the current continuity key and VPS settings
+# are stored in the protected environment and one real-phone update passes.
 
 on:
   push:
@@ -25,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish the verified stable-signed APK to the VPS OTA directory"
+        description: "Publish a continuity-signed APK to the VPS OTA directory"
         required: true
         default: false
         type: boolean

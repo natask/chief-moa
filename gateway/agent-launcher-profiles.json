@@ -23,7 +23,9 @@
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
+      "AGENTS.md",
       "AGENT_WORKFLOW.md",
+      "DEPLOYMENT.md",
       "reference/openspec/changes/define-android-core-product-map",
       "reference/openspec/changes/message-broker-session-router",
       "reference/openspec/changes/define-aggie-compatible-surface"
@@ -42,7 +44,9 @@
     "context_files": [
       "README.md",
       "ARCHITECTURE.md",
+      "AGENTS.md",
       "AGENT_WORKFLOW.md",
+      "DEPLOYMENT.md",
       "reference/openspec/changes/define-android-core-product-map/manual-qa-checklist.md",
       "reference/openspec/changes/define-android-core-product-map/voice-model-test-plan.md"
     ],

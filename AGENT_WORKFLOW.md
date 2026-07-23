@@ -89,6 +89,9 @@ Read:
 - README.md
 - ARCHITECTURE.md
 - AGENTS.md
+- AGENT_WORKFLOW.md
+- DEPLOYMENT.md when the task builds, releases, publishes, promotes, installs,
+  or tests a deployed surface
 - <active OpenSpec or task file>
 - <target source files>
 

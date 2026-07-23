@@ -89,6 +89,10 @@
       for gateway, Android OTA, and browser extension deploys; require changed
       browser-extension deploys to advance the manifest version after the first
       recorded extension deploy.
+- [x] 9.8 Record the active Android distribution contract in the agent deployment
+      context. The first install uses a debug APK over USB. OTA builds keep the
+      same local debug certificate until a tested GitHub Actions key migration
+      replaces this path.
 
 ## 10. Cross-Device Tool Hub
 
@@ -131,9 +135,11 @@ the manual QA check.
 Release note: commit `5106d52` produced Android artifact
 `android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact
 `agee-chrome-0.1.35-5106d52d7fcc527ee05b0c2197c1b8b38124eb52`.
-Stable Android publication remains blocked because the protected publish job is
-not configured to run, and the Chrome Web Store upload gate was skipped; the
-local unpacked-extension reload signal completed without a client acknowledgement.
+The Android CI artifact from this release proves the build only. The active
+direct-distribution path still uses the local continuity signer and VPS OTA
+publisher. GitHub Actions publication requires a tested signer migration. The
+Chrome Web Store upload gate was skipped. The local unpacked-extension reload
+signal completed without a client acknowledgement.
 
 ## 12. Manual Cross-Surface Voice Gestures
 

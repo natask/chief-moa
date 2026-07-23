@@ -9,8 +9,10 @@ Before changing code, read:
 1. [README.md](README.md)
 2. [ARCHITECTURE.md](ARCHITECTURE.md)
 3. [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md)
-4. The active OpenSpec change or task under `reference/openspec/changes/`
-5. The source files touched by the task
+4. [DEPLOYMENT.md](DEPLOYMENT.md) for any build, release, publish, promotion,
+   install, OTA, or deployment task
+5. The active OpenSpec change or task under `reference/openspec/changes/`
+6. The source files touched by the task
 
 For Android-first product work, the active change is usually
 `reference/openspec/changes/define-android-core-product-map`.
@@ -91,6 +93,12 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
 The main machine (10.147.17.10) has been decommissioned. The production
 gateway is the DigitalOcean droplet behind https://api.agee.app. Fix work
 happens in an isolated branch or worktree, never against the running service.
+
+Android currently uses direct distribution. The first install uses a debug APK
+over USB and ADB. Later OTA APKs must use the same debug certificate from this
+development Mac. The GitHub-runner signing path is a migration target. A green
+credential-free Android CI artifact is not an OTA publication. Read
+`DEPLOYMENT.md` before Android release work.
 
 The VPS gateway auto-promotes (user-approved policy, 2026-07-06): every push
 to master that touches the gateway deploy path is verified by the
@@ -173,7 +181,8 @@ artifact through the repo's existing deployment path after verification. Active
 promotion happens automatically when the active-promotion gate passes, then the
 target is smoke-checked. For Android app changes, publish the OTA artifact when
 the install path will not interrupt an active phone session and rollback is
-clear.
+clear. Use the current local continuity signer described in `DEPLOYMENT.md`.
+Do not substitute a GitHub runner's temporary debug key.
 If preview or active promotion is blocked by missing credentials, failing
 verification, unavailable network, unsafe state, or a non-deployable docs-only
 change, record the blocker plainly before ending the task.

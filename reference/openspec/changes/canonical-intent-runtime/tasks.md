@@ -23,6 +23,10 @@
 - [ ] 4.1 Add authenticated intent list/detail/rehydration routes.
 - [ ] 4.2 Add intent/focus/brief events to the bounded Aggie protocol.
 - [ ] 4.3 Carry intent correlation additively on Android/browser turns.
+- [ ] 4.4 Add the mobile multi-agent launcher defined in
+      `mobile-agent-launcher-intent.md`: source-linked split preview, named
+      parallel runs, direct agent follow-up, durable status, and personal
+      segment isolation.
 
 ## 5. Verification and release
 

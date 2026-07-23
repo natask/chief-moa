@@ -123,6 +123,21 @@ test("profile loading accepts object maps and falls back for invalid files", () 
   assert.equal(launcher.launcherProfiles().coding.id, "coding");
 }));
 
+test("deployment profiles always load the active deployment contract", () => withFixture(({ launcher }) => {
+  const profiles = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "agent-launcher-profiles.json"), "utf8"));
+  for (const id of ["coding", "qa"]) {
+    const selected = launcher.launcherProfileForDecision(
+      decision({ target_type: "workflow", target_id: id, action: "invoke_workflow" }),
+      event({ text: id === "coding" ? "deploy Android OTA" : "verify the deployed release" }),
+      profiles,
+    );
+    assert.ok(selected.context_files.includes("AGENTS.md"));
+    assert.ok(selected.context_files.includes("DEPLOYMENT.md"));
+    const pack = launcher.buildContextPack(event(), decision(), selected);
+    assert.ok(pack.context_files.includes("DEPLOYMENT.md"));
+  }
+}));
+
 test("launch flag parsing preserves aliases and accepted string values", () => withFixture(({ launcher }) => {
   for (const body of [
     { launch_agent_run: true }, { launch_agent: "true" }, { launch: "1" },

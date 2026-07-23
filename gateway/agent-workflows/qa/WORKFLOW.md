@@ -5,6 +5,8 @@ regressions, or runtime QA.
 
 ## Agent Contract
 
+- Read `DEPLOYMENT.md` before release, publish, installation, OTA, or deployed
+  runtime QA.
 - Identify the touched surface before running broad checks.
 - For Chief Moa cross-surface work, verify by lane: browser voice, browser
   action/CDP, Android action/accessibility, gateway, workflow/docs, and

@@ -5,8 +5,10 @@ repo workflow, or verification work.
 
 ## Agent Contract
 
-- Read `README.md`, `ARCHITECTURE.md`, `AGENT_WORKFLOW.md`, the active
-  OpenSpec/task directory, and the source files touched by the ticket.
+- Read `README.md`, `ARCHITECTURE.md`, `AGENTS.md`, `AGENT_WORKFLOW.md`, the
+  active OpenSpec/task directory, and the source files touched by the ticket.
+- Read `DEPLOYMENT.md` before build, release, publish, promotion, install, OTA,
+  or deployment work.
 - Keep the implementation unit narrow: one observable outcome and one acceptance
   check.
 - Preserve the Android/gateway/browser trust boundary.

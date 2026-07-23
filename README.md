@@ -103,11 +103,17 @@ Android OTA artifact:
 android_app/deploy/ota/build-ota-artifact.sh
 ```
 
-Main-machine Android OTA sync:
+VPS Android OTA publish:
 
 ```sh
-android_app/deploy/ota/sync-main-machine.sh
+bash scripts/deploy.sh android
 ```
+
+Android uses direct distribution today. The first install uses USB and ADB.
+Later OTA builds must use the same local debug certificate. Read
+[DEPLOYMENT.md](DEPLOYMENT.md) before release work. GitHub Actions currently
+builds a verification artifact. It does not publish an installable update unless
+the workflow uses the continuity key and completes the VPS publication gate.
 
 Auto-deploy committed target changes:
 
