@@ -94,8 +94,10 @@ public final class MainActivity extends Activity {
     private int gatewayHealthGeneration;
     private int controlCenterGeneration;
     private int updateCheckGeneration;
+    private int releaseInstallGeneration;
     private long updateDialogVersionCode;
     private boolean reviewUpdateOnNextCheck;
+    private MoaReleaseCardController releaseController;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -106,6 +108,7 @@ public final class MainActivity extends Activity {
         window.setNavigationBarColor(MoaColors.SURFACE_0);
 
         applyIntentConfiguration(getIntent());
+        releaseController = createReleaseController();
         setContentView(createContent());
         maybeRequestMicPermission();
     }
@@ -147,6 +150,13 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onDestroy() {
+        releaseInstallGeneration++;
+        if (releaseController != null) releaseController.close();
+        super.onDestroy();
+    }
+
+    @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_AUDIO || requestCode == REQUEST_CONTACTS) {
@@ -172,6 +182,7 @@ public final class MainActivity extends Activity {
         root.addView(statusCard());
         root.addView(gatewayCard());
         root.addView(controlCenterCard());
+        root.addView(releaseController.createView());
         root.addView(actionCard());
         root.addView(orbSizeCard());
         root.addView(gesturesCard());
@@ -566,6 +577,7 @@ public final class MainActivity extends Activity {
                 checkGatewayHealth(gatewayUrl);
                 checkForAppUpdate(false);
                 refreshControlCenter();
+                releaseController.refresh();
             } else {
                 gatewayHealthGeneration++;
                 updateCheckGeneration++;
@@ -576,6 +588,7 @@ public final class MainActivity extends Activity {
                     updateStatus.setTextColor(MoaColors.GOLD);
                 }
                 setControlCenterGatewayRequired();
+                releaseController.unavailable("Gateway required. Current app behavior is unchanged.");
             }
         }
 
@@ -725,6 +738,155 @@ public final class MainActivity extends Activity {
             safe = "unknown";
         }
         return "android_" + safe;
+    }
+
+    private String installedReleaseLabel() {
+        try {
+            return "v" + currentVersionName() + " · code " + currentVersionCode()
+                    + " · " + BuildConfig.GIT_SHA;
+        } catch (Exception ignored) {
+            return "Installed locally";
+        }
+    }
+
+    private MoaReleaseCardController createReleaseController() {
+        return new MoaReleaseCardController(this, new MoaReleaseCardController.Host() {
+            @Override public String gatewayUrl() {
+                return MoaPrefs.gatewayUrl(MainActivity.this);
+            }
+
+            @Override public String gatewayToken() {
+                return MoaPrefs.gatewayToken(MainActivity.this);
+            }
+
+            @Override public String deviceId() {
+                return androidDeviceId();
+            }
+
+            @Override public String installedLabel() {
+                return installedReleaseLabel();
+            }
+
+            @Override public long installedVersionCode() throws Exception {
+                return currentVersionCode();
+            }
+
+            @Override public String installedVersionName() throws Exception {
+                return currentVersionName();
+            }
+
+            @Override public String installedArtifactSha256() throws Exception {
+                return sha256Hex(new File(getApplicationInfo().sourceDir));
+            }
+
+            @Override public void reviewInstall(
+                    MoaReleaseSelectionPolicy.Candidate candidate,
+                    String gatewayUrl,
+                    String gatewayToken) {
+                reviewSelectedReleaseInstall(candidate, gatewayUrl, gatewayToken);
+            }
+        });
+    }
+
+    private void reviewSelectedReleaseInstall(
+            MoaReleaseSelectionPolicy.Candidate candidate,
+            String gatewayUrl,
+            String gatewayToken) {
+        if (candidate == null || !candidate.installable()) return;
+        try {
+            long installedCode = currentVersionCode();
+            if (candidate.artifact.versionCode < installedCode) {
+                new AlertDialog.Builder(this)
+                        .setTitle("A recovery build is required")
+                        .setMessage("Android cannot safely install this older release over the current app. "
+                                + "A.G. will not uninstall itself because that could remove local settings "
+                                + "and strand recovery. Ask for a signed, forward-moving stable recovery build.")
+                        .setPositiveButton("OK", null)
+                        .show();
+                return;
+            }
+        } catch (Exception ignored) {
+            releaseController.showInstallStatus(
+                    "Installed version could not be verified. Nothing was downloaded.", MoaColors.WARN);
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Review release install")
+                .setMessage("A.G. will download and verify " + candidate.label()
+                        + ". Android will then ask you to confirm installation. "
+                        + "Selecting this release did not install it.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Download", (ignored, which) ->
+                        installSelectedRelease(candidate, gatewayUrl, gatewayToken))
+                .show();
+    }
+
+    private void installSelectedRelease(
+            MoaReleaseSelectionPolicy.Candidate candidate,
+            String gatewayUrl,
+            String gatewayToken) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !getPackageManager().canRequestPackageInstalls()) {
+            startActivity(new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())));
+            releaseController.showInstallStatus(
+                    "Allow installs, then tap Download and review install again.", MoaColors.GOLD);
+            return;
+        }
+        releaseController.setInstallBusy(true);
+        releaseController.showInstallStatus("Downloading selected release...", MoaColors.GOLD);
+        final int installGeneration = ++releaseInstallGeneration;
+        new Thread(() -> {
+            try {
+                File apk = updateApkFile();
+                MoaReleaseControlClient client = new MoaReleaseControlClient(
+                        gatewayUrl, gatewayToken);
+                client.downloadArtifact(
+                        candidate.artifact.downloadUrl, candidate.artifact.sizeBytes, apk);
+                long installedCode = currentVersionCode();
+                if (candidate.artifact.versionCode > installedCode) {
+                    verifyDownloadedUpdate(candidate.artifact.asUpdateManifest(), apk);
+                } else {
+                    verifyDownloadedRollback(new MoaUpdatePolicy.RollbackOption(
+                            candidate.releaseId,
+                            candidate.artifact.versionCode,
+                            candidate.artifact.versionName,
+                            candidate.artifact.downloadUrl,
+                            candidate.artifact.sha256,
+                            candidate.artifact.sizeBytes,
+                            false), apk);
+                }
+                releaseController.postInstallReceiptBestEffort(candidate, "download_verified", "");
+                mainHandler.post(() -> {
+                    if (isFinishing() || installGeneration != releaseInstallGeneration) return;
+                    boolean opened = launchInstaller();
+                    new Thread(() -> releaseController.postInstallReceiptBestEffort(
+                            candidate,
+                            opened ? "installer_opened" : "failed",
+                            opened ? "" : "installer_unavailable"), "moa-release-install-receipt").start();
+                    releaseController.showInstallStatus(opened
+                            ? "Installer opened. Android still requires your confirmation."
+                            : "Android's installer could not be opened. Nothing was installed.",
+                            opened ? MoaColors.OK : MoaColors.WARN);
+                });
+            } catch (Exception error) {
+                releaseController.postInstallReceiptBestEffort(
+                        candidate, "failed", "verification_or_download_failed");
+                mainHandler.post(() -> {
+                    if (isFinishing() || installGeneration != releaseInstallGeneration) return;
+                    releaseController.showInstallStatus(
+                            "Release download or verification failed. Nothing was installed.",
+                            MoaColors.WARN);
+                });
+            } finally {
+                mainHandler.post(() -> {
+                    if (!isFinishing() && installGeneration == releaseInstallGeneration) {
+                        releaseController.setInstallBusy(false);
+                    }
+                });
+            }
+        }, "moa-release-install").start();
     }
 
     private void refreshControlCenter() {
@@ -1370,7 +1532,7 @@ public final class MainActivity extends Activity {
         }, "moa-rollback-download").start();
     }
 
-    private void launchInstaller() {
+    private boolean launchInstaller() {
         Uri apkUri = Uri.parse("content://" + getPackageName() + ".apkprovider/ota/" + MoaApkProvider.APK_NAME);
         Intent install = new Intent(Intent.ACTION_VIEW);
         install.setDataAndType(apkUri, "application/vnd.android.package-archive");
@@ -1382,11 +1544,13 @@ public final class MainActivity extends Activity {
                 updateStatus.setText("Installer opened");
                 updateStatus.setTextColor(MoaColors.OK);
             }
+            return true;
         } catch (ActivityNotFoundException error) {
             if (updateStatus != null) {
                 updateStatus.setText("No installer");
                 updateStatus.setTextColor(MoaColors.GOLD);
             }
+            return false;
         } finally {
             if (updateButton != null) {
                 updateButton.setEnabled(true);

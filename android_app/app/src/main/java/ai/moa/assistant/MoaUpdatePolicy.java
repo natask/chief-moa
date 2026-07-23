@@ -206,7 +206,7 @@ final class MoaUpdatePolicy {
                     + "Because this is an older version, Android will not install it over the "
                     + "current one. You'll be sent to the system screen to uninstall the current "
                     + "version first, then A.G. can download and install version "
-                    + rollback.versionName + ". Your settings are kept.";
+                    + rollback.versionName + ". Uninstalling can remove this app's local settings and data.";
         }
         return base
                 + "A.G. will download the signed version " + rollback.versionName
