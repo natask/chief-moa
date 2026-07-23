@@ -2,6 +2,7 @@ package ai.moa.assistant;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -21,6 +22,7 @@ final class MoaReleaseControlClient {
     private static final String BASE_PATH = "/v1/release-control/apps/chief-moa";
     private static final String REGISTRATION_PATH = "/v1/device-credentials/registrations";
     private static final String SURFACE = "android";
+    private static final int MAX_JSON_RESPONSE_BYTES = 1024 * 1024;
     private static final Pattern DEVICE_TOKEN =
             Pattern.compile("^moa_dev_v1\\.[A-Za-z0-9_-]{43}$");
     private final String baseUrl;
@@ -202,7 +204,7 @@ final class MoaReleaseControlClient {
         InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
         String text;
         try (InputStream input = stream) {
-            text = input == null ? "" : new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            text = input == null ? "" : readBoundedUtf8(input);
         } finally {
             connection.disconnect();
         }
@@ -211,6 +213,21 @@ final class MoaReleaseControlClient {
                     "HTTP " + status + (text.isEmpty() ? "" : " " + text));
         }
         return text.trim().isEmpty() ? new JSONObject() : new JSONObject(text);
+    }
+
+    private static String readBoundedUtf8(InputStream input) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8 * 1024];
+        int read;
+        int total = 0;
+        while ((read = input.read(buffer)) >= 0) {
+            total += read;
+            if (total > MAX_JSON_RESPONSE_BYTES) {
+                throw new IllegalStateException("release-control JSON response exceeds size limit");
+            }
+            output.write(buffer, 0, read);
+        }
+        return new String(output.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static boolean sameOrigin(String left, String right) {

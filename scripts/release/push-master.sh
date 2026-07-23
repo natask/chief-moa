@@ -66,7 +66,7 @@ fi
 if [ "$expects_checks" = true ]; then
   log "diff touches CI-verified paths; waiting for checks to be scheduled"
   deadline=$((SECONDS + 300))
-  until gh pr checks "$pr_number" >/dev/null 2>&1; do
+  until [ "$(gh pr view "$pr_number" --json statusCheckRollup --jq '.statusCheckRollup | length' 2>/dev/null || echo 0)" -gt 0 ]; do
     [ "$SECONDS" -lt "$deadline" ] || fail "CI checks never appeared on PR #${pr_number} after 5 minutes; investigate before releasing. master was NOT moved."
     sleep 10
   done
