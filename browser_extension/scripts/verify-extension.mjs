@@ -475,13 +475,19 @@ if (
   throw new Error("per-tab shortcuts must fall back to summonOverlay on restricted pages (chrome://, Web Store, PDF viewer) instead of failing silently");
 }
 if (
-  !/summonOverlay\(tab, "toggleDictation"\)/.test(backgroundSource) ||
-  !/case "toggleDictation":/.test(contentSource) ||
+  !/function toggleGlobalDictation\(/.test(backgroundSource) ||
+  !/planGlobalDictationToggle\(voiceSessions\.values\(\)\)/.test(backgroundSource) ||
+  !/cmd:\s*"commitDictation"/.test(backgroundSource) ||
+  !/summonOverlayFromAnywhere\(target, "startDictation"/.test(backgroundSource) ||
+  !/dictationLeaseId:\s*leaseId/.test(backgroundSource) ||
+  !/reconcilePersistedDictationState\(\)/.test(backgroundSource) ||
+  !/case "startDictation":/.test(contentSource) ||
+  !/case "commitDictation":/.test(contentSource) ||
   !/transcriptionOnly: state\.dictation/.test(contentSource) ||
   !/transcription_only: true/.test(backgroundSource) ||
   !/copyTextToClipboard\(transcript\)/.test(contentSource)
 ) {
-  throw new Error("global macOS summon must run transcription-only dictation and copy the literal transcript");
+  throw new Error("global macOS summon must start or commit the worker-owned transcription-only dictation and copy the literal transcript");
 }
 
 // The side panel is the extension-owned agent surface: it renders on every
@@ -637,10 +643,19 @@ if (
   !/function setActiveBrowserAgentOwner/.test(backgroundSource) ||
   !/function notifyBrowserAgentOwner/.test(backgroundSource) ||
   !/cmd:\s*"browserAgentOwnerChanged"/.test(backgroundSource) ||
+  !/msg\.cmd === "browserAgentOwnerGet"/.test(backgroundSource) ||
+  !/function hydrateBrowserAgentOwner/.test(contentSource) ||
   !/case "browserAgentOwnerChanged":/.test(contentSource) ||
   !/root\.dataset\.ageeOwner/.test(contentSource)
 ) {
-  throw new Error("browser agent ownership must be shared across tabs through storage and owner-change messages");
+  throw new Error("browser agent ownership must be shared across tabs through storage, owner-change messages, and late-tab hydration");
+}
+
+if (/active_owner\s*:/.test(backgroundSource)) {
+  throw new Error("device heartbeat must not publish extension-local browser owner or page state");
+}
+if (/ageeOwnerResult/.test(contentSource)) {
+  throw new Error("shared browser owner state must never project transcript or assistant text into DOM metadata");
 }
 
 if (!/const owner = await getActiveBrowserAgentOwner\(\);[\s\S]{0,420}chrome\.tabs\.get\(ownerTabId\)/.test(backgroundSource)) {

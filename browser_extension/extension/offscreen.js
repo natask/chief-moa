@@ -1,5 +1,6 @@
 import { createPcm16Resampler } from "./offscreen-audio-resampler.js";
 import { createVoicePreRollBuffer } from "./voice-preroll-buffer.js";
+import { finalizeActiveVideoCapture } from "./video-capture-finalization.js";
 
 // Extension-owned microphone capture for MV3.
 // The content script owns only page UI; this document owns getUserMedia so the
@@ -386,8 +387,15 @@ async function stopAndUploadVideoCapture(msg) {
   if (!capture || (msg.videoSessionId && capture.videoSessionId !== msg.videoSessionId)) {
     return { stored: false, error: "No video recording is in progress." };
   }
-  activeVideoCapture = null;
-  await waitForVideoRecorderStop(capture);
+  // Keep this capture active through MediaRecorder.onstop. The terminal
+  // dataavailable event can arrive only after stop() is requested, and the
+  // handler intentionally accepts chunks only from the active capture.
+  await finalizeActiveVideoCapture({
+    capture,
+    getActiveCapture: () => activeVideoCapture,
+    clearActiveCapture: () => { activeVideoCapture = null; },
+    stopRecorder: waitForVideoRecorderStop,
+  });
   const durationMs = Date.now() - capture.startedAt;
   const blob = new Blob(capture.chunks, { type: capture.recorder?.mimeType || "video/webm" });
   capture.chunks = [];
@@ -425,6 +433,29 @@ async function stopAndUploadVideoCapture(msg) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.cmd === "offscreenVoiceReady") {
     sendResponse({ ok: true, context: "offscreen" });
+    return true;
+  }
+  if (msg.cmd === "offscreenVoiceCaptureStatus") {
+    sendResponse({
+      ok: true,
+      active: Boolean(activeCapture),
+      voiceSessionId: activeCapture?.captureId || null,
+      warming: activeCapture?.warming === true,
+    });
+    return true;
+  }
+  if (msg.cmd === "offscreenClipboardWrite") {
+    const text = String(msg.text || "");
+    if (!text) {
+      sendResponse({ ok: false, error: "clipboard text is empty" });
+      return true;
+    }
+    Promise.resolve().then(() => {
+      if (!navigator.clipboard?.writeText) throw new Error("offscreen clipboard API is unavailable");
+      return navigator.clipboard.writeText(text);
+    })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (msg.cmd === "offscreenVideoCaptureStart") {

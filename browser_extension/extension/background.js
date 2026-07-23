@@ -50,6 +50,13 @@ import {
   browserTurnSummary,
   normalizeBrowserSnapshot,
 } from "./browser-turn-protocol.js";
+import {
+  persistedDictationBlocksStart,
+  planDictationRestartReconciliation,
+  planGlobalDictationToggle,
+  sanitizeBrowserAgentOwner,
+  transitionVoiceOwner,
+} from "./browser-surface-state-runtime.js";
 
 function browserLocalToolManifest() {
   return [...browserAutomationLocalToolManifest(), ...browserMediaLocalToolManifest()]
@@ -122,6 +129,9 @@ let uiSpecRefreshInFlight = null;
 let uiSpecLastRefreshAt = 0;
 const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
 let activeAgentTabId = null;
+let browserOwnerWriteQueue = Promise.resolve();
+let globalDictationToggleQueue = Promise.resolve();
+let dictationReconcileInFlight = null;
 let creatingOffscreenVoiceDocument = null;
 // Capture mutex: counts voice session starts that are still in their async
 // setup window (ticket fetch -> voiceSessions registration). Record mode must
@@ -1059,7 +1069,12 @@ async function initializePrivacyState() {
     const owner = stored[ACTIVE_BROWSER_AGENT_OWNER_KEY];
     let scrubbedOwner = owner;
     if (owner && typeof owner === "object") {
-      const { page_url: _pageUrl, page_title: _pageTitle, ...withoutPageIdentity } = owner;
+      const {
+        page_url: _pageUrl,
+        page_title: _pageTitle,
+        last_result: _lastResult,
+        ...withoutPageIdentity
+      } = owner;
       scrubbedOwner = withoutPageIdentity;
     }
     await chrome.storage.local.set({
@@ -1098,6 +1113,7 @@ async function syncBackgroundAutomationRuntime() {
 
 async function initializePassiveRuntime() {
   await initializePrivacyState();
+  await reconcilePersistedDictationState();
   await syncBackgroundAutomationRuntime();
   await startDevReloadPolling();
   await reloadDevTabsAfterExtensionRestart();
@@ -1133,7 +1149,6 @@ async function heartbeatDeviceClient() {
     if (!cfg.gatewayUrl) return;
     const deviceId = await getStableDeviceId();
     const sessionId = await getStableSessionId();
-    const owner = await getActiveBrowserAgentOwner();
     const sessionAdvertisement = await currentBrowserSessionAdvertisement();
     await callGateway(cfg, "/v1/device-clients/heartbeat", {
       body: {
@@ -1145,7 +1160,6 @@ async function heartbeatDeviceClient() {
           source: "agee-extension",
           extension_version: chrome.runtime.getManifest().version,
           extension_id: chrome.runtime.id,
-          active_owner: owner || null,
           context_descriptor: sessionAdvertisement.context_descriptor,
           execution_adapters: sessionAdvertisement.execution_adapters,
         },
@@ -1814,46 +1828,78 @@ async function fetchStoredVoiceTurn(turnId) {
 
 async function getActiveBrowserAgentOwner() {
   const stored = await chrome.storage.local.get(ACTIVE_BROWSER_AGENT_OWNER_KEY);
-  return stored[ACTIVE_BROWSER_AGENT_OWNER_KEY] || null;
+  const raw = stored[ACTIVE_BROWSER_AGENT_OWNER_KEY];
+  const owner = sanitizeBrowserAgentOwner(raw);
+  if (
+    raw &&
+    (
+      Object.hasOwn(raw, "page_url") ||
+      Object.hasOwn(raw, "page_title") ||
+      Object.hasOwn(raw, "last_result")
+    )
+  ) {
+    await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: owner });
+  }
+  return owner;
+}
+
+function serializeBrowserOwnerWrite(operation) {
+  const pending = browserOwnerWriteQueue.catch(() => {}).then(operation);
+  browserOwnerWriteQueue = pending.catch(() => {});
+  return pending;
 }
 
 async function setActiveBrowserAgentOwner(tabId, reason = "browser agent owner changed", patch = {}) {
   if (tabId == null || !chrome?.storage?.local) return null;
-  let tab = null;
-  try {
-    tab = await chrome.tabs.get(tabId);
-  } catch {}
-  const sessionId = await getStableSessionId();
-  const owner = {
-    browser_session_id: sessionId,
-    tab_id: tabId,
-    window_id: tab?.windowId ?? patch.window_id ?? null,
-    page_url: tab?.url || patch.page_url || "",
-    page_title: tab?.title || patch.page_title || "",
-    cue_id: patch.cue_id || patch.cueId || null,
-    voice_session_id: patch.voice_session_id || patch.voiceSessionId || null,
-    agent_run_id: patch.agent_run_id || patch.agentRunId || null,
-    status: patch.status || "active",
-    last_result: patch.last_result || patch.lastResult || "",
-    reason,
-    updated_at: new Date().toISOString(),
-  };
-  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: owner });
-  await notifyBrowserAgentOwner(owner);
-  return owner;
+  return serializeBrowserOwnerWrite(async () => {
+    const sessionId = await getStableSessionId();
+    const owner = sanitizeBrowserAgentOwner({
+      browser_session_id: sessionId,
+      tab_id: tabId,
+      window_id: patch.window_id ?? null,
+      cue_id: patch.cue_id || patch.cueId || null,
+      voice_session_id: patch.voice_session_id || patch.voiceSessionId || null,
+      agent_run_id: patch.agent_run_id || patch.agentRunId || null,
+      activity: patch.activity || null,
+      lease_id: patch.lease_id || null,
+      status: patch.status || "active",
+      transition_sequence: Number.isSafeInteger(patch.transition_sequence) ? patch.transition_sequence : 0,
+      reason,
+      updated_at: new Date().toISOString(),
+    });
+    await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: owner });
+    await notifyBrowserAgentOwner(owner);
+    return owner;
+  });
 }
 
 async function updateActiveBrowserAgentOwner(patch = {}) {
-  const owner = await getActiveBrowserAgentOwner();
-  if (!owner) return null;
-  const next = {
-    ...owner,
-    ...patch,
-    updated_at: new Date().toISOString(),
-  };
-  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: next });
-  await notifyBrowserAgentOwner(next);
-  return next;
+  return serializeBrowserOwnerWrite(async () => {
+    const owner = await getActiveBrowserAgentOwner();
+    if (!owner) return null;
+    const next = sanitizeBrowserAgentOwner({
+      ...owner,
+      ...patch,
+      updated_at: new Date().toISOString(),
+    });
+    await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: next });
+    await notifyBrowserAgentOwner(next);
+    return next;
+  });
+}
+
+async function updateActiveBrowserAgentOwnerForVoiceSession(voiceSessionId, patch = {}) {
+  return serializeBrowserOwnerWrite(async () => {
+    const owner = await getActiveBrowserAgentOwner();
+    const next = transitionVoiceOwner(owner, voiceSessionId, {
+      ...patch,
+      updated_at: new Date().toISOString(),
+    });
+    if (!next) return null;
+    await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: next });
+    await notifyBrowserAgentOwner(next);
+    return next;
+  });
 }
 
 async function updateActiveBrowserAgentOwnerFromTask(cueId, patch) {
@@ -1869,16 +1915,20 @@ async function updateActiveBrowserAgentOwnerFromTask(cueId, patch) {
 }
 
 async function clearActiveBrowserAgentOwner(tabId, reason = "browser agent owner cleared") {
-  const owner = await getActiveBrowserAgentOwner();
-  if (!owner || (tabId != null && owner.tab_id !== tabId)) return;
-  const cleared = {
-    ...owner,
-    status: "cleared",
-    reason,
-    updated_at: new Date().toISOString(),
-  };
-  await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: cleared });
-  await notifyBrowserAgentOwner(cleared);
+  return serializeBrowserOwnerWrite(async () => {
+    const owner = await getActiveBrowserAgentOwner();
+    if (!owner || (tabId != null && owner.tab_id !== tabId)) return null;
+    const cleared = sanitizeBrowserAgentOwner({
+      ...owner,
+      status: "cleared",
+      transition_sequence: Number(owner.transition_sequence || 0) + 1,
+      reason,
+      updated_at: new Date().toISOString(),
+    });
+    await chrome.storage.local.set({ [ACTIVE_BROWSER_AGENT_OWNER_KEY]: cleared });
+    await notifyBrowserAgentOwner(cleared);
+    return cleared;
+  });
 }
 
 async function notifyBrowserAgentOwner(owner) {
@@ -1891,6 +1941,11 @@ async function notifyBrowserAgentOwner(owner) {
       isOwner: owner?.tab_id === tab.id && owner?.status !== "cleared",
     }).catch(() => {})
   )));
+}
+
+function nextVoiceOwnerTransition(session) {
+  session.ownerTransitionSequence = Number(session.ownerTransitionSequence || 0) + 1;
+  return session.ownerTransitionSequence;
 }
 
 // Read the gateway-owned session projection. New gateways expose one canonical
@@ -2210,6 +2265,54 @@ async function ensureOffscreenVoiceReceiver() {
   return waitForOffscreenReceiver((message) => chrome.runtime.sendMessage(message));
 }
 
+async function offscreenVoiceCaptureStatus() {
+  if (!(await hasOffscreenVoiceDocument())) {
+    return { ok: true, active: false, voiceSessionId: null };
+  }
+  return chrome.runtime.sendMessage({ cmd: "offscreenVoiceCaptureStatus" })
+    .catch(() => ({ ok: false, active: false, voiceSessionId: null }));
+}
+
+async function copyDictationTranscript(session) {
+  if (!session?.transcriptionOnly || session.clipboardAttempted) return session?.clipboardCopied === true;
+  session.clipboardAttempted = true;
+  const text = String(session.mediaIntentText || "").trim();
+  if (!text) return false;
+  const response = await chrome.runtime.sendMessage({
+    cmd: "offscreenClipboardWrite",
+    text,
+  }).catch(() => null);
+  session.clipboardCopied = response?.ok === true;
+  return session.clipboardCopied;
+}
+
+async function reconcilePersistedDictationState() {
+  if (dictationReconcileInFlight) return dictationReconcileInFlight;
+  dictationReconcileInFlight = (async () => {
+    const hasRuntimeSession = [...voiceSessions.values()].some((session) => session.transcriptionOnly && !session.closed);
+    const owner = await getActiveBrowserAgentOwner();
+    const capture = await offscreenVoiceCaptureStatus();
+    const plan = planDictationRestartReconciliation({
+      owner,
+      hasRuntimeSession,
+      offscreenCaptureId: capture?.active ? capture.voiceSessionId : null,
+    });
+    if (plan.action !== "reconcile_error") return;
+    if (plan.stopCaptureId) {
+      await stopOffscreenVoiceCapture(plan.stopCaptureId);
+    }
+    await updateActiveBrowserAgentOwner({
+      tab_id: null,
+      status: "error",
+      transition_sequence: Number(owner.transition_sequence || 0) + 1,
+      reason: "dictation runtime restarted; orphan capture reconciled",
+    });
+  })().finally(() => {
+    dictationReconcileInFlight = null;
+  });
+  return dictationReconcileInFlight;
+}
+
 function extensionMicCaptureMessage(error, code = error?.code) {
   const detail = String(error?.message || error || "").trim();
   const suffix = detail ? ` (${detail})` : "";
@@ -2379,7 +2482,7 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, onSessionCreated } = {}) {
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, onSessionCreated } = {}) {
   // Hold the capture mutex across the async setup window. recordSessionStart
   // refuses while voiceStartPending > 0; by the time the mutex releases the
   // session is registered in voiceSessions (or this start has failed), so the
@@ -2389,7 +2492,7 @@ async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, 
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, onSessionCreated });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2415,12 +2518,16 @@ async function activeThreadBranch(cfg) {
   const data = await callGateway(cfg, path, { method: "GET" });
   return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
 }
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, onSessionCreated } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
     id,
     tabId,
+    cueId: cueId || null,
+    transcriptionOnly: transcriptionOnly === true,
+    dictationLeaseId: dictationLeaseId || null,
+    ownerTransitionSequence: 0,
     ws: null,
     turnId,
     opened: false,
@@ -2446,6 +2553,16 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     sampleText,
   };
   voiceSessions.set(id, session);
+  if (session.transcriptionOnly && session.dictationLeaseId) {
+    updateActiveBrowserAgentOwner({
+      tab_id: tabId,
+      voice_session_id: id,
+      lease_id: session.dictationLeaseId,
+      status: "listening",
+      transition_sequence: nextVoiceOwnerTransition(session),
+      reason: "browser dictation session bound",
+    }).catch(() => {});
+  }
   onSessionCreated?.(id);
   if (voiceSessions.get(id) !== session || session.closed) {
     throw new Error(session.setupErrorMessage || "Voice session closed during setup.");
@@ -2816,6 +2933,11 @@ async function forwardVoiceSessionEvent(session, event) {
     }
   }
   if (parsed?.type === "error") {
+    updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
+      status: "error",
+      transition_sequence: nextVoiceOwnerTransition(session),
+      reason: String(parsed.message || "voice turn failed"),
+    }).catch(() => {});
     deliverVoiceSessionEvent(session, { event: parsed });
     return;
   }
@@ -2828,7 +2950,31 @@ async function forwardVoiceSessionEvent(session, event) {
     deliverVoiceSessionEvent(session, { event: parsed });
     return;
   }
-  if (parsed?.type === "transcript_final") session.mediaIntentText = String(parsed.text || "");
+  if (parsed?.type === "transcript_final") {
+    session.mediaIntentText = String(parsed.text || "");
+    updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
+      status: session.committed ? "processing" : "listening",
+      transition_sequence: nextVoiceOwnerTransition(session),
+    }).catch(() => {});
+  }
+  if (parsed?.type === "assistant_text") {
+    session.lastAssistantText = String(parsed.text || "");
+    updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
+      status: "responding",
+      transition_sequence: nextVoiceOwnerTransition(session),
+    }).catch(() => {});
+  }
+  if (parsed?.type === "turn_done") {
+    const status = String(parsed.status || "completed").toLowerCase();
+    if (session.transcriptionOnly && status === "completed") {
+      parsed.clipboard_copied = await copyDictationTranscript(session);
+    }
+    updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
+      status: status === "completed" ? "completed" : status,
+      transition_sequence: nextVoiceOwnerTransition(session),
+      reason: session.transcriptionOnly ? "dictation turn finished" : "voice turn finished",
+    }).catch(() => {});
+  }
   const voiceMediaAction = mediaActionsFromTurn(parsed)[0];
   if (voiceMediaAction) {
     const key = JSON.stringify(voiceMediaAction).slice(0, 2000);
@@ -2897,6 +3043,20 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
   try {
     session.ws?.close(1000, reason);
   } catch {}
+  getActiveBrowserAgentOwner().then((owner) => {
+    if (String(owner?.voice_session_id || "") !== String(id)) return null;
+    if (!revoked && ["completed", "no_speech", "error"].includes(String(owner.status || ""))) {
+      return updateActiveBrowserAgentOwnerForVoiceSession(id, {
+        reason,
+        transition_sequence: nextVoiceOwnerTransition(session),
+      });
+    }
+    return updateActiveBrowserAgentOwnerForVoiceSession(id, {
+      status: "cleared",
+      transition_sequence: nextVoiceOwnerTransition(session),
+      reason,
+    });
+  }).catch(() => {});
 }
 
 function noteVoiceSessionAudio(session, buffer) {
@@ -2966,7 +3126,18 @@ function clearVoiceAutoCommit(session) {
 
 function closeTabVoiceSessions(tabId) {
   for (const session of voiceSessions.values()) {
-    if (session.tabId === tabId) closeVoiceSession(session.id, "tab closed");
+    if (session.tabId !== tabId) continue;
+    if (session.transcriptionOnly) {
+      session.tabId = null;
+      session.attached = false;
+      updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
+        tab_id: null,
+        transition_sequence: nextVoiceOwnerTransition(session),
+        reason: "dictation view tab closed; capture remains worker-owned",
+      }).catch(() => {});
+      continue;
+    }
+    closeVoiceSession(session.id, "tab closed");
   }
 }
 
@@ -4164,27 +4335,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     const tabId = sender.tab.id;
-    claimActiveAgentTab(tabId, "another page voice session started", {
-      cue_id: msg.cueId || null,
-      status: "listening",
-    });
-    startVoiceSessionWithMode(tabId, {
-      cueId: msg.cueId,
-      turnId: msg.turnId,
-      assistantOverlap: msg.assistantOverlap === true,
-      capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
-      autoCommit: msg.autoCommit !== false,
-      contextAction: msg.contextAction,
-      threadLabel: msg.threadLabel,
-      warmCaptureId: msg.warmCaptureId || null,
-      transcriptionOnly: msg.transcriptionOnly === true,
-    })
+    (async () => {
+      const transcriptionOnly = msg.transcriptionOnly === true;
+      const owner = transcriptionOnly ? await getActiveBrowserAgentOwner() : null;
+      if (
+        transcriptionOnly &&
+        (
+          !msg.dictationLeaseId ||
+          owner?.activity !== "dictation" ||
+          owner?.status !== "starting" ||
+          owner?.lease_id !== msg.dictationLeaseId ||
+          owner?.tab_id !== tabId
+        )
+      ) {
+        throw new Error("Global dictation start lease is missing, stale, or already consumed.");
+      }
+      if (!transcriptionOnly) {
+        claimActiveAgentTab(tabId, "another page voice session started", {
+          cue_id: msg.cueId || null,
+          activity: "voice",
+          status: "listening",
+        });
+      }
+      return startVoiceSessionWithMode(tabId, {
+        cueId: msg.cueId,
+        turnId: msg.turnId,
+        assistantOverlap: msg.assistantOverlap === true,
+        capture: msg.capture === "extension-offscreen" ? "extension-offscreen" : "content-script",
+        autoCommit: msg.autoCommit !== false,
+        contextAction: msg.contextAction,
+        threadLabel: msg.threadLabel,
+        warmCaptureId: msg.warmCaptureId || null,
+        transcriptionOnly,
+        dictationLeaseId: msg.dictationLeaseId || null,
+      });
+    })()
       .then((session) => {
-        if (session?.voiceSessionId) {
+        const activeSession = session?.voiceSessionId ? voiceSessions.get(session.voiceSessionId) : null;
+        if (
+          msg.transcriptionOnly !== true &&
+          activeSession &&
+          activeSession.closed !== true &&
+          activeSession.tabId === tabId
+        ) {
           setActiveBrowserAgentOwner(tabId, "browser voice session started", {
             cue_id: msg.cueId || null,
             voice_session_id: session.voiceSessionId,
+            activity: msg.transcriptionOnly === true ? "dictation" : "voice",
+            lease_id: msg.dictationLeaseId || null,
             status: "listening",
+            transition_sequence: nextVoiceOwnerTransition(activeSession),
           }).catch(() => {});
         }
         sendResponse({ ok: true, ...session });
@@ -4209,6 +4409,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "voiceSessionClose") {
     closeVoiceSession(msg.voiceSessionId, String(msg.reason || "closed"));
     sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.cmd === "browserAgentOwnerGet") {
+    getActiveBrowserAgentOwner()
+      .then((owner) => sendResponse({
+        ok: true,
+        owner,
+        isOwner: owner?.tab_id === sender.tab?.id && owner?.status !== "cleared",
+      }))
+      .catch((error) => sendResponse({ ok: false, owner: null, error: String(error?.message || error) }));
     return true;
   }
   if (msg.cmd === "devReloadExtension") {
@@ -4392,7 +4602,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (ambient && ambient.tabId === tabId) stopAmbientCapture();
   if (activeAgentTabId === tabId) {
     activeAgentTabId = null;
-    clearActiveBrowserAgentOwner(tabId, "owner tab closed").catch(() => {});
+    getActiveBrowserAgentOwner().then((owner) => {
+      if (owner?.activity !== "dictation") {
+        return clearActiveBrowserAgentOwner(tabId, "owner tab closed");
+      }
+      return null;
+    }).catch(() => {});
   }
   closeTabVoiceSessions(tabId);
   closeTabRecordSessions(tabId);
@@ -4511,9 +4726,9 @@ async function resolveOverlayTargetTab(firedTab) {
   return created?.id != null ? await waitForTabComplete(created.id) : null;
 }
 
-async function summonOverlayFromAnywhere(firedTab, cmd = "open") {
+async function summonOverlayFromAnywhere(firedTab, cmd = "open", payload = {}) {
   const target = await resolveOverlayTargetTab(firedTab);
-  if (!target?.id) return;
+  if (!target?.id) return false;
   // Bring Chrome's window and the target tab forward so the overlay is visible
   // even when the command fired while another application was focused.
   try {
@@ -4526,9 +4741,60 @@ async function summonOverlayFromAnywhere(firedTab, cmd = "open") {
   }
   try {
     await ensureContent(target.id);
-    await chrome.tabs.sendMessage(target.id, { cmd, source: "command" });
+    const result = await chrome.tabs.sendMessage(target.id, { cmd, source: "command", ...payload });
+    return result?.ok === true;
   } catch {
     // Restricted browser pages cannot receive content scripts.
+    return false;
+  }
+}
+
+async function toggleGlobalDictation(firedTab) {
+  await reconcilePersistedDictationState();
+  const plan = planGlobalDictationToggle(voiceSessions.values());
+  if (plan.action === "wait") return;
+  if (plan.action === "commit") {
+    let committedByOwner = false;
+    try {
+      const result = await ask(plan.ownerTabId, {
+        cmd: "commitDictation",
+        voiceSessionId: plan.voiceSessionId,
+      });
+      committedByOwner = result?.ok === true;
+    } catch {}
+    if (!committedByOwner) {
+      const result = await sendVoiceSessionControl(plan.voiceSessionId, {
+        type: "commit_turn",
+        turn_id: plan.turnId,
+      });
+      if (!result?.ok) return;
+    }
+    const committedSession = voiceSessions.get(plan.voiceSessionId);
+    await updateActiveBrowserAgentOwnerForVoiceSession(plan.voiceSessionId, {
+      status: "processing",
+      transition_sequence: committedSession
+        ? nextVoiceOwnerTransition(committedSession)
+        : Number((await getActiveBrowserAgentOwner())?.transition_sequence || 0) + 1,
+      reason: "global dictation committed",
+    }).catch(() => {});
+    return;
+  }
+  const persistedOwner = await getActiveBrowserAgentOwner();
+  if (persistedDictationBlocksStart(persistedOwner)) return;
+  const target = await resolveOverlayTargetTab(firedTab);
+  if (!target?.id) return;
+  const leaseId = `dictation_${crypto.randomUUID()}`;
+  await setActiveBrowserAgentOwner(target.id, "global dictation start reserved", {
+    activity: "dictation",
+    lease_id: leaseId,
+    status: "starting",
+    transition_sequence: 0,
+  });
+  const started = await summonOverlayFromAnywhere(target, "startDictation", {
+    dictationLeaseId: leaseId,
+  });
+  if (!started) {
+    await clearActiveBrowserAgentOwner(target.id, "global dictation start failed");
   }
 }
 
@@ -4550,7 +4816,8 @@ function summonOverlay(firedTab, cmd = "open") {
 
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "open-agee-global") return;
-  summonOverlay(tab, "toggleDictation");
+  const pending = globalDictationToggleQueue.catch(() => {}).then(() => toggleGlobalDictation(tab));
+  globalDictationToggleQueue = pending.catch(() => {});
 });
 
 // ---- Side panel agent surface ----------------------------------------------

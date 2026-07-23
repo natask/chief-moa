@@ -237,6 +237,128 @@
       }
       .delegation-confirm-actions button { background: var(--text); color: #111; }
       .delegation-confirm-actions button.secondary { background: transparent; color: var(--muted); }
+      .release-cockpit {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin-bottom: 14px;
+        padding: 12px;
+      }
+      .release-cockpit h2 {
+        font-size: 13px;
+        margin: 0;
+      }
+      .release-cockpit-head {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+      }
+      .release-cockpit button,
+      .release-cockpit select,
+      .release-cockpit textarea {
+        background: #1b1d22;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font: inherit;
+      }
+      .release-cockpit button {
+        cursor: pointer;
+        padding: 6px 9px;
+      }
+      .release-cockpit button:disabled {
+        color: #777a82;
+        cursor: default;
+      }
+      .release-cockpit select,
+      .release-cockpit textarea {
+        padding: 8px;
+        width: 100%;
+      }
+      .release-cockpit textarea {
+        min-height: 70px;
+        resize: vertical;
+      }
+      .release-error,
+      .release-pending {
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 10px;
+        padding: 8px 9px;
+      }
+      .release-error {
+        background: #24191b;
+        border: 1px solid #5b2b2b;
+        color: var(--error);
+      }
+      .release-pending {
+        background: #211f18;
+        border: 1px solid #5b5130;
+        color: #e8d68b;
+      }
+      .release-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: 1fr 1fr;
+        margin-top: 10px;
+      }
+      .release-card {
+        background: #121318;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        min-width: 0;
+        padding: 8px;
+      }
+      .release-card[data-current="true"] {
+        border-color: #7182ad;
+      }
+      .release-card-title {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .release-card-value,
+      .release-binding {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .release-card-meta,
+      .release-feedback-binding {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+        margin-top: 4px;
+        overflow-wrap: anywhere;
+      }
+      .release-controls {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .release-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .release-actions button {
+        flex: 1;
+      }
+      .release-feedback {
+        border-top: 1px solid var(--border);
+        display: grid;
+        gap: 7px;
+        margin-top: 10px;
+        padding-top: 10px;
+      }
+      #releaseNotice[hidden],
+      #releaseError[hidden],
+      #releaseContent[hidden] {
+        display: none;
+      }
       footer {
         border-top: 1px solid var(--border);
         display: flex;
@@ -317,6 +439,29 @@
         stays open while you switch tabs. Hold the button (or hold
         <code>Space</code>) to talk, release to send. Type below for a text turn.
       </p>
+      <section class="release-cockpit" aria-labelledby="releaseCockpitTitle">
+        <div class="release-cockpit-head">
+          <h2 id="releaseCockpitTitle">Release cockpit</h2>
+          <button id="releaseRefresh" type="button">Refresh</button>
+        </div>
+        <div id="releaseError" class="release-error" role="alert" hidden></div>
+        <div id="releaseNotice" class="release-pending" role="status" hidden></div>
+        <div id="releaseContent" hidden>
+          <div id="releaseCards" class="release-grid"></div>
+          <div class="release-controls">
+            <select id="releaseCandidate" aria-label="Choose an exact release"></select>
+            <div class="release-actions">
+              <button id="releaseAssign" type="button">Use selected release</button>
+              <button id="releaseFallback" type="button">Return to stable</button>
+            </div>
+          </div>
+          <form id="releaseFeedbackForm" class="release-feedback">
+            <div id="releaseFeedbackBinding" class="release-feedback-binding"></div>
+            <textarea id="releaseFeedbackText" maxlength="4000" placeholder="Comment on this exact release" required></textarea>
+            <button id="releaseFeedbackSubmit" type="submit">Send release-bound feedback</button>
+          </form>
+        </div>
+      </section>
       <div id="historyError" role="status" hidden>
         <span id="historyErrorText"></span>
         <button id="historyRetry" type="button">Retry</button>
@@ -331,6 +476,6 @@
         <button id="sendBtn" type="submit">Send</button>
       </form>
     </footer>
-    <script src="sidepanel.js"></script>
+    <script type="module" src="sidepanel.js"></script>
   </body>
 </html>

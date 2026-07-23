@@ -21,6 +21,7 @@ const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `smoke-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
 const artifactsDir = join(runDir, "artifacts");
+const CDP_CALL_TIMEOUT_MS = 15000;
 let latestChromeStderr = "";
 
 function serve() {
@@ -64,25 +65,53 @@ class Cdp {
     this.nextId = 1;
     this.pending = new Map();
     this.ready = new Promise((resolveReady, rejectReady) => {
-      this.ws.onopen = resolveReady;
-      this.ws.onerror = rejectReady;
+      const timer = setTimeout(
+        () => rejectReady(new Error(`Timed out after ${CDP_CALL_TIMEOUT_MS} ms opening CDP connection`)),
+        CDP_CALL_TIMEOUT_MS,
+      );
+      this.ws.onopen = () => {
+        clearTimeout(timer);
+        resolveReady();
+      };
+      this.ws.onerror = (error) => {
+        clearTimeout(timer);
+        rejectReady(error);
+      };
     });
     this.ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (!msg.id || !this.pending.has(msg.id)) return;
-      const { resolveCall, rejectCall } = this.pending.get(msg.id);
+      const { resolveCall, rejectCall, timer } = this.pending.get(msg.id);
       this.pending.delete(msg.id);
+      clearTimeout(timer);
       if (msg.error) rejectCall(new Error(`${msg.error.message}: ${msg.error.data || ""}`));
       else resolveCall(msg.result);
     };
+    this.ws.onclose = () => {
+      for (const [id, { rejectCall, timer }] of this.pending) {
+        clearTimeout(timer);
+        rejectCall(new Error(`CDP connection closed while waiting for call ${id}`));
+      }
+      this.pending.clear();
+    };
   }
 
-  async send(method, params = {}) {
+  async send(method, params = {}, timeoutMs = CDP_CALL_TIMEOUT_MS) {
     await this.ready;
     const id = this.nextId++;
-    this.ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolveCall, rejectCall) => {
-      this.pending.set(id, { resolveCall, rejectCall });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        rejectCall(new Error(`Timed out after ${timeoutMs} ms waiting for CDP ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, { resolveCall, rejectCall, timer });
+      try {
+        this.ws.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        rejectCall(error);
+      }
     });
   }
 
@@ -112,11 +141,17 @@ async function waitForTarget(port, predicate, timeoutMs = 15000) {
 }
 
 async function evaluate(cdp, expression) {
-  const result = await cdp.send("Runtime.evaluate", {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
+  let result;
+  try {
+    result = await cdp.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+  } catch (error) {
+    const summary = String(expression || "").replace(/\s+/g, " ").trim().slice(0, 180);
+    throw new Error(`${String(error?.message || error)}; expression=${summary}`);
+  }
   if (result.exceptionDetails) {
     // Newer Chrome puts the useful message in exception.description and leaves
     // text as a bare "Uncaught".
@@ -318,11 +353,17 @@ async function main() {
           });
         }
         const response = await chrome.runtime.sendMessage({ cmd: "offscreenVoiceReady" });
+        const captureStatus = await chrome.runtime.sendMessage({ cmd: "offscreenVoiceCaptureStatus" });
         await chrome.offscreen.closeDocument();
-        return response;
+        return { response, captureStatus };
       })()
     `);
-    if (offscreenReady?.ok !== true || offscreenReady?.context !== "offscreen") {
+    if (
+      offscreenReady?.response?.ok !== true ||
+      offscreenReady?.response?.context !== "offscreen" ||
+      offscreenReady?.captureStatus?.ok !== true ||
+      offscreenReady?.captureStatus?.active !== false
+    ) {
       throw new Error(`packaged offscreen voice receiver did not become ready: ${JSON.stringify(offscreenReady)}`);
     }
 
@@ -347,23 +388,6 @@ async function main() {
       })()
     `);
     if (!ping?.tabId) throw new Error("real content script did not answer ping via the service worker");
-
-    const offscreenCaptureProbe = await evaluate(workerCdp, `
-      (async () => {
-        const [result] = await chrome.scripting.executeScript({
-          target: { tabId: ${ping.tabId} },
-          func: async () => {
-            const started = await chrome.runtime.sendMessage({ cmd: "recordSessionStart" });
-            if (started?.ok) await chrome.runtime.sendMessage({ cmd: "recordSessionStop" });
-            return started;
-          },
-        });
-        return result?.result || null;
-      })()
-    `);
-    if (!offscreenCaptureProbe || /receiving end does not exist/i.test(String(offscreenCaptureProbe.error || ""))) {
-      throw new Error(`offscreen capture receiver was unavailable: ${JSON.stringify(offscreenCaptureProbe)}`);
-    }
 
     const singleRootResult = await evaluate(workerCdp, `
       (async () => {
@@ -1123,6 +1147,8 @@ async function main() {
           b.rootOwner === "active" &&
           a.ownerState !== "active" &&
           a.rootOwner !== "active" &&
+          !Object.hasOwn(ownerB || {}, "page_url") &&
+          !Object.hasOwn(ownerB || {}, "page_title") &&
           Array.isArray(a.revoked?.cueIds) &&
           a.revoked.cueIds.includes("owner-a");
         return {

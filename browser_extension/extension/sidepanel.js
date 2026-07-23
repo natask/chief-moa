@@ -5,6 +5,16 @@
 // offscreen document, never here (extension pages cannot render the
 // getUserMedia permission prompt).
 
+import { getEffectiveGatewayConfig } from "./config.js";
+import {
+  buildAssignmentRequest,
+  buildFallbackRequest,
+  buildFeedbackRequest,
+  deriveReleaseCockpitState,
+  parseAssignmentMutationResponse,
+  parseReleaseControlView,
+} from "./release-control-runtime.js";
+
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 const historyEl = document.getElementById("history");
@@ -30,6 +40,269 @@ let audioCtx = null;
 let playbackTime = 0;
 let playbackRate = 1;
 const playbackSources = new Set();
+
+// ---- Release cockpit -------------------------------------------------------
+
+const releaseRefreshBtn = document.getElementById("releaseRefresh");
+const releaseErrorEl = document.getElementById("releaseError");
+const releaseNoticeEl = document.getElementById("releaseNotice");
+const releaseContentEl = document.getElementById("releaseContent");
+const releaseCardsEl = document.getElementById("releaseCards");
+const releaseCandidateEl = document.getElementById("releaseCandidate");
+const releaseAssignBtn = document.getElementById("releaseAssign");
+const releaseFallbackBtn = document.getElementById("releaseFallback");
+const releaseFeedbackForm = document.getElementById("releaseFeedbackForm");
+const releaseFeedbackBindingEl = document.getElementById("releaseFeedbackBinding");
+const releaseFeedbackTextEl = document.getElementById("releaseFeedbackText");
+const releaseFeedbackSubmitBtn = document.getElementById("releaseFeedbackSubmit");
+const RELEASE_CONTROL_BASE = "/v1/release-control/apps/chief-moa";
+
+let releaseView = null;
+let releaseDeviceId = "";
+let releaseBusy = false;
+let releaseFeedbackEligible = false;
+
+async function stableReleaseDeviceId() {
+  const stored = await chrome.storage.local.get("ageeDeviceId");
+  if (stored.ageeDeviceId) return String(stored.ageeDeviceId);
+  const deviceId = `browser_${crypto.randomUUID().replaceAll("-", "")}`;
+  await chrome.storage.local.set({ ageeDeviceId: deviceId });
+  return deviceId;
+}
+
+function releaseNonce() {
+  return crypto.randomUUID();
+}
+
+function showReleaseError(message) {
+  releaseErrorEl.textContent = String(message || "Release control is unavailable.");
+  releaseErrorEl.hidden = false;
+  releaseContentEl.hidden = true;
+}
+
+function clearReleaseError() {
+  releaseErrorEl.hidden = true;
+  releaseErrorEl.textContent = "";
+}
+
+function showReleaseNotice(message) {
+  releaseNoticeEl.textContent = String(message || "");
+  releaseNoticeEl.hidden = !message;
+}
+
+function setReleaseBusy(busy) {
+  releaseBusy = busy;
+  releaseRefreshBtn.disabled = busy;
+  releaseCandidateEl.disabled = busy;
+  releaseAssignBtn.disabled = busy;
+  releaseFallbackBtn.disabled = busy;
+  releaseFeedbackTextEl.disabled = busy || !releaseFeedbackEligible;
+  releaseFeedbackSubmitBtn.disabled = busy || !releaseFeedbackEligible;
+}
+
+async function releaseControlRequest(path, { method = "GET", body = null } = {}) {
+  const config = await getEffectiveGatewayConfig();
+  if (!config.gatewayUrl) throw new Error("Release control is unavailable because no gateway origin is configured.");
+  const gatewayOrigin = new URL(config.gatewayUrl);
+  const loopback = gatewayOrigin.hostname === "localhost"
+    || gatewayOrigin.hostname === "127.0.0.1"
+    || gatewayOrigin.hostname === "[::1]";
+  if (gatewayOrigin.protocol !== "https:" && !(gatewayOrigin.protocol === "http:" && loopback)) {
+    throw new Error("Release control requires HTTPS, except for an explicit loopback development gateway.");
+  }
+  releaseDeviceId ||= await stableReleaseDeviceId();
+  const headers = { accept: "application/json" };
+  if (config.gatewayToken) headers.authorization = `Bearer ${config.gatewayToken}`;
+  if (body) headers["content-type"] = "application/json";
+  let response;
+  try {
+    response = await fetch(`${config.gatewayUrl}${RELEASE_CONTROL_BASE}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (error) {
+    throw new Error(`Release control could not reach the configured gateway: ${String(error?.message || error)}`);
+  }
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`Release control returned ${response.status} without a JSON response.`);
+  }
+  if (!response.ok) {
+    const detail = String(payload?.message || payload?.error || `HTTP ${response.status}`);
+    if (response.status === 404) throw new Error("This gateway does not expose the release-control API yet (404).");
+    throw new Error(`Release control rejected the request (${response.status}): ${detail}`);
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Release control returned an invalid response.");
+  }
+  return payload;
+}
+
+function readinessLabel(readiness) {
+  if (typeof readiness.status === "string") return readiness.status;
+  if (typeof readiness.ready === "boolean") return readiness.ready ? "ready" : "blocked";
+  return JSON.stringify(readiness);
+}
+
+function addReleaseCard(label, candidate, current) {
+  const card = document.createElement("article");
+  card.className = "release-card";
+  card.dataset.current = String(Boolean(candidate && current
+    && candidate.bundle_id === current.bundle_id && candidate.release_id === current.release_id));
+  const title = document.createElement("div");
+  title.className = "release-card-title";
+  title.textContent = label;
+  const value = document.createElement("div");
+  value.className = "release-card-value";
+  value.textContent = candidate ? `${candidate.release_id}\n${candidate.artifact.sha256}` : "Unavailable";
+  card.append(title, value);
+  if (candidate) {
+    const meta = document.createElement("div");
+    meta.className = "release-card-meta";
+    meta.textContent = `v${candidate.artifact.version} · ${readinessLabel(candidate.readiness)}`;
+    card.appendChild(meta);
+  }
+  releaseCardsEl.appendChild(card);
+}
+
+function renderReleaseCockpit(view) {
+  const manifestVersion = chrome.runtime.getManifest().version;
+  const state = deriveReleaseCockpitState(view, manifestVersion);
+  releaseCardsEl.replaceChildren();
+  addReleaseCard("Current assignment", state.current, state.current);
+  addReleaseCard("Stable", state.stable, state.current);
+  addReleaseCard("Preview", state.preview, state.current);
+
+  const options = document.createDocumentFragment();
+  for (const candidate of view.candidates) {
+    const option = document.createElement("option");
+    option.value = `${candidate.bundle_id}\u0000${candidate.release_id}`;
+    option.disabled = !candidate.compatibility.eligible;
+    option.selected = candidate === state.current;
+    option.textContent = `${candidate.channel} · ${candidate.release_id} · v${candidate.artifact.version}`
+      + (candidate.compatibility.eligible ? "" : " · incompatible");
+    options.appendChild(option);
+  }
+  releaseCandidateEl.replaceChildren(options);
+  releaseFallbackBtn.disabled = releaseBusy
+    || !view.effective_assignment
+    || view.effective_assignment.channel === "stable";
+  releaseFeedbackBindingEl.textContent =
+    state.feedback_binding_proven
+      ? `Feedback binds to loaded release ${state.current.release_id} · ${state.current.artifact.sha256}`
+      : `Feedback is disabled: ${state.current?.release_id || "no release"} is selected, but these exact extension bytes are not locally proven loaded.`;
+  releaseFeedbackEligible = state.feedback_binding_proven;
+  releaseFeedbackTextEl.disabled = releaseBusy || !releaseFeedbackEligible;
+  releaseFeedbackSubmitBtn.disabled = releaseBusy || !releaseFeedbackEligible;
+  releaseContentEl.hidden = false;
+  clearReleaseError();
+  showReleaseNotice(
+    `Selected ${state.current?.release_id || "no release yet"}. Loaded extension version: ${state.loaded_version}. `
+    + "Extension binary install/reload is pending; this panel never downloads remote code or reloads Chrome automatically."
+  );
+}
+
+async function refreshReleaseCockpit() {
+  if (releaseBusy) return;
+  setReleaseBusy(true);
+  showReleaseNotice("Loading release assignments…");
+  try {
+    releaseDeviceId = await stableReleaseDeviceId();
+    const payload = await releaseControlRequest(
+      `/view?device_id=${encodeURIComponent(releaseDeviceId)}&surface=${encodeURIComponent("browser_extension")}`,
+    );
+    releaseView = parseReleaseControlView(payload);
+    renderReleaseCockpit(releaseView);
+  } catch (error) {
+    releaseView = null;
+    releaseFeedbackEligible = false;
+    showReleaseNotice("");
+    showReleaseError(String(error?.message || error));
+  } finally {
+    setReleaseBusy(false);
+    if (releaseView) {
+      releaseFallbackBtn.disabled = !releaseView.effective_assignment
+        || releaseView.effective_assignment.channel === "stable";
+    }
+  }
+}
+
+function selectedReleaseCandidate() {
+  if (!releaseView) return null;
+  const [bundleId, releaseId] = releaseCandidateEl.value.split("\u0000");
+  return releaseView.candidates.find((item) =>
+    item.bundle_id === bundleId && item.release_id === releaseId) || null;
+}
+
+releaseRefreshBtn.addEventListener("click", refreshReleaseCockpit);
+
+releaseAssignBtn.addEventListener("click", async () => {
+  const candidate = selectedReleaseCandidate();
+  if (!releaseView || !candidate || releaseBusy) return;
+  setReleaseBusy(true);
+  clearReleaseError();
+  showReleaseNotice(`Selecting exact release ${candidate.release_id}…`);
+  try {
+    const requestBody = buildAssignmentRequest(releaseView, candidate, releaseDeviceId, releaseNonce());
+    parseAssignmentMutationResponse(
+      await releaseControlRequest("/assignments", { method: "POST", body: requestBody }),
+    );
+    showReleaseNotice("Assignment recorded. Extension binary install/reload remains pending.");
+    setReleaseBusy(false);
+    await refreshReleaseCockpit();
+  } catch (error) {
+    showReleaseError(String(error?.message || error));
+  } finally {
+    setReleaseBusy(false);
+  }
+});
+
+releaseFallbackBtn.addEventListener("click", async () => {
+  if (!releaseView || releaseBusy) return;
+  setReleaseBusy(true);
+  clearReleaseError();
+  showReleaseNotice("Returning this browser assignment to last-known-good stable…");
+  try {
+    const requestBody = buildFallbackRequest(releaseView, releaseDeviceId, releaseNonce());
+    parseAssignmentMutationResponse(
+      await releaseControlRequest("/fallback", { method: "POST", body: requestBody }),
+    );
+    showReleaseNotice("Stable assignment recorded. Extension binary install/reload remains pending.");
+    setReleaseBusy(false);
+    await refreshReleaseCockpit();
+  } catch (error) {
+    showReleaseError(String(error?.message || error));
+  } finally {
+    setReleaseBusy(false);
+  }
+});
+
+releaseFeedbackForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!releaseView || releaseBusy) return;
+  setReleaseBusy(true);
+  clearReleaseError();
+  try {
+    const requestBody = buildFeedbackRequest(
+      releaseView,
+      releaseDeviceId,
+      releaseFeedbackTextEl.value,
+      [],
+      { digest_proven: false },
+      releaseNonce(),
+    );
+    await releaseControlRequest("/feedback", { method: "POST", body: requestBody });
+    releaseFeedbackTextEl.value = "";
+    showReleaseNotice(`Feedback saved against exact release ${requestBody.release_id}. Binary install/reload is still pending.`);
+  } catch (error) {
+    showReleaseError(String(error?.message || error));
+  } finally {
+    setReleaseBusy(false);
+  }
+});
 
 // One turn at a time. `turn` is null when idle.
 let turn = null;
@@ -703,3 +976,8 @@ form.addEventListener("submit", async (e) => {
 ensurePort();
 historyRetryBtn.addEventListener("click", () => refreshHistory({ reason: "manual retry" }));
 refreshHistory({ reason: "initial" });
+refreshReleaseCockpit();
+
+// Keep the small diagnostic surface used by the browser smoke harness. These
+// functions were document globals before sidepanel.js became an ES module.
+Object.assign(globalThis, { refreshHistory, request, roleForInstruction });

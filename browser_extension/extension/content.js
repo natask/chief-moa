@@ -109,6 +109,7 @@
   const UI_SPEC_CACHE_KEY = "ageeUiSpec";
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
+  const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
   // Language chip: what A.G. currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
   let ageeProfileCacheValue = null;
@@ -2718,6 +2719,7 @@
       assistantSpeechSuppressed: false,
       steeringBoundaryText: "",
       dictation: options.dictation === true,
+      dictationLeaseId: options.dictationLeaseId || null,
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -2737,6 +2739,7 @@
         threadLabel: context.label,
         warmCaptureId: options.warmCaptureId || null,
         transcriptionOnly: state.dictation,
+        dictationLeaseId: state.dictationLeaseId,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -2890,6 +2893,7 @@
       state.turnStatus = status;
       state.ttsSpoke = msg.tts_spoke === true;
       state.transcriptionOnly = msg.transcription_only === true;
+      state.clipboardCopied = msg.clipboard_copied === true;
       if (msg.reply_language) {
         state.replyLanguage = String(msg.reply_language);
         // Live-update the "Speaks" side of the language chip from this turn,
@@ -3167,7 +3171,7 @@
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.dataset.ageeOwnerStatus = browserAgentOwner?.status || "";
     root.dataset.ageeOwnerCue = browserAgentOwner?.cue_id || "";
-    root.dataset.ageeOwnerResult = browserAgentOwner?.last_result || "";
+    root.removeAttribute("data-agee-owner-result");
   }
 
   function liveCancelTurnMessage(state, playedSegments, replacement = null) {
@@ -3314,7 +3318,11 @@
     if (state.dictation && state.transcriptionOnly) {
       conversationActive = false;
       const transcript = String(state.transcript || "").trim();
-      const copied = transcript ? await copyTextToClipboard(transcript) : false;
+      const copied = state.clipboardCopied === true
+        ? true
+        : transcript
+          ? await copyTextToClipboard(transcript)
+          : false;
       const summary = copied
         ? "Copied transcript to clipboard."
         : transcript
@@ -3466,6 +3474,24 @@
       dictation: true,
       preserveAssistantPlayback: false,
     });
+  }
+
+  function startDictation(dictationLeaseId = null) {
+    if (liveVoice) stopLiveVoiceTurn("cancel");
+    startLiveVoiceTurn({
+      conversation: false,
+      dictation: true,
+      dictationLeaseId,
+      preserveAssistantPlayback: false,
+    });
+  }
+
+  function hydrateBrowserAgentOwner() {
+    return safeRuntimeSendMessage({ cmd: "browserAgentOwnerGet" })
+      .then((result) => {
+        if (result?.ok) handleBrowserAgentOwnerChanged(result);
+      })
+      .catch(() => {});
   }
 
   function toggleVoiceSession() {
@@ -3933,6 +3959,9 @@
             clearVoiceFirstHoldTimer();
             applyGestureModeHints();
           }
+          if (changes[ACTIVE_BROWSER_AGENT_OWNER_KEY]) {
+            hydrateBrowserAgentOwner();
+          }
         });
       } catch (error) {
         markExtensionContextInvalidated(error);
@@ -4250,6 +4279,21 @@
         toggleDictation();
         reply({ ok: true });
         return true;
+      case "startDictation":
+        if (!root) build();
+        startDictation(msg.dictationLeaseId || null);
+        reply({ ok: true });
+        return true;
+      case "commitDictation": {
+        const state = liveVoiceBySessionId.get(msg.voiceSessionId);
+        if (!state?.dictation || state.committed) {
+          reply({ ok: false, error: "active dictation was not found in this tab" });
+          return true;
+        }
+        commitLiveVoiceTurn(state);
+        reply({ ok: true });
+        return true;
+      }
       case "snapshot":
         reply(snapshot());
         return true;
@@ -4378,5 +4422,6 @@
   });
 
   build();
+  hydrateBrowserAgentOwner();
   startDevReloadWatcher().catch(() => {});
 })();

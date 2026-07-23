@@ -104,6 +104,11 @@ export function quietChromeArgs({ extensionPath, profilePath, initialUrl = "abou
     "--disable-sync",
     "--disable-default-apps",
     "--disable-component-update",
+    // The profile is disposable and must never wait on an invisible media
+    // permission prompt. A deterministic fake device exercises the packaged
+    // offscreen capture path without touching the user's microphone.
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
     // Chrome 150+ ships built-in component extensions whose service workers
     // also live at chrome-extension://…/background.js; without this flag they
     // shadow the extension under test when harnesses scan worker targets.
