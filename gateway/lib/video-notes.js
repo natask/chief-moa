@@ -11,6 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DEFAULT_CONTENT_TYPE = "video/webm";
+const DEFAULT_RETENTION = "user_kept";
 const MAX_LIMIT = 500;
 const DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 // Per-request cap. Inline Gemini video rides base64 inside one generateContent
@@ -47,6 +48,9 @@ function createVideoNotesStore(options = {}) {
     const contentType = normalizeContentType(input.content_type || input.contentType);
     const id = createNoteId();
     const now = new Date().toISOString();
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    const evidenceRef = `video-note://${id}`;
+    const retention = normalizeRetention(input.retention);
     const note = {
       id,
       created_at: now,
@@ -54,12 +58,18 @@ function createVideoNotesStore(options = {}) {
       session_id: cleanToken(input.session_id || input.sessionId, 120),
       content_type: contentType,
       bytes: bytes.length,
+      sha256,
+      evidence_ref: evidenceRef,
+      retention,
       duration_ms: normalizeDurationMs(input.duration_ms || input.durationMs),
       label: cleanText(input.label, 200),
       video: {
         kind: "note",
         content_type: contentType,
         bytes: bytes.length,
+        sha256,
+        evidence_ref: evidenceRef,
+        retention,
         href: `/v1/video-notes/${encodeURIComponent(id)}/video`,
       },
     };
@@ -215,6 +225,7 @@ function createVideoNoteHandlers(options = {}) {
         session_id: request.headers["x-moa-session-id"] || "",
         duration_ms: request.headers["x-moa-duration-ms"] || "",
         label: request.headers["x-moa-label"] || "",
+        retention: request.headers["x-moa-retention"] || "",
       });
     } catch (error) {
       sendJson(response, Number(error?.statusCode) || 500, { error: cleanError(error) });
@@ -306,6 +317,10 @@ function videoInlinePart(note, bytes) {
 
 function bareMimeType(contentType) {
   return String(contentType || "").split(";")[0].trim().toLowerCase();
+}
+
+function normalizeRetention(value) {
+  return value === "short_lived" ? "short_lived" : DEFAULT_RETENTION;
 }
 
 function writeNote(notesDir, note) {
@@ -449,5 +464,6 @@ module.exports = {
   videoInlinePart,
   bareMimeType,
   DEFAULT_CONTENT_TYPE,
+  DEFAULT_RETENTION,
   DEFAULT_MAX_NOTE_BYTES,
 };

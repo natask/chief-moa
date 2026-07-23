@@ -83,6 +83,12 @@ const { createBrowserTaskHandlers } = require("./lib/browser-task-handlers");
 const { createBrowserTurnHandlers } = require("./lib/browser-turn-handlers");
 const { createAccountConnectionHandlers } = require("./lib/account-connection-handlers");
 const { createEventSubstrateStore, normalizeEventType } = require("./lib/event-substrate");
+const {
+  MAX_LITERAL_BYTES: CAPTURE_BLOCK_MAX_LITERAL_BYTES,
+  createCaptureBlockStore,
+  isCompletedTranscriptionOnly,
+} = require("./lib/capture-blocks");
+const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { buildIdentity } = require("./lib/build-identity");
 const { createWorkHistoryStore } = require("./lib/work-history");
@@ -594,6 +600,12 @@ const eventSubstrate = createEventSubstrateStore({
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
+const captureBlocks = createCaptureBlockStore({ events: eventSubstrate });
+const { routeCaptureBlocks } = createCaptureBlockHandlers({
+  authorized,
+  sendJson,
+  store: captureBlocks,
+});
 const { routeEventProjects, eventStatus } = createEventProjectHandlers({
   eventSubstrate, normalizeEventType, authorized, authorizedAgent, agentAuthError,
   projectStore, readJsonBody, sendJson, cleanError,
@@ -926,6 +938,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (await routeCaptureBlocks(request, response, url)) {
+      return;
+    }
+
     if (await routeWorkGraph(request, response, url)) {
       return;
     }
@@ -1064,6 +1080,7 @@ function startServer() {
       .catch((error) => {
         console.warn(`Intent runtime rehydration warm failed (will rebuild on demand): ${cleanError(error)}`);
       });
+    scheduleCaptureBlockReconciliation();
   });
 }
 
@@ -1675,8 +1692,38 @@ async function writeCompletedVoiceTurnRecord(record) {
   }
   writeVoiceTurnRecord(record);
   await recordVoiceTurnCompletedProductEvent(record);
+  scheduleCaptureBlockProjection(record);
   // Rolling summary upkeep for the voice paths (async, never adds latency).
   maybeScheduleThreadSummaryAfterTurn(record.session_id, record.branch_id);
+}
+
+function scheduleCaptureBlockProjection(record) {
+  if (!isCompletedTranscriptionOnly(record)) {
+    return;
+  }
+  // Dictation clipboard delivery waits for turn_done. Keep the derived
+  // capture/routing projection off that critical path: the canonical turn and
+  // PCM archive already exist, and the event store's idempotency keys make
+  // startup reconciliation safe after a crash.
+  setImmediate(() => {
+    captureBlocks.recordCompletedDictation(record).catch((error) => {
+      console.warn(`capture block projection failed (will retry on startup): ${cleanError(error)}`);
+    });
+  });
+}
+
+function scheduleCaptureBlockReconciliation() {
+  setImmediate(async () => {
+    try {
+      for (const record of listAllVoiceTurnRecords()) {
+        if (isCompletedTranscriptionOnly(record)) {
+          await captureBlocks.recordCompletedDictation(record);
+        }
+      }
+    } catch (error) {
+      console.warn(`capture block reconciliation failed: ${cleanError(error)}`);
+    }
+  });
 }
 
 function shouldDelegateToBrowserTurn(body) {
@@ -9070,7 +9117,12 @@ async function recordStreamingVoiceTurn(turn) {
     await deleteVoiceTurnPcm(sessionId, turnId);
   }
 
-  const transcript = truncate(String(turn.transcript || ""), 16000);
+  const rawTranscript = String(turn.transcript || "");
+  const transcriptionOnly = turn.transcription_only === true;
+  const rawTranscriptBytes = Buffer.byteLength(rawTranscript, "utf8");
+  const transcript = transcriptionOnly
+    ? truncateToBytes(rawTranscript, CAPTURE_BLOCK_MAX_LITERAL_BYTES)
+    : truncate(rawTranscript, 16000);
   const transcriptSource = normalizeTranscriptSource(turn.transcript_source, transcript);
   const assistantText = String(turn.assistant_text || "").trim();
   const deviceId = normalizeDeviceId(turn.device_id || turn.deviceId || "");
@@ -9104,6 +9156,15 @@ async function recordStreamingVoiceTurn(turn) {
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
     transcript_source: transcriptSource,
+    ...(transcriptionOnly ? {
+      transcript_completeness: {
+        state: rawTranscriptBytes <= CAPTURE_BLOCK_MAX_LITERAL_BYTES ? "complete" : "truncated",
+        exact: rawTranscriptBytes <= CAPTURE_BLOCK_MAX_LITERAL_BYTES,
+        truncated: rawTranscriptBytes > CAPTURE_BLOCK_MAX_LITERAL_BYTES,
+        source_utf8_bytes: rawTranscriptBytes,
+        retained_utf8_bytes: Buffer.byteLength(transcript, "utf8"),
+      },
+    } : {}),
     classification,
     screen: null,
     created_at: turn.started_at || now,

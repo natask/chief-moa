@@ -156,6 +156,176 @@ test("feedback defaults to active work and cancellation requires claim receipt",
   assert.equal(rejected.decision, "rejected");
 });
 
+test("interaction feedback preserves raw evidence and binds the exact deployment candidate", async (t) => {
+  const store = makeStore(t);
+  const digest = "a".repeat(64);
+  const request = await store.requestDeployment({
+    target: "gateway",
+    candidate_refs: [{
+      candidate_id: "cand_feedback",
+      target: "gateway",
+      release_id: "release_feedback",
+      artifact_sha256: digest,
+      artifact_ref: "artifact://feedback",
+    }],
+  });
+  const rawComment = "  the button moved after this click  \n";
+  const result = await store.attachFeedback({
+    targets: [{ type: "deployment", id: request.request_id }],
+    raw_comment: rawComment,
+    interaction_feedback: {
+      schema: "interaction_feedback.v1",
+      evidence_refs: ["video-note://vnote_feedback"],
+      anchors: [
+        { kind: "time_range", start_ms: 1200, end_ms: 1800 },
+        {
+          kind: "browser_snapshot",
+          snapshot_id: "snap_feedback",
+          captured_at: "2026-07-22T12:00:00Z",
+          page_ref: "https://preview.example.test/page",
+          element_index: 7,
+          label: "Save",
+        },
+      ],
+      release_binding: {
+        surface: "gateway",
+        release_id: "release_feedback",
+        candidate_id: "cand_feedback",
+        artifact_sha256: digest,
+        channel: "preview",
+      },
+    },
+  });
+
+  assert.equal(result.feedback.raw_comment, rawComment);
+  assert.equal(result.feedback.transcript, rawComment);
+  assert.equal(result.feedback.interaction_feedback.release_binding.artifact_sha256, digest);
+  assert.deepEqual(result.feedback.interaction_feedback.evidence_refs, ["video-note://vnote_feedback"]);
+  assert.equal(result.feedback.interaction_feedback.context_proposal.status, "unreviewed");
+  assert.equal(result.feedback.interaction_feedback.context_proposal.derivation, "deterministic_v1");
+  assert.match(result.feedback.interaction_feedback.context_proposal.text, /1200-1800ms/);
+  assert.equal((await store.deploymentRequestDetail(request.request_id)).feedback[0].feedback_id, result.feedback.feedback_id);
+
+  await assert.rejects(
+    store.attachFeedback({
+      targets: [{ type: "deployment", id: request.request_id }],
+      raw_comment: "wrong bytes",
+      interaction_feedback: {
+        evidence_refs: [],
+        anchors: [],
+        release_binding: {
+          surface: "gateway",
+          release_id: "release_feedback",
+          candidate_id: "cand_feedback",
+          artifact_sha256: "b".repeat(64),
+        },
+      },
+    }),
+    /does not match the targeted candidate/,
+  );
+});
+
+test("interaction feedback rejects unbounded anchors and unproven release identity", async (t) => {
+  const store = makeStore(t);
+  const digest = "c".repeat(64);
+  const request = await store.requestDeployment({
+    target: "browser_extension",
+    candidate_refs: [{
+      candidate_id: "cand_bounds",
+      target: "browser_extension",
+      release_id: "release_bounds",
+      artifact_sha256: digest,
+    }],
+  });
+  const base = {
+    targets: [{ type: "deployment", id: request.request_id }],
+    interaction_feedback: {
+      evidence_refs: [],
+      release_binding: {
+        surface: "browser_extension",
+        release_id: "release_bounds",
+        candidate_id: "cand_bounds",
+        artifact_sha256: digest,
+      },
+    },
+  };
+  await assert.rejects(
+    store.attachFeedback({
+      ...base,
+      interaction_feedback: {
+        ...base.interaction_feedback,
+        anchors: [{ kind: "time_range", start_ms: 20, end_ms: 10 }],
+      },
+    }),
+    /cannot precede/,
+  );
+  await assert.rejects(
+    store.attachFeedback({
+      ...base,
+      interaction_feedback: {
+        ...base.interaction_feedback,
+        anchors: [{ kind: "browser_snapshot", snapshot_id: "snap", captured_at: "not-a-date" }],
+      },
+    }),
+    /RFC3339/,
+  );
+  await assert.rejects(
+    store.attachFeedback({
+      targets: [{ type: "run", id: "run_unbound" }],
+      interaction_feedback: { ...base.interaction_feedback, anchors: [] },
+    }),
+    /exactly one deployment target/,
+  );
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: "invalid",
+  }), /must be an object/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, schema: "interaction_feedback.v2" },
+  }), /schema/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, anchors: "invalid" },
+  }), /anchors must be an array/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, anchors: Array(51).fill({ kind: "time_range", start_ms: 0 }) },
+  }), /exceeds 50/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, anchors: [null] },
+  }), /must be an object/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, anchors: [{ kind: "other" }] },
+  }), /kind is unsupported/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, anchors: [{ kind: "time_range", start_ms: -1 }] },
+  }), /bounded integer/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: {
+      ...base.interaction_feedback,
+      anchors: [{
+        kind: "browser_snapshot",
+        snapshot_id: "snap",
+        captured_at: "2026-07-22T12:00:00Z",
+        element_index: -1,
+      }],
+    },
+  }), /bounded integer/);
+  await assert.rejects(store.attachFeedback({
+    ...base,
+    interaction_feedback: { ...base.interaction_feedback, release_binding: null },
+  }), /release_binding is required/);
+  await assert.rejects(store.attachFeedback({
+    targets: [{ type: "deployment", id: "dep_missing" }],
+    interaction_feedback: base.interaction_feedback,
+  }), /target was not found/);
+});
+
 test("status and UI routes resolve latest task, run evidence, and safe fallbacks", async (t) => {
   const store = makeStore(t);
   assert.equal(await store.resolveUiRoute({ route_kind: "task" }), null);

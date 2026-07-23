@@ -19,6 +19,7 @@
 // explicit promotion marker plus backup/restore evidence refs.
 
 const crypto = require("node:crypto");
+const { createInteractionFeedbackContract } = require("./interaction-feedback");
 
 const TASK_STATUSES = Object.freeze(["proposed", "queued", "active", "blocked", "completed", "canceled", "failed"]);
 
@@ -72,6 +73,21 @@ const UI_ROUTE_KINDS = Object.freeze(["task", "run", "diff", "verification", "de
 
 const EVENT_LIST_LIMIT = 500;
 const EVENT_REBUILD_LIMIT = 100_000;
+const {
+  boundedRawText,
+  deploymentCandidateRefs,
+  deploymentRefs,
+  deploymentRequestIdForTarget,
+  deploymentUrl,
+  normalizeInteractionFeedback,
+} = createInteractionFeedbackContract({
+  deploymentRef,
+  deploymentString,
+  iso,
+  refs,
+  text,
+  workHistoryRef,
+});
 
 function createWorkHistoryStore({ events }) {
   if (!events || typeof events.appendEvent !== "function" || typeof events.listEvents !== "function") {
@@ -404,6 +420,14 @@ function createWorkHistoryStore({ events }) {
     if (targets.length === 0) {
       throw new Error("no feedback target: name a run/task id or have active work");
     }
+    const rawComment = boundedRawText(
+      input.raw_comment ?? input.transcript ?? input.text,
+      8000,
+    );
+    const interactionFeedback = normalizeInteractionFeedback(
+      input.interaction_feedback || input.interactionFeedback,
+      { rawComment, targets, state },
+    );
 
     const feedback = {
       feedback_id: id("fb"),
@@ -412,8 +436,10 @@ function createWorkHistoryStore({ events }) {
       target_refs: targets,
       intent,
       urgency: text(input.urgency, 40) || "normal",
-      transcript: text(input.transcript || input.text, 8000),
-      summary: text(input.summary, 2000) || text(input.transcript || input.text, 2000),
+      transcript: rawComment,
+      raw_comment: rawComment,
+      summary: text(input.summary, 2000) || text(rawComment, 2000),
+      ...(interactionFeedback ? { interaction_feedback: interactionFeedback } : {}),
       routing_decision_ids: Array.isArray(input.routing_decision_ids)
         ? input.routing_decision_ids.map((v) => text(v, 160)).filter(Boolean).slice(0, 20)
         : [],
@@ -1091,6 +1117,7 @@ function createWorkHistoryStore({ events }) {
           effect_adoptions: [],
           receipts: new Map(),
           records: [],
+          feedback: [],
           latest_event_at: "",
         });
       }
@@ -1142,6 +1169,15 @@ function createWorkHistoryStore({ events }) {
           feedback.push(payload);
           if (runId) {
             ensureRun(runId).feedback.push(payload);
+          }
+          for (const target of normalizeFeedbackTargets(payload.target_refs)) {
+            if (target.type !== "deployment") continue;
+            const requestId = deploymentRequestIdForTarget({
+              targetId: target.id,
+              deploymentRequests,
+              deployments,
+            });
+            if (requestId) ensureDeploymentRequest(requestId).feedback.push(payload);
           }
           continue;
         }
@@ -1390,6 +1426,7 @@ function createWorkHistoryStore({ events }) {
       effects: [...entry.effects.values()],
       effect_adoptions: entry.effect_adoptions,
       receipts: [...entry.receipts.values()],
+      feedback: entry.feedback,
       apply_guard: applyGuard,
       status: deploymentRequestStatus(entry),
       blocking_reason: deploymentRequestBlockingReason(entry),
@@ -1736,44 +1773,6 @@ function deploymentRef(value, name) {
     throw new Error(`${name} must be a typed non-secret reference`);
   }
   return ref;
-}
-
-function deploymentUrl(value, name) {
-  const url = deploymentString(value, name, 800, false);
-  if (!url) return "";
-  let parsed;
-  try { parsed = new URL(url); } catch { throw new Error(`${name} must be an https URL`); }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-    throw new Error(`${name} must be an https URL without credentials`);
-  }
-  return url;
-}
-
-function deploymentRefs(value, name) {
-  if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) throw new Error(`${name} must be an array of typed string references`);
-  if (value.length > 50) throw new Error(`${name} exceeds 50 references`);
-  return value.map((item, index) => deploymentRef(item, `${name}[${index}]`)).filter(Boolean);
-}
-
-function deploymentCandidateRefs(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (typeof item === "string") {
-        return { candidate_id: deploymentString(item, "candidate_id", 160, true) };
-      }
-      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-      const candidate = {
-        candidate_id: deploymentString(item.candidate_id || item.candidateId || item.id, "candidate_id", 160),
-        target: deploymentString(item.target, "candidate target", 120),
-        artifact_ref: deploymentRef(item.artifact_ref || item.artifactRef, "candidate artifact_ref"),
-        provenance_ref: deploymentRef(item.provenance_ref || item.provenanceRef, "candidate provenance_ref"),
-      };
-      return candidate.candidate_id || candidate.target || candidate.artifact_ref ? candidate : null;
-    })
-    .filter(Boolean)
-    .slice(0, 20);
 }
 
 function iso(value, fallback) {

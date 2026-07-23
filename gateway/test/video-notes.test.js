@@ -11,6 +11,7 @@ const {
   videoInlinePart,
   bareMimeType,
   DEFAULT_CONTENT_TYPE,
+  DEFAULT_RETENTION,
 } = require("../lib/video-notes");
 
 function tempDataDir() {
@@ -33,6 +34,12 @@ test("create stores bytes and metadata, get and readBytes round-trip", async () 
   assert.strictEqual(note.bytes, bytes.length);
   assert.strictEqual(note.duration_ms, 12000);
   assert.strictEqual(note.video.href, `/v1/video-notes/${note.id}/video`);
+  assert.match(note.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(note.sha256, note.video.sha256);
+  assert.equal(note.evidence_ref, `video-note://${note.id}`);
+  assert.equal(note.video.evidence_ref, note.evidence_ref);
+  assert.equal(note.retention, DEFAULT_RETENTION);
+  assert.equal(note.video.retention, DEFAULT_RETENTION);
 
   const loaded = store.get(note.id);
   assert.strictEqual(loaded.id, note.id);
@@ -40,6 +47,13 @@ test("create stores bytes and metadata, get and readBytes round-trip", async () 
   // codecs parameter maps to the .webm extension
   assert.ok(store.videoPath(note.id).endsWith(".webm"));
   assert.strictEqual(store.list().length, 1);
+});
+
+test("retention is bounded to supported evidence policies", () => {
+  const dataDir = tempDataDir();
+  const store = createVideoNotesStore({ dataDir });
+  assert.equal(store.create({ bytes: Buffer.from("a"), retention: "short_lived" }).retention, "short_lived");
+  assert.equal(store.create({ bytes: Buffer.from("b"), retention: "forever" }).retention, "user_kept");
 });
 
 test("empty body is refused and quota refuses instead of pruning", () => {

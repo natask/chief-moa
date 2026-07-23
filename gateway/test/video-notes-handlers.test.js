@@ -86,6 +86,7 @@ test("create handler accepts raw bytes and isolates product-event failure", asyn
     "x-moa-session-id": "session",
     "x-moa-duration-ms": "12",
     "x-moa-label": "demo",
+    "x-moa-retention": "short_lived",
   });
   const response = captureResponse();
   const pending = handlers.create(request, response);
@@ -95,6 +96,7 @@ test("create handler accepts raw bytes and isolates product-event failure", asyn
   assert.equal(response.json.note.id, "note-1");
   assert.equal(created[0].bytes.toString(), "video");
   assert.equal(created[0].surface, "android");
+  assert.equal(created[0].retention, "short_lived");
 });
 
 test("create handler rejects empty, oversized, stream-error, and storage-error bodies", async (t) => {
