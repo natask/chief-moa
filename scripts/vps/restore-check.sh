@@ -51,6 +51,21 @@ trap cleanup EXIT
 echo "Starting scratch Postgres..."
 scratch_compose up -d --wait postgres
 
+echo "Waiting for scratch Postgres SQL readiness..."
+sql_ready=0
+for _attempt in $(seq 1 30); do
+  if scratch_compose exec -T postgres psql -q -U moa -d moa_gateway \
+    -c 'select 1' >/dev/null 2>&1; then
+    sql_ready=1
+    break
+  fi
+  sleep 1
+done
+[ "$sql_ready" -eq 1 ] || {
+  echo "Scratch Postgres did not accept SQL connections within 30 seconds." >&2
+  exit 1
+}
+
 echo "Restoring Postgres dump..."
 scratch_compose exec -T postgres psql -q -U moa -d moa_gateway < "$backup_dir/postgres-dump.sql" >/dev/null
 
