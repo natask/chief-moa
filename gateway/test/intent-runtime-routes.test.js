@@ -168,3 +168,47 @@ test("list and rehydrate expose projections", async () => {
   const badRehydrate = await call("POST", "/v1/intent-runtime/rehydrate", { body: {} });
   assert.equal(badRehydrate.status, 400);
 });
+
+test("work-history creation exposes a durable delivery projection", async () => {
+  const created = await call("POST", "/v1/work-history/turns", {
+    body: {
+      text: "queue a run to implement the durable intent linkage",
+      turn_id: "turn_delivery_route",
+      session_id: "sess_delivery_route",
+      project_id: "chief-moa",
+      acceptance_contract_ref: "openspec://durable-intent-delivery-pipeline/task-1",
+    },
+  });
+  assert.equal(created.status, 202, JSON.stringify(created.json));
+  assert.ok(created.json.refs.intent_id);
+  assert.ok(created.json.refs.task_id);
+  assert.ok(created.json.refs.run_id);
+
+  const retried = await call("POST", "/v1/work-history/turns", {
+    body: {
+      text: "queue a run to implement the durable intent linkage",
+      turn_id: "turn_delivery_route",
+      session_id: "sess_delivery_route",
+      project_id: "chief-moa",
+      acceptance_contract_ref: "openspec://durable-intent-delivery-pipeline/task-1",
+    },
+  });
+  assert.equal(retried.status, 202, JSON.stringify(retried.json));
+  assert.equal(retried.json.refs.intent_id, created.json.refs.intent_id);
+  assert.equal(retried.json.refs.task_id, created.json.refs.task_id);
+  assert.equal(retried.json.refs.run_id, created.json.refs.run_id);
+
+  const delivery = await call(
+    "GET",
+    `/v1/intent-runtime/intents/${encodeURIComponent(created.json.refs.intent_id)}/delivery`,
+  );
+  assert.equal(delivery.status, 200, JSON.stringify(delivery.json));
+  assert.equal(delivery.json.delivery.intent_id, created.json.refs.intent_id);
+  assert.deepEqual(delivery.json.delivery.task_refs.map((ref) => ref.task_id), [created.json.refs.task_id]);
+  assert.deepEqual(delivery.json.delivery.run_refs.map((ref) => ref.run_id), [created.json.refs.run_id]);
+  assert.equal(delivery.json.delivery.execution_started, false);
+  assert.equal(delivery.json.delivery.promotion_recorded, false);
+
+  const missing = await call("GET", "/v1/intent-runtime/intents/intent_missing_delivery/delivery");
+  assert.equal(missing.status, 404);
+});

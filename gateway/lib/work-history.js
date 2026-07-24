@@ -121,7 +121,7 @@ function createWorkHistoryStore({ events }) {
       subproject_id: text(input.subproject_id, 160),
       created_from_broker_event_id: text(input.created_from_broker_event_id, 160),
       created_from_turn_id: text(input.created_from_turn_id, 160),
-      owner_hint: text(input.owner_hint, 200),
+      owner_hint: text(input.owner_hint, 200), intent_id: text(input.intent_id, 160), intent_revision: integer(input.intent_revision), acceptance_contract_ref: text(input.acceptance_contract_ref, 400),
       linked_run_ids: [],
       acceptance_refs: refs(input.acceptance_refs),
       created_at: now,
@@ -157,7 +157,7 @@ function createWorkHistoryStore({ events }) {
       created_from_turn_id: text(input.created_from_turn_id, 160),
       route_decision_id: text(input.route_decision_id, 160),
       context_pack_ref: text(input.context_pack_ref, 400),
-      profile_version: text(input.profile_version, 160),
+      profile_version: text(input.profile_version, 160), intent_id: text(input.intent_id, 160), intent_revision: integer(input.intent_revision), acceptance_contract_ref: text(input.acceptance_contract_ref, 400),
       created_at: now,
     };
     if (!run.objective) {
@@ -1330,7 +1330,7 @@ function createWorkHistoryStore({ events }) {
     const state = await collectState();
     const runs = [...state.runs.values()].map((run) => ({
       run_id: run.record.run_id,
-      task_id: run.record.task_id || "",
+      task_id: run.record.task_id || "", intent_id: run.record.intent_id || "", intent_revision: run.record.intent_revision || 0, acceptance_contract_ref: run.record.acceptance_contract_ref || "",
       status: run.status,
       objective: text(run.record.objective, 200),
       worker_id: run.claim?.worker_id || "",
@@ -1343,7 +1343,7 @@ function createWorkHistoryStore({ events }) {
       feedback_count: run.feedback.length,
     }));
     const tasks = [...state.tasks.values()].map((task) => ({
-      task_id: task.record.task_id,
+      task_id: task.record.task_id, intent_id: task.record.intent_id || "", intent_revision: task.record.intent_revision || 0, acceptance_contract_ref: task.record.acceptance_contract_ref || "",
       title: task.record.title,
       status: task.status,
       status_reason: task.status_reason,

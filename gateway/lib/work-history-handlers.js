@@ -5,6 +5,7 @@ const DEPLOYMENT_OPERATIONS = new Set(["preview", "apply", "rollback"]);
 function createWorkHistoryHandlers(deps) {
   const {
     workHistory,
+    intentWorkflow,
     semanticTelemetry,
     parseWorkHistoryIntent,
     authorized,
@@ -147,7 +148,11 @@ function createWorkHistoryHandlers(deps) {
         }
       }
     } catch (error) {
-      sendJson(response, 400, { error: cleanError(error) });
+      const partial = error?.intent_workflow_partial;
+      sendJson(response, 400, {
+        error: cleanError(error),
+        ...(partial ? { intent_workflow_partial: partial } : {}),
+      });
       return true;
     }
     sendJson(response, 404, { error: "unknown work-history endpoint" });
@@ -255,22 +260,41 @@ function createWorkHistoryHandlers(deps) {
     const actor = { kind: "user", id: body.device_id || body.source || "voice" };
     if (intent.kind === "create_work") {
       const objective = intent.objective || transcript;
-      const task = await workHistory.createTask({
-        title: firstLine(objective).slice(0, 120), objective, owner_hint: intent.owner_hint || "",
-        session_id: sessionId, branch_id: branchId, project_id: body.project_id || "",
-        created_from_broker_event_id: brokerEvent?.id || "", created_from_turn_id: turnId, actor,
+      const linked = await intentWorkflow.createWork({
+        title: firstLine(objective).slice(0, 120),
+        statement: transcript,
+        objective,
+        owner_hint: intent.owner_hint || "",
+        wants_run: intent.wants_run !== false,
+        completion_criteria: body.completion_criteria,
+        acceptance_contract_ref: body.acceptance_contract_ref,
+        session_id: sessionId,
+        branch_id: branchId,
+        project_id: body.project_id || "",
+        broker_event_id: brokerEvent?.id || "",
+        turn_id: turnId,
+        surface: body.source || "work-history-turn",
+        harness_hint: body.harness || "",
+        route_decision_id: topDecision?.id || "",
+        context_pack_ref: topDecision?.context_pack_id || "",
+        profile_version: brokerEvent?.profile_version || "",
+        actor,
       });
-      const run = intent.wants_run === false ? null : await workHistory.queueRun({
-        task_id: task.task_id, objective, owner_hint: intent.owner_hint || "", harness_hint: body.harness || "",
-        session_id: sessionId, branch_id: branchId, project_id: body.project_id || "",
-        created_from_broker_event_id: brokerEvent?.id || "", created_from_turn_id: turnId,
-        route_decision_id: topDecision?.id || "", context_pack_ref: topDecision?.context_pack_id || "",
-        profile_version: brokerEvent?.profile_version || "", actor,
-      });
+      const { intent: deliveryIntent, task, run, delivery } = linked;
       return {
         status_code: 202,
-        speak: run ? `Created task ${task.task_id} and queued run ${run.run_id}. It stays queued until a worker claims it.` : `Created task ${task.task_id}. No run queued yet.`,
-        refs: { task_id: task.task_id, run_id: run?.run_id || "", run_status: run?.status || "" },
+        speak: run
+          ? `Captured intent ${deliveryIntent.intent_id}, created task ${task.task_id}, and queued run ${run.run_id}. It stays queued until a worker claims it.`
+          : `Captured intent ${deliveryIntent.intent_id} and created task ${task.task_id}. No run queued yet.`,
+        refs: {
+          intent_id: deliveryIntent.intent_id,
+          intent_revision: deliveryIntent.version,
+          acceptance_contract_ref: delivery.acceptance_contract_ref,
+          task_id: task.task_id,
+          run_id: run?.run_id || "",
+          run_status: run?.status || "",
+        },
+        actions: [{ type: "delivery_intent_recorded", delivery }],
       };
     }
     if (intent.kind === "status_query") {

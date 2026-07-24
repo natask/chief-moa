@@ -55,6 +55,23 @@ function makeHarness(overrides = {}) {
   }
   const deps = {
     workHistory,
+    intentWorkflow: {
+      createWork: async (body) => {
+        calls.push(["intentWorkflow.createWork", body]);
+        const task = await workHistory.createTask(body);
+        const run = body.wants_run === false ? null : await workHistory.queueRun({ ...body, task_id: task.task_id });
+        const intent = { intent_id: "intent_1", version: 4 };
+        return {
+          intent,
+          task,
+          run,
+          delivery: {
+            intent_id: intent.intent_id,
+            acceptance_contract_ref: body.acceptance_contract_ref || "work-history://turn/test/acceptance",
+          },
+        };
+      },
+    },
     semanticTelemetry: { query: async (query) => ({ query }) },
     parseWorkHistoryIntent: (text) => text === "unknown" ? null : ({ kind: "create_work", objective: text, wants_run: false }),
     authorized: () => true,
@@ -112,6 +129,19 @@ test("general routes cover missing, empty claim, scoped denial, and caught error
   assert.equal((await route(denied, "GET", "/v1/work-history/deployments")).status, 400);
   const broken = makeHarness({ workHistory: { statusSummary: async () => { throw new Error("broken store"); } } });
   assert.deepEqual((await route(broken, "GET", "/v1/work-history/status")).payload, { error: "broken store" });
+  const partial = makeHarness({
+    intentWorkflow: {
+      createWork: async () => {
+        const error = new Error("run queue failed");
+        error.intent_workflow_partial = { intent_id: "intent_1", task_id: "wt_1" };
+        throw error;
+      },
+    },
+  });
+  assert.deepEqual((await route(partial, "POST", "/v1/work-history/turns", { text: "ship it" })).payload, {
+    error: "run queue failed",
+    intent_workflow_partial: { intent_id: "intent_1", task_id: "wt_1" },
+  });
 });
 
 test("deployment routes keep user, reviewer, preview, and promoter authority separate", async () => {
@@ -200,6 +230,8 @@ test("intent execution creates inert tasks and queued runs with broker provenanc
   const context = { transcript: "build it", turnId: "turn_1", brokerEvent: { id: "be_1", decisions: [{ id: "rd_1", context_pack_id: "pack_1" }], profile_version: "pv_1" }, sessionId: "s", branchId: "b", body: { device_id: "phone", project_id: "p", harness: "codex" } };
   const queued = await harness.executeWorkHistoryIntent({ kind: "create_work", objective: "build it", owner_hint: "gateway", wants_run: true }, context);
   assert.equal(queued.refs.run_status, "queued");
+  assert.equal(queued.refs.intent_id, "intent_1");
+  assert.equal(queued.actions[0].type, "delivery_intent_recorded");
   const taskOnly = await harness.executeWorkHistoryIntent({ kind: "create_work", objective: "document it", wants_run: false }, { ...context, brokerEvent: null, body: {} });
   assert.equal(taskOnly.refs.run_id, "");
 });

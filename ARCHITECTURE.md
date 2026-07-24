@@ -1669,6 +1669,11 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   `executable=false` and `model_used=false`; later reflection, topic, or intent
   derivation remains proposal data until the user explicitly accepts a separate
   action.
+- `delivery_intent`: the canonical intent-runtime projection that links one
+  user-authored objective and revision to its source evidence, OpenSpec or
+  acceptance contract, work tasks, queued/executing runs, exact candidate,
+  verification, preview, user acceptance, release receipts, promoted smoke, and
+  outcome. A task or terminal run never proves delivery completion by itself.
 - `broker_event`: one inbound user message stored before routing to sessions,
   workflow packages, chat, voice, or agent runs.
 - `product_event`: one canonical append-only event in the self-hostable event
@@ -1895,6 +1900,10 @@ queues.
 - `gateway/lib/work-history.js`: event-sourced work-history control-plane
   store: tasks, queued runs, claims, snapshots, diffs, verifications, feedback,
   control requests, deployment records, and rebuildable projections.
+- `gateway/lib/intent-workflow.js`: idempotent linkage from one broker-first
+  current work turn to the canonical intent runtime, a work-history task, and an
+  inert queued run proposal. It exposes `moa.delivery-intent.v1`; it never
+  claims a worker, executes code, or records promotion.
 - `gateway/scripts/smoke-work-history.js`: end-to-end control-plane smoke
   (voice create, worker evidence, status, feedback, cancel receipt, deployment
   links, ui.open claim/receipt), run via `npm run smoke:work-history`.

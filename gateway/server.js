@@ -95,6 +95,7 @@ const { createWorkHistoryStore } = require("./lib/work-history");
 const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
 const { createIntentRuntime } = require("./lib/intent-runtime");
+const { createIntentWorkflow } = require("./lib/intent-workflow");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -662,8 +663,14 @@ const semanticTelemetry = createSemanticTelemetryStore({
     build_id: process.env.MOA_TELEMETRY_BUILD_ID || undefined,
   },
 });
+// The intent runtime is the canonical identity/revision authority for delivery
+// work. Construct it before work-history handlers so current user-authored work
+// can be linked to tasks and inert queued proposals in one idempotent workflow.
+const intentRuntime = createIntentRuntime({ events: eventSubstrate });
+const intentWorkflow = createIntentWorkflow({ intentRuntime, workHistory });
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
+  intentWorkflow,
   semanticTelemetry,
   parseWorkHistoryIntent,
   authorized,
@@ -682,12 +689,6 @@ const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers
   recordToolRequestProductEvent,
   emitPreviewTelemetry,
 });
-
-// Intent runtime: durable, event-sourced capture/transition/connect/focus state
-// machine over the same event substrate. It holds no in-memory state, so its
-// projections rehydrate from the canonical event log on every read; startup
-// initialization is just constructing it against the shared substrate.
-const intentRuntime = createIntentRuntime({ events: eventSubstrate });
 
 // Account connections: user-connected provider accounts + credential health.
 // Raw provider credentials stay inside this store's encrypted boundary; the
@@ -2232,7 +2233,7 @@ async function routeIntentRuntime(request, response, url) {
       sendJson(response, 200, await intentRuntime.rehydrate(body));
       return true;
     }
-    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete))?$/);
+    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery))?$/);
     if (intentMatch) {
       const intentId = decodeURIComponent(intentMatch[1]);
       const action = intentMatch[2] || "";
@@ -2243,6 +2244,15 @@ async function routeIntentRuntime(request, response, url) {
           return true;
         }
         sendJson(response, 200, { intent });
+        return true;
+      }
+      if (method === "GET" && action === "delivery") {
+        const delivery = await intentWorkflow.delivery(intentId);
+        if (!delivery) {
+          sendJson(response, 404, { error: "delivery intent not found" });
+          return true;
+        }
+        sendJson(response, 200, { delivery });
         return true;
       }
       if (method === "POST" && action === "transition") {

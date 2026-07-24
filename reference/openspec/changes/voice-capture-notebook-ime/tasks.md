@@ -158,6 +158,17 @@ alignment.
 
 ## Later Changes
 
+- [ ] Replace hidden multi-tap mode selection with visible Speak, Dictate, and
+  Type activities per `explicit-activity-interface-direction-20260723.md`.
+- [ ] Make Android orb and browser mascot drag orthogonal to active capture:
+  movement preserves the capture identity and release leaves it latched until
+  explicit Stop/Send or Cancel.
+- [ ] Add separate Mute and Interrupt controls and preserve unrelated detached
+  agent runs.
+- [ ] Replace the five-minute in-memory product limit with durable bounded
+  chunks, an immediate timestamped history row, and explicit replay/retry state.
+- [ ] Add visible file/video Attach paths and a clear
+  `Copied — clipboard replaced` dictation receipt.
 - [ ] Design and validate a complete Amharic character keyboard and transliteration
   model as its own product change.
 - [ ] Define drill consent, corpus, rubric, evaluation, and deletion behavior.
