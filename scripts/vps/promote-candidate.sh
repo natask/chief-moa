@@ -66,13 +66,18 @@ preview_compose down -v >/dev/null 2>&1 || true
 docker rm -f "$preview_tls_container" >/dev/null 2>&1 || true
 git -C "$APP_DIR" worktree remove --force "$source_dir" >/dev/null 2>&1 || true
 git -C "$APP_DIR" worktree add --detach "$source_dir" "$target" >/dev/null
+"$source_dir/scripts/vps/install-release-control-database-credentials.sh" --check
 
 preview_token="$(openssl rand -hex 32)"
 preview_password="$(openssl rand -hex 32)"
+preview_release_password="$(openssl rand -hex 32)"
+preview_release_publisher_password="$(openssl rand -hex 32)"
 cat > "$preview_env" <<ENV
 MOA_MODE=self-host
 MOA_GATEWAY_TOKEN=$preview_token
 POSTGRES_PASSWORD=$preview_password
+RELEASE_CONTROL_POSTGRES_PASSWORD=$preview_release_password
+RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD=$preview_release_publisher_password
 GATEWAY_IMAGE_TAG=preview-$suffix
 GATEWAY_BIND=127.0.0.1
 GATEWAY_PORT=$preview_port

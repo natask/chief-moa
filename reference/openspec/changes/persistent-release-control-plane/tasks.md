@@ -98,6 +98,10 @@
       disabled for the first schema rollout.
 - [x] V0.2.8c Add the least-authority repository publisher with exact source,
       artifact, evidence, sequence, and stable-promotion binding.
+- [x] V0.2.8d Add the first-rollout bootstrap for distinct release-control
+      database credentials and isolated preview credentials. Fail before backup
+      or preview when the live roles are absent, preserve mode-0600 atomic env
+      updates, and test the idempotent no-output installer in gateway CI.
 - [ ] V0.2.9 Run all release-control, Android, and browser verification. Fix any
       failure before creating release artifacts. Add one shared contract test
       that feeds the HTTP projection into both strict client parsers. Align

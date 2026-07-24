@@ -85,6 +85,7 @@ jobs:
           bash scripts/vps/test-node-runtime.sh
           bash scripts/vps/test-preview-tls-proxy.sh
           bash scripts/vps/test-install-promotion-control-plane.sh
+          bash scripts/vps/test-install-release-control-database-credentials.sh
           bash scripts/vps/test-update-rollback.sh
           cd gateway
           # Same installer and lockfile as dev and the Docker image: what gets

@@ -106,6 +106,19 @@ drain, compatibility, and smoke checks before it changes the active gateway.
 The workflow now remains incomplete until public `/health` reports the exact
 published commit. A green ref-publication job alone is not a successful deploy.
 
+For the first release that adds the separate release-control database, install
+its two distinct role passwords without restarting the active gateway:
+
+```sh
+bash scripts/vps/install-release-control-database-credentials.sh --install
+```
+
+The candidate promoter checks these credentials before taking a backup or
+starting an isolated preview. The installer never prints their values and is
+idempotent. A stale pre-release updater cannot bootstrap the new backup format
+by republishing the ref alone; run the verified candidate promoter from its
+isolated fetched worktree once. Later timer promotions are self-contained.
+
 When the live VPS cannot safely host a candidate, start a device-reachable,
 isolated Mac preview:
 
