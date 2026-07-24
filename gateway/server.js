@@ -1765,8 +1765,14 @@ async function writeCompletedVoiceTurnRecord(record) {
   writeVoiceTurnRecord(record);
   await recordVoiceTurnCompletedProductEvent(record);
   scheduleCaptureBlockProjection(record);
-  // Rolling summary upkeep for the voice paths (async, never adds latency).
-  maybeScheduleThreadSummaryAfterTurn(record.session_id, record.branch_id);
+  // Capture-only dictation is an STT-only boundary. Its literal capture
+  // projection is deterministic and inert; it must not schedule the rolling
+  // model summary that ordinary conversational turns may trigger.
+  if (record.references?.voice_session?.transcription_only !== true) {
+    // Rolling summary upkeep for conversational voice paths (async, never adds
+    // latency to the client response).
+    maybeScheduleThreadSummaryAfterTurn(record.session_id, record.branch_id);
+  }
 }
 
 function scheduleCaptureBlockProjection(record) {
@@ -9196,13 +9202,16 @@ async function recordStreamingVoiceTurn(turn) {
     ? truncateToBytes(rawTranscript, CAPTURE_BLOCK_MAX_LITERAL_BYTES)
     : truncate(rawTranscript, 16000);
   const transcriptSource = normalizeTranscriptSource(turn.transcript_source, transcript);
-  const assistantText = String(turn.assistant_text || "").trim();
+  // Never trust an upstream assistant payload on an explicitly capture-only
+  // turn. The canonical record is the last enforcement boundary before
+  // conversation/event persistence.
+  const assistantText = transcriptionOnly ? "" : String(turn.assistant_text || "").trim();
   const deviceId = normalizeDeviceId(turn.device_id || turn.deviceId || "");
   // Capture memory-worthy statements ("my name is X", "remember that …") from
   // live voice transcripts the same way the HTTP voice-turn handler does, so
   // identity and preference facts are stored regardless of the voice path used.
   // Incognito turns write no memory.
-  if (!incognito) {
+  if (!incognito && !transcriptionOnly) {
     captureMemoryFromTurn(transcript, turn.source || "voice-live");
   }
   const profileVersion = sanitizeOptionalId(turn.profile_version || agentProfile.currentVersion(), agentProfile.currentVersion());
@@ -9214,7 +9223,7 @@ async function recordStreamingVoiceTurn(turn) {
   const incomplete = turn.incomplete === true;
   const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
   const hasRealTranscript = Boolean(transcript && transcriptSource !== "synthetic");
-  const liveClassification = !incomplete && hasRealTranscript
+  const liveClassification = !transcriptionOnly && !incomplete && hasRealTranscript
     ? classifyVoiceTurnWithPersona(turn.persona, { source: turn.source || "voice-live" }, transcript)
     : "";
   const classification = incomplete ? "interrupted" : (liveClassification || "chat");
@@ -9247,7 +9256,7 @@ async function recordStreamingVoiceTurn(turn) {
   // The reasoner planned this identity before answering. Materialize it only
   // now, after the cascaded answer/classification completed successfully and
   // immediately before the canonical recorder performs durable writes.
-  if (stashedContext?.thread) {
+  if (!transcriptionOnly && stashedContext?.thread) {
     commitTurnFilingThread({
       sessionId,
       thread: stashedContext.thread,
@@ -9264,20 +9273,24 @@ async function recordStreamingVoiceTurn(turn) {
       // languages come from the STT prompt; reply_language is the OUTPUT.
       input_languages: Array.isArray(turn.input_languages) ? turn.input_languages : [],
       reply_language: turn.reply_language || "",
-      tts_spoke: turn.tts_spoke === true,
+      tts_spoke: transcriptionOnly ? false : turn.tts_spoke === true,
       // How the reply was delivered ("text" = deliberately not spoken) and, when
       // hosted TTS was attempted but failed, the short reason. Distinct fields so
       // a text-only delivery is never mistaken for a synthesis failure.
-      modality: String(turn.modality || ""),
-      tts_error: String(turn.tts_error || ""),
+      modality: transcriptionOnly ? "" : String(turn.modality || ""),
+      tts_error: transcriptionOnly ? "" : String(turn.tts_error || ""),
       stage_timings: turn.stage_timings && typeof turn.stage_timings === "object" && !Array.isArray(turn.stage_timings)
         ? turn.stage_timings
         : {},
-      assistant_audio_segments: Array.isArray(turn.assistant_audio_segments) ? turn.assistant_audio_segments : [],
-      playback_progress: turn.playback_progress && typeof turn.playback_progress === "object" ? turn.playback_progress : null,
+      assistant_audio_segments: transcriptionOnly
+        ? []
+        : (Array.isArray(turn.assistant_audio_segments) ? turn.assistant_audio_segments : []),
+      playback_progress: !transcriptionOnly && turn.playback_progress && typeof turn.playback_progress === "object"
+        ? turn.playback_progress
+        : null,
       transcript_language_rejected: turn.transcript_language_rejected === true,
       audio: turn.audio || null,
-      assistant_audio: turn.assistant_audio || null,
+      assistant_audio: transcriptionOnly ? null : (turn.assistant_audio || null),
       context: turn.context && typeof turn.context === "object" && !Array.isArray(turn.context)
         ? turn.context
         : {},
@@ -9316,6 +9329,21 @@ async function recordStreamingVoiceTurn(turn) {
     return canonicalRecord;
   }
   await recordVoiceTurnAcceptedProductEvent(baseRecord);
+  if (transcriptionOnly) {
+    const payload = voiceTurnPayload(baseRecord, {
+      speak: "",
+      display: "",
+      actions: [],
+      follow_up_expected: false,
+    });
+    const canonicalRecord = {
+      ...baseRecord,
+      response: payload,
+      references: voiceSessionReferences,
+    };
+    await writeCompletedVoiceTurnRecord(canonicalRecord);
+    return canonicalRecord;
+  }
   if (!incomplete && classification === "control") {
     const payload = voiceTurnPayload(baseRecord, {
       speak: "",

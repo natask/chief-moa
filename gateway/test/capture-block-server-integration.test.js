@@ -85,7 +85,9 @@ test("server projects completed and reconciled dictation without truncation or e
       source: "browser-extension",
       transcript: exactBoundedLiteral,
       transcript_source: "stt",
-      assistant_text: "precomputed transcript acknowledgement",
+      // A stale/upstream reply must be discarded at the canonical persistence
+      // boundary for an explicitly transcription-only turn.
+      assistant_text: "must not persist",
       provider: "cascaded",
       model: "chirp_3",
       input_languages: ["en-US", "am-ET"],
@@ -102,6 +104,11 @@ test("server projects completed and reconciled dictation without truncation or e
     });
 
     assert.equal(completed.transcript.length, MAX_LITERAL_BYTES);
+    assert.equal(completed.response.speak, "");
+    assert.equal(completed.response.display, "");
+    assert.equal(completed.response.text, "");
+    assert.deepEqual(completed.response.agent_runs, []);
+    assert.equal(completed.response.agent_run, null);
     assert.deepEqual(completed.transcript_completeness, {
       state: "complete",
       exact: true,
@@ -123,9 +130,24 @@ test("server projects completed and reconciled dictation without truncation or e
     assert.equal(completedBlock.transcript_completeness.utf8_bytes, MAX_LITERAL_BYTES);
     assert.equal(completedBlock.transcript_completeness.source_utf8_bytes, MAX_LITERAL_BYTES);
     assert.equal(completedBlock.transcript_completeness.retained_utf8_bytes, MAX_LITERAL_BYTES);
+    assert.deepEqual(
+      completedBlock.transcript_provenance.input_languages,
+      ["en-US", "am-ET"],
+      "capture provenance must preserve configured prompt languages",
+    );
     assertNonExecutingProjection(completedBlock);
 
     assert.equal(modelTrap.requestCount, 0);
+    assert.equal(
+      fs.existsSync(path.join(dataDir, "conversations", "session_completed.json")),
+      false,
+      "dictation persistence must not create an assistant conversation",
+    );
+    assert.equal(
+      fs.existsSync(path.join(dataDir, "turns.jsonl")),
+      false,
+      "dictation persistence must not append a generated assistant turn",
+    );
     assert.deepEqual(fs.readdirSync(path.join(dataDir, "agent-runs")), []);
   } finally {
     if (gatewayServer?.listening) {

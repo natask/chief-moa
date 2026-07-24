@@ -1211,7 +1211,8 @@ class VoiceSessionConnection {
     }
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     const transcript = String(providerEvents.transcript || "").trim();
-    const assistantText = String(providerEvents.assistantText || "").trim();
+    const transcriptionOnly = turn.transcriptionOnly === true;
+    const assistantText = transcriptionOnly ? "" : String(providerEvents.assistantText || "").trim();
     if (!transcript && !assistantText && turn.audioBytes <= 0 && turn.assistantAudioBytes <= 0) {
       return;
     }
@@ -1241,7 +1242,7 @@ class VoiceSessionConnection {
           bytes: turn.audioBytes,
           chunks: turn.audioChunks,
         },
-        assistant_audio: {
+        assistant_audio: transcriptionOnly ? null : {
           pcm_file: path.basename(turn.assistantPcmPath),
           bytes: turn.assistantAudioBytes,
           chunks: turn.assistantAudioChunks,
@@ -1249,18 +1250,17 @@ class VoiceSessionConnection {
         context: turn.contextSummary || {},
         capture: turn.captureSummary || captureSummaryForTurn(turn),
         transport: turn.transportSummary || {},
-        assistant_audio_segments: turn.assistantAudioSegments,
+        assistant_audio_segments: transcriptionOnly ? [] : turn.assistantAudioSegments,
         playback_policy: turn.playbackPolicy || {},
         playback_progress: turn.playbackProgress,
+        transcription_only: transcriptionOnly,
         incomplete: true,
         status,
         error: errorMessage,
         ...(spokenProgress ? { spoken_progress: spokenProgress } : {}),
         stage_timings: sanitizeStageTimings(providerEvents.stageTimings),
         transcript_language_rejected: turn.transcriptLanguageRejected === true,
-        // Input languages the STT leg restricted to, so an interrupted turn's
-        // stored PCM still carries its language for later audio analysis.
-        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
+        input_languages: turnInputLanguages(turn),
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
         ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
       });
@@ -1338,7 +1338,7 @@ class VoiceSessionConnection {
         // The restricted INPUT languages the STT leg recognized, captured at
         // session start. Recorded on the canonical turn so a later audio-analysis
         // agent can fetch the stored PCM and know both input and output languages.
-        input_languages: Array.isArray(turn.providerStatus?.language_codes) ? turn.providerStatus.language_codes : [],
+        input_languages: turnInputLanguages(turn),
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
         ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
       });

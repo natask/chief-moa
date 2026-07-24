@@ -143,6 +143,11 @@ async function main() {
     });
     assert.equal(calls.length, 2, "dictation should issue only one additional Chirp request");
     assert.equal(reasonerCalls, 0, "dictation must not run the reasoner");
+    assert.equal(
+      calls.filter((call) => !String(call.url).includes(":recognize")).length,
+      0,
+      "dictation must issue zero TTS requests",
+    );
     assert.equal(dictation.transcript, "hello from chirp");
     assert.equal(dictation.assistant_text, "");
     assert.equal(dictation.transcription_only, true);

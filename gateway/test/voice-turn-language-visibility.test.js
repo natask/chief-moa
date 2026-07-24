@@ -29,7 +29,8 @@ function noReplyLanguageProvider() {
         model: "lang-visibility-model",
         configured: true,
         assistant_audio_format: AUDIO_FORMAT,
-        language_codes: INPUT_LANGUAGES.slice(),
+        language_codes: ["auto"],
+        prompt_language_codes: INPUT_LANGUAGES.slice(),
       };
     },
     async processTurn(turn, hooks) {
@@ -124,11 +125,15 @@ function runTextTurn(target, { text }) {
 
 test("turn_done always carries reply_language and input_languages", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-voice-lang-vis-"));
+  const completedTurns = [];
   const voiceServer = createVoiceSessionServer({
     dataDir: path.join(tempDir, "data"),
     voiceProvider: noReplyLanguageProvider(),
     agentProfile: amharicReplyProfile(),
-    onTurnCompleted: () => null,
+    onTurnCompleted: (turn) => {
+      completedTurns.push(turn);
+      return turn;
+    },
   });
   const server = http.createServer();
   server.on("upgrade", (request, socket, head) => {
@@ -153,6 +158,12 @@ test("turn_done always carries reply_language and input_languages", async () => 
     assert.equal(turnDone.reply_language, "am-ET", "reply_language must fall back to the effective profile");
     assert.ok(Object.prototype.hasOwnProperty.call(turnDone, "input_languages"), "input_languages must always be present");
     assert.deepEqual(turnDone.input_languages, INPUT_LANGUAGES, "input_languages must carry the configured STT prompt codes");
+    assert.equal(completedTurns.length, 1);
+    assert.deepEqual(
+      completedTurns[0].input_languages,
+      INPUT_LANGUAGES,
+      "canonical persistence must store configured prompt languages, not provider auto-detection",
+    );
   } finally {
     await closeVoiceServer(voiceServer);
     await closeHttpServer(server);
