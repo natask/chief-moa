@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "json"
 require "open3"
 require "tmpdir"
 require "yaml"
@@ -36,6 +37,10 @@ PUBLISH_ENV = {
   "GIT_CONFIG_NOSYSTEM" => "1",
   "GIT_CONFIG_COUNT" => "0"
 }.freeze
+OBSERVE_ENV = VERIFICATION_ENV.merge(
+  "EXPECTED_GIT_SHA" => "${{ github.sha }}",
+  "HEALTH_URL" => "https://api.agee.app/health"
+).freeze
 VERIFY_SCRIPT = <<~'BASH'
   set -euo pipefail
   bash -n scripts/vps/*.sh
@@ -56,6 +61,32 @@ PUBLISH_SCRIPT = <<~'BASH'
   git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
   test "$(git rev-parse refs/remotes/origin/master)" = "$GITHUB_SHA"
   git push --atomic origin "${GITHUB_SHA}:refs/heads/vps-deploy"
+BASH
+OBSERVE_SCRIPT = <<~'BASH'
+  set -euo pipefail
+  deadline="$(( $(date +%s) + 1200 ))"
+  live_sha="unavailable"
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    health="$(curl -fsS --connect-timeout 5 --max-time 10 \
+      -H 'Cache-Control: no-cache' "$HEALTH_URL" || true)"
+    observed="$(ruby -rjson -e '
+      health = JSON.parse(STDIN.read)
+      sha = health.dig("build", "git_sha")
+      abort unless sha.is_a?(String) && sha.match?(/\A[0-9a-f]{7,64}\z/i)
+      print sha.downcase
+    ' <<<"$health" 2>/dev/null || true)"
+    if [ -n "$observed" ]; then
+      live_sha="$observed"
+    fi
+    if [ "$live_sha" = "$EXPECTED_GIT_SHA" ]; then
+      echo "active gateway serves exact commit $EXPECTED_GIT_SHA"
+      exit 0
+    fi
+    echo "waiting for active gateway: expected=$EXPECTED_GIT_SHA observed=$live_sha"
+    sleep 15
+  done
+  echo "active gateway stayed stale: expected=$EXPECTED_GIT_SHA observed=$live_sha" >&2
+  exit 1
 BASH
 
 class ContractError < StandardError; end
@@ -102,10 +133,11 @@ def validate_workflow!(workflow)
 
   triggers = workflow["on"] || workflow[true] # Psych uses YAML 1.1 booleans.
   jobs = workflow.fetch("jobs")
-  assert_contract(jobs.keys.sort == %w[deploy publish],
-                  "workflow must contain only verification and publication jobs")
+  assert_contract(jobs.keys.sort == %w[deploy observe publish],
+                  "workflow must contain only verification, publication, and live observation jobs")
   verify_job = jobs.fetch("deploy")
   publish_job = jobs.fetch("publish")
+  observe_job = jobs.fetch("observe")
 
   expected_triggers = {
     "push" => { "branches" => ["master"], "paths" => DEPLOY_PATHS },
@@ -189,6 +221,23 @@ def validate_workflow!(workflow)
   assert_contract(publish_job.fetch("steps") == expected_steps,
                   "publication job must contain only checkout and the canonical ref update")
 
+  assert_contract(observe_job == {
+                    "name" => "Verify live gateway commit",
+                    "needs" => "publish",
+                    "if" => "${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}",
+                    "runs-on" => "ubuntu-latest",
+                    "timeout-minutes" => 25,
+                    "permissions" => { "contents" => "read" },
+                    "steps" => [
+                      {
+                        "name" => "Wait for exact commit at active gateway",
+                        "shell" => "bash",
+                        "env" => OBSERVE_ENV,
+                        "run" => OBSERVE_SCRIPT
+                      }
+                    ]
+                  }, "live observation must be read-only and bind active health to the exact commit")
+
   PUBLISH_SCRIPT
 end
 
@@ -229,6 +278,18 @@ def assert_negative_mutations!(workflow)
   contract_step = custom_shell.fetch("jobs").fetch("deploy").fetch("steps")[2]
   contract_step["shell"] = "bash -c 'true' -- {0}"
   expect_rejected!("verification custom shell") { validate_workflow!(custom_shell) }
+
+  loose_observation = deep_copy(workflow)
+  observation_script = loose_observation.fetch("jobs").fetch("observe").fetch("steps")[0]
+  observation_script["run"] = OBSERVE_SCRIPT.sub(
+    'if [ "$live_sha" = "$EXPECTED_GIT_SHA" ]; then',
+    'if [ "$live_sha" != "unavailable" ]; then'
+  )
+  expect_rejected!("non-exact live observation") { validate_workflow!(loose_observation) }
+
+  privileged_observation = deep_copy(workflow)
+  privileged_observation.fetch("jobs").fetch("observe").fetch("permissions")["contents"] = "write"
+  expect_rejected!("live observation write authority") { validate_workflow!(privileged_observation) }
 end
 
 def assert_verification_environment!(verification_env)
@@ -298,12 +359,49 @@ def assert_publish_behavior!(publish_script, publish_env)
   end
 end
 
+def assert_observe_behavior!(observe_script, observe_env)
+  Dir.mktmpdir("deploy-vps-observe-") do |tmp|
+    expected_sha = "0123456789abcdef0123456789abcdef01234567"
+    other_sha = "89abcdef0123456789abcdef0123456789abcdef"
+    fake_curl = File.join(tmp, "curl")
+    File.write(fake_curl, <<~'BASH')
+      #!/usr/bin/env bash
+      printf '%s\n' "$MOCK_HEALTH"
+    BASH
+    FileUtils.chmod(0o755, fake_curl)
+
+    marker = File.join(tmp, "observe-bypass-ran")
+    hook = File.join(tmp, "bash-env-hook")
+    File.write(hook, "printf bypassed > \"$BYPASS_MARKER\"\n")
+    process_env = {
+      "BASH_ENV" => hook,
+      "BYPASS_MARKER" => marker,
+      "PATH" => "#{tmp}:#{ENV.fetch("PATH")}",
+      "MOCK_HEALTH" => JSON.generate({ "build" => { "git_sha" => expected_sha } })
+    }.merge(observe_env).merge("EXPECTED_GIT_SHA" => expected_sha)
+    command!("bash", "-c", observe_script, chdir: tmp, env: process_env)
+    assert_contract(!File.exist?(marker),
+                    "live observation environment executed inherited BASH_ENV")
+
+    fast_failure_script = observe_script
+                          .sub(" + 1200 ", " + 1 ")
+                          .sub("sleep 15", "sleep 0.05")
+    mismatch_env = process_env.merge(
+      "MOCK_HEALTH" => JSON.generate({ "build" => { "git_sha" => other_sha } })
+    )
+    assert_contract(command_fails?("bash", "-c", fast_failure_script,
+                                   chdir: tmp, env: mismatch_env),
+                    "live observation accepted a different healthy commit")
+  end
+end
+
 begin
   workflow = YAML.safe_load(File.read(WORKFLOW_PATH), aliases: false)
   publish_script = validate_workflow!(workflow)
   assert_negative_mutations!(workflow)
   assert_verification_environment!(VERIFICATION_ENV)
   assert_publish_behavior!(publish_script, PUBLISH_ENV)
+  assert_observe_behavior!(OBSERVE_SCRIPT, OBSERVE_ENV)
   puts "deploy-vps contract: ok"
 rescue ContractError, KeyError, TypeError => e
   warn "deploy-vps contract: #{e.message}"

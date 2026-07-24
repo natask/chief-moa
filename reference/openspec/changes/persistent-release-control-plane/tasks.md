@@ -114,3 +114,38 @@
 - [ ] V0.2.11 Deploy the verified Android and browser clients. Smoke each client
       against the hosted endpoint and record installed, activated, and smoked
       receipts separately.
+
+## Device-reachable preview delivery
+
+- [ ] V0.3.1 Persist one preview lifecycle per immutable candidate with exact
+      bundle, release, surface, artifact-digest, source-revision, endpoint or
+      package locator, expiry, cleanup owner, and last-known-good fallback.
+      Acceptance: the preview remains discoverable and reachable after its
+      build/QA job exits; CI-only candidates remain labeled `built` or
+      `packaged`.
+- [ ] V0.3.2 Provision gateway previews at non-production URLs with separate
+      database, object storage, queue, worker identity, credentials, and
+      callbacks. Acceptance: health and one bounded authenticated smoke identify
+      the expected candidate while production state remains unchanged.
+- [ ] V0.3.3 Publish the exact browser extension preview archive and assign it
+      to a test browser. Acceptance: the loaded browser confirms the expected
+      version and digest after a user-approved reload, with `packaged`,
+      `published`, `installed`, `activated`, and `smoked` receipts kept
+      distinct.
+- [ ] V0.3.4 Publish a device-assigned Android preview manifest and APK using
+      the local continuity signer and a monotonic version code. Acceptance: the
+      assigned phone verifies size, digest, and signer; the user approves the
+      installer; installed, activated, and smoked receipts bind those bytes.
+- [ ] V0.3.5 Publish a macOS preview through a device-reachable locator.
+      Acceptance: production-like preview receipts prove stable application
+      identity, Developer ID signing, notarization/stapling, target-Mac install,
+      launch, TCC behavior, and smoke. Unsigned QA archives remain explicitly
+      local QA and blocked from satisfying this ticket.
+- [ ] V0.3.6 Add user accept and reject decisions. Acceptance promotes only the
+      exact accepted preview head; rejection restores last-known-good
+      assignments before deprovisioning candidate-only resources; both paths
+      retain immutable evidence and exact before/after receipts.
+- [ ] V0.3.7 Render per-surface release state and explicit blockers.
+      Acceptance: the control surface never reports “deployed everywhere” unless
+      every required surface has matching published and smoked receipts, and a
+      compatible partial bundle names every omitted surface.

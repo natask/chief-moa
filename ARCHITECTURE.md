@@ -168,6 +168,17 @@ cover the new database. Exact stable and preview bundles are published before
 the routes are enabled and before Android or browser clients depend on them.
 Assignment remains distinct from native installation throughout this sequence.
 
+Every deployable candidate must have a persistent, device-reachable preview
+before user acceptance. CI output, a loopback-only process, and an uploaded
+archive are build evidence, not preview deployment. A preview keeps its own
+endpoint or package locator, state, credentials, and cleanup owner and remains
+available after its build worker exits. The Mac-hosted development adapter
+(`scripts/preview/gateway-lan.sh`) provides an isolated real-provider gateway
+for LAN device QA; the Android preview server exposes one continuity-signed APK
+through a revocable capability without moving the stable OTA head. These local
+adapters create QA evidence only. They do not move a release-control channel or
+grant promotion authority.
+
 A cross-surface release bundle binds one immutable release to the exact artifact
 digest for each included surface. Stable and preview are views over those
 bundles, not mutable binaries. A device assignment records the requested bundle

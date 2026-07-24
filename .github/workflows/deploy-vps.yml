@@ -126,3 +126,53 @@ jobs:
           git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
           test "$(git rev-parse refs/remotes/origin/master)" = "$GITHUB_SHA"
           git push --atomic origin "${GITHUB_SHA}:refs/heads/vps-deploy"
+
+  observe:
+    name: Verify live gateway commit
+    needs: publish
+    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Wait for exact commit at active gateway
+        shell: bash
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_COUNT: "0"
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+          RUBYOPT: ""
+          RUBYLIB: ""
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+          HEALTH_URL: https://api.agee.app/health
+        run: |
+          set -euo pipefail
+          deadline="$(( $(date +%s) + 1200 ))"
+          live_sha="unavailable"
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            health="$(curl -fsS --connect-timeout 5 --max-time 10 \
+              -H 'Cache-Control: no-cache' "$HEALTH_URL" || true)"
+            observed="$(ruby -rjson -e '
+              health = JSON.parse(STDIN.read)
+              sha = health.dig("build", "git_sha")
+              abort unless sha.is_a?(String) && sha.match?(/\A[0-9a-f]{7,64}\z/i)
+              print sha.downcase
+            ' <<<"$health" 2>/dev/null || true)"
+            if [ -n "$observed" ]; then
+              live_sha="$observed"
+            fi
+            if [ "$live_sha" = "$EXPECTED_GIT_SHA" ]; then
+              echo "active gateway serves exact commit $EXPECTED_GIT_SHA"
+              exit 0
+            fi
+            echo "waiting for active gateway: expected=$EXPECTED_GIT_SHA observed=$live_sha"
+            sleep 15
+          done
+          echo "active gateway stayed stale: expected=$EXPECTED_GIT_SHA observed=$live_sha" >&2
+          exit 1

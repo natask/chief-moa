@@ -122,3 +122,76 @@ context. It SHALL ignore caller-supplied tenant and actor fields.
   authenticated context
 - **THEN** authorization uses the authenticated tenant and actor
 - **AND** the caller cannot read or write the other tenant's release records
+
+### Requirement: Every deployable candidate has a persistent device-reachable preview
+The control plane SHALL publish every deployable candidate to an isolated
+preview that remains reachable after its build and QA workers terminate. A CI
+build, uploaded artifact, loopback-only process, or expiring job environment
+SHALL NOT count as a preview deployment.
+
+#### Scenario: Local or simulated QA cannot exercise the real device
+- **WHEN** pre-publication checks pass but a real Android phone, loaded browser,
+  or supported Mac is unavailable to the runner
+- **THEN** the candidate may be published to its isolated persistent preview
+  when the evidence policy permits user-led QA
+- **AND** the missing real-device checks remain visibly pending
+- **AND** the user can test the exact assigned bytes on the owning device
+
+#### Scenario: Candidate spans multiple surfaces
+- **WHEN** a release bundle names gateway, browser, Android, or macOS artifacts
+- **THEN** each included surface exposes a device-reachable preview locator and
+  independent publication, installation or activation, and smoke state
+- **AND** an unavailable surface is reported as blocked or explicitly omitted
+  by compatible partial-bundle policy
+- **AND** the system does not claim that all services are deployed prematurely
+
+### Requirement: Preview resources are isolated from stable resources
+Every preview runtime SHALL use separate state stores, queues, storage paths,
+worker identities, credentials, callback targets, and endpoints from the active
+stable runtime. The preview SHALL declare an expiry, cleanup owner, and stable
+fallback before assignment.
+
+#### Scenario: User exercises a gateway preview
+- **WHEN** the user sends a bounded request to the preview gateway
+- **THEN** the request cannot read or mutate production conversations, jobs,
+  queues, or release assignments
+- **AND** the preview health and smoke receipts identify the exact candidate
+  bundle and artifact digest
+
+### Requirement: User decision governs promotion or rejection cleanup
+The control plane SHALL keep a preview available until the user accepts it,
+rejects it, or an explicit expiry policy closes it. Acceptance SHALL promote
+the exact previewed bundle subject to release policy. Rejection SHALL restore
+affected assignments to last-known-good stable before candidate-only resources
+are deprovisioned.
+
+#### Scenario: User accepts the tested preview
+- **WHEN** the user accepts a preview with matching platform smoke receipts
+- **THEN** promotion names the exact accepted preview head and prior stable head
+- **AND** stable rollout and post-rollout smoke create separate receipts
+- **AND** no artifact may be rebuilt or substituted during promotion
+
+#### Scenario: User rejects the tested preview
+- **WHEN** the user rejects a preview
+- **THEN** affected assignments return to their recorded last-known-good stable
+  bundle
+- **AND** native fallback installation and smoke remain pending until separately
+  receipted
+- **AND** candidate-only runtime resources are deprovisioned only after fallback
+  is safe
+- **AND** immutable artifacts, evidence, feedback, and decision receipts remain
+  available for audit
+
+### Requirement: Preview receipts distinguish build, publication, use, and decision
+The control plane SHALL retain append-only, exact-artifact receipts for
+candidate creation, build, verification, preview publication, assignment,
+platform installation or activation, smoke, user decision, promotion or
+fallback, and preview deprovisioning. Every receipt SHALL name its candidate,
+bundle, surface, artifact digest, actor, timestamp, and prior sequence.
+
+#### Scenario: CI uploads a successful artifact
+- **WHEN** CI builds and uploads an artifact but no device-reachable preview
+  serves or assigns those exact bytes
+- **THEN** the candidate is reported as built or packaged
+- **AND** it is not reported as published, installed, activated, smoked, or
+  deployed

@@ -103,6 +103,38 @@ git show HEAD:.github/workflows/<workflow>.yml
 Move `master` only through `scripts/release/push-master.sh`. Gateway CI moves the
 verified commit to `vps-deploy`. The VPS timer then runs preview, backup, restore,
 drain, compatibility, and smoke checks before it changes the active gateway.
+The workflow now remains incomplete until public `/health` reports the exact
+published commit. A green ref-publication job alone is not a successful deploy.
+
+When the live VPS cannot safely host a candidate, start a device-reachable,
+isolated Mac preview:
+
+```sh
+bash scripts/preview/gateway-lan.sh start
+bash scripts/preview/gateway-lan.sh smoke
+```
+
+The command reports LAN/Tailscale URLs and the private token-file path without
+printing the token. It uses separate temporary data and a per-start credential.
+Stop and revoke it with:
+
+```sh
+bash scripts/preview/gateway-lan.sh stop
+```
+
+Build Android into a unique directory under `android_app/deploy/preview/`, then
+serve that directory without changing the stable OTA head:
+
+```sh
+node android_app/deploy/ota/serve-preview.mjs \
+  --dir android_app/deploy/preview/<candidate>
+```
+
+The server validates manifest/APK size and SHA-256 before listening. It prints
+only the bearer-token file path. A generated capability URL or QR may be used
+for phone installation on the private LAN; stopping the process revokes the
+capability. Report the APK as installed or smoked only after the phone confirms
+those states.
 
 For the unpacked browser extension, run:
 
