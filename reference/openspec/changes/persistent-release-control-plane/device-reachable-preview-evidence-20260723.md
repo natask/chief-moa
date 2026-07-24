@@ -70,11 +70,27 @@
 
 ## Stable Promotion
 
-- GitHub previously published `3af1a798` to `vps-deploy`, but the active VPS
-  remained on `c0572df2`. The pull worker therefore did not apply the verified
-  ref.
-- This candidate adds exact live-SHA observation after publication and a manual,
-  read-only VPS worker audit.
-- Stable promotion is blocked until DigitalOcean console access or restricted
-  SSH ingress can repair or prove the timer worker. No active gateway process,
-  persisted gateway state, or stable OTA artifact was changed by these previews.
+- State: gateway and Android OTA published; physical-phone installation and
+  smoke remain user/device-owned.
+- Production gateway:
+  `24db87f1946489141c1c7c1c15420c680e58f719`.
+- Promotion repaired the one-time old-worker/new-backup bootstrap mismatch,
+  installed distinct mode-0600 release-control database credentials, passed two
+  new-format backup and scratch-restore checks, passed an isolated TLS/auth
+  preview, rechecked drain safety, migrated the additive release-control
+  database, replaced only the gateway container, wrote the guarded promotion
+  receipt, and returned drain-safe.
+- GitHub run `30076190525` independently observed the exact production SHA and
+  completed successfully. The droplet audit reports target equals deployed,
+  timer enabled and active, promotion control plane ready, local health healthy,
+  and no blocker.
+- Stable Android OTA: `ai.moa.assistant-1784880316`, version
+  `0.1.1784880316`, source `24db87f1`, APK SHA-256
+  `5ae7f7d1c8fa6de95324c7b8788066d73f733e8300830c924d5f50cfb09ffb22`.
+- The production APK uses continuity signer SHA-256
+  `8f0b62c73777a961687041f6faac24597830127d1f0ca9841aa6f7c70fe6ae0d`.
+  The protected production manifest serves the exact release and digest with
+  rollback to `ai.moa.assistant-1784199280`.
+- The OTA publisher now normalizes only public artifact directories/files to
+  mode 0755/0644 after exact-byte verification. Private staging, snapshots,
+  locks, and credentials remain private.
