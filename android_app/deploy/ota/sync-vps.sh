@@ -599,6 +599,14 @@ if [ "$state" = existing ]; then
   (cd "$snapshot" && sha256sum -c checksums.sha256 >/dev/null)
 fi
 
+# rsync preserves the local builder's private 0600 mode and numeric owner.
+# OTA bytes are authenticated downloads, not credentials; make only the
+# canonical artifacts and immutable release readable by the unprivileged
+# gateway container. Private staging, snapshots, and publisher locks stay 0700.
+chmod 755 "$root" "$root/releases" "$target"
+chmod 644 "$target/moa-assistant.apk" "$target/release.json" \
+  "$root/moa-assistant.apk" "$root/latest.json"
+
 printf '%s %s %s %s %s %s\n' \
   "$operation" "$release_id" "$apk_sha" "$apk_size" "$release_meta_sha" "$latest_sha" \
   > "$receipt_tmp"

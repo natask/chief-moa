@@ -216,6 +216,10 @@ assert_no_target_leak() {
   if grep -Fq "$remote_dir" "$output"; then return 1; fi
 }
 
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
 if grep -Eq 'rsync.*--delete' "$SYNC_SCRIPT"; then
   echo "sync-vps.sh must never mirror-delete the remote OTA store" >&2
   exit 1
@@ -291,6 +295,13 @@ run_sync "$local_dir" "$remote_dir" "$case_dir/output"
 [ -f "$remote_dir/releases/ai.moa.assistant-9/moa-assistant.apk" ]
 [ -f "$remote_dir/releases/ai.moa.assistant-10/moa-assistant.apk" ]
 cmp -s "$local_dir/moa-assistant.apk" "$remote_dir/moa-assistant.apk"
+[ "$(file_mode "$remote_dir")" = 755 ]
+[ "$(file_mode "$remote_dir/releases")" = 755 ]
+[ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10")" = 755 ]
+[ "$(file_mode "$remote_dir/moa-assistant.apk")" = 644 ]
+[ "$(file_mode "$remote_dir/latest.json")" = 644 ]
+[ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10/moa-assistant.apk")" = 644 ]
+[ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10/release.json")" = 644 ]
 [ "$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 6 ]
 snapshot="$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d -name '*ai.moa.assistant-10*' | head -n 1)"
 [ -n "$snapshot" ]
