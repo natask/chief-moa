@@ -1869,6 +1869,7 @@ class CascadedVoiceProvider {
             transcript: result?.alternatives?.[0]?.transcript || "",
             isFinal: result?.isFinal === true || result?.is_final === true,
             languageCode: result?.languageCode || result?.language_code || "",
+            resultEndOffset: result?.resultEndOffset?.seconds != null ? `${result.resultEndOffset.seconds}:${result.resultEndOffset.nanos || 0}` : (result?.result_end_offset?.seconds != null ? `${result.result_end_offset.seconds}:${result.result_end_offset.nanos || 0}` : ""),
           }));
         },
         onPartial: hooks && typeof hooks.onTranscriptPartial === "function"

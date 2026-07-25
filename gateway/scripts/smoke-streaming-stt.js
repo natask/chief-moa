@@ -119,6 +119,73 @@ async function testRotationAndPartials() {
   console.log("  A rotation+partials: ok");
 }
 
+async function testProviderRetryAndOverlapReconciliation() {
+  const opened = [];
+  const partials = [];
+  const session = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    onPartial: (text) => { partials.push(text); },
+    rotateAfterMs: 60000,
+  });
+
+  const first = "Alpha plan has three safe steps";
+  opened[0].emitData([{ transcript: first, isFinal: false }]);
+  opened[0].emitData([{ transcript: first, isFinal: true, segmentId: "6:0" }]);
+  // The gRPC/provider retry redelivers the same final event.
+  opened[0].emitData([{ transcript: first, isFinal: true, segmentId: "6:0" }]);
+  // A later final overlaps the prior segment, as can happen at a long-pause
+  // boundary or provider replacement.
+  opened[0].emitData([{
+    transcript: "three safe steps and one final check",
+    isFinal: true,
+    segmentId: "10:0",
+  }]);
+  await tick();
+  const result = await session.finalize();
+  assert.equal(result.text, "Alpha plan has three safe steps and one final check");
+  assert.ok(!partials.some((text) => text.includes(`${first} ${first}`)),
+    "retry must never leak a repeated block into a partial");
+
+  const amharic = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const amStream = opened.at(-1);
+  amStream.emitData([{ transcript: "የመጀመሪያ ክፍል እዚህ ነው", isFinal: true, segmentId: "4:0" }]);
+  amStream.emitData([{ transcript: "ክፍል እዚህ ነው ከዚያ ይቀጥላል", isFinal: true, segmentId: "8:0" }]);
+  const amResult = await amharic.finalize();
+  assert.equal(amResult.text, "የመጀመሪያ ክፍል እዚህ ነው ከዚያ ይቀጥላል");
+
+  // Short deliberate repetition stays intact without a shared provider id.
+  const repeated = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const repeatStream = opened.at(-1);
+  repeatStream.emitData([{ transcript: "yes", isFinal: true }]);
+  repeatStream.emitData([{ transcript: "yes", isFinal: true }]);
+  assert.equal((await repeated.finalize()).text, "yes yes");
+  console.log("  A2 provider retry + multilingual overlap reconciliation: ok");
+}
+
 function chirpProviderEnv(extra = {}) {
   return {
     VOICE_PROVIDER: "chirp",
@@ -410,6 +477,7 @@ function sentEvents(ws) {
 
 async function main() {
   await testRotationAndPartials();
+  await testProviderRetryAndOverlapReconciliation();
   await testV2BidiMethodSelection();
   await testBatchFallbackOnStreamingError();
   await testWindowedBatchSplit();

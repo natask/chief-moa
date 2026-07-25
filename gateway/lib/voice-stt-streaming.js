@@ -41,7 +41,45 @@ function joinTranscript(a, b) {
   const right = String(b || "").trim();
   if (!left) return right;
   if (!right) return left;
+  if (right.startsWith(`${left} `)) return right;
+  if (left.endsWith(` ${right}`)) return left;
+
+  // Providers may resend a finalized hypothesis after a retry/reconnect, or
+  // start a replacement stream with a short recognition overlap. Reconcile a
+  // meaningful word boundary instead of blindly appending the whole block.
+  // Keep one- and two-word repeats ("yes yes", names, corrections) intact:
+  // without provider identity they are valid speech, not safe duplicates.
+  const leftWords = transcriptWords(left);
+  const rightWords = transcriptWords(right);
+  const maxOverlap = Math.min(leftWords.length, rightWords.length);
+  for (let count = maxOverlap; count >= 3; count -= 1) {
+    const leftOffset = leftWords.length - count;
+    let matches = true;
+    for (let index = 0; index < count; index += 1) {
+      if (leftWords[leftOffset + index].value !== rightWords[index].value) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      if (count === rightWords.length) return left;
+      return `${left} ${right.slice(rightWords[count].start)}`.trim();
+    }
+  }
   return `${left} ${right}`;
+}
+
+function transcriptWords(text) {
+  const words = [];
+  const pattern = /[\p{L}\p{N}]+/gu;
+  let match;
+  while ((match = pattern.exec(String(text || "")))) {
+    words.push({
+      value: match[0].toLocaleLowerCase("en-US"),
+      start: match.index,
+    });
+  }
+  return words;
 }
 
 function createStreamingSttSession(options) {
@@ -79,6 +117,11 @@ function createStreamingSttSession(options) {
     // Serializes rotations so overlapping timer/error triggers don't race.
     rotating: false,
     languageCode: "",
+    streamGeneration: 0,
+    // Google may redeliver the same finalized result during gRPC retry. A
+    // provider result identity is scoped to one stream generation; rotations
+    // get a new namespace so identical words spoken later remain legitimate.
+    finalSegmentIds: new Set(),
   };
 
   function currentDisplayText() {
@@ -111,6 +154,14 @@ function createStreamingSttSession(options) {
       }
       if (!transcript) continue;
       if (result?.isFinal) {
+        const providerIdentity = String(result?.segmentId || result?.resultEndOffset || "").trim();
+        const segmentId = providerIdentity
+          ? `${state.streamGeneration}:${providerIdentity}`
+          : "";
+        if (segmentId && state.finalSegmentIds.has(segmentId)) {
+          continue;
+        }
+        if (segmentId) state.finalSegmentIds.add(segmentId);
         state.committedText = joinTranscript(state.committedText, transcript);
         state.interim = "";
         changed = true;
@@ -267,6 +318,7 @@ function createStreamingSttSession(options) {
       return;
     }
     state.stream = next;
+    state.streamGeneration += 1;
     state.rotations += 1;
     // Replay any audio buffered during the transition.
     const pending = state.pendingChunks;
