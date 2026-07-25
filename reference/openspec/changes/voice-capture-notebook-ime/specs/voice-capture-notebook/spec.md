@@ -122,6 +122,14 @@ active dictation rather than creating a second recorder.
 - **AND** the browser copies that transcript to the clipboard
 - **AND** no reasoning, TTS, or agent run begins
 
+#### Scenario: User explicitly copies the completed dictation again
+- **WHEN** a completed dictation card contains a successful final transcript
+- **THEN** the card exposes one Copy control bound to that exact final transcript
+- **AND** pressing it replaces the clipboard and shows
+  `Copied — clipboard replaced`
+- **AND** a clipboard failure preserves the transcript and leaves the copy
+  action available to retry
+
 #### Scenario: Another tab finishes the active dictation
 - **WHEN** dictation starts from one browser tab and the user invokes the global
   command while another tab is active

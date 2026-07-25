@@ -1234,6 +1234,31 @@ button.agee-ui-list-row:hover {
   cursor: wait;
   opacity: 0.65;
 }
+.agee-dictation-copy-action {
+  display: flex;
+  margin-top: 10px;
+}
+.agee-dictation-copy {
+  appearance: none;
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 215, 106, 0.35);
+  border-radius: 8px;
+  background: rgba(245, 166, 35, 0.12);
+  color: var(--agee-gold);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.agee-dictation-copy:hover,
+.agee-dictation-copy:focus-visible {
+  border-color: rgba(255, 215, 106, 0.62);
+  background: rgba(245, 166, 35, 0.2);
+}
+.agee-dictation-copy:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
 /* Dismiss control: removes this card and every older one above it. Hidden
    entirely while the card is running (in-flight cards are not dismissable),
    and revealed on hover for a mouse; a touch/narrow viewport shows it always

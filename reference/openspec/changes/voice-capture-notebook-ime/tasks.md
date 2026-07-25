@@ -31,10 +31,14 @@ alignment.
 - [x] 0B.4 Make the extension worker authoritative for the one active dictation
   session so an invocation from another tab commits that session, late tabs
   hydrate passive state, and tab activation cannot start a competing recorder.
+- [x] 0B.5 Keep a one-click Copy control on the completed dictation card so the
+  exact final transcript can be copied again after the automatic clipboard
+  attempt, with a visible clipboard-replaced or retryable-failure receipt.
 - Acceptance: double-tap Command starts capture, a second double-tap commits it,
   the final English/Amharic transcript is paste-ready, and the gateway performs
-  zero reasoning and TTS calls for the turn. Starting in one tab and finishing
-  from another still produces one canonical turn.
+  zero reasoning and TTS calls for the turn. The completed card keeps a Copy
+  control bound to that exact final transcript. Starting in one tab and
+  finishing from another still produces one canonical turn.
 - Verification: gateway Chirp smoke, browser verify/smoke, and manual macOS
   clipboard QA.
 - Acceptance status: source implementation is present in the current candidate.
@@ -167,8 +171,7 @@ alignment.
   agent runs.
 - [ ] Replace the five-minute in-memory product limit with durable bounded
   chunks, an immediate timestamped history row, and explicit replay/retry state.
-- [ ] Add visible file/video Attach paths and a clear
-  `Copied — clipboard replaced` dictation receipt.
+- [ ] Add visible file/video Attach paths.
 - [ ] Design and validate a complete Amharic character keyboard and transliteration
   model as its own product change.
 - [ ] Define drill consent, corpus, rubric, evaluation, and deletion behavior.

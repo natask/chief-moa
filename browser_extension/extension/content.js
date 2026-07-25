@@ -2060,6 +2060,7 @@
       clearTimeout(entry.dismissTimer);
       entry.dismissTimer = null;
     }
+    if (entry?.cardEl) delete entry.cardEl.dataset.retireAfterMs;
   }
 
   function renderTweakList(listEl) {
@@ -2203,6 +2204,41 @@
     return materializeCue(state.cueId, label || state.transcript || "Voice", statusText || "");
   }
 
+  function attachDictationCopyAction(state, transcript, { copied = false } = {}) {
+    const value = String(transcript || "").trim();
+    if (!state?.cueId || !value) return null;
+    const entry = cues.get(state.cueId);
+    if (!entry?.cardEl) return null;
+    let action = entry.cardEl.querySelector(".agee-dictation-copy-action");
+    if (action) return action;
+
+    entry.cardEl.classList.add("agee-cue-dictation");
+    action = document.createElement("div");
+    action.className = "agee-dictation-copy-action";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "agee-dictation-copy";
+    button.textContent = copied ? "Copy again" : "Copy";
+    button.setAttribute("aria-label", "Copy the final dictation transcript");
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const didCopy = await copyTextToClipboard(value);
+      if (didCopy) {
+        button.textContent = "Copied";
+        updateCue(state.cueId, "Copied — clipboard replaced.", "done");
+      } else {
+        button.textContent = "Try copy again";
+        updateCue(state.cueId, "Copy failed — the transcript is still available above.", "error");
+      }
+      button.disabled = false;
+      holdCueOpen(state.cueId);
+    });
+    action.appendChild(button);
+    entry.cardEl.appendChild(action);
+    holdCueOpen(state.cueId);
+    return action;
+  }
+
   function updateCueLabel(cueId, text) {
     const value = String(text || "").trim();
     if (!value) return;
@@ -2249,7 +2285,8 @@
       if (kind === "running" && entry.cardEl) entry.cardEl.classList.add("agee-cue-streaming");
     }
     if (kind === "done" || kind === "error") {
-      entry.cardEl.className = `agee-cue agee-cue-${kind}`;
+      entry.cardEl.classList.remove("agee-cue-running", "agee-cue-done", "agee-cue-error");
+      entry.cardEl.classList.add(`agee-cue-${kind}`);
       activeCues.delete(cueId);
       lastTerminal = kind;
       const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
@@ -3324,13 +3361,14 @@
           ? await copyTextToClipboard(transcript)
           : false;
       const summary = copied
-        ? "Copied transcript to clipboard."
+        ? "Copied — clipboard replaced."
         : transcript
-          ? "Transcript ready. Select the text above to copy it."
+          ? "Transcript ready."
           : "Didn't catch that.";
       if (!isLiveVoiceStateActive(state)) return;
       ensureVoiceCueCard(state, transcript || "Dictation", summary);
       updateCue(state.cueId, summary, copied ? "done" : "error");
+      attachDictationCopyAction(state, transcript, { copied });
       reactLauncher(copied ? "done" : "error");
       closeLiveVoiceSession(state, "dictation complete");
       untrackLiveVoiceState(state);
