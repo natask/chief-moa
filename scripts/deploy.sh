@@ -24,8 +24,33 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="${REMOTE:-}"
 REMOTE_GW_DIR="${REMOTE_GW_DIR:-}"
 GATEWAY_URL="${GATEWAY_URL:-https://api.agee.app}"
+DEPLOY_TARGETS_FILE="${MOA_DEPLOY_TARGETS_FILE:-$ROOT_DIR/scripts/deploy-targets.json}"
 log() { printf '[deploy] %s\n' "$*"; }
 VERSION_STATUS_SCRIPT="$ROOT_DIR/scripts/deploy-version-status.mjs"
+
+production_vps_target() {
+  node - "$DEPLOY_TARGETS_FILE" <<'NODE'
+const fs = require("node:fs");
+const file = process.argv[2];
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {
+  process.exit(1);
+}
+const target = config?.production?.vps_ssh;
+if (typeof target !== "string"
+  || !/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$/.test(target)) {
+  process.exit(1);
+}
+const host = target.slice(target.indexOf("@") + 1);
+if (host.length > 253 || host.includes("..") || host.includes(".-")
+  || host.includes("-.") || host.endsWith(".") || host.endsWith("-")) {
+  process.exit(1);
+}
+process.stdout.write(target);
+NODE
+}
 
 adb_path() {
   if command -v adb >/dev/null 2>&1; then
@@ -86,29 +111,41 @@ deploy_gateway() {
 }
 
 deploy_android() {
+  local vps_target="${MOA_VPS_SSH:-}"
+  local install_status=0
+  if [ -z "$vps_target" ]; then
+    if ! vps_target="$(production_vps_target)"; then
+      log "android: canonical production VPS target is invalid or unavailable"
+      return 1
+    fi
+    log "android: using tracked canonical production VPS target"
+  else
+    log "android: using MOA_VPS_SSH production target override"
+  fi
   log "android: building + syncing OTA artifact"
   # OTA hosting moved to the VPS gateway (api.agee.app); the main machine is
-  # decommissioned. sync-vps.sh refuses to run without an explicit host.
-  if ! ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
+  # decommissioned. The target is non-secret; SSH still owns authentication.
+  if ! MOA_VPS_SSH="$vps_target" \
+    ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
     bash "$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"; then
-    log "android: OTA sync failed; not marking Android deployed"
+    log "android: OTA publication or public verification failed; not marking Android deployed"
     return 1
   fi
-  if ! direct_install_android; then
-    log "android: direct install failed; not marking Android deployed"
-    return 1
+  log "android: publication receipt verified"
+  if direct_install_android; then
+    :
+  else
+    install_status=$?
+    if [ "$install_status" -eq 75 ]; then
+      log "android: optional install was not attempted; verified publication remains successful"
+    else
+      log "android: optional install failed; verified publication remains successful"
+    fi
   fi
   if curl -fsS "$GATEWAY_URL/health" >/dev/null 2>&1; then
     log "android: gateway health smoke passed at $GATEWAY_URL"
   else
     log "android: gateway health smoke skipped or failed at $GATEWAY_URL"
-  fi
-  if [ -n "${MOA_GATEWAY_TOKEN:-}" ]; then
-    curl -fsS -H "Authorization: Bearer $MOA_GATEWAY_TOKEN" \
-      "$GATEWAY_URL/v1/android/updates/latest" >/dev/null
-    log "android: OTA metadata endpoint smoke passed"
-  else
-    log "android: OTA metadata endpoint smoke blocked (MOA_GATEWAY_TOKEN unset)"
   fi
 }
 
@@ -123,26 +160,28 @@ direct_install_android() {
     apk="$ROOT_DIR/android_app/app/build/outputs/apk/debug/app-debug.apk"
   fi
   if [ ! -f "$apk" ]; then
-    log "android: direct install skipped (APK not found)"
-    return 0
+    log "android: install receipt status=not_attempted reason=apk_missing"
+    return 75
   fi
   if ! adb="$(adb_path)"; then
-    log "android: direct install skipped (adb not found)"
-    return 0
+    log "android: install receipt status=not_attempted reason=adb_unavailable"
+    return 75
   fi
 
   "$adb" start-server >/dev/null 2>&1 || true
   devices="$("$adb" devices | awk 'NR > 1 && $2 == "device" { print $1 }')"
   if [ -z "$devices" ]; then
-    log "android: direct install skipped (no authorized ADB devices)"
-    return 0
+    log "android: install receipt status=not_attempted reason=no_authorized_device"
+    return 75
   fi
 
+  local installed=0
   while IFS= read -r serial; do
     [ -z "$serial" ] && continue
     log "android: direct installing $(basename "$apk") to $serial"
     if "$adb" -s "$serial" install -r -d "$apk" >/dev/null; then
       log "android: installed on $serial $(installed_android_version "$adb" "$serial")"
+      installed=$((installed + 1))
     else
       log "android: direct install failed on $serial"
       failures=$((failures + 1))
@@ -151,7 +190,12 @@ direct_install_android() {
 $devices
 EOF
 
-  [ "$failures" -eq 0 ]
+  if [ "$failures" -eq 0 ]; then
+    log "android: install receipt status=installed devices=$installed"
+    return 0
+  fi
+  log "android: install receipt status=failed installed=$installed failed=$failures"
+  return 1
 }
 
 installed_android_version() {
@@ -209,6 +253,12 @@ git_head() {
 }
 
 deploy_state_dir() {
+  if [ -n "${MOA_DEPLOY_STATE_DIR:-}" ]; then
+    case "$MOA_DEPLOY_STATE_DIR" in
+      /*) printf '%s\n' "$MOA_DEPLOY_STATE_DIR"; return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
   local git_dir
   git_dir="$(git -C "$ROOT_DIR" rev-parse --git-dir 2>/dev/null)" || return 1
   case "$git_dir" in
@@ -226,7 +276,8 @@ target_patterns() {
         "android_app/settings.gradle" \
         "android_app/gradle/" \
         "android_app/gradlew" \
-        "android_app/deploy/ota/"
+        "android_app/deploy/ota/" \
+        "scripts/deploy-targets.json"
       ;;
     extension)
       printf '%s\n' \

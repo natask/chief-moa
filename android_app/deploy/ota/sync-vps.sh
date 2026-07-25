@@ -10,7 +10,8 @@
 #   MOA_VPS_SSH=root@vps android_app/deploy/ota/sync-vps.sh
 #   android_app/deploy/ota/sync-vps.sh --host root@vps
 #
-# The host is never guessed. It must come from --host or MOA_VPS_SSH.
+# This low-level publisher requires --host or MOA_VPS_SSH. The repository
+# deployment entrypoint resolves its tracked canonical production target.
 
 set -euo pipefail
 
@@ -151,6 +152,10 @@ process.stdout.write([
   String(releaseApk.length),
   sha256(releaseMetaBytes),
   sha256(latestBytes),
+  latest.app_id,
+  String(latest.version_code),
+  latest.version_name,
+  latest.git_sha,
 ].join(" "));
 NODE
 )"; then
@@ -158,12 +163,17 @@ NODE
   exit 1
 fi
 
-read -r RELEASE_ID APK_SHA256 APK_SIZE RELEASE_META_SHA256 LATEST_SHA256 <<<"$LOCAL_RELEASE_FACTS"
+read -r RELEASE_ID APK_SHA256 APK_SIZE RELEASE_META_SHA256 LATEST_SHA256 \
+  APP_ID VERSION_CODE VERSION_NAME GIT_SHA <<<"$LOCAL_RELEASE_FACTS"
 if [[ ! "$RELEASE_ID" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] \
   || [[ ! "$APK_SHA256" =~ ^[a-f0-9]{64}$ ]] \
   || [[ ! "$APK_SIZE" =~ ^[0-9]+$ ]] \
   || [[ ! "$RELEASE_META_SHA256" =~ ^[a-f0-9]{64}$ ]] \
-  || [[ ! "$LATEST_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+  || [[ ! "$LATEST_SHA256" =~ ^[a-f0-9]{64}$ ]] \
+  || [[ "$APP_ID" != "ai.moa.assistant" ]] \
+  || [[ ! "$VERSION_CODE" =~ ^[0-9]+$ ]] \
+  || [[ ! "$VERSION_NAME" =~ ^[A-Za-z0-9._+-]+$ ]] \
+  || [[ ! "$GIT_SHA" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "Local OTA store validation returned unsafe release facts." >&2
   exit 1
 fi
@@ -636,6 +646,81 @@ if [ "$FINALIZE_STATUS" -ne 0 ]; then
       echo "OTA finalization failed after restoring state, but cleanup could not be verified; publication remains locked." >&2
     fi
   fi
+  exit 1
+fi
+
+# Verify the exact manifest and APK through the authenticated public endpoint
+# before acknowledging publication. The token never leaves the already-running
+# gateway container and is never printed by this script or the remote verifier.
+if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" bash -s -- \
+  "$REMOTE_OTA_DIR" verify-public "$RELEASE_ID" "$APK_SHA256" "$APK_SIZE" \
+  "$APP_ID" "$VERSION_CODE" "$VERSION_NAME" "$GIT_SHA" >/dev/null 2>&1 <<'REMOTE_PUBLIC_VERIFY'
+set -euo pipefail
+root="$1"
+phase="$2"
+release_id="$3"
+apk_sha="$4"
+apk_size="$5"
+app_id="$6"
+version_code="$7"
+version_name="$8"
+git_sha="$9"
+[ "$phase" = verify-public ] || exit 1
+[[ "$root" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
+[[ "$release_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || exit 1
+[[ "$apk_sha" =~ ^[a-f0-9]{64}$ ]] || exit 1
+[[ "$apk_size" =~ ^[0-9]+$ ]] || exit 1
+[ "$app_id" = ai.moa.assistant ] || exit 1
+[[ "$version_code" =~ ^[0-9]+$ ]] || exit 1
+[[ "$version_name" =~ ^[A-Za-z0-9._+-]+$ ]] || exit 1
+[[ "$git_sha" =~ ^[A-Za-z0-9._-]+$ ]] || exit 1
+
+container_ids="$(docker ps \
+  --filter label=com.docker.compose.project=chief-moa \
+  --filter label=com.docker.compose.service=gateway \
+  --format '{{.ID}}')"
+[ "$(printf '%s\n' "$container_ids" | sed '/^$/d' | wc -l | tr -d '[:space:]')" = 1 ] || exit 1
+gateway_container="$(printf '%s\n' "$container_ids" | sed -n '1p')"
+[ -n "$gateway_container" ] || exit 1
+
+docker exec -i "$gateway_container" node - \
+  "$release_id" "$apk_sha" "$apk_size" "$app_id" "$version_code" \
+  "$version_name" "$git_sha" <<'REMOTE_PUBLIC_NODE'
+const crypto = require("node:crypto");
+const [releaseId, apkSha, apkSizeText, appId, versionCodeText, versionName, gitSha] =
+  process.argv.slice(2);
+const base = String(process.env.PUBLIC_GATEWAY_URL || "").replace(/\/+$/, "");
+const token = process.env.MOA_GATEWAY_TOKEN;
+if (!/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]+)?$/.test(base) || !token) process.exit(1);
+const headers = { authorization: `Bearer ${token}` };
+
+async function main() {
+  const requestOptions = () => ({ headers, signal: AbortSignal.timeout(10000) });
+  const manifestResponse = await fetch(`${base}/v1/android/updates/latest`, requestOptions());
+  if (!manifestResponse.ok) process.exit(1);
+  const manifest = await manifestResponse.json();
+  const expectedSize = Number(apkSizeText);
+  const expectedVersionCode = Number(versionCodeText);
+  if (manifest.release_id !== releaseId
+    || manifest.sha256 !== apkSha
+    || manifest.size_bytes !== expectedSize
+    || manifest.app_id !== appId
+    || manifest.version_code !== expectedVersionCode
+    || manifest.version_name !== versionName
+    || manifest.git_sha !== gitSha) process.exit(1);
+
+  const apkResponse = await fetch(`${base}/v1/android/updates/latest.apk`, requestOptions());
+  if (!apkResponse.ok) process.exit(1);
+  const apk = Buffer.from(await apkResponse.arrayBuffer());
+  if (apk.length !== expectedSize
+    || crypto.createHash("sha256").update(apk).digest("hex") !== apkSha) process.exit(1);
+}
+
+main().catch(() => process.exit(1));
+REMOTE_PUBLIC_NODE
+REMOTE_PUBLIC_VERIFY
+then
+  echo "OTA publication committed, but authenticated public manifest/APK verification failed; remote state remains locked for exact retry." >&2
   exit 1
 fi
 

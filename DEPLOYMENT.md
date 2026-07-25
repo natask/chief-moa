@@ -38,14 +38,26 @@ state.
 Build and publish the current Android OTA through:
 
 ```sh
-MOA_VPS_SSH=user@vps bash scripts/deploy.sh android
+bash scripts/deploy.sh android
 ```
 
 This command builds a timestamp-versioned debug APK with the local continuity
 key, publishes it to the VPS OTA store, and installs the same APK over ADB when
-an authorized phone is connected. The host must come from `MOA_VPS_SSH` or the
-`--host` option on `android_app/deploy/ota/sync-vps.sh`. The script does not
-guess it. The phone downloads later updates from:
+an authorized phone is connected. The repository entrypoint reads the canonical,
+non-secret production target from `scripts/deploy-targets.json`;
+`MOA_VPS_SSH` overrides that target. The lower-level
+`android_app/deploy/ota/sync-vps.sh` still requires `MOA_VPS_SSH` or `--host`.
+SSH authentication remains in the user's SSH configuration and is never stored
+in the target file.
+
+Publication succeeds only after the running VPS gateway container uses its own
+`MOA_GATEWAY_TOKEN` to fetch the authenticated public manifest and APK and
+matches their release id, version, size, and SHA-256 to the local candidate.
+The token does not leave the container. A public verification failure prevents
+the deploy marker from moving and preserves the remote publication receipt for
+exact retry. Optional ADB installation produces a separate receipt: no attached
+phone or an install failure does not invalidate an already verified
+publication. The phone downloads later updates from:
 
 ```text
 GET /v1/android/updates/latest

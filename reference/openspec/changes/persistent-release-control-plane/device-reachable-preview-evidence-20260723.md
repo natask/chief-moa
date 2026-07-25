@@ -84,13 +84,19 @@
   completed successfully. The droplet audit reports target equals deployed,
   timer enabled and active, promotion control plane ready, local health healthy,
   and no blocker.
-- Stable Android OTA: `ai.moa.assistant-1784880316`, version
-  `0.1.1784880316`, source `24db87f1`, APK SHA-256
-  `5ae7f7d1c8fa6de95324c7b8788066d73f733e8300830c924d5f50cfb09ffb22`.
+- Stable Android OTA: `ai.moa.assistant-1784937132`, version
+  `0.1.1784937132`, source `60137abb`, APK SHA-256
+  `d6e3b77a502a023f6e412fd4d71bbfa37065106f4980851c575adb74be0156d5`.
 - The production APK uses continuity signer SHA-256
   `8f0b62c73777a961687041f6faac24597830127d1f0ca9841aa6f7c70fe6ae0d`.
   The protected production manifest serves the exact release and digest with
-  rollback to `ai.moa.assistant-1784199280`.
+  rollback to `ai.moa.assistant-1784880316`.
 - The OTA publisher now normalizes only public artifact directories/files to
   mode 0755/0644 after exact-byte verification. Private staging, snapshots,
   locks, and credentials remain private.
+- Follow-up deployment-contract repair: `scripts/deploy.sh android` resolves the
+  tracked production target when no environment override is present, and it
+  advances its deploy marker only after the running gateway container verifies
+  the exact authenticated public manifest and APK using its container-confined
+  token. Optional ADB installation now has a separate receipt and cannot erase
+  successful publication evidence.

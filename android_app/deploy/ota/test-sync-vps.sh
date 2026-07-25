@@ -41,6 +41,10 @@ fi
 if [ "$phase" = ack ] && [ "${FAKE_SSH_FAIL_ACK_BEFORE:-0}" = 1 ]; then
   exit 255
 fi
+if [ "$phase" = verify-public ]; then
+  [ "${FAKE_PUBLIC_VERIFY_FAIL:-0}" != 1 ] || exit 78
+  exit 0
+fi
 /bin/bash -s -- "$@"
 status=$?
 if [ "$status" -eq 0 ] && [ "$phase" = finalize ] \
@@ -350,6 +354,26 @@ run_sync "$local_dir" "$remote_dir" "$case_dir/retry-output"
 [ -f "$remote_dir/releases/ai.moa.assistant-16/moa-assistant.apk" ]
 assert_no_target_leak "$case_dir/retry-output" "$remote_dir"
 
+# Public verification happens after the atomic commit but before ACK cleanup.
+# A failure must prevent success and preserve the durable owner lock so an
+# exact retry can reconcile and recheck the served bytes.
+case_dir="$TMP_DIR/public-verification"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$remote_dir" 132 '2026-07-01T00:00:00Z' remote-132
+publish_release "$local_dir" 133 '2026-07-02T00:00:00Z' local-133
+if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+  FAKE_PUBLIC_VERIFY_FAIL=1; then exit 1; fi
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-133 ]
+[ -f "$remote_dir/.publish-lock/published.receipt" ]
+grep -Fq 'authenticated public manifest/APK verification failed' "$case_dir/output"
+run_sync "$local_dir" "$remote_dir" "$case_dir/retry-output"
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-133 ]
+[ ! -e "$remote_dir/.publish-lock" ]
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+assert_no_target_leak "$case_dir/retry-output" "$remote_dir"
+
 # An immutable release-id collision with different bytes fails closed and
 # keeps the prior current, legacy artifacts, and release bytes unchanged.
 case_dir="$TMP_DIR/release-collision"
@@ -564,4 +588,13 @@ if grep -q '^rsync$' "$FAKE_CALL_LOG"; then exit 1; fi
 [ ! -e "$remote_dir/releases/ai.moa.assistant-50" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
-echo "Android OTA VPS publication safety smoke passed (18 fake transport cases + workflow contract)."
+grep -Fq "docker exec -i \"\$gateway_container\" node -" "$SYNC_SCRIPT" || {
+  echo "Public OTA verification must use the running gateway container token" >&2
+  exit 1
+}
+grep -Fq 'process.env.MOA_GATEWAY_TOKEN' "$SYNC_SCRIPT" || {
+  echo "Public OTA verification must read auth only inside the gateway container" >&2
+  exit 1
+}
+
+echo "Android OTA VPS publication safety smoke passed (19 fake transport cases + workflow contract)."
