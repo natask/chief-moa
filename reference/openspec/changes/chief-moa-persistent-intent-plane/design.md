@@ -35,6 +35,19 @@ All routes require normal gateway Bearer authentication.
 Completion and `needs_user` transitions create durable pending pings. Receipt
 events move the projection to `received`.
 
+The hosted-global extension is normative in
+[`global-authority-contract.md`](global-authority-contract.md). Its baseline
+comparison is in [`gap-matrix.md`](gap-matrix.md).
+
+Intent placement adds `tenant_id`, `namespace_id`, `sphere`, and `project_id`.
+These are mutable routing metadata; reclassification appends an update without
+changing stable identities. Agent registration adds runtime, location,
+non-secret endpoint, parent provenance, and recovery policy.
+
+`POST /v1/intent-plane/agents/{id}/heartbeat` establishes a bounded lease.
+Projections derive `unleased`, `healthy`, `stale`, or `terminal`. Stale
+detection never authorizes a duplicate launch.
+
 ## Authority and privacy
 
 - `user_confirmed: true` is mandatory for admission; inferred intent is rejected.
@@ -51,3 +64,5 @@ events move the projection to `received`.
   gateway launcher adapter should register immediately after allocating its
   stable agent/run identities and before launch; it must not guess or scrape
   current Codex subagent ids.
+- Logical placement is not authorization. This release still has one
+  authenticated principal and one physical event substrate.

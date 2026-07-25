@@ -82,6 +82,14 @@ Moa Gateway
   explicit user confirmation before admission, and plane records grant no
   external-action authority.
 
+  Hosted mode is the single global intent authority for local and remote
+  launchers. Its initial deployment uses one physical product-event substrate.
+  Tenant, namespace, sphere, and project fields are reversible routing metadata,
+  not separate databases or authorization scopes. Agent heartbeat leases expose
+  disappeared work as stale but never authorize an automatic duplicate. The
+  normative model and future partition protocol live under
+  `reference/openspec/changes/chief-moa-persistent-intent-plane/`.
+
   First-class agent identities become durable only when an explicit launcher
   adapter or the bounded manual registration route records them. Current Codex
   subagent identities are not silently imported. A future launcher adapter must

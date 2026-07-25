@@ -7,12 +7,14 @@ const EVENT_TYPES = Object.freeze([
   "intent_plane.intent.updated",
   "intent_plane.agent.registered",
   "intent_plane.agent.progressed",
+  "intent_plane.agent.heartbeat",
   "intent_plane.notification.created",
   "intent_plane.notification.received",
 ]);
 const INTENT_STATUSES = new Set(["admitted", "active", "blocked", "needs_user", "completed", "cancelled"]);
 const AGENT_STATUSES = new Set(["registered", "running", "blocked", "completed", "failed", "cancelled"]);
 const SENSITIVITIES = new Set(["normal", "sensitive", "restricted"]);
+const TERMINAL_AGENT_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function clean(value, max = 2_000) {
   const result = String(value || "").trim();
@@ -50,6 +52,24 @@ function texts(value, maxItems = 40) {
   return [...new Set((Array.isArray(value) ? value : []).map((item) => clean(item, 400)).filter(Boolean))].slice(0, maxItems);
 }
 
+function safeReference(value, label) {
+  const result = clean(value, 800);
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s]+:[^@\s]+@/i.test(result)
+    || /[?&](?:token|access_?token|api_?key|secret|signature|sig|authorization)=/i.test(result)
+    || /\bBearer\s+\S+/i.test(result)) {
+    throw new Error(`${label} must not contain credentials`);
+  }
+  return result;
+}
+
+function scopedId(value, fallback, label) {
+  const result = clean(value, 160) || fallback;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(result)) {
+    throw new Error(`${label} must be a stable scoped identifier`);
+  }
+  return result;
+}
+
 function makeId(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -70,13 +90,35 @@ function reduce(events) {
   for (const event of events) {
     const payload = plainObject(event.payload);
     if (event.event_type === "intent_plane.intent.created") {
-      intents.set(payload.intent_id, { ...payload, version: event.stream_version, created_at: event.occurred_at, updated_at: event.occurred_at });
+      intents.set(payload.intent_id, {
+        tenant_id: "tenant_global",
+        namespace_id: "namespace_default",
+        sphere: "personal",
+        project_id: "project_unfiled",
+        ...payload,
+        version: event.stream_version,
+        created_at: event.occurred_at,
+        updated_at: event.occurred_at,
+      });
     } else if (event.event_type === "intent_plane.intent.updated") {
       const current = intents.get(payload.intent_id);
       if (current) intents.set(payload.intent_id, { ...current, ...payload, version: event.stream_version, updated_at: event.occurred_at });
     } else if (event.event_type === "intent_plane.agent.registered") {
-      agents.set(payload.agent_id, { ...payload, version: event.stream_version, created_at: event.occurred_at, updated_at: event.occurred_at });
-    } else if (event.event_type === "intent_plane.agent.progressed") {
+      agents.set(payload.agent_id, {
+        runtime_type: "unspecified",
+        execution_location: "unspecified",
+        endpoint_ref: "",
+        parent_agent_id: "",
+        recovery_policy: "manual",
+        last_heartbeat_at: "",
+        lease_expires_at: "",
+        ...payload,
+        version: event.stream_version,
+        created_at: event.occurred_at,
+        updated_at: event.occurred_at,
+      });
+    } else if (event.event_type === "intent_plane.agent.progressed"
+      || event.event_type === "intent_plane.agent.heartbeat") {
       const current = agents.get(payload.agent_id);
       if (current) agents.set(payload.agent_id, { ...current, ...payload, version: event.stream_version, updated_at: event.occurred_at });
     } else if (event.event_type === "intent_plane.notification.created") {
@@ -97,7 +139,12 @@ function assertExactReplay(current, payload, label) {
   }
 }
 
-function createIntentPlane({ events, now = () => new Date().toISOString(), idFactory = makeId } = {}) {
+function createIntentPlane({
+  events,
+  now = () => new Date().toISOString(),
+  idFactory = makeId,
+  defaultLeaseDurationMs = 120_000,
+} = {}) {
   if (!events?.appendEvent || !events?.listEvents) throw new Error("intent plane requires the event substrate");
 
   async function allEvents() {
@@ -116,6 +163,19 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
   async function firstPayload(kind, id) {
     const rows = await events.listEvents({ stream_id: streamId(kind, id), order: "asc", limit: 1 });
     return plainObject(rows[0]?.payload);
+  }
+
+  async function eventByIdempotency(kind, id, key) {
+    for (let offset = 0; ; offset += 500) {
+      const page = await events.listEvents({
+        stream_id: streamId(kind, id),
+        order: "asc",
+        offset,
+        limit: 500,
+      });
+      const match = page.find((event) => event.idempotency_key === key);
+      if (match || page.length < 500) return match;
+    }
   }
 
   async function append(kind, id, operation, type, payload, rawKey, expectedVersion) {
@@ -155,6 +215,10 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
       source: safeMetadata(input.source, "source"),
       provenance: safeMetadata(input.provenance, "provenance"),
       sensitivity,
+      tenant_id: scopedId(input.tenant_id, "tenant_global", "tenant_id"),
+      namespace_id: scopedId(input.namespace_id, "namespace_default", "namespace_id"),
+      sphere: scopedId(input.sphere, "personal", "sphere"),
+      project_id: scopedId(input.project_id, "project_unfiled", "project_id"),
       owner_agent_id: clean(input.owner_agent_id, 160),
       next_action: clean(input.next_action),
       artifact_refs: texts(input.artifact_refs),
@@ -182,6 +246,10 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
       owner_agent_id: input.owner_agent_id === undefined ? current.owner_agent_id : clean(input.owner_agent_id, 160),
       next_action: input.next_action === undefined ? current.next_action : clean(input.next_action),
       artifact_refs: input.artifact_refs === undefined ? current.artifact_refs : texts(input.artifact_refs),
+      tenant_id: input.tenant_id === undefined ? current.tenant_id : scopedId(input.tenant_id, current.tenant_id, "tenant_id"),
+      namespace_id: input.namespace_id === undefined ? current.namespace_id : scopedId(input.namespace_id, current.namespace_id, "namespace_id"),
+      sphere: input.sphere === undefined ? current.sphere : scopedId(input.sphere, current.sphere, "sphere"),
+      project_id: input.project_id === undefined ? current.project_id : scopedId(input.project_id, current.project_id, "project_id"),
     };
     await append("intent", intentId, "update", EVENT_TYPES[1], payload, input.idempotency_key || `${intentId}:${current.version + 1}`, current.version);
     if (status === "completed" || status === "needs_user") {
@@ -215,6 +283,13 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
       current_run_id: clean(input.current_run_id, 160),
       latest_recap: clean(input.latest_recap),
       registration_mode: clean(input.registration_mode, 40) || "manual",
+      runtime_type: clean(input.runtime_type, 80) || "unspecified",
+      execution_location: clean(input.execution_location, 160) || "unspecified",
+      endpoint_ref: safeReference(input.endpoint_ref, "endpoint_ref"),
+      parent_agent_id: clean(input.parent_agent_id, 160),
+      recovery_policy: clean(input.recovery_policy, 80) || "manual",
+      last_heartbeat_at: "",
+      lease_expires_at: "",
     };
     if (currentState.agents.has(agentId)) {
       assertExactReplay(await firstPayload("agent", agentId), payload, "agent");
@@ -242,6 +317,58 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
     return (await state()).agents.get(agentId);
   }
 
+  async function heartbeatAgent(agentId, input = {}) {
+    const current = (await state()).agents.get(agentId);
+    if (!current) throw new Error("agent not found");
+    if (TERMINAL_AGENT_STATUSES.has(current.status)) throw new Error("terminal agent cannot heartbeat");
+    const status = clean(input.status, 40) || "running";
+    if (!["registered", "running", "blocked"].includes(status)) {
+      throw new Error("heartbeat status must be registered, running, or blocked");
+    }
+    const durationMs = Math.max(15_000, Math.min(
+      Number(input.lease_duration_ms) || defaultLeaseDurationMs,
+      600_000,
+    ));
+    const requestFingerprint = crypto.createHash("sha256").update(JSON.stringify({
+      status: input.status === undefined ? null : clean(input.status, 40),
+      progress: input.progress === undefined && input.last_progress === undefined
+        ? null
+        : clean(input.progress || input.last_progress),
+      current_run_id: input.current_run_id === undefined ? null : clean(input.current_run_id, 160),
+      latest_recap: input.latest_recap === undefined ? null : clean(input.latest_recap),
+      artifact_refs: input.artifact_refs === undefined ? null : texts(input.artifact_refs),
+      lease_duration_ms: durationMs,
+    })).digest("hex");
+    const rawKey = input.idempotency_key || `${agentId}:${current.version + 1}`;
+    const canonicalKey = idempotencyKey("agent", agentId, "heartbeat", rawKey);
+    const prior = await eventByIdempotency("agent", agentId, canonicalKey);
+    if (prior) {
+      if (prior.payload?.request_fingerprint !== requestFingerprint) {
+        throw new Error("agent heartbeat idempotency collision");
+      }
+      return agentWithRecovery(current, now());
+    }
+    const heartbeatAt = now();
+    const heartbeatMs = Date.parse(heartbeatAt);
+    if (!Number.isFinite(heartbeatMs)) throw new Error("intent plane clock returned an invalid timestamp");
+    const payload = {
+      agent_id: agentId,
+      intent_id: current.intent_id,
+      status,
+      last_progress: clean(input.progress || input.last_progress) || current.last_progress,
+      current_run_id: input.current_run_id === undefined ? current.current_run_id : clean(input.current_run_id, 160),
+      latest_recap: input.latest_recap === undefined ? current.latest_recap : clean(input.latest_recap),
+      artifact_refs: input.artifact_refs === undefined ? (current.artifact_refs || []) : texts(input.artifact_refs),
+      last_heartbeat_at: heartbeatAt,
+      lease_expires_at: new Date(heartbeatMs + durationMs).toISOString(),
+      recovery_policy: current.recovery_policy,
+      request_fingerprint: requestFingerprint,
+    };
+    await append("agent", agentId, "heartbeat", EVENT_TYPES[4], payload,
+      rawKey, current.version);
+    return agentWithRecovery((await state()).agents.get(agentId), heartbeatAt);
+  }
+
   async function createNotification(input = {}) {
     const currentState = await state();
     const notificationId = clean(input.notification_id, 160) || idFactory("notification");
@@ -262,7 +389,7 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
       assertExactReplay(await firstPayload("notification", notificationId), payload, "notification");
       return existing;
     }
-    await append("notification", notificationId, "create", EVENT_TYPES[4], payload, rawKey, 0);
+    await append("notification", notificationId, "create", EVENT_TYPES[5], payload, rawKey, 0);
     return (await state()).notifications.get(notificationId);
   }
 
@@ -270,7 +397,7 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
     const current = (await state()).notifications.get(notificationId);
     if (!current) throw new Error("notification not found");
     if (current.receipt_state === "received") return current;
-    await append("notification", notificationId, "receipt", EVENT_TYPES[5], {
+    await append("notification", notificationId, "receipt", EVENT_TYPES[6], {
       notification_id: notificationId,
       intent_id: current.intent_id,
       receipt: { actor: clean(input.actor, 160) || "user", note: clean(input.note, 800), at: now() },
@@ -280,7 +407,13 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
 
   async function projection(filters = {}) {
     const current = await state();
-    const all = [...current.intents.values()].filter((item) => !filters.status || item.status === filters.status);
+    const projectedAt = now();
+    const all = [...current.intents.values()].filter((item) =>
+      (!filters.status || item.status === filters.status)
+      && (!filters.tenant_id || item.tenant_id === filters.tenant_id)
+      && (!filters.namespace_id || item.namespace_id === filters.namespace_id)
+      && (!filters.sphere || item.sphere === filters.sphere)
+      && (!filters.project_id || item.project_id === filters.project_id));
     const limit = Math.max(1, Math.min(Number(filters.limit) || 100, 500));
     const offset = Math.max(0, Math.min(Number(filters.offset) || 0, 10_000_000));
     const intents = all.slice(offset, offset + limit);
@@ -289,12 +422,15 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
       schema: "moa.intent-plane.v1",
       page: { offset, limit, returned: intents.length, total: all.length },
       intents,
-      agents: [...current.agents.values()].filter((item) => intentIds.has(item.intent_id)),
+      agents: [...current.agents.values()]
+        .filter((item) => intentIds.has(item.intent_id))
+        .map((item) => agentWithRecovery(item, projectedAt)),
       notifications: [...current.notifications.values()].filter((item) => intentIds.has(item.intent_id)),
       authority: {
         inferred_intents_require_user_confirmation: true,
         external_actions: "none",
         sensitivity_boundary: "single_authenticated_gateway_principal; sensitivity is classification, not a separate authorization scope",
+        tenancy_boundary: "one authenticated principal and one physical event substrate; tenant/namespace/sphere/project are routing metadata, not independent authorization scopes",
       },
     };
   }
@@ -303,7 +439,10 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
     const current = await state();
     const intent = current.intents.get(intentId);
     if (!intent) return null;
-    const agents = [...current.agents.values()].filter((item) => item.intent_id === intentId);
+    const projectedAt = now();
+    const agents = [...current.agents.values()]
+      .filter((item) => item.intent_id === intentId)
+      .map((item) => agentWithRecovery(item, projectedAt));
     return {
       schema: "moa.intent-plane.v1",
       intent,
@@ -315,7 +454,35 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
     };
   }
 
-  return { createIntent, updateIntent, registerAgent, progressAgent, createNotification, receiveNotification, projection, explain };
+  return {
+    createIntent,
+    updateIntent,
+    registerAgent,
+    progressAgent,
+    heartbeatAgent,
+    createNotification,
+    receiveNotification,
+    projection,
+    explain,
+  };
+}
+
+function agentWithRecovery(agent, projectedAt) {
+  if (!agent) return agent;
+  if (TERMINAL_AGENT_STATUSES.has(agent.status)) {
+    return { ...agent, recovery_state: "terminal" };
+  }
+  if (!agent.last_heartbeat_at || !agent.lease_expires_at) {
+    return { ...agent, recovery_state: "unleased" };
+  }
+  const projectedMs = Date.parse(projectedAt);
+  const expiryMs = Date.parse(agent.lease_expires_at);
+  return {
+    ...agent,
+    recovery_state: Number.isFinite(projectedMs) && Number.isFinite(expiryMs) && projectedMs > expiryMs
+      ? "stale"
+      : "healthy",
+  };
 }
 
 module.exports = { createIntentPlane, intentPlaneEventTypes: EVENT_TYPES };
