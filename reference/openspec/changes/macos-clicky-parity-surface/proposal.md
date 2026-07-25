@@ -15,9 +15,10 @@ other surfaces.
 - Add a global `Control+Space` summon shortcut and one compact floating command
   panel for voice capture and typed turns. App launch and first summon begin
   latched capture; the next summon commits it.
-- Store only the configured gateway origin and bearer token locally. The token
-  remains in Keychain; raw provider credentials and consumer-subscription
-  tokens never enter the app.
+- Persist only the non-secret configured gateway origin. Keep the bearer token
+  in process memory for the current app session, default it to empty, and clear
+  it on disconnect or termination. Raw provider credentials and
+  consumer-subscription tokens never enter the app.
 - Send typed turns to the existing authenticated `POST /v1/chat` contract and
   render returned text as inert presentation data.
 - Keep screen/Accessibility evidence completely separate. A normal command

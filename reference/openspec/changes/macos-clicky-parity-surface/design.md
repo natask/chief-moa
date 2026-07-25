@@ -34,9 +34,11 @@ response sizes are bounded. Only the returned `text` field is displayed; no
 response field can directly execute a local action.
 
 The user configures the origin and gateway bearer token. The origin has no
-packaged default and is stored in app preferences. The token is stored in the
-macOS Keychain. Provider keys, CLI OAuth tokens, and model-subscription tokens
-remain gateway/execution-machine concerns.
+packaged default and is stored in app preferences. The token defaults to empty,
+exists only in process memory, and is cleared on explicit disconnect and app
+termination. Apple runnable sources and configuration prohibit credential
+persistence APIs. Provider keys, CLI OAuth tokens, and model-subscription
+tokens remain gateway/execution-machine concerns.
 
 ## Privacy boundary
 

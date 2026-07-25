@@ -16,8 +16,8 @@ public struct StatusView: View {
         HStack { Button("Select frontmost app") { model.selectFrontmost() }; Button("Enable Accessibility") { model.requestAccessibility() }; Button("Enable Screen Recording") { model.requestScreenRecording() } }
         TextField("Canonical gateway origin (no default)", text: $model.origin).textFieldStyle(.roundedBorder)
         Picker("Release", selection: $model.mode) { Text("Local only").tag(ReleaseMode.localOnly); Text("Ask each time").tag(ReleaseMode.askEachTime); Text("Trust server for 15m").tag(ReleaseMode.trustedServer15m) }
-        SecureField("Gateway bearer token", text: $model.token).textFieldStyle(.roundedBorder)
-        HStack { Button("Save token in Keychain") { model.saveToken() }; Button("Delete token") { model.deleteToken() } }
+        SecureField("Gateway session token (memory only)", text: $model.token).textFieldStyle(.roundedBorder)
+        HStack { Button("Use for this session") { model.useConnectionForSession() }; Button("Clear session token") { model.clearSessionCredential() } }
         Toggle("Attach focused-window screenshot for this grant", isOn: $model.screenshot)
         HStack { Button("Start 15 minutes") { Task { await model.start() } }; Button("Pause") { Task { await model.pause() } }; Button("Resume") { model.resume() }; Button("Stop") { Task { await model.stop() } } }
         if !model.suggestion.isEmpty { GroupBox("Suggestion (inert)") { Text(model.suggestion).textSelection(.enabled) } }

@@ -1,13 +1,15 @@
 ## 1. Typed companion loop
 
 - [x] 1.1 Add bounded canonical `/v1/chat` request and inert reply decoding.
-- [x] 1.2 Share the gateway origin and Keychain token between the command
-      surface and the existing screen-context settings.
+- [x] 1.2 Share the gateway origin while keeping each entered token
+      session-only and clearing it on explicit disconnect/stop.
 - [x] 1.3 Add the menu-bar shell, global summon shortcut, compact command panel,
       loading/error/reply states, and Escape dismissal.
 - [x] 1.4 Prove typed turns contain no AX or screenshot evidence and redirects,
       invalid origins, oversized input, oversized responses, and missing tokens
       fail closed.
+- [x] 1.5 Add a static Apple-source gate that rejects credential persistence
+      APIs, service labels, and generic-password commands.
 
 ## 2. QA artifact
 

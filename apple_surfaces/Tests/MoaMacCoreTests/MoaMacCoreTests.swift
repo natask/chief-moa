@@ -191,11 +191,9 @@ func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
 #if os(macOS)
 private struct StaticConnectionStore: GatewayConnectionStore {
     let origin: String
-    let token: String
     func loadOrigin() -> String { origin }
-    func loadToken() -> String { token }
     func loadSessionID() -> String { "mac-test-session" }
-    func save(origin: String, token: String) throws {}
+    func saveOrigin(_ origin: String) throws {}
 }
 
 private actor FakeChatSender: GatewayChatSending {
@@ -208,7 +206,9 @@ private actor FakeChatSender: GatewayChatSending {
 
 @MainActor @Test func commandModelSendsOneInertTurnAndPreservesGatewayOnlyBoundary() async throws {
     let sender = FakeChatSender()
-    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example", token: "gateway-token"), sender: sender)
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: sender)
+    #expect(model.token.isEmpty)
+    model.token = "gateway-token"
     #expect(model.isConfigured)
     model.prompt = "Help with this"
     await model.submit()
@@ -224,7 +224,8 @@ private actor FakeChatSender: GatewayChatSending {
 }
 
 @MainActor @Test func macShellSafeStoppedControlsRemainInert() async {
-    let model = SurfaceModel(loadToken: { nil })
+    let model = SurfaceModel()
+    #expect(model.token.isEmpty)
     #expect(model.paused)
     model.resume()
     await model.pause()
@@ -295,9 +296,9 @@ private actor FakeChatSender: GatewayChatSending {
 
     let identity = ProcessIdentity(bundleID: "test.coverage", pid: ProcessInfo.processInfo.processIdentifier,
                                    processStart: NSRunningApplication.current.launchDate ?? now, signingIdentity: "test:coverage")
-    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App", loadToken: { nil })
-    model.saveToken()
-    #expect(model.status == "Gateway connection save failed")
+    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App")
+    model.useConnectionForSession()
+    #expect(model.status == "Session connection validation failed")
     model.mode = .askEachTime
     model.origin = "http://not-loopback.example"
     await model.start()
@@ -307,5 +308,38 @@ private actor FakeChatSender: GatewayChatSending {
     try await Task.sleep(for: .milliseconds(450))
     await model.stop()
     #expect(model.paused)
+    #expect(model.token.isEmpty)
+}
+
+@MainActor @Test func sessionCredentialIsMemoryOnlyAndClearsOnDisconnect() async {
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender())
+    #expect(model.token.isEmpty)
+    model.token = "temporary-token"
+    #expect(model.useConnectionForSession())
+    await model.disconnect()
+    #expect(model.token.isEmpty)
+    let replacement = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender())
+    #expect(replacement.token.isEmpty)
+}
+
+@Test func runnableAppleSourcesForbidCredentialPersistenceAPIs() throws {
+    let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    let package = tests.deletingLastPathComponent().deletingLastPathComponent()
+    let roots = ["Sources", "Resources", "scripts"].map { package.appendingPathComponent($0) }
+    let forbidden = [
+        ["Sec", "Item"].joined(),
+        ["Keychain", "Token"].joined(),
+        ["app", ".agee", ".moa-mac", ".gateway"].joined(),
+        ["generic", "-password"].joined(),
+    ]
+    for root in roots {
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
+        for case let file as URL in enumerator where file.hasDirectoryPath == false {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for pattern in forbidden {
+                #expect(!text.contains(pattern), "Forbidden credential persistence API in \(file.path)")
+            }
+        }
+    }
 }
 #endif

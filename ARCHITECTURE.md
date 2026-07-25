@@ -335,7 +335,7 @@ actor-isolated and any effect is available only through an injected executor
 after all local checks pass.
 
 The library seam has no transport, provider credential, canonical conversation
-store, Keychain policy, OS action implementation, SwiftUI product shell,
+store, credential-persistence policy, OS action implementation, SwiftUI product shell,
 signing, update or distribution authority. The `AggieSurfaceApp` product is a
 static SwiftUI demo shell over this seam; an unsigned macOS or iOS Simulator
 build is compilation evidence only and does not establish device behavior,
@@ -352,11 +352,14 @@ explicit app launch, menu-bar Speak, or Control-Space
   -> typed Send remains a bounded authenticated POST /v1/chat
 ```
 
-The command panel stores the canonical gateway origin in app preferences and
-the gateway bearer token in Keychain. It contains no packaged destination or
-provider credentials, rejects redirects, uses an ephemeral URL session, and
-never attaches screen context implicitly. Provider selection and credentials
-remain gateway-owned. This is the first daily companion slice; ticketed live
+The command panel stores the non-secret canonical gateway origin in app
+preferences. The gateway bearer token exists only in process memory, defaults
+to empty, and is cleared on explicit disconnect/stop and app termination.
+Credential persistence APIs are prohibited in Apple runnable sources and
+configuration. The panel contains no packaged destination or provider
+credentials, rejects redirects, uses an ephemeral URL session, and never
+attaches screen context implicitly. Provider selection and credentials remain
+gateway-owned. This is the first daily companion slice; ticketed live
 assistant audio replies, shared session-event presentation, pointer overlays,
 and approved native actions remain staged work.
 
@@ -382,7 +385,8 @@ only the same process's focused window, re-encoded and size-bounded. Neither
 macOS permission alone starts observation or release.
 
 There is no packaged gateway destination. Network modes require a canonical
-user-configured HTTPS origin (HTTP only on loopback) and a Keychain bearer token.
+user-configured HTTPS origin (HTTP only on loopback) and a session-only bearer
+token supplied after launch.
 Ask mode binds exact serialized bytes and SHA-256 to a final approval;
 trusted-server mode displays the origin/evidence/screenshot scope and expiry.
 The gateway route requires exact bearer authentication, treats AX/pixels as
@@ -1971,8 +1975,8 @@ queues.
   macOS chat request and inert reply decoding.
 - `apple_surfaces/Sources/MoaMacCore/GatewayVoice.swift`: bounded literal voice
   session envelope, PCM frame, server-event, and capture-state contracts.
-- `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: Keychain-backed
-  gateway connection state, summon lifecycle, and redirect-rejecting ephemeral
+- `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: session-only
+  gateway credential state, summon lifecycle, and redirect-rejecting ephemeral
   chat transport.
 - `apple_surfaces/Sources/MoaMacShell/GatewayVoiceShell.swift`: explicit
   microphone capture and authenticated voice WebSocket adapter.

@@ -218,9 +218,8 @@ private actor StubVoiceTransport: GatewayVoiceTransporting {
 
 private struct VoiceTestConnectionStore: GatewayConnectionStore {
     func loadOrigin() -> String { "https://moa.example" }
-    func loadToken() -> String { "gateway-token" }
     func loadSessionID() -> String { "mac-test-session" }
-    func save(origin: String, token: String) throws {}
+    func saveOrigin(_ origin: String) throws {}
 }
 
 private struct UnusedChatSender: GatewayChatSending {
@@ -325,6 +324,7 @@ private struct UnusedChatSender: GatewayChatSending {
         sender: UnusedChatSender(),
         voiceController: capture
     )
+    model.token = "gateway-token"
     await model.handleSummon()
     #expect(capture.starts == 1)
     #expect(model.voiceState.phase == .listening)

@@ -38,7 +38,7 @@ the returned text as inert presentation data.
 #### Scenario: A configured user submits text
 
 - **WHEN** a non-empty bounded prompt is submitted with a valid origin and
-  Keychain token
+  session-only token
 - **THEN** exactly one request is sent with `source: moa-macos`
 - **AND** the reply appears without executing any returned local action
 
@@ -56,7 +56,20 @@ SHALL NOT extract OAuth material from local vendor CLIs.
 
 #### Scenario: User connects the Mac app
 
-- **WHEN** the user saves a gateway origin and bearer token
-- **THEN** the origin is stored in app preferences and the bearer token is
-  stored in Keychain
+- **WHEN** the user activates a gateway origin and bearer token
+- **THEN** the origin may be stored in app preferences and the bearer token
+  remains only in process memory until disconnect or app termination
 - **AND** no provider key or vendor CLI OAuth token is requested or persisted
+
+### Requirement: Apple clients prohibit credential persistence
+
+The macOS surface SHALL default every credential field to empty and SHALL NOT
+invoke a credential persistence API or command. Non-secret origins and session
+identifiers MAY remain in app preferences.
+
+#### Scenario: A new process starts or the user disconnects
+
+- **WHEN** the app starts, explicitly disconnects, stops the proactive surface,
+  or terminates
+- **THEN** no prior bearer token is restored
+- **AND** the in-memory token is empty after disconnect or stop

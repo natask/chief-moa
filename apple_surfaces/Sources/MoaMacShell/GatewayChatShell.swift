@@ -5,26 +5,22 @@ import SwiftUI
 
 public protocol GatewayConnectionStore: Sendable {
     func loadOrigin() -> String
-    func loadToken() -> String
     func loadSessionID() -> String
-    func save(origin: String, token: String) throws
+    func saveOrigin(_ origin: String) throws
 }
 
 public struct SystemGatewayConnectionStore: GatewayConnectionStore {
     public init() {}
     public func loadOrigin() -> String { UserDefaults.standard.string(forKey: "moa.gateway.origin") ?? "" }
-    public func loadToken() -> String { KeychainToken.load() ?? "" }
     public func loadSessionID() -> String {
         if let value = UserDefaults.standard.string(forKey: "moa.gateway.session"), !value.isEmpty { return value }
         let value = "mac-\(UUID().uuidString.lowercased())"
         UserDefaults.standard.set(value, forKey: "moa.gateway.session")
         return value
     }
-    public func save(origin: String, token: String) throws {
+    public func saveOrigin(_ origin: String) throws {
         guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
         _ = try GatewayOrigin.endpoint(origin: url, path: ["v1", "chat"])
-        guard !token.isEmpty else { throw MoaMacError.missingToken }
-        try KeychainToken.save(token)
         UserDefaults.standard.set(origin, forKey: "moa.gateway.origin")
     }
 }
@@ -98,21 +94,31 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         self.sender = sender
         self.voiceController = voiceController ?? VoiceCaptureController()
         origin = store.loadOrigin()
-        token = store.loadToken()
+        token = ""
         sessionID = store.loadSessionID()
     }
 
     public var isConfigured: Bool { !origin.isEmpty && !token.isEmpty }
 
-    @discardableResult public func saveConnection() -> Bool {
+    @discardableResult public func useConnectionForSession() -> Bool {
         do {
-            try store.save(origin: origin, token: token)
-            status = "Connected to your gateway"
+            guard !token.isEmpty else { throw MoaMacError.missingToken }
+            try store.saveOrigin(origin)
+            status = "Connected for this app session"
             return true
         } catch {
-            status = "Enter a canonical HTTPS gateway origin and bearer token"
+            status = "Enter a canonical HTTPS gateway origin and session token"
             return false
         }
+    }
+
+    public func disconnect() async {
+        voiceGeneration &+= 1
+        voiceReleaseRequested = false
+        await voiceController.cancel()
+        token = ""
+        resetPresentation()
+        status = "Disconnected — session credential cleared"
     }
 
     public func submit() async {

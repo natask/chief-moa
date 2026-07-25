@@ -26,23 +26,6 @@ enum ProcessInspector {
     }
 }
 
-enum KeychainToken {
-    static let service = "app.agee.moa-mac.gateway", account = "bearer"
-    static func load() -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-            kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var out: CFTypeRef?; guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-    static func save(_ token: String) throws {
-        delete(); let data = Data(token.utf8)
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-            kSecAttrAccount as String: account, kSecValueData as String: data, kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        guard SecItemAdd(q as CFDictionary, nil) == errSecSuccess else { throw MoaMacError.missingToken }
-    }
-    static func delete() { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account] as CFDictionary) }
-}
-
 final class AXSession: @unchecked Sendable {
     private var observer: AXObserver?; private var fallback: Timer?; private var debounce: DispatchWorkItem?
     private let pid: pid_t; private let changed: () -> Void
@@ -156,16 +139,16 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     private var identity: ProcessIdentity?; private var observer: AXSession?; private var task: Task<Void, Never>?; private var generation: UInt64 = 0
     private let inspectIdentity: @MainActor (NSRunningApplication) -> ProcessIdentity?
     public convenience init() {
-        self.init(loadToken: KeychainToken.load)
+        self.init(sessionToken: "")
     }
-    init(loadToken: () -> String?) {
+    init(sessionToken: String = "") {
         inspectIdentity = ProcessInspector.identity
-        token = loadToken() ?? ""
+        token = sessionToken
         origin = UserDefaults.standard.string(forKey: "moa.gateway.origin") ?? ""
     }
-    init(selectedIdentity: ProcessIdentity, appName: String, loadToken: () -> String?) {
+    init(selectedIdentity: ProcessIdentity, appName: String, sessionToken: String = "") {
         inspectIdentity = { _ in selectedIdentity }
-        token = loadToken() ?? ""
+        token = sessionToken
         identity = selectedIdentity
         self.appName = appName
     }
@@ -176,7 +159,7 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     }
     public func requestAccessibility() { _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary); status = "Accessibility permission requested; still not observing" }
     public func requestScreenRecording() { CGRequestScreenCaptureAccess(); status = "Screen Recording permission requested; still not capturing" }
-    public func saveToken() {
+    public func useConnectionForSession() {
         do {
             guard !token.isEmpty else { throw MoaMacError.missingToken }
             if !origin.isEmpty {
@@ -184,11 +167,10 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
                 _ = try GatewayOrigin.endpoint(origin: url, path: ["v1", "chat"])
                 UserDefaults.standard.set(origin, forKey: "moa.gateway.origin")
             }
-            try KeychainToken.save(token)
-            status = "Gateway connection saved"
-        } catch { status = "Gateway connection save failed" }
+            status = "Gateway token active for this app session only"
+        } catch { status = "Session connection validation failed" }
     }
-    public func deleteToken() { KeychainToken.delete(); token = ""; status = "Token deleted from Keychain" }
+    public func clearSessionCredential() { token = ""; status = "Session credential cleared" }
     public func start() async {
         generation &+= 1; let requestedGeneration = generation; task?.cancel(); observer?.stop(); observer = nil
         guard AXIsProcessTrusted(), let identity, let live = NSRunningApplication(processIdentifier: identity.pid), inspectIdentity(live) == identity else { status = "Select a live app and enable Accessibility first"; return }
@@ -211,7 +193,7 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     }
     public func pause() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; status = "Paused and revoked — press Start again for a new grant" }
     public func resume() { status = "Pause revoked the grant — press Start again" }
-    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; suggestion = ""; status = "Stopped — context purged" }
+    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await grants.stop(); paused = true; suggestion = ""; token = ""; status = "Stopped — context and session credential purged" }
     private func refresh() {
         guard !paused, let identity, let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier == identity.pid, inspectIdentity(front) == identity else { Task { await stop() }; return }
         task?.cancel(); task = Task { [weak self] in

@@ -119,14 +119,17 @@ public struct CommandPaletteView: View {
             Text("Your Chief Moa gateway").font(.subheadline.weight(.semibold))
             TextField("Canonical HTTPS gateway origin", text: $model.origin)
                 .textFieldStyle(.roundedBorder)
-            SecureField("Gateway bearer token", text: $model.token)
+            SecureField("Gateway session token (memory only)", text: $model.token)
                 .textFieldStyle(.roundedBorder)
             HStack {
-                Text("Provider credentials stay on the gateway.")
+                Text("Token stays in memory and is cleared on disconnect or app exit.")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Button("Save connection") {
-                    if model.saveConnection() { editingConnection = false }
+                Button("Disconnect") {
+                    Task { await model.disconnect() }
+                }
+                Button("Use for this session") {
+                    if model.useConnectionForSession() { editingConnection = false }
                     promptFocused = true
                 }
             }
