@@ -1,3 +1,4 @@
+- Kept one browser mascot root while shrinking fresh desktop and phone-width defaults with real-extension size, ownership, and gesture coverage — agent: codex/gpt-5 — 376252e5
 - Preserved the first 500 ms of browser voice and audio-note speech with permission-safe gesture warm-up and release 0.1.84 — agent: codex/gpt-5 — b0749b79
 - Made the extension side panel hydrate deduplicated cross-surface gateway history, preserve recoverable last-good messages, reconcile terminal turns, and recover across panel or worker restart — agent: codex/gpt-5 — hygiene/browser-durable-history-20260716
 - Added browser media parity: canonical YouTube URL/current-time parsing plus approved shared bookmark create, recall, open, and delete without OAuth, cookies, CDP, or browser-agent fallback — agent: codex/gpt-5 — 2e2ee264
