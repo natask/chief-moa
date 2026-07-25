@@ -96,6 +96,8 @@ const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
 const { createIntentRuntime } = require("./lib/intent-runtime");
 const { createIntentWorkflow } = require("./lib/intent-workflow");
+const { createIntentPlane } = require("./lib/intent-plane");
+const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -668,6 +670,10 @@ const semanticTelemetry = createSemanticTelemetryStore({
 // can be linked to tasks and inert queued proposals in one idempotent workflow.
 const intentRuntime = createIntentRuntime({ events: eventSubstrate });
 const intentWorkflow = createIntentWorkflow({ intentRuntime, workHistory });
+const intentPlane = createIntentPlane({ events: eventSubstrate });
+const { routeIntentPlane } = createIntentPlaneHandlers({
+  plane: intentPlane, readJsonBody, sendJson, cleanError,
+});
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
   intentWorkflow,
@@ -1013,6 +1019,17 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const handled = await routeIntentRuntime(request, response, url);
+      if (handled) return;
+    }
+
+    // Shared Chief Moa persistent intent/agent projection. All first-class
+    // surfaces consume this authenticated gateway route; it executes no work.
+    if (url.pathname.startsWith("/v1/intent-plane")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const handled = await routeIntentPlane(request, response, url);
       if (handled) return;
     }
 

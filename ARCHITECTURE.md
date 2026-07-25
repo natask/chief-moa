@@ -72,6 +72,22 @@ Moa Gateway
   companion manifests, pet manifests, engine-served browser customizations, and
   signed Android APK update artifacts.
 
+  The Chief Moa persistent intent plane is an authenticated projection over the
+  same gateway product-event substrate. It is not a separate intent product or
+  JSON store. A stable intent identity relates user-confirmed objective,
+  provenance, sensitivity, owner, agents, runs, artifacts, progress and durable
+  user pings. MoaMac, Android, browser, web/ag.app and future iPhone surfaces
+  consume the same `/v1/intent-plane` contract and preserve those canonical
+  identities when handing work across surfaces. Inferred intentions require
+  explicit user confirmation before admission, and plane records grant no
+  external-action authority.
+
+  First-class agent identities become durable only when an explicit launcher
+  adapter or the bounded manual registration route records them. Current Codex
+  subagent identities are not silently imported. A future launcher adapter must
+  register the stable agent id, owning intent, reason, launcher provenance,
+  capabilities/authority and current run before claiming plane continuity.
+
   The same gateway binary runs in `local`, `self-host`, or `hosted` mode.
   Remote modes bind to `0.0.0.0`, require `MOA_GATEWAY_TOKEN` and
   `DATABASE_URL`, trust proxy headers only when configured, and should publish a
