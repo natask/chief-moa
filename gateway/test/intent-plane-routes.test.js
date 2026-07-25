@@ -60,6 +60,14 @@ test("authenticated CRUD, projection, explanation and receipts are wired", async
   assert.equal(explained.json.runs[0].run_id, "route_run");
   assert.deepEqual(explained.json.artifacts, ["artifact:route"]);
 
+  const started = await call("POST", "/v1/intent-plane/agents/route_agent/runs", {
+    current_run_id: "route_run_two",
+    progress: "second run",
+    idempotency_key: "route-run-two-start",
+  });
+  assert.equal(started.status, 201, JSON.stringify(started.json));
+  assert.equal(started.json.agent.current_run_id, "route_run_two");
+
   const patched = await call("PATCH", "/v1/intent-plane/intents/route_intent", {
     status: "needs_user", next_action: "Review", idempotency_key: "route-needs-user",
   });

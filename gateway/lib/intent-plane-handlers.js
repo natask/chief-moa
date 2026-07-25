@@ -43,10 +43,14 @@ function createIntentPlaneHandlers({ plane, readJsonBody, sendJson, cleanError }
           return true;
         }
       }
-      const agent = url.pathname.match(/^\/v1\/intent-plane\/agents\/([^/]+)\/(progress|heartbeat)$/);
+      const agent = url.pathname.match(/^\/v1\/intent-plane\/agents\/([^/]+)\/(progress|heartbeat|runs)$/);
       if (agent && request.method === "POST") {
         const agentId = decodeURIComponent(agent[1]);
         const body = await readJsonBody(request);
+        if (agent[2] === "runs") {
+          sendJson(response, 201, await plane.startAgentRun(agentId, body));
+          return true;
+        }
         const result = agent[2] === "heartbeat"
           ? await plane.heartbeatAgent(agentId, body)
           : await plane.progressAgent(agentId, body);

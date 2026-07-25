@@ -200,7 +200,11 @@ substantive work. Registration records:
 
 Capabilities advertise suitability; they do not grant authority. Raw
 credentials, cookies, authorization headers, and signed callback URLs never
-enter intent metadata.
+enter intent metadata. Endpoint references reject every URL userinfo value,
+Bearer text, and query or fragment parameter named `auth`, `authorization`,
+`code`, `credential`, `jwt`, `key`, `password`, `passwd`, `secret`, `sig`,
+`signature`, `token`, `access_token`, or `api_key`, including percent-decoded
+parameter names.
 
 While working, a non-terminal agent sends an authenticated heartbeat before its
 lease expires. Projections derive:
@@ -217,12 +221,22 @@ does not autonomously recover them.
 
 Progress is a meaningful durable recap. A heartbeat is temporary liveness and
 may carry the current bounded recap. Terminal work links durable output and
-verification before its owning intent completes.
+verification before its owning intent completes. Ordinary progress may not
+move a completed, failed, or cancelled agent back to a non-terminal state.
+
+Starting a later attempt is an explicit command:
+`POST /v1/intent-plane/agents/{agent_id}/runs`. It requires a new
+`current_run_id`; a running agent cannot start another run. Reopening a
+completed intent requires `reopen_intent: true`. A cancelled intent cannot
+reopen. The command appends a run-start event, resets liveness, preserves the
+prior run as provenance, and returns the agent and intent projections. Exact
+replay returns the projection at that run-start event rather than later state.
 
 ## Leases, heartbeats, idempotency, and reconciliation
 
 Heartbeats use unique idempotency keys. Exact replay returns the same durable
-lease; different reuse fails. Lease duration is server-bounded.
+lease and event-time agent projection even after later heartbeats or restart;
+different reuse fails. Lease duration is server-bounded.
 
 The reconciler:
 
@@ -305,8 +319,10 @@ stable references such as `git:<repo>@<commit>:<path>` or
 ## Notifications, security, and audit
 
 `completed` and `needs_user` create durable notifications. Delivery attempts
-and user receipts are separate. The current slice records pending and received
-but not per-channel retries or dead letters.
+and user receipts are separate. Notification identity binds intent, terminal
+status, run ID, and transition idempotency key. Repeated runs therefore create
+distinct pings while exact transition retry reuses the same ping. The current
+slice records pending and received but not per-channel retries or dead letters.
 
 Production routes require TLS and gateway authentication. The current shared
 gateway token represents one owner and must not be placed in public browser
@@ -442,6 +458,25 @@ curl -sS https://api.agee.app/v1/intent-plane/agents/agent_example/heartbeat \
   }'
 ```
 
+Start a distinct later run. This is the only route that can reopen a terminal
+agent:
+
+```sh
+curl -sS https://api.agee.app/v1/intent-plane/agents/agent_example/runs \
+  -H "Authorization: Bearer $MOA_INTENT_PLANE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_run_id":"run_example_2",
+    "reopen_intent":true,
+    "progress":"Starting the second bounded attempt",
+    "idempotency_key":"agent-example-run-2-start"
+  }'
+```
+
+When completing or requesting attention for an intent, clients include
+`current_run_id` on `PATCH /v1/intent-plane/intents/{id}`. The server uses that
+run identity and the transition idempotency key for the notification identity.
+
 The new placement fields and heartbeat route exist only after this candidate is
 deployed. Existing clients keep using original v1 fields and progress.
 
@@ -471,10 +506,11 @@ intent, agent, run, event, and request IDs with sensitive content redacted.
 2. Rehydrate old events with deterministic defaults.
 3. Deploy readers before adapters send new fields.
 4. Feature-detect heartbeat during rolling deployment.
-5. Add run/message/artifact/recap aggregates beside opaque v1 fields.
-6. Backfill links idempotently and compare projections.
-7. Switch reads only after backup/restore and public commit-health evidence.
-8. Retain v1 compatibility until every surface migrates.
+5. Move adapters to explicit run-start and per-run terminal notifications.
+6. Add message/artifact/recap aggregates beside opaque v1 fields.
+7. Backfill links idempotently and compare projections.
+8. Switch reads only after backup/restore and public commit-health evidence.
+9. Retain v1 compatibility until every surface migrates.
 
 ## Alternatives
 

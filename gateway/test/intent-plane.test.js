@@ -233,13 +233,24 @@ test("agent heartbeat exposes durable lease and restart recovery state", async (
     recovery_policy: "relaunch",
     idempotency_key: "lease-register",
   });
-  await assert.rejects(() => f.plane.registerAgent({
-    agent_id: "agent_secret",
-    intent_id: "intent_lease",
-    launch_reason: "unsafe",
-    endpoint_ref: "https://runtime.invalid/callback?token=secret",
-    idempotency_key: "lease-secret",
-  }), /must not contain credentials/);
+  for (const [index, endpoint] of [
+    "https://user@runtime.invalid/callback",
+    "https://user:password@runtime.invalid/callback",
+    "https://runtime.invalid/callback?token=secret",
+    "https://runtime.invalid/callback?authorization=secret",
+    "https://runtime.invalid/callback?to%6Ben=secret",
+    "https://runtime.invalid/callback#api_key=secret",
+    "https://runtime.invalid/callback#?credential=secret",
+    "codex://thread/stable#Bearer secret",
+  ].entries()) {
+    await assert.rejects(() => f.plane.registerAgent({
+      agent_id: `agent_secret_${index}`,
+      intent_id: "intent_lease",
+      launch_reason: "unsafe",
+      endpoint_ref: endpoint,
+      idempotency_key: `lease-secret-${index}`,
+    }), /must not contain credentials/);
+  }
   const heartbeat = await f.plane.heartbeatAgent("agent_lease", {
     progress: "working",
     lease_duration_ms: 60_000,
@@ -260,6 +271,22 @@ test("agent heartbeat exposes durable lease and restart recovery state", async (
     idempotency_key: "lease-heartbeat",
   }), /idempotency collision/);
 
+  const later = await f.plane.heartbeatAgent("agent_lease", {
+    progress: "later work",
+    lease_duration_ms: 120_000,
+    idempotency_key: "lease-heartbeat-later",
+  });
+  assert.notEqual(later.lease_expires_at, heartbeat.lease_expires_at);
+  const delayedReplay = await createIntentPlane({
+    events: f.events,
+    now: () => "2026-07-25T12:00:00.000Z",
+  }).heartbeatAgent("agent_lease", {
+    progress: "working",
+    lease_duration_ms: 60_000,
+    idempotency_key: "lease-heartbeat",
+  });
+  assert.deepEqual(delayedReplay, heartbeat);
+
   const stale = createIntentPlane({
     events: f.events,
     now: () => "2026-07-26T00:00:00.000Z",
@@ -269,4 +296,86 @@ test("agent heartbeat exposes durable lease and restart recovery state", async (
   await assert.rejects(() => stale.heartbeatAgent("agent_lease", {
     status: "completed", progress: "invalid",
   }), /heartbeat status/);
+});
+
+test("terminal agent progress cannot resurrect without explicit new run", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_terminal", title: "Terminal", objective: "Keep terminal states closed",
+    user_confirmed: true, idempotency_key: "terminal-create",
+  });
+  for (const terminal of ["completed", "failed", "cancelled"]) {
+    const agentId = `agent_${terminal}`;
+    await f.plane.registerAgent({
+      agent_id: agentId, intent_id: "intent_terminal", launch_reason: terminal,
+      current_run_id: `run_${terminal}_one`, idempotency_key: `register-${terminal}`,
+    });
+    await f.plane.progressAgent(agentId, {
+      status: "running", progress: "started", idempotency_key: `running-${terminal}`,
+    });
+    await f.plane.progressAgent(agentId, {
+      status: terminal, progress: terminal, idempotency_key: `terminal-${terminal}`,
+    });
+    await assert.rejects(() => f.plane.progressAgent(agentId, {
+      status: "running", progress: "resurrect", idempotency_key: `resurrect-${terminal}`,
+    }), new RegExp(`illegal agent status transition: ${terminal} -> running`));
+  }
+});
+
+test("explicit run start reopens a completed agent and pings each run separately", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_runs", title: "Runs", objective: "Track repeated attempts",
+    user_confirmed: true, idempotency_key: "runs-create",
+  });
+  await f.plane.registerAgent({
+    agent_id: "agent_runs", intent_id: "intent_runs", launch_reason: "attempts",
+    current_run_id: "run_one", idempotency_key: "runs-register",
+  });
+  await f.plane.progressAgent("agent_runs", {
+    status: "running", progress: "run one", idempotency_key: "run-one-running",
+  });
+  await f.plane.progressAgent("agent_runs", {
+    status: "completed", progress: "run one done", idempotency_key: "run-one-completed",
+  });
+  await f.plane.updateIntent("intent_runs", {
+    status: "completed", current_run_id: "run_one", next_action: "Review one",
+    idempotency_key: "intent-run-one-completed",
+  });
+
+  const started = await f.plane.startAgentRun("agent_runs", {
+    current_run_id: "run_two",
+    reopen_intent: true,
+    progress: "run two",
+    idempotency_key: "run-two-start",
+  });
+  assert.equal(started.agent.status, "running");
+  assert.equal(started.agent.current_run_id, "run_two");
+  assert.equal(started.intent.status, "active");
+  await assert.rejects(() => f.plane.startAgentRun("agent_runs", {
+    current_run_id: "run_three", progress: "parallel", idempotency_key: "run-three-start",
+  }), /running agent cannot start another run/);
+
+  await f.plane.progressAgent("agent_runs", {
+    status: "completed", progress: "run two done", idempotency_key: "run-two-completed",
+  });
+  await f.plane.updateIntent("intent_runs", {
+    status: "completed", current_run_id: "run_two", next_action: "Review two",
+    idempotency_key: "intent-run-two-completed",
+  });
+  const view = await f.plane.projection();
+  assert.deepEqual(view.notifications.map((item) => item.run_id), ["run_one", "run_two"]);
+  assert.notEqual(view.notifications[0].notification_id, view.notifications[1].notification_id);
+  const delayedStartReplay = await createIntentPlane({
+    events: f.events,
+    now: () => "2026-07-26T00:00:00.000Z",
+  }).startAgentRun("agent_runs", {
+    current_run_id: "run_two",
+    reopen_intent: true,
+    progress: "run two",
+    idempotency_key: "run-two-start",
+  });
+  assert.deepEqual(delayedStartReplay, started);
 });

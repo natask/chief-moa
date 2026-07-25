@@ -12,7 +12,7 @@ Streams and events:
 | Stream | Events |
 | --- | --- |
 | `intent-plane:intent:{intent_id}` | `intent_plane.intent.created`, `intent_plane.intent.updated` |
-| `intent-plane:agent:{agent_id}` | `intent_plane.agent.registered`, `intent_plane.agent.progressed` |
+| `intent-plane:agent:{agent_id}` | `intent_plane.agent.registered`, `intent_plane.agent.progressed`, `intent_plane.agent.heartbeat`, `intent_plane.agent.run_started` |
 | `intent-plane:notification:{notification_id}` | `intent_plane.notification.created`, `intent_plane.notification.received` |
 
 Every mutation has a global idempotency key and an expected stream version.
@@ -29,6 +29,8 @@ All routes require normal gateway Bearer authentication.
 | `PATCH /v1/intent-plane/intents/{id}` | Update status, owner, next action or artifact refs |
 | `POST /v1/intent-plane/intents/{id}/agents` | Manual/fixture agent registration |
 | `POST /v1/intent-plane/agents/{id}/progress` | Append idempotent progress/blocked/completed state |
+| `POST /v1/intent-plane/agents/{id}/heartbeat` | Establish or renew a bounded liveness lease |
+| `POST /v1/intent-plane/agents/{id}/runs` | Explicitly start a distinct run and optionally reopen a completed intent |
 | `GET /v1/intent-plane/intents/{id}/explain` | Explain intent, agent, run and artifact links |
 | `POST /v1/intent-plane/notifications/{id}/receipt` | Record that the user ping was received |
 
@@ -47,6 +49,12 @@ non-secret endpoint, parent provenance, and recovery policy.
 `POST /v1/intent-plane/agents/{id}/heartbeat` establishes a bounded lease.
 Projections derive `unleased`, `healthy`, `stale`, or `terminal`. Stale
 detection never authorizes a duplicate launch.
+
+Terminal agents cannot return to running through progress. A distinct
+`POST /v1/intent-plane/agents/{id}/runs` command starts a new run identity and
+may explicitly reopen a completed, never cancelled, intent. Completion and
+needs-user notifications bind the run and transition idempotency identity, so
+later runs do not collide with the first ping.
 
 ## Authority and privacy
 
