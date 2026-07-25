@@ -88,6 +88,16 @@ Moa Gateway
   register the stable agent id, owning intent, reason, launcher provenance,
   capabilities/authority and current run before claiming plane continuity.
 
+  The first local Codex adapter supervises non-interactive `codex exec` work.
+  It derives stable intent and agent identities from explicit namespace,
+  project and launch keys, requires hosted admission before execution by
+  default, and persists a machine-local run receipt plus artifact references.
+  It removes the gateway credential from the child environment and reconciles a
+  vanished process as blocked rather than completed. This is observability and
+  lifecycle bridging only: the in-conversation collaboration API is not a
+  process API, and the adapter does not claim direct cross-session chat or
+  resumability without a runtime-supplied session handle.
+
   The same gateway binary runs in `local`, `self-host`, or `hosted` mode.
   Remote modes bind to `0.0.0.0`, require `MOA_GATEWAY_TOKEN` and
   `DATABASE_URL`, trust proxy headers only when configured, and should publish a
