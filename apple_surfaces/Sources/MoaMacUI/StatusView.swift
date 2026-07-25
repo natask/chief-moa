@@ -4,8 +4,13 @@ import MoaMacShell
 import SwiftUI
 
 public struct StatusView: View {
-    public init() {}
-    @StateObject private var model = SurfaceModel()
+    @StateObject private var model: SurfaceModel
+    public init() {
+        _model = StateObject(wrappedValue: SurfaceModel())
+    }
+    init(model: SurfaceModel) {
+        _model = StateObject(wrappedValue: model)
+    }
     public var body: some View { Form {
         Text("Moa Mac").font(.title); Text(model.status); Text("Scope: \(model.appName)")
         HStack { Button("Select frontmost app") { model.selectFrontmost() }; Button("Enable Accessibility") { model.requestAccessibility() }; Button("Enable Screen Recording") { model.requestScreenRecording() } }
