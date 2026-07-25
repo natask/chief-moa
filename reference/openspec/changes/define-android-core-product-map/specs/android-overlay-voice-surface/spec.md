@@ -45,30 +45,33 @@ earbud or headset buttons.
 - **WHEN** Android launches Moa through `android.intent.action.ASSIST` or
   `android.intent.action.VOICE_ASSIST`
 - **THEN** the app starts the overlay service
-- **AND** begins a voice turn when overlay and microphone permissions are
+- **AND** begins one latched manual voice turn when overlay and microphone permissions are
   available
+- **AND** does not submit on silence or automatically re-arm after a reply
 
 #### Scenario: Launch from earbud voice command action
 - **WHEN** Android launches Moa through `android.intent.action.VOICE_COMMAND`
   from an earbud or headset assistant gesture
 - **THEN** the app starts the overlay service
-- **AND** begins a voice turn using the same overlay transcript path as an orb
-  tap
+- **AND** begins a latched manual voice turn using the same overlay transcript
+  path as an orb tap
 
-#### Scenario: Assistant launch keeps listening after replies
-- **WHEN** Android launches Moa through an assistant or voice-command action
-  and the spoken response finishes
-- **THEN** the current response card clears
-- **AND** the overlay starts the next listening turn without requiring a new
-  assistant-button launch
-- **AND** a user stop gesture cancels the continuous loop locally
+#### Scenario: Repeated invocation commits the latched turn
+- **WHEN** an assistant-, voice-command-, or launcher-started voice turn is active
+- **AND** the user invokes the same entry again or single-clicks the orb
+- **THEN** Android commits that turn exactly once
+- **AND** does not re-arm the microphone after the reply
+
+#### Scenario: Hold remains push-to-talk after invocation
+- **WHEN** an invocation-started manual turn is active and the user holds the orb
+- **THEN** Android replaces it locally with push-to-talk capture
+- **AND** release commits the push-to-talk turn exactly once
 
 #### Scenario: Assistant launch before required permissions
 - **WHEN** Android launches Moa through an assistant or voice-command action
   before overlay or microphone permission is available
-- **THEN** the app opens the setup surface
-- **AND** preserves the user's intent to start the overlay after permissions are
-  granted
+- **THEN** the app shows a bounded permission hint without pretending capture
+  started
 
 #### Scenario: Media button is not an assistant command
 - **WHEN** a normal headset media play/pause button is routed to the active media
@@ -92,6 +95,17 @@ The Android app SHALL show current speech text while the user is speaking.
 - **THEN** the visible user transcript fades out
 - **AND** the assistant response appears in the same compact voice surface
 - **AND** previous voice-turn messages are not shown in that surface
+
+### Requirement: Launcher Opens The Overlay
+The normal Android launcher entry SHALL invoke the same single overlay voice
+surface as Android Assistant rather than opening the full control center.
+
+#### Scenario: User taps the app icon
+- **WHEN** the required overlay and microphone permissions are available and the
+  user taps the A.G. launcher icon
+- **THEN** Android starts or reuses the one overlay service
+- **AND** starts or commits the current latched manual turn
+- **AND** does not render `MainActivity`
 
 ### Requirement: Reviewable Tap Voice Draft
 When voice-first gestures are enabled, the Android overlay SHALL treat a tap

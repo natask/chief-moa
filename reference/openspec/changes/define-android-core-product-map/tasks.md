@@ -167,3 +167,21 @@ signal completed without a client acknowledgement.
       session rather than only future connections.
 - [ ] 13.4 Complete physical-phone QA for system-inset placement, scroll touch,
       low-opacity discoverability, TTS delivery, and drag-to-remove behavior.
+
+## 14. Overlay-First Android Invocation
+
+- [x] 14.1 Route the normal launcher icon through the thin Assistant activity
+      instead of rendering the full control center.
+- [x] 14.2 Make launcher, Assistant, voice-assist, and voice-command invocations
+      start/commit one manual latched turn without silence auto-submit or re-arm.
+- [x] 14.3 Keep orb hold/release as push-to-talk while an invoked turn is open.
+- [x] 14.4 Keep the control center reachable through the explicit launcher
+      Settings shortcut, notification, Quick Settings, and spoken/typed "show
+      app UI" commands.
+- [ ] 14.5 Complete physical-phone QA for launcher reuse, repeated Assistant
+      invocation, orb click commit, orb hold/release, and permission hints.
+
+Verification evidence: Android JVM tests and `assembleDebug` pass. The merged
+APK manifest has exactly one `MAIN`/`LAUNCHER` entry on `MoaAssistActivity`;
+`MainActivity` has none. Strict OpenSpec validation is locally blocked because
+the installed CLI cannot import its `commander` dependency.
