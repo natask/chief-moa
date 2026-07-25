@@ -170,3 +170,11 @@ signal completed without a client acknowledgement.
 - [x] 13.5 Give each finalized voice row an explicit Copy control that places
       the exact transcript on the Android clipboard and shows a visible copied
       receipt; keep partial streaming rows non-copyable until finalized.
+- [ ] 13.6 Publish and physically smoke the transcript-copy Android OTA.
+
+Release evidence: commit `b99379b0` built candidate
+`ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256
+`a5f0692eab128ad0e257458e5acd82275e6537ac62f7770e76a34bb31f5e969d`).
+The VPS backup/preflight gate failed before publication, so the active OTA head
+did not move. No authorized phone was attached; the candidate is neither
+installed nor physically smoked.
