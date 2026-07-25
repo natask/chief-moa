@@ -63,7 +63,7 @@ async function gatewayFetch(path, init = {}) {
   return fetch(GATEWAY_URL + path, { ...init, headers, signal: AbortSignal.timeout(30000) });
 }
 
-function runSmoke(label, extraEnv = {}) {
+function runSmokeOnce(label, extraEnv = {}) {
   return new Promise((resolveRun) => {
     const child = spawn(process.execPath, [join(root, "scripts", "smoke-live-voice-main.mjs")], {
       cwd: root,
@@ -94,6 +94,17 @@ function runSmoke(label, extraEnv = {}) {
   });
 }
 
+async function runSmoke(label, extraEnv = {}) {
+  const first = await runSmokeOnce(label, extraEnv);
+  if (first.passed) return { ...first, attempts: 1 };
+  const second = await runSmokeOnce(label, extraEnv);
+  return {
+    ...second,
+    attempts: 2,
+    first_attempt_error: first.stderr_tail || first.stdout_tail || `exit ${first.exit_code}`,
+  };
+}
+
 async function synthesizeAmharicPcm() {
   const resp = await gatewayFetch("/v1/internal/voice/synthesize", {
     method: "POST",
@@ -122,7 +133,34 @@ async function readBackTurns(turnIds) {
     try {
       const resp = await gatewayFetch(`/v1/voice/turns/${encodeURIComponent(turnId)}`);
       const body = await resp.json().catch(() => ({}));
-      readback.turns.push({ turn_id: turnId, http_status: resp.status, record: body });
+      const voice = body?.references?.voice_session || {};
+      readback.turns.push({
+        turn_id: turnId,
+        http_status: resp.status,
+        record: {
+          turn_id: body.turn_id || "",
+          session_id: body.session_id || "",
+          classification: body.classification || "",
+          source: body.source || "",
+          transcript: body.transcript || "",
+          transcript_source: body.transcript_source || "",
+          assistant_text: body.assistant_text || "",
+          created_at: body.created_at || "",
+          updated_at: body.updated_at || "",
+          voice_session: {
+            provider: voice.provider || "",
+            model: voice.model || "",
+            input_languages: voice.input_languages || [],
+            reply_language: voice.reply_language || "",
+            tts_spoke: Boolean(voice.tts_spoke),
+            tts_error: voice.tts_error || "",
+            stage_timings: voice.stage_timings || {},
+            capture: voice.capture || {},
+            transport: voice.transport || {},
+            assistant_audio: voice.assistant_audio || {},
+          },
+        },
+      });
     } catch (e) {
       readback.turns.push({ turn_id: turnId, error: String(e.message || e) });
     }
@@ -139,9 +177,18 @@ async function main() {
   // Leg 1: runtime provider selection.
   const healthResp = await gatewayFetch("/health");
   const health = await healthResp.json();
+  const runtimeProvider = health.voice_stream?.provider || {};
   evidence.legs.health = {
     http_status: healthResp.status,
-    voice_stream: health.voice_stream || null,
+    voice_stream: {
+      runtime_mode: runtimeProvider.runtime_mode || "",
+      configured: Boolean(runtimeProvider.configured),
+      provider: runtimeProvider.provider || "",
+      selected_providers: runtimeProvider.selected_providers || {},
+      model: runtimeProvider.model || "",
+      input_audio_format: runtimeProvider.input_audio_format || null,
+      assistant_audio_format: runtimeProvider.assistant_audio_format || null,
+    },
     version: health.version || health.git || null,
   };
   console.log(`health: ${healthResp.status}, voice provider: ${JSON.stringify(health.voice_stream?.provider ?? health.voice_stream ?? null).slice(0, 200)}`);
@@ -180,12 +227,22 @@ async function main() {
   console.log(`evidence written: ${outPath}`);
 
   const englishOk = Boolean(evidence.legs.english_turn?.passed);
-  const storedOk = (evidence.legs.stored_readback.turns || []).some((t) => t.http_status === 200);
-  if (!englishOk) {
-    console.error("RESULT: live proof NOT established (English browser turn failed)");
+  const amharicOk = Boolean(evidence.legs.amharic_turn?.passed);
+  const storedTurns = evidence.legs.stored_readback.turns || [];
+  const storedOk = storedTurns.length === 2 && storedTurns.every((turn) => (
+    turn.http_status === 200
+      && turn.record?.voice_session?.provider
+      && turn.record?.voice_session?.tts_spoke
+      && turn.record?.voice_session?.assistant_audio?.bytes > 0
+  ));
+  if (!englishOk || !amharicOk || !storedOk) {
+    console.error(
+      "RESULT: live proof NOT established "
+        + `(english=${englishOk}, amharic=${amharicOk}, canonical_stored_turns=${storedOk})`,
+    );
     process.exit(1);
   }
-  console.log(`RESULT: live browser voice turn PROVEN end to end${storedOk ? " with stored-turn readback" : " (stored readback incomplete — inspect evidence)"}`);
+  console.log("RESULT: English + Amharic live browser voice turns PROVEN end to end with canonical stored-turn readback");
 }
 
 main().catch((error) => {
