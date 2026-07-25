@@ -55,3 +55,4 @@
 - Added sent-message history search and archived voice PCM playback refs — agent: Codex/GPT-5 — entire checkpoint: intent-history-voice-playback
 - Fixed Vertex Live voice to use regional endpoints instead of `global` — agent: Codex/GPT-5 — c6eb268
 - Audited gateway production LOC and ordered semantic reduction opportunities with behavior, runtime, performance, migration, and rollback evidence gates — agent: Codex/GPT-5 — a6e64c5
+- Reconciled repeated and overlapping streaming STT finals before canonical transcript storage — Codex: GPT-5 — 54a5b209

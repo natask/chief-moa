@@ -26,6 +26,10 @@ alignment.
   no reasoning or TTS stage.
 - [x] 0B.2 Route the existing macOS global summon to start/finish dictation and
   copy the final transcript to the clipboard.
+- [x] 0B.4 Make long-form streaming transcript assembly idempotent for repeated
+  provider result identities and reconcile meaningful rotation/reconnect
+  overlap without deleting short deliberate repetition. Verify sanitized
+  English and Amharic fixtures through the gateway final-turn path.
 - [x] 0B.3 Preserve explicit configured input-language evidence and the canonical
   retained voice turn while keeping agent dispatch out of this path.
 - [x] 0B.4 Make the extension worker authoritative for the one active dictation

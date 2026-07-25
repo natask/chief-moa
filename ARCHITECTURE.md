@@ -111,6 +111,12 @@ Moa Gateway
   after the latency-sensitive transcript/clipboard result and may reconcile
   idempotently from completed turns after a restart.
 
+  Streaming STT treats provider hypotheses as replacements, not append-only
+  text. Final result identities are idempotent within a provider stream, while
+  bounded word overlap reconciles stream rotation and reconnect boundaries.
+  Only the reconciled final transcript may enter the canonical turn,
+  capture-block projection, clipboard result, or downstream message.
+
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
   build/test commands, desktop/browser/server automation.
