@@ -593,6 +593,10 @@ grep -Fq "docker exec -i \"\$gateway_container\" node -" "$SYNC_SCRIPT" || {
   echo "Public OTA verification must use the running gateway container token" >&2
   exit 1
 }
+grep -Fq -- "--filter label=com.docker.compose.container-number=1" "$SYNC_SCRIPT" || {
+  echo "Public OTA verification must select the Compose-owned gateway, not a worker with spoofable broad labels" >&2
+  exit 1
+}
 grep -Fq 'process.env.MOA_GATEWAY_TOKEN' "$SYNC_SCRIPT" || {
   echo "Public OTA verification must read auth only inside the gateway container" >&2
   exit 1

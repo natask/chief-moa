@@ -1,4 +1,5 @@
 - Extracted focused overlay support types so OverlayService returns to its guarded source-size ceiling without changing runtime behavior — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
+- Bound OTA public verification to the Compose-owned gateway container so worker labels cannot make exact publication retries ambiguous — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Made Android OTA publication verify the exact public HTTPS origin supplied by the deployment authority instead of relying on an optional container alias — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Made Android launcher and Assistant invocations reuse one manual latched overlay turn while keeping the control center explicit — agent: Codex/GPT-5 — 4b4d6a1e
 - Made Android overlay launches converge on one orb owner, applied the existing 70% mobile size with live resize geometry, and raised idle visibility to 30% while preserving hold-drag and removal — agent: Codex/GPT-5 — 365f4e2d
