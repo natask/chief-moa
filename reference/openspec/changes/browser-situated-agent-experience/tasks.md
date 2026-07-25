@@ -273,6 +273,15 @@ change action authority; stop remains reachable from the workspace.
 Acceptance: listening/thinking/explaining/waiting/acting/done/error reactions
 use known packaged motions only and remain functional with custom appearance.
 
+- [x] 8.3 Keep one compact mascot root per top-level page, reduce the fresh
+      desktop mascot and its pointer-blocking hit target, and use a smaller
+      phone-width default without overriding a user-persisted scale.
+
+Acceptance: real-extension smoke reinjects the content script after adding a
+stale duplicate and still finds one `#agee-root`; desktop and 375px-wide
+fixtures measure the compact defaults; the existing pointer gesture checks
+continue to prove drag, hold-to-talk, toggle capture, and send-on-release.
+
 ## 9. Tutorial Workflow
 
 - [ ] 9.1 Define a tutorial as a saved goal, ordered steps, anchor refs,
