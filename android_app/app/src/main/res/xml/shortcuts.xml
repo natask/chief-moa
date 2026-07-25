@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_moa_orb"
+        android:shortcutId="control_center"
+        android:shortcutLongLabel="@string/control_center_shortcut_long"
+        android:shortcutShortLabel="@string/control_center_shortcut_short">
+        <intent
+            android:action="ai.moa.assistant.action.SHOW_CONTROL_CENTER"
+            android:targetClass="ai.moa.assistant.MainActivity"
+            android:targetPackage="ai.moa.assistant" />
+    </shortcut>
+</shortcuts>

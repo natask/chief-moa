@@ -442,9 +442,11 @@ Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
 drag repositions the orb without starting voice, and double-click-and-hold is
 the manual push-to-talk path. Recording starts only after the second press is
 held briefly, and release commits the turn without waiting for silence
-detection. Continuous voice is an optional secondary loop for launch paths that
-do not have a release event, where silence commits each turn and the mic re-arms
-after the reply. The browser extension
+detection. Android launcher and standard Assistant/voice-command entry are
+manual toggles: the first invocation starts one latched current-thread capture
+and the next invocation or matching orb click commits it. They never use silence
+to submit or re-arm after a reply. A still orb hold remains push-to-talk and
+release sends. The browser extension
 mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
 Cmd+. (Ctrl+.) mirrors the browser mark's double-click voice path. A quick
 Cmd+. tap, or a quick mark double-click, toggles a manual voice turn on; the
@@ -1867,7 +1869,10 @@ queues.
 ## Source Map
 
 - `android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
-  setup/full-app entry surface.
+  explicit setup/full-app control-center surface.
+- `android_app/app/src/main/java/ai/moa/assistant/MoaAssistActivity.java`:
+  launcher and Android Assistant/voice-command entry that forwards into the
+  single overlay service without rendering the full app.
 - `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
   floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:

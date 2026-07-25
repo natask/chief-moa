@@ -141,6 +141,7 @@ public final class OverlayService extends Service {
     private boolean nextStreamingTurnFollowsActiveRun;
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
+    private boolean voiceInvocationLatched;
     private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
     private boolean recordModeEnabled;
@@ -272,7 +273,7 @@ public final class OverlayService extends Service {
         loadSettings();
         Log.i(TAG, "onStartCommand id=" + startId
                 + " action=" + (intent == null ? "" : intent.getAction())
-                + " startVoice=" + shouldStartVoice(intent));
+                + " voiceInvocation=" + isVoiceInvocation(intent));
         if (!Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -292,8 +293,8 @@ public final class OverlayService extends Service {
             collapseInteractiveSurfaces();
             return START_STICKY;
         }
-        if (shouldStartVoice(intent)) {
-            mainHandler.post(this::startContinuousStreamingVoiceTurn);
+        if (isVoiceInvocation(intent)) {
+            mainHandler.post(this::handleVoiceInvocation);
         }
         return START_STICKY;
     }
@@ -522,7 +523,8 @@ public final class OverlayService extends Service {
                 this::handleOrbSingleTap, this::handleOrbDoublePressStart,
                 this::handleOrbVoicePressRelease, this::beginWarmMic,
                 this::discardWarmMic,
-                () -> MoaPrefs.voiceFirstGestures(this),
+                () -> MoaPrefs.voiceFirstGestures(this) || voiceInvocationLatched
+                        || reviewableVoiceDraftActive(),
                 this::manualTapCaptureOrigin,
                 this::handleOrbStartTalkLoop, this::handleOrbStopAndSend,
                 this::handleOrbStartFreshTalkLoop, this::handleOrbCancelTalkLoop,
@@ -936,8 +938,7 @@ public final class OverlayService extends Service {
     }
 
     private boolean reviewableVoiceDraftActive() {
-        return MoaPrefs.voiceFirstGestures(this)
-                && continuousVoiceLoop
+        return continuousVoiceLoop
                 && !pushToTalkVoiceTurn
                 && !currentStreamingTurnCommitRequested
                 && (voiceRuntimeState == VoiceRuntimeState.LISTENING
@@ -1022,6 +1023,7 @@ public final class OverlayService extends Service {
     }
 
     private void discardVoiceDraft() {
+        voiceInvocationLatched = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
@@ -1038,9 +1040,10 @@ public final class OverlayService extends Service {
     }
 
     private void sendVoiceDraft() {
-        if (!reviewableVoiceDraftActive()) {
+        if (!voiceInvocationLatched && !reviewableVoiceDraftActive()) {
             return;
         }
+        voiceInvocationLatched = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
@@ -2578,7 +2581,7 @@ public final class OverlayService extends Service {
     // True only while the user owns an open manual capture. Assistant playback
     // and reasoning are not capture: tapping then interrupts and starts a new turn.
     private boolean isManualTapCaptureActive() {
-        return audioNoteActive || reviewableVoiceDraftActive();
+        return audioNoteActive || voiceInvocationLatched || reviewableVoiceDraftActive();
     }
 
     private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin() {
@@ -2618,6 +2621,20 @@ public final class OverlayService extends Service {
             return;
         }
         sendVoiceDraft();
+    }
+
+    private void handleVoiceInvocation() {
+        MoaVoiceInvocationPolicy.Action action = MoaVoiceInvocationPolicy.decide(
+                voiceInvocationLatched || reviewableVoiceDraftActive(),
+                pushToTalkVoiceTurn || audioNoteActive);
+        if (action == MoaVoiceInvocationPolicy.Action.COMMIT_LATCHED_CAPTURE) {
+            sendVoiceDraft();
+            return;
+        }
+        if (action == MoaVoiceInvocationPolicy.Action.START_LATCHED_CAPTURE) {
+            voiceInvocationLatched = true;
+            handleOrbStartTalkLoop();
+        }
     }
 
     private void handleOrbStartFreshTalkLoop() {
@@ -2691,6 +2708,7 @@ public final class OverlayService extends Service {
     }
 
     private void startPushToTalkVoiceTurn() {
+        voiceInvocationLatched = false;
         if (streamingVoiceActive() || voiceController.isActive() || voiceSamplePlayer != null || continuousVoiceLoop || pendingContinuousVoiceRestart != null) {
             dismissOverlayUi(false);
         }
@@ -2870,6 +2888,7 @@ public final class OverlayService extends Service {
     // rows must persist and the new turn appends to them. A genuine user close
     // (Done button, tap-outside, end-loop) clears the stack.
     private void dismissOverlayUi(boolean clearVoiceLog) {
+        voiceInvocationLatched = false;
         cancelAudioNoteCapture();
         discardWarmMic();
         pushToTalkVoiceTurn = false;
@@ -2899,6 +2918,7 @@ public final class OverlayService extends Service {
     // but remove large overlay surfaces so settings and operational status are
     // usable without the overlay stealing focus.
     private void collapseInteractiveSurfaces() {
+        voiceInvocationLatched = false;
         cancelAudioNoteCapture();
         discardWarmMic();
         cancelVoiceSampler();
@@ -3219,14 +3239,6 @@ public final class OverlayService extends Service {
         startStreamingVoiceTurn(autoCommitOnSilence, false);
     }
 
-    private void startContinuousStreamingVoiceTurn() {
-        if (!streamingVoiceAvailable()) {
-            startLocalVoiceTurn(false, false);
-            return;
-        }
-        startStreamingVoiceTurn(true, true);
-    }
-
     private void startReviewableVoiceDraft() {
         if (!streamingVoiceAvailable()) {
             startLocalVoiceTurn(true, true);
@@ -3538,6 +3550,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                voiceInvocationLatched = false;
                 cancelStreamingTurnWatchdog();
                 // turn_done carries the language the assistant actually replied in.
                 // Persist it for the session so the header's "Speaks" segment stays
@@ -3661,6 +3674,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                voiceInvocationLatched = false;
                 cancelStreamingTurnWatchdog();
                 nextStreamingTurnFollowsActiveRun = false;
                 Log.w(TAG, "streaming voice error: " + safe(message), error);
@@ -3891,7 +3905,7 @@ public final class OverlayService extends Service {
         }
     }
 
-    private boolean shouldStartVoice(Intent intent) {
+    private boolean isVoiceInvocation(Intent intent) {
         if (intent == null) {
             return false;
         }

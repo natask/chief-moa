@@ -108,6 +108,7 @@ public final class MoaActionBrokerTest {
         assertTrue(MoaActionBroker.isKnownTool("url.open"));
         assertTrue(MoaActionBroker.isKnownTool("phone.dial"));
         assertTrue(MoaActionBroker.isKnownTool("contact.open"));
+        assertTrue(MoaActionBroker.isKnownTool("ui.control_center"));
         assertFalse(MoaActionBroker.isKnownTool("phone.call"));
 
         assertEquals("navigation", MoaActionBroker.capabilityRisk("url.open"));
@@ -116,6 +117,8 @@ public final class MoaActionBrokerTest {
         assertEquals("target_app_confirmation", MoaActionBroker.capabilityApproval("phone.dial"));
         assertEquals("navigation", MoaActionBroker.capabilityRisk("contact.open"));
         assertEquals("implicit_user_command", MoaActionBroker.capabilityApproval("contact.open"));
+        assertEquals("navigation", MoaActionBroker.capabilityRisk("ui.control_center"));
+        assertEquals("implicit_user_command", MoaActionBroker.capabilityApproval("ui.control_center"));
 
         assertTrue(MoaActionBroker.isKnownTool("media.open"));
         assertTrue(MoaActionBroker.isKnownTool("media.control"));
