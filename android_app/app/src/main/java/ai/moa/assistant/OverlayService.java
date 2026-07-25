@@ -1,5 +1,8 @@
 package ai.moa.assistant;
 
+import static ai.moa.assistant.MoaStrings.cleanError;
+import static ai.moa.assistant.MoaStrings.safe;
+
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -166,17 +169,6 @@ public final class OverlayService extends Service {
     private boolean deviceClientLoopRunning;
     private boolean deviceClientPollInFlight;
 
-    private enum VoiceRuntimeState {
-        READY,
-        LISTENING,
-        SENDING,
-        THINKING,
-        SPEAKING,
-        INTERRUPTED,
-        RECOVERING,
-        ERROR
-    }
-
     @Override
     public void onCreate() {
         super.onCreate();
@@ -303,7 +295,7 @@ public final class OverlayService extends Service {
     public void onDestroy() {
         String pendingToolRequest = toolRequestGate.active();
         if (!pendingToolRequest.isEmpty()) finishClaimedToolRequest(pendingToolRequest,
-                new ToolRequestExecution(false, "Overlay stopped before the local action completed.", null));
+                new MoaToolRequestExecution(false, "Overlay stopped before the local action completed.", null));
         running = false;
         MoaAccessibilityService.cancelActiveYoutubeOperation();
         if (toolConfirmationDialog != null) toolConfirmationDialog.dismiss();
@@ -512,7 +504,8 @@ public final class OverlayService extends Service {
         int size = scaledOrbSizePx();
         orbView = new OrbView(this);
         applyCachedPetVisualState();
-        orbParams = MoaOrbWindowSizing.initialParams(this, size, overlayType(), ORB_EDGE_MARGIN_DP);
+        orbParams = MoaOrbWindowSizing.initialParams(
+                this, size, MoaOverlayWindowType.resolve(), ORB_EDGE_MARGIN_DP);
         orbDragFrameCoalescer = new MoaFrameCoalescer(
                 new MoaViewFrameScheduler(orbView), this::applyLatestOrbDragFrame);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
@@ -608,7 +601,8 @@ public final class OverlayService extends Service {
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
-        orbRemoveTarget = MoaOrbRemoveTarget.show(this, windowManager, overlayType());
+        orbRemoveTarget = MoaOrbRemoveTarget.show(
+                this, windowManager, MoaOverlayWindowType.resolve());
     }
     private void updateOrbDragSurfaces() {
         if (orbDragFrameCoalescer != null) {
@@ -732,7 +726,7 @@ public final class OverlayService extends Service {
         panelParams = new WindowManager.LayoutParams(
                 width,
                 WindowManager.LayoutParams.WRAP_CONTENT,
-                overlayType(),
+                MoaOverlayWindowType.resolve(),
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -839,7 +833,7 @@ public final class OverlayService extends Service {
         int transcriptBodyHeight = MoaOverlayWindowLayout.transcriptBodyHeight(
                 getResources().getDisplayMetrics().heightPixels,
                 getResources().getDisplayMetrics().density);
-        voiceTranscriptScroll = new CappedScrollView(this, transcriptBodyHeight);
+        voiceTranscriptScroll = new MoaCappedScrollView(this, transcriptBodyHeight);
         voiceTranscriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
         voiceTranscriptScroll.setClipToPadding(false);
@@ -868,7 +862,7 @@ public final class OverlayService extends Service {
         transcriptParams = new WindowManager.LayoutParams(
                 width,
                 WindowManager.LayoutParams.WRAP_CONTENT,
-                overlayType(),
+                MoaOverlayWindowType.resolve(),
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -964,14 +958,16 @@ public final class OverlayService extends Service {
             voiceCancelControl = MoaVoiceDraftControls.create(
                     this, "×", "Cancel voice draft", false, dp(42), dp(1));
             voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
-            voiceCancelControlParams = MoaVoiceDraftControls.windowParams(size, overlayType());
+            voiceCancelControlParams = MoaVoiceDraftControls.windowParams(
+                    size, MoaOverlayWindowType.resolve());
             windowManager.addView(voiceCancelControl, voiceCancelControlParams);
         }
         if (voiceSendControl == null) {
             voiceSendControl = MoaVoiceDraftControls.create(
                     this, "↑", "Send voice draft", true, dp(42), dp(1));
             voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
-            voiceSendControlParams = MoaVoiceDraftControls.windowParams(size, overlayType());
+            voiceSendControlParams = MoaVoiceDraftControls.windowParams(
+                    size, MoaOverlayWindowType.resolve());
             windowManager.addView(voiceSendControl, voiceSendControlParams);
         }
     }
@@ -2333,7 +2329,7 @@ public final class OverlayService extends Service {
         String tool = safe(request.optString("tool", ""));
         JSONObject supplied = request.optJSONObject("input");
         final JSONObject input = supplied == null ? new JSONObject() : supplied;
-        ToolRequestExecution execution;
+        MoaToolRequestExecution execution;
         if ("audio.speak".equals(tool)) {
             execution = executeAudioSpeakRequest(input);
         } else {
@@ -2344,7 +2340,7 @@ public final class OverlayService extends Service {
                 return;
             }
             if (result.pending) return;
-            execution = new ToolRequestExecution(result.success, result.reply, result.receipt);
+            execution = new MoaToolRequestExecution(result.success, result.reply, result.receipt);
         }
 
         finishClaimedToolRequest(requestId, execution);
@@ -2357,9 +2353,9 @@ public final class OverlayService extends Service {
             return;
         }
         if (!result.pending) finishClaimedToolRequest(requestId,
-                new ToolRequestExecution(result.success, result.reply, result.receipt));
+                new MoaToolRequestExecution(result.success, result.reply, result.receipt));
     }
-    private void finishClaimedToolRequest(String requestId, ToolRequestExecution execution) {
+    private void finishClaimedToolRequest(String requestId, MoaToolRequestExecution execution) {
         MoaToolReceiptOutbox.Reservation reservation = activeToolReservation;
         if (reservation == null || !requestId.equals(reservation.requestId)) return;
         String tool = activeToolName;
@@ -2402,7 +2398,7 @@ public final class OverlayService extends Service {
                 finishApprovedWhenTargetVisible(requestId, tool, input, 5);
             }
         });
-        if (dialog.getWindow() != null) dialog.getWindow().setType(overlayType());
+        if (dialog.getWindow() != null) dialog.getWindow().setType(MoaOverlayWindowType.resolve());
         dialog.show();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(ignored -> {
             if (!decision[0]) { decision[0] = true; decision[1] = true; dialog.dismiss(); }
@@ -2431,17 +2427,17 @@ public final class OverlayService extends Service {
         MoaActionBroker.ToolExecutionResult result = actionBroker.resolveToolConfirmation(
                 requestId, tool, input, approved,
                 completed -> mainHandler.post(() -> finishClaimedToolRequest(requestId,
-                        new ToolRequestExecution(completed.success, completed.reply, completed.receipt))));
+                        new MoaToolRequestExecution(completed.success, completed.reply, completed.receipt))));
         if (result.pending) return;
         finishClaimedToolRequest(requestId,
-                new ToolRequestExecution(result.success, result.reply, result.receipt));
+                new MoaToolRequestExecution(result.success, result.reply, result.receipt));
     }
 
-    private ToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
+    private MoaToolRequestExecution executeAudioSpeakRequest(JSONObject input) {
         String text = safe(input.optString("text", input.optString("message", input.optString("utterance", ""))));
         if (text.isEmpty()) {
             JSONObject receipt = MoaActionReceiptStore.record(this, "audio.speak", "local_output", "implicit_user_command", "", false, "Speech text is required.");
-            return new ToolRequestExecution(false, "Speech text is required.", receipt);
+            return new MoaToolRequestExecution(false, "Speech text is required.", receipt);
         }
         boolean spoken = voiceController != null && voiceController.speak(text);
         String summary = spoken
@@ -2450,7 +2446,7 @@ public final class OverlayService extends Service {
         JSONObject receipt = MoaActionReceiptStore.record(
                 this, "audio.speak", "local_output", "implicit_user_command",
                 "device_speaker", spoken, summary);
-        return new ToolRequestExecution(spoken, summary, receipt);
+        return new MoaToolRequestExecution(spoken, summary, receipt);
     }
 
     private void postToolRequestReceipt(MoaToolReceiptOutbox.PendingReceipt pending) {
@@ -3956,63 +3952,8 @@ public final class OverlayService extends Service {
         return MoaTextViews.text(this, text, color, sp, bold);
     }
 
-    private int overlayType() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            return WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
-        }
-        return WindowManager.LayoutParams.TYPE_PHONE;
-    }
-
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private String safe(String value) {
-        return value == null ? "" : value.trim();
-    }
-
-    private String cleanError(Throwable error) {
-        String message = error.getMessage();
-        if (message == null || message.trim().isEmpty()) {
-            message = error.getClass().getSimpleName();
-        }
-        message = message.replace('\n', ' ').replace('\r', ' ').trim();
-        if (message.length() > 180) {
-            return message.substring(0, 180);
-        }
-        return message;
-    }
-
-    private static final class CappedScrollView extends ScrollView {
-        private final int maxHeight;
-
-        CappedScrollView(android.content.Context context, int maxHeight) {
-            super(context);
-            this.maxHeight = maxHeight;
-        }
-
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int parentMode = View.MeasureSpec.getMode(heightMeasureSpec);
-            int parentSize = View.MeasureSpec.getSize(heightMeasureSpec);
-            int cap = parentMode == View.MeasureSpec.UNSPECIFIED || parentSize <= 0
-                    ? maxHeight
-                    : Math.min(parentSize, maxHeight);
-            int cappedHeight = View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST);
-            super.onMeasure(widthMeasureSpec, cappedHeight);
-        }
-    }
-
-    private static final class ToolRequestExecution {
-        final boolean success;
-        final String summary;
-        final JSONObject receipt;
-
-        ToolRequestExecution(boolean success, String summary, JSONObject receipt) {
-            this.success = success;
-            this.summary = summary == null ? "" : summary.trim();
-            this.receipt = receipt;
-        }
     }
 
 }
