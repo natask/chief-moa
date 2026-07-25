@@ -186,6 +186,30 @@ async function testProviderRetryAndOverlapReconciliation() {
   console.log("  A2 provider retry + multilingual overlap reconciliation: ok");
 }
 
+async function testCumulativeFinalStaircaseReplacement() {
+  const opened = [];
+  const session = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const stream = opened[0];
+  const prefix = "Draft the release note";
+  const middle = `${prefix} እሺ then verify the package`;
+  const complete = `${middle} before publishing the result`;
+  stream.emitData([{ transcript: prefix, isFinal: true, segmentId: "4:0" }]);
+  stream.emitData([{ transcript: middle, isFinal: true, segmentId: "8:0" }]);
+  stream.emitData([{ transcript: complete, isFinal: true, segmentId: "12:0" }]);
+  assert.equal((await session.finalize()).text, complete,
+    "cumulative A; A+B; A+B+C finals replace the prefix and retain an isolated language token once");
+  console.log("  A3 cumulative-final staircase replacement: ok");
+}
+
 function chirpProviderEnv(extra = {}) {
   return {
     VOICE_PROVIDER: "chirp",
@@ -478,6 +502,7 @@ function sentEvents(ws) {
 async function main() {
   await testRotationAndPartials();
   await testProviderRetryAndOverlapReconciliation();
+  await testCumulativeFinalStaircaseReplacement();
   await testV2BidiMethodSelection();
   await testBatchFallbackOnStreamingError();
   await testWindowedBatchSplit();
