@@ -51,12 +51,12 @@ public final class OverlayService extends Service {
     static final String ACTION_ASSIST_BUTTON = "ai.moa.assistant.action.ASSIST_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
     static final String ACTION_HIDE_OVERLAY = "ai.moa.assistant.action.HIDE_OVERLAY";
+    static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
     private static final int MAX_GATEWAY_MESSAGES = 24;
     private static final int MAX_AGENT_PROMPT_CHARS = 12000;
-    private static final int ORB_WINDOW_DP = 96;
     private static final int ORB_EDGE_MARGIN_DP = 16;
     private static final int OVERLAY_NOTIFICATION_ID = 5701;
     private static final long VOICE_RESPONSE_HOLD_MS = 1200;
@@ -73,7 +73,7 @@ public final class OverlayService extends Service {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<ChatMessage> messages = new ArrayList<>();
-
+    private static final MoaOverlayOwner OVERLAY_OWNER = new MoaOverlayOwner();
     private MoaActionBroker actionBroker;
     private WindowManager windowManager;
     private OrbView orbView;
@@ -283,6 +283,10 @@ public final class OverlayService extends Service {
         }
         if (orbView == null) {
             showOrb();
+        }
+        if (ACTION_REFRESH_ORB_SCALE.equals(intent != null ? intent.getAction() : null)) {
+            applyOrbScale();
+            return START_STICKY;
         }
         if (ACTION_COLLAPSE_SURFACES.equals(intent != null ? intent.getAction() : null)) {
             collapseInteractiveSurfaces();
@@ -500,25 +504,14 @@ public final class OverlayService extends Service {
     }
 
     private void showOrb() {
-        if (!Settings.canDrawOverlays(this) || orbView != null) {
+        if (!Settings.canDrawOverlays(this) || orbView != null || !OVERLAY_OWNER.claim(this)) {
             return;
         }
 
-        int size = dp(ORB_WINDOW_DP);
+        int size = scaledOrbSizePx();
         orbView = new OrbView(this);
         applyCachedPetVisualState();
-        orbParams = new WindowManager.LayoutParams(
-                size,
-                size,
-                overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        orbParams.gravity = Gravity.TOP | Gravity.START;
-        orbParams.x = getResources().getDisplayMetrics().widthPixels - size - dp(ORB_EDGE_MARGIN_DP);
-        orbParams.y = dp(164);
+        orbParams = MoaOrbWindowSizing.initialParams(this, size, overlayType(), ORB_EDGE_MARGIN_DP);
         orbDragFrameCoalescer = new MoaFrameCoalescer(
                 new MoaViewFrameScheduler(orbView), this::applyLatestOrbDragFrame);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
@@ -526,27 +519,35 @@ public final class OverlayService extends Service {
                 orbParams,
                 size,
                 ORB_EDGE_MARGIN_DP,
-                this::handleOrbSingleTap,
-                this::handleOrbDoublePressStart,
-                this::handleOrbVoicePressRelease,
-                this::beginWarmMic,
+                this::handleOrbSingleTap, this::handleOrbDoublePressStart,
+                this::handleOrbVoicePressRelease, this::beginWarmMic,
                 this::discardWarmMic,
                 () -> MoaPrefs.voiceFirstGestures(this),
                 this::manualTapCaptureOrigin,
-                this::handleOrbStartTalkLoop,
-                this::handleOrbStopAndSend,
-                this::handleOrbStartFreshTalkLoop,
-                this::handleOrbCancelTalkLoop,
-                this::showPanel,
-                this::handleOrbPushToTalkCancel,
-                this::showOrbRemoveTarget,
-                this::updateOrbDragSurfaces,
+                this::handleOrbStartTalkLoop, this::handleOrbStopAndSend,
+                this::handleOrbStartFreshTalkLoop, this::handleOrbCancelTalkLoop,
+                this::showPanel, this::handleOrbPushToTalkCancel,
+                this::showOrbRemoveTarget, this::updateOrbDragSurfaces,
                 this::finishOrbDrag
         ));
 
-        orbView.setAlpha(0.10f);
-
+        orbView.setAlpha(MoaOrbPresentation.IDLE_ALPHA);
         windowManager.addView(orbView, orbParams);
+    }
+
+    private int scaledOrbSizePx() {
+        return dp(MoaOrbPresentation.scaledWindowDp(MoaPrefs.orbScalePercent(this)));
+    }
+
+    private void applyOrbScale() {
+        if (orbView == null || orbParams == null) {
+            showOrb();
+            return;
+        }
+        int size = scaledOrbSizePx();
+        MoaOrbWindowSizing.resize(
+                this, windowManager, orbView, orbParams, size, ORB_EDGE_MARGIN_DP);
+        updateAnchoredSurfacePositions();
     }
 
     private void removeOrb() {
@@ -554,6 +555,7 @@ public final class OverlayService extends Service {
             windowManager.removeView(orbView);
             orbView = null;
         }
+        OVERLAY_OWNER.release(this);
     }
 
     private void positionSurfaceNearOrb(View surface, WindowManager.LayoutParams params) {
@@ -563,7 +565,7 @@ public final class OverlayService extends Service {
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int margin = dp(10);
-        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+        int orbSize = orbParams.width > 0 ? orbParams.width : scaledOrbSizePx();
         int surfaceWidth = params.width > 0 ? params.width : Math.min(screenWidth - margin * 2, dp(380));
         MoaOverlayWindowLayout.positionAnchored(
                 windowManager, surface, params, screenWidth, screenHeight, margin, dp(12),
@@ -596,7 +598,7 @@ public final class OverlayService extends Service {
     private void attachSurfaceHeaderDrag(View header) {
         if (header == null || orbView == null || orbParams == null) return;
         header.setOnTouchListener(new MoaOverlayGroupDragListener(
-                this, windowManager, orbView, orbParams, dp(ORB_WINDOW_DP),
+                this, windowManager, orbView, orbParams, scaledOrbSizePx(),
                 dp(ORB_EDGE_MARGIN_DP), this::hideKeyboard, this::updateAnchoredSurfacePositions));
     }
 
@@ -636,7 +638,7 @@ public final class OverlayService extends Service {
         }
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+        int orbSize = orbParams.width > 0 ? orbParams.width : scaledOrbSizePx();
         boolean active = MoaOrbOverlayGeometry.isInRemoveTarget(
                 screenWidth,
                 screenHeight,
@@ -988,7 +990,7 @@ public final class OverlayService extends Service {
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         int controlSize = voiceCancelControlParams.width;
-        int orbSize = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
+        int orbSize = orbParams.width > 0 ? orbParams.width : scaledOrbSizePx();
         int gap = dp(8);
         int margin = dp(12);
 

@@ -11,6 +11,13 @@ The Android app SHALL provide an overlay control that remains available above ot
 - **WHEN** the user leaves the Moa app
 - **THEN** the assistant orb remains available without opening the full Moa app
 
+#### Scenario: Multiple launch paths target the running overlay
+- **WHEN** the app, assistant intent, or quick tile starts the overlay while it
+  is already active
+- **THEN** Android keeps one overlay service owner and one orb window
+- **AND** routes the new invocation to that existing owner instead of attaching
+  another orb
+
 ### Requirement: Tap-Based Voice Loop
 The overlay SHALL make the primary voice loop available through simple orb gestures.
 
@@ -171,10 +178,16 @@ The Android overlay SHALL provide discoverable local ways to remove the orb.
 The Android overlay SHALL remain available without visually dominating the
 current app.
 
-#### Scenario: Idle orb is barely visible
+#### Scenario: Idle orb stays visible without dominating the screen
 - **WHEN** the orb is idle and not touched
-- **THEN** Android renders it at approximately ten percent opacity
+- **THEN** Android renders the default orb at seventy percent of its 96dp base
+  window and approximately thirty percent opacity
 - **AND** pressing or dragging the orb restores full opacity for the gesture
+
+#### Scenario: User changes orb size
+- **WHEN** the user changes the orb-size setting while the overlay is active
+- **THEN** Android resizes the existing orb window without creating a second one
+- **AND** updates its drag bounds and anchored card placement for the new size
 
 ### Requirement: Stable Scrollable Voice Transcript
 The Android overlay SHALL give the voice transcript a stable viewport instead

@@ -171,6 +171,9 @@ signal completed without a client acknowledgement.
       the exact transcript on the Android clipboard and shows a visible copied
       receipt; keep partial streaming rows non-copyable until finalized.
 - [ ] 13.6 Publish and physically smoke the transcript-copy Android OTA.
+- [x] 13.7 Make every Android overlay launch path reuse one process owner and
+      one orb window; apply the existing 70% default size and live size refresh,
+      use 30% idle opacity, and preserve hold-drag and drag-to-remove geometry.
 
 Release evidence: commit `b99379b0` built candidate
 `ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256
