@@ -1,3 +1,4 @@
+- Added Chief MOA-owned file-URL consent detection, tab focus, bounded console/network diagnostics, and gateway-receipted browser control release 0.1.91 — agent: Codex/GPT-5 — 10057037
 - Kept an explicit retryable Copy control on completed dictation cards, bound to the exact final transcript without launching agent work — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Kept one browser mascot root while shrinking fresh desktop and phone-width defaults with real-extension size, ownership, and gesture coverage — agent: codex/gpt-5 — 376252e5
 - Preserved the first 500 ms of browser voice and audio-note speech with permission-safe gesture warm-up and release 0.1.84 — agent: codex/gpt-5 — b0749b79
