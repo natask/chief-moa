@@ -42,7 +42,6 @@ function joinTranscript(a, b) {
   if (!left) return right;
   if (!right) return left;
   if (right.startsWith(`${left} `)) return right;
-  if (left.endsWith(` ${right}`)) return left;
 
   // Providers may resend a finalized hypothesis after a retry/reconnect, or
   // start a replacement stream with a short recognition overlap. Reconcile a
@@ -51,6 +50,7 @@ function joinTranscript(a, b) {
   // without provider identity they are valid speech, not safe duplicates.
   const leftWords = transcriptWords(left);
   const rightWords = transcriptWords(right);
+  if (rightWords.length >= 3 && left.endsWith(` ${right}`)) return left;
   const maxOverlap = Math.min(leftWords.length, rightWords.length);
   for (let count = maxOverlap; count >= 3; count -= 1) {
     const leftOffset = leftWords.length - count;
