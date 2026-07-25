@@ -1118,6 +1118,11 @@ class VoiceSessionConnection {
     // fire after the turn is done. Cleared synchronously (clearInterval) before
     // the awaited send, so the interval cannot slip a tick in on the yield.
     this.stopTurnProgress();
+
+    // Persist first: turn_done is a receipt consumers can immediately read.
+    const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
+    turn.status = hasPlaybackTail ? "playback" : "completed";
+    writeTurnMetadata(turn, { status: "completed", completed_at: nowIso() });
     await this.sendEvent({
       type: "turn_done",
       session_id: turn.sessionId,
@@ -1146,12 +1151,6 @@ class VoiceSessionConnection {
     // tail. Keep audio turns addressable until the client closes or replaces
     // the session so a barge-in during that tail can report its checkpoint.
     // Text-only turns still close immediately for old-client compatibility.
-    const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
-    turn.status = hasPlaybackTail ? "playback" : "completed";
-    writeTurnMetadata(turn, {
-      status: "completed",
-      completed_at: nowIso(),
-    });
     if (!hasPlaybackTail && this.turn === turn) {
       this.turn = null;
     }

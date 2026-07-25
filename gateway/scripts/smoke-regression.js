@@ -487,9 +487,10 @@ async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
   assert.equal(otherDeviceProfile.profile.voice, "Charon", "other devices should inherit global voice");
   assert.equal(otherDeviceProfile.profile.input_languages, "en-US", "other devices should inherit global input language");
 
-  // A spoken, deterministic profile-control change (voice) applies device-scoped.
-  // Language is model-owned now and no longer routes through the spoken parser, so
-  // this uses a voice change to exercise device-scoped spoken updates.
+  // The model-less HTTP path may classify a clear spoken device-scoped change,
+  // but it must fail closed instead of letting deterministic transcript matching
+  // mutate the profile. Real voice pipelines offer the model a settings tool;
+  // this regression gateway intentionally has no configured model provider.
   const spokenDeviceUpdate = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "profile_scope_session",
     branch_id: "default",
@@ -500,12 +501,19 @@ async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
   });
   assert.equal(spokenDeviceUpdate.status, 200);
   assert.equal(spokenDeviceUpdate.json.classification, "profile_control");
-  assert.equal(spokenDeviceUpdate.json.profile.scope, "device");
-  assert.equal(spokenDeviceUpdate.json.profile.device_id, deviceA);
-  assert.equal(spokenDeviceUpdate.json.profile.voice, "Aoede");
+  assert.equal(spokenDeviceUpdate.json.scope, "device");
+  assert.equal(spokenDeviceUpdate.json.device_id, deviceA);
+  assert.ok(
+    spokenDeviceUpdate.json.actions?.some(
+      (action) => action.type === "profile_update_blocked"
+        && action.reason === "unconfirmed_voice_mutation",
+    ),
+    "model-less spoken profile mutation must be blocked",
+  );
+  assert.equal(spokenDeviceUpdate.json.profile.voice, "Kore");
 
   const afterSpokenDevice = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
-  assert.equal(afterSpokenDevice.profile.voice, "Aoede", "spoken profile control must update only this device");
+  assert.equal(afterSpokenDevice.profile.voice, "Kore", "blocked spoken profile control must preserve the device override");
   const afterSpokenGlobal = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(afterSpokenGlobal.profile.voice, "Charon", "spoken device update must not mutate global voice");
 
