@@ -31,7 +31,8 @@ public final class MoaVoiceTranscriptLogTest {
     public void partialsUpdateTheCurrentRowInPlaceUntilNextTurn() {
         MoaVoiceTranscriptLog log = new MoaVoiceTranscriptLog(20);
 
-        log.setUser("he", false);
+        MoaVoiceTranscriptLog.Entry entry = log.setUser("he", false);
+        assertEquals("", entry.copyableText());
         log.setUser("hello wor", false);
         log.setUser("hello world", true);
 
@@ -39,6 +40,16 @@ public final class MoaVoiceTranscriptLogTest {
         assertEquals("hello world", log.get(0).text);
         assertTrue(log.get(0).finalText);
         assertEquals("hello world", log.currentUserText());
+        assertEquals("hello world", entry.copyableText());
+    }
+
+    @Test
+    public void copyableTextPreservesTheExactFinalTranscript() {
+        MoaVoiceTranscriptLog log = new MoaVoiceTranscriptLog(20);
+        MoaVoiceTranscriptLog.Entry entry =
+                log.setUser("  exact transcript with spacing  ", true);
+
+        assertEquals("  exact transcript with spacing  ", entry.copyableText());
     }
 
     @Test

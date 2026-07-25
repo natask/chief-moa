@@ -37,6 +37,13 @@ final class MoaVoiceTranscriptLog {
         boolean isUser() {
             return role == Role.USER;
         }
+
+        String copyableText() {
+            if (!finalText || text.trim().isEmpty()) {
+                return "";
+            }
+            return text;
+        }
     }
 
     private final int maxEntries;

@@ -167,3 +167,6 @@ signal completed without a client acknowledgement.
       session rather than only future connections.
 - [ ] 13.4 Complete physical-phone QA for system-inset placement, scroll touch,
       low-opacity discoverability, TTS delivery, and drag-to-remove behavior.
+- [x] 13.5 Give each finalized voice row an explicit Copy control that places
+      the exact transcript on the Android clipboard and shows a visible copied
+      receipt; keep partial streaming rows non-copyable until finalized.

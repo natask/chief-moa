@@ -6,6 +6,8 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
@@ -1117,7 +1119,11 @@ public final class OverlayService extends Service {
             String rowText = entry.interrupted
                     ? entry.text + "\n\nInterrupted · steering"
                     : entry.text;
-            View row = voiceMessageRow(assistant, rowText, entry.finalText);
+            View row = voiceMessageRow(
+                    assistant,
+                    rowText,
+                    entry.copyableText(),
+                    entry.finalText);
             attachSwipeDismiss(row, entry);
             voiceTranscriptColumn.addView(row);
             boolean newestAssistant = assistant && i == count - 1;
@@ -1243,13 +1249,34 @@ public final class OverlayService extends Service {
         }
     }
 
-    private View voiceMessageRow(boolean assistant, String text, boolean finalText) {
+    private View voiceMessageRow(
+            boolean assistant,
+            String text,
+            String copyableText,
+            boolean finalText) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
+        LinearLayout rowHeader = new LinearLayout(this);
+        rowHeader.setOrientation(LinearLayout.HORIZONTAL);
+        rowHeader.setGravity(Gravity.CENTER_VERTICAL);
+        rowHeader.setPadding(dp(5), 0, dp(5), dp(3));
+
         TextView label = text(assistant ? "A.G." : "You", assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
-        label.setPadding(dp(5), 0, dp(5), dp(3));
+        rowHeader.addView(label, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        if (!copyableText.isEmpty()) {
+            TextView copy = pill("Copy", 0x243D8BFF, 0xFF9BC1FF);
+            copy.setTextSize(10);
+            copy.setContentDescription(
+                    assistant ? "Copy A.G. reply" : "Copy your transcript");
+            copy.setOnClickListener(v -> copyVoiceTranscript(copyableText, copy));
+            rowHeader.addView(copy);
+        }
 
         LinearLayout bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
@@ -1280,7 +1307,7 @@ public final class OverlayService extends Service {
         body.setAlpha(text.isEmpty() ? 0.48f : finalText ? 1f : 0.82f);
         bubble.addView(body);
 
-        wrap.addView(label);
+        wrap.addView(rowHeader);
         wrap.addView(bubble);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -1294,6 +1321,24 @@ public final class OverlayService extends Service {
         wrap.setLayoutParams(params);
         wrap.setGravity(assistant ? Gravity.START : Gravity.END);
         return wrap;
+    }
+
+    private void copyVoiceTranscript(String value, TextView receipt) {
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard == null || value.isEmpty()) {
+            receipt.setText("Retry");
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("A.G. voice transcript", value));
+        receipt.setText("Copied");
+        receipt.setContentDescription("Voice transcript copied");
+        mainHandler.postDelayed(() -> {
+            if (receipt.isAttachedToWindow()) {
+                receipt.setText("Copy");
+                receipt.setContentDescription("Copy voice transcript");
+            }
+        }, 1600);
     }
 
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
