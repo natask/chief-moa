@@ -418,10 +418,12 @@ const audioHistory = createAudioHistory({
   dataDir: DATA_DIR,
   audioNotes,
   voiceTurnAudioRefs,
+  ownerSubject: accountUserId(),
 });
 const { routeAudioHistory } = createAudioHistoryHandlers({
   history: audioHistory,
   authorized,
+  principal: () => accountUserId(),
   sendJson,
   sendVoiceAudio,
   sendAudioNote: audioNoteHandlers.sendAudio,

@@ -5,7 +5,7 @@
 Chief MOA exposes one authenticated, read-only projection of retained user
 audio. The browser extension has an explicit **History** entry point that lists
 the projection, plays original audio, shows transcript revisions and provenance,
-and invokes the existing non-destructive voice-turn retranscription path.
+and shows the retained read-only evidence.
 
 ## Contract
 
@@ -18,17 +18,23 @@ and invokes the existing non-destructive voice-turn retranscription path.
 - Capture blocks are not scanned because they project voice turns and would
   create duplicate audio records.
 - Existing voice transcripts become immutable display revisions. The selected
-  revision is explicit. The original stays visible after retranscription.
+  revision is explicit. Every revision reports complete provenance or the
+  literal value `unknown`; attribution is never inherited from another revision.
 - Audio notes remain `not_transcribed`; the slice does not introduce automatic
   paid transcription.
-- Every route requires the existing gateway bearer boundary. The browser
+- Every route requires the existing gateway bearer boundary and the configured
+  single-user subject derived from that bearer. An authenticated request bound
+  to any other subject receives the same not-found response for list, detail,
+  and playback. The browser
   extension never puts credentials, record IDs, or transcript data in a public
   website URL.
 
 ## Security scope
 
-This slice is intentionally for the existing single-user/self-hosted gateway
-trust model. A shared gateway bearer token is not multi-user authorization.
+This slice enforces the existing single-user/self-hosted gateway trust model in
+code. The gateway derives one subject from its configured bearer token and the
+projection rejects every other subject. A shared gateway bearer token is not
+multi-user authorization.
 Do not expose a hosted `agee.app/history` archive until the website has a real
 end-user session, subject-bound gateway assertions, CSRF protection, and
 cross-user denial tests.
@@ -46,5 +52,6 @@ cross-user denial tests.
 - A voice turn and an audio note produce exactly two records.
 - Voice revisions retain the original and selected retranscription separately.
 - Anonymous list/detail/audio access is denied.
-- Extension History is visible, authenticated, and exposes playback,
-  provenance, revisions, and explicit retranscription.
+- Extension History is visible, authenticated, survives a real panel and
+  service-worker restart, and exposes playback, lifecycle, provenance, and
+  revisions without any mutation or retranscription affordance.

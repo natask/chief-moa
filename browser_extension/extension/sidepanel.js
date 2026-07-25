@@ -321,7 +321,7 @@ releaseFeedbackForm.addEventListener("submit", async (event) => {
 
 // ---- Durable audio history --------------------------------------------------
 
-async function audioHistoryRequest(path, { method = "GET", body = null, responseType = "json" } = {}) {
+async function audioHistoryRequest(path, { responseType = "json" } = {}) {
   const config = await getEffectiveGatewayConfig();
   if (!config.gatewayUrl || !config.gatewayToken) {
     throw new Error("Configure an authenticated Chief MOA gateway to use audio history.");
@@ -332,12 +332,9 @@ async function audioHistoryRequest(path, { method = "GET", body = null, response
     throw new Error("Audio history requires HTTPS except on explicit loopback development gateways.");
   }
   const response = await fetch(new URL(path, `${config.gatewayUrl.replace(/\/+$/, "")}/`), {
-    method,
     headers: {
       authorization: `Bearer ${config.gatewayToken}`,
-      ...(body ? { "content-type": "application/json" } : {}),
     },
-    body: body ? JSON.stringify(body) : null,
     cache: "no-store",
   });
   if (!response.ok) {
@@ -377,6 +374,7 @@ function renderAudioHistory(records) {
       record.source_kind === "audio_note" ? "audio note" : "voice turn",
       record.surface || "unknown surface",
       Number.isFinite(duration) ? `${(duration / 1000).toFixed(1)}s` : "",
+      `media: ${record.media_status || "unknown"}`,
     ].filter(Boolean).join(" · ");
     const transcript = document.createElement("div");
     transcript.className = "audio-record-transcript";
@@ -387,25 +385,18 @@ function renderAudioHistory(records) {
     play.type = "button";
     play.className = "audio-history-action";
     play.textContent = "Play";
+    play.disabled = record.media_status !== "available" || !record.audio?.playback_href;
+    if (play.disabled) play.title = `Original media is ${record.media_status || "unavailable"}.`;
     play.addEventListener("click", () => playAudioRecord(record, play));
     actions.appendChild(play);
-    if (record.retranscribe_href) {
-      const retranscribe = document.createElement("button");
-      retranscribe.type = "button";
-      retranscribe.className = "audio-history-action";
-      retranscribe.textContent = "Retranscribe";
-      retranscribe.addEventListener("click", () => retranscribeAudioRecord(record, retranscribe));
-      actions.appendChild(retranscribe);
-    }
     const details = document.createElement("details");
     const label = document.createElement("summary");
     label.textContent = `Provenance and ${record.transcript?.revisions?.length || 0} transcript version(s)`;
     details.appendChild(label);
     const provenance = document.createElement("div");
     provenance.textContent = [
-      record.provenance?.provider ? `provider: ${record.provenance.provider}` : "",
-      record.provenance?.model ? `model: ${record.provenance.model}` : "",
-      record.provenance?.transcript_source ? `source: ${record.provenance.transcript_source}` : "",
+      `media lifecycle: ${record.lifecycle?.status || record.media_status || "unknown"}`,
+      `lifecycle reason: ${record.lifecycle?.reason || "unknown"}`,
       record.session_id ? `session: ${record.session_id}` : "",
       record.source_id ? `source id: ${record.source_id}` : "",
     ].filter(Boolean).join(" · ");
@@ -413,7 +404,17 @@ function renderAudioHistory(records) {
     for (const revision of record.transcript?.revisions || []) {
       const row = document.createElement("div");
       row.className = "audio-record-revision";
-      row.textContent = `Version ${revision.ordinal} · ${revision.source || "unknown"} · ${formatAudioRecordDate(revision.created_at)}\n${revision.transcript || ""}`;
+      const revisionProvenance = revision.provenance || {};
+      row.textContent = [
+        `Version ${revision.ordinal} · ${revision.source || "unknown"} · ${formatAudioRecordDate(revision.created_at)}`,
+        revision.transcript || "",
+        `provider ${revisionProvenance.provider || "unknown"} · API ${revisionProvenance.api_version || "unknown"} · model ${revisionProvenance.model || "unknown"}`,
+        `method ${revisionProvenance.method || "unknown"} · recognizer ${revisionProvenance.recognizer || "unknown"} · location ${revisionProvenance.location || "unknown"}`,
+        `languages ${(revisionProvenance.language_codes || []).join(", ") || "unknown"} · chunks ${revisionProvenance.chunk_strategy || "unknown"}`,
+        `prompt ${revisionProvenance.prompt_digest || "unknown"} · audio hash ${revisionProvenance.audio_sha256 || "unknown"} · duration ${revisionProvenance.audio_duration_ms || "unknown"}`,
+        `operation ${revisionProvenance.operation_id || "unknown"} · billed ${revisionProvenance.billed_duration_ms || "unknown"} · cost ${revisionProvenance.cost?.amount || "unknown"} ${revisionProvenance.cost?.currency || ""}`,
+        `error ${revisionProvenance.error?.code || "unknown"}: ${revisionProvenance.error?.message || "unknown"}`,
+      ].join("\n");
       details.appendChild(row);
     }
     item.append(summary, transcript, actions, details);
@@ -475,21 +476,6 @@ async function playAudioRecord(record, button) {
     button.textContent = "Play";
   } finally {
     button.disabled = false;
-  }
-}
-
-async function retranscribeAudioRecord(record, button) {
-  if (!confirm("Create a new Chirp transcript version? The original transcript will remain available.")) return;
-  button.disabled = true;
-  button.textContent = "Transcribing…";
-  try {
-    await audioHistoryRequest(record.retranscribe_href, { method: "POST", body: {} });
-    await refreshAudioHistory();
-  } catch (error) {
-    audioHistoryStatusEl.textContent = `Retranscription failed: ${String(error?.message || error)}`;
-  } finally {
-    button.disabled = false;
-    button.textContent = "Retranscribe";
   }
 }
 

@@ -26,6 +26,7 @@ const profilePath = join(runDir, "chrome-profile");
 const GATEWAY_TOKEN = "sidepanel-history-smoke-token";
 const SESSION_ID = "shared-sidepanel-history-smoke";
 const LONG_ANDROID_TEXT = `Android product direction ${"kept complete across surfaces ".repeat(40)}`.trim();
+const AUDIO_RECORD_ID = "aud_0123456789abcdef01234567";
 
 const SEEDED_MESSAGES = [
   {
@@ -83,6 +84,7 @@ const SEEDED_MESSAGES = [
 
 function startGateway() {
   let messageReads = 0;
+  let audioHistoryReads = 0;
   let legacyReads = 0;
   let canonicalAvailable = true;
   let historyFailure = false;
@@ -137,6 +139,64 @@ function startGateway() {
       ] }));
       return;
     }
+    if (url.pathname === "/v1/audio-history") {
+      audioHistoryReads += 1;
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "private, no-store",
+      });
+      res.end(JSON.stringify({
+        contract: "audio_record.v1",
+        records: [{
+          contract: "audio_record.v1",
+          audio_record_id: AUDIO_RECORD_ID,
+          source_kind: "voice_turn",
+          source_id: "turn_audio",
+          session_id: SESSION_ID,
+          captured_at: "2026-07-25T00:00:00.000Z",
+          duration_ms: 1000,
+          media_status: "missing",
+          lifecycle: { status: "missing", reason: "fixture", deleted_at: "unknown" },
+          audio: {
+            content_type: "audio/L16; rate=16000; channels=1",
+            encoding: "pcm16",
+            bytes: 0,
+            playback_href: null,
+          },
+          transcript: {
+            status: "available",
+            original_revision_id: "rev_0",
+            selected_revision_id: "rev_0",
+            revisions: [{
+              revision_id: "rev_0",
+              ordinal: 0,
+              source: "original",
+              transcript: "Audio history survives extension restarts.",
+              created_at: "2026-07-25T00:00:00.000Z",
+              provenance: {
+                provider: "unknown",
+                api_version: "unknown",
+                model: "unknown",
+                method: "unknown",
+                recognizer: "unknown",
+                location: "unknown",
+                language_codes: [],
+                prompt_digest: "unknown",
+                audio_sha256: "unknown",
+                audio_duration_ms: 1000,
+                chunk_strategy: "unknown",
+                operation_id: "unknown",
+                billed_duration_ms: "unknown",
+                cost: { amount: "unknown", currency: "unknown" },
+                error: { code: "unknown", message: "unknown" },
+              },
+            }],
+          },
+        }],
+        next_cursor: null,
+      }));
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
   });
@@ -145,6 +205,7 @@ function startGateway() {
       server,
       baseUrl: `http://127.0.0.1:${server.address().port}`,
       messageReads: () => messageReads,
+      audioHistoryReads: () => audioHistoryReads,
       legacyReads: () => legacyReads,
       setCanonicalAvailable: (available) => { canonicalAvailable = available === true; },
       setHistoryFailure: (failed) => { historyFailure = failed === true; },
@@ -275,6 +336,21 @@ async function assertHydratedHistory(pageCdp, label) {
   return history;
 }
 
+async function assertAudioHistory(pageCdp, label) {
+  await evaluate(pageCdp, 'document.getElementById("audioHistoryBtn").click(); true');
+  const record = await waitForEval(pageCdp, `(() => {
+    const row = document.querySelector("#audioHistoryList [data-audio-record-id]");
+    const play = row?.querySelector("button");
+    return row?.dataset.audioRecordId === ${JSON.stringify(AUDIO_RECORD_ID)}
+      && /survives extension restarts/.test(row.textContent)
+      && /media: missing/.test(row.textContent)
+      && play?.disabled === true
+      ? { id: row.dataset.audioRecordId, disabled: play.disabled }
+      : null;
+  })()`);
+  if (!record) throw new Error(`${label}: audio history did not recover`);
+}
+
 async function main() {
   const chromePath = resolveChromeForTesting();
   mkdirSync(profilePath, { recursive: true });
@@ -323,6 +399,7 @@ async function main() {
     browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "initial open");
+    await assertAudioHistory(pageCdp, "initial open");
 
     // A failed refresh must preserve the last-good messages, mark them stale,
     // and expose a user-triggered recovery instead of presenting an empty chat.
@@ -382,6 +459,7 @@ async function main() {
     await browserCdp.send("Target.closeTarget", { targetId: pageTargetId });
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "panel reopen");
+    await assertAudioHistory(pageCdp, "panel reopen");
     if (gateway.legacyReads() < 1) throw new Error("panel reopen did not exercise the legacy /turns fallback");
 
     // Stop the isolated service-worker target while leaving the panel document
@@ -398,13 +476,21 @@ async function main() {
     workerCdp = new Cdp(restartedWorker.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
     await assertHydratedHistory(pageCdp, "extension/background restart");
+    // The History panel remains live across a real service-worker target
+    // termination and continues from its gateway-owned projection.
+    const recoveredAudio = await waitForEval(pageCdp, `document.querySelector(
+      "#audioHistoryList [data-audio-record-id='${AUDIO_RECORD_ID}']"
+    )?.textContent.includes("survives extension restarts")`);
+    if (!recoveredAudio || gateway.audioHistoryReads() < 2) {
+      throw new Error(`audio history did not survive panel/worker restart; reads=${gateway.audioHistoryReads()}`);
+    }
     if (gateway.messageReads() < 3) {
       throw new Error(`expected canonical history to be re-read for each document/restart, got ${gateway.messageReads()}`);
     }
 
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
-        "canonical mixed-surface history hydrated and deduplicated on first open, panel reopen, and extension/background restart; " +
+        "canonical mixed-surface and audio history hydrated on first open, panel reopen, and extension/background restart; " +
         "agee-panel port round-tripped, conversational roles had no selector, Delegate confirmation cancelled safely, " +
         "open-agee-panel and chrome.sidePanel.open remained available.",
     );

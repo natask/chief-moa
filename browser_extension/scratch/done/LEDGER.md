@@ -1,3 +1,4 @@
+- Made extension Audio History strictly read-only, lifecycle/provenance explicit, and recoverable across real panel and service-worker restarts — agent: Codex/GPT-5 — feat/audio-history-extension-20260725 correction checkpoint
 - Added Chief MOA-owned file-URL consent detection, tab focus, bounded console/network diagnostics, and gateway-receipted browser control release 0.1.91 — agent: Codex/GPT-5 — 10057037
 - Kept an explicit retryable Copy control on completed dictation cards, bound to the exact final transcript without launching agent work — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Kept one browser mascot root while shrinking fresh desktop and phone-width defaults with real-extension size, ownership, and gesture coverage — agent: codex/gpt-5 — 376252e5

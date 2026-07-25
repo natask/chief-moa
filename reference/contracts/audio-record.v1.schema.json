@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agee.app/contracts/audio-record.v1.schema.json",
+  "title": "Chief MOA AudioRecord v1",
+  "type": "object",
+  "required": [
+    "contract",
+    "audio_record_id",
+    "source_kind",
+    "captured_at",
+    "duration_ms",
+    "media_status",
+    "lifecycle",
+    "audio",
+    "transcript"
+  ],
+  "properties": {
+    "contract": { "const": "audio_record.v1" },
+    "audio_record_id": { "type": "string", "pattern": "^aud_[a-f0-9]{24}$" },
+    "source_kind": { "enum": ["voice_turn", "audio_note"] },
+    "captured_at": { "type": "string" },
+    "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "media_status": {
+      "enum": ["available", "missing", "deleted", "incognito", "tombstone"]
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": ["status", "reason", "deleted_at"]
+    },
+    "audio": {
+      "type": "object",
+      "required": ["content_type", "encoding", "bytes", "playback_href"]
+    },
+    "transcript": {
+      "type": "object",
+      "required": [
+        "status",
+        "original_revision_id",
+        "selected_revision_id",
+        "revisions"
+      ]
+    }
+  }
+}
