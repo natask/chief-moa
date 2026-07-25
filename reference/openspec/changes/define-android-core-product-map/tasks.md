@@ -167,3 +167,6 @@ signal completed without a client acknowledgement.
       session rather than only future connections.
 - [ ] 13.4 Complete physical-phone QA for system-inset placement, scroll touch,
       low-opacity discoverability, TTS delivery, and drag-to-remove behavior.
+- [x] 13.5 Make every Android overlay launch path reuse one process owner and
+      one orb window; apply the existing 70% default size and live size refresh,
+      use 30% idle opacity, and preserve hold-drag and drag-to-remove geometry.

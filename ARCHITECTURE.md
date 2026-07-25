@@ -437,8 +437,12 @@ fresh-thread capture cancels an active current-thread capture without sending.
 Large movement after a hold starts cancels capture and escapes into drag. No
 separate X/Send side controls own disposition, and normal manual turns never
 wait for silence detection. The one open chat/transcript card follows the orb
-and flips wholly above or below it. Android drag-to-remove and explicit Hide
-actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
+and stays wholly above it. Android drag-to-remove and explicit Hide
+actions keep their existing behavior. Android app, assistant-intent, and quick
+tile starts converge on one process-local overlay owner and one orb window. The
+mobile orb defaults to 70% of its 96dp base window and 30% idle opacity, becomes
+fully opaque while touched, and live size changes update drag/card geometry
+without replacing the owner. Keyboard shortcuts and flag-off legacy
 behavior remain unchanged. Delivery policy is separate from gesture mechanics.
 The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
 routing state. Clients do not expose a mode selector: the user changes behavior
