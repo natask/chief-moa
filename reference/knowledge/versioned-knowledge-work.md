@@ -62,6 +62,13 @@ addressable agent keeps the intention moving within granted authority, records
 new evidence and artifact revisions, and pings the user when a decision,
 approval, blocker, or meaningful milestone needs attention.
 
+The desired system treats these responsible agents as first-class,
+addressable identities. One agent may continue an authorized intention across
+devices and services, including open-source self-hosted Chief Moa deployments,
+without changing the durable agent, intention, artifact, revision, or
+provenance contract. This is a target boundary, not a claim that current
+clients, identity federation, or self-hosted installations already provide it.
+
 ## Requirements
 
 ### Capture and provenance
@@ -107,26 +114,31 @@ approval, blocker, or meaningful milestone needs attention.
     blocker, conflict, material revision, milestone, or proposed completion.
     Pings must be deduplicated, rate-limited, sensitivity-aware, and linked to
     the relevant intention and artifact revision.
+13. Give first-class addressable agents stable identities that can span
+    authorized devices, services, and open-source self-hosted deployments under
+    the same intention, artifact, revision, authority, and provenance
+    contracts. Transport, hosting mode, or a fresh run must not create a
+    competing identity or source of truth.
 
 ### Search and access
 
-13. Make curated artifacts searchable by text, semantic similarity, artifact
+14. Make curated artifacts searchable by text, semantic similarity, artifact
     type, intention, agent, source, time, sensitivity, status, and relations.
-14. Make the same authorized current projection available across services and
+15. Make the same authorized current projection available across services and
     devices. Local caches and UI views are projections, not competing truth.
-15. Enforce tenant, user, device, and capability boundaries at retrieval time.
+16. Enforce tenant, user, device, and capability boundaries at retrieval time.
     Search snippets must not disclose content a caller cannot open.
-16. Let users inspect provenance, revision history, current owner, related
+17. Let users inspect provenance, revision history, current owner, related
     intention, background activity, and why an artifact appeared in search.
 
 ### Flow preservation
 
-17. Keep capture latency low and never require classification during high-flow
+18. Keep capture latency low and never require classification during high-flow
     idea generation. Admission can retain a source first and curate later.
-18. Allow multiple candidate interpretations, partial extracts, and unfiled
+19. Allow multiple candidate interpretations, partial extracts, and unfiled
     inbox material. Ask for clarification only when it changes authority,
     routing, destructive retention, or the meaning of a durable intention.
-19. Preserve raw cadence and alternative ideas under the capture policy while
+20. Preserve raw cadence and alternative ideas under the capture policy while
     presenting concise curated projections for resumption.
 
 ## Open questions
