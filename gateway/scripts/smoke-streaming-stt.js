@@ -183,6 +183,23 @@ async function testProviderRetryAndOverlapReconciliation() {
   repeatStream.emitData([{ transcript: "yes", isFinal: true }]);
   repeatStream.emitData([{ transcript: "yes", isFinal: true }]);
   assert.equal((await repeated.finalize()).text, "yes yes");
+
+  const shortPhraseRepeat = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const shortPhraseStream = opened.at(-1);
+  for (const transcript of ["go", "go", "very good", "very good"]) {
+    shortPhraseStream.emitData([{ transcript, isFinal: true }]);
+  }
+  assert.equal((await shortPhraseRepeat.finalize()).text, "go go very good very good",
+    "legitimate one- and two-word final segments remain repeated");
   console.log("  A2 provider retry + multilingual overlap reconciliation: ok");
 }
 
