@@ -24,7 +24,7 @@ All routes require normal gateway Bearer authentication.
 | Method and route | Purpose |
 | --- | --- |
 | `POST /v1/intent-plane/intents` | Admit one explicitly confirmed intention |
-| `GET /v1/intent-plane` | List the unified projection; optional `status` filter |
+| `GET /v1/intent-plane` | List a bounded unified projection; optional `status`, `limit` and `offset` |
 | `GET /v1/intent-plane/intents/{id}` | Read one intention |
 | `PATCH /v1/intent-plane/intents/{id}` | Update status, owner, next action or artifact refs |
 | `POST /v1/intent-plane/intents/{id}/agents` | Manual/fixture agent registration |
@@ -43,6 +43,10 @@ events move the projection to `received`.
 - Source and launcher provenance are metadata, not action authority.
 - The plane performs no external action.
 - Capabilities and authority are summaries, never credentials.
+- This slice has one authenticated gateway principal. Sensitivity is durable
+  classification for that principal, not a separate authorization scope;
+  multi-user/scope enforcement is future work and restricted records must not
+  be described as independently access-controlled.
 - First-class agent persistence requires explicit registration. A future
   gateway launcher adapter should register immediately after allocating its
   stable agent/run identities and before launch; it must not guess or scrape

@@ -109,3 +109,77 @@ test("completed and needs-user transitions create receiptable durable pings", as
   assert.equal(view.notifications[0].receipt_state, "received");
   assert.equal(view.authority.external_actions, "none");
 });
+
+test("foreign idempotency keys cannot hijack intent admission", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.events.appendEvent({
+    stream_id: "foreign:stream",
+    event_type: "foreign.event",
+    idempotency_key: "caller-key",
+    payload: { foreign: true },
+  });
+  const intent = await f.plane.createIntent({
+    intent_id: "intent_collision", title: "Collision", objective: "Stay isolated",
+    user_confirmed: true, idempotency_key: "caller-key",
+  });
+  assert.equal(intent.intent_id, "intent_collision");
+  assert.equal((await f.plane.projection()).intents.length, 1);
+  await assert.rejects(() => f.plane.createIntent({
+    intent_id: "intent_collision", title: "Changed", objective: "Different",
+    user_confirmed: true, idempotency_key: "caller-key",
+  }), /intent idempotency collision/);
+});
+
+test("retry after notification append failure repairs a terminal ping", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_repair", title: "Repair", objective: "Resume partial append",
+    user_confirmed: true, idempotency_key: "repair-create",
+  });
+  let failNotificationOnce = true;
+  const flakyEvents = {
+    listEvents: (filter) => f.events.listEvents(filter),
+    appendEvent: (event) => {
+      if (failNotificationOnce && event.event_type === "intent_plane.notification.created") {
+        failNotificationOnce = false;
+        throw new Error("injected notification failure");
+      }
+      return f.events.appendEvent(event);
+    },
+  };
+  const flaky = createIntentPlane({ events: flakyEvents, now: f.now });
+  const command = { status: "completed", next_action: "Review", idempotency_key: "repair-complete" };
+  await assert.rejects(() => flaky.updateIntent("intent_repair", command), /injected/);
+  assert.equal((await f.plane.projection()).notifications.length, 0);
+
+  const restarted = createIntentPlane({ events: f.events, now: f.now });
+  const repaired = await restarted.updateIntent("intent_repair", command);
+  assert.equal(repaired.status, "completed");
+  const view = await restarted.projection();
+  assert.equal(view.notifications.length, 1);
+  assert.equal(view.notifications[0].receipt_state, "pending");
+});
+
+test("stable agent identity cannot move between intents and list is bounded", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  for (const id of ["one", "two"]) {
+    await f.plane.createIntent({
+      intent_id: `intent_${id}`, title: id, objective: id,
+      user_confirmed: true, idempotency_key: `create-${id}`,
+    });
+  }
+  await f.plane.registerAgent({
+    agent_id: "agent_stable", intent_id: "intent_one", launch_reason: "one",
+    idempotency_key: "agent-one",
+  });
+  await assert.rejects(() => f.plane.registerAgent({
+    agent_id: "agent_stable", intent_id: "intent_two", launch_reason: "two",
+    idempotency_key: "agent-two",
+  }), /agent idempotency collision/);
+  const page = await f.plane.projection({ limit: 1, offset: 1 });
+  assert.deepEqual(page.page, { offset: 1, limit: 1, returned: 1, total: 2 });
+  assert.equal(page.intents[0].intent_id, "intent_two");
+});

@@ -4,7 +4,11 @@ function createIntentPlaneHandlers({ plane, readJsonBody, sendJson, cleanError }
   async function route(request, response, url) {
     try {
       if (request.method === "GET" && url.pathname === "/v1/intent-plane") {
-        sendJson(response, 200, await plane.projection({ status: url.searchParams.get("status") || "" }));
+        sendJson(response, 200, await plane.projection({
+          status: url.searchParams.get("status") || "",
+          limit: url.searchParams.get("limit") || undefined,
+          offset: url.searchParams.get("offset") || undefined,
+        }));
         return true;
       }
       if (request.method === "POST" && url.pathname === "/v1/intent-plane/intents") {
