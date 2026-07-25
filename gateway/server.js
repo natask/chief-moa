@@ -103,6 +103,7 @@ const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
 const { createAndroidOtaHandlers } = require("./lib/android-ota-handlers");
 const { createAudioNoteHandlers, createAudioNotesStore } = require("./lib/audio-notes");
+const { createAudioHistory, createAudioHistoryHandlers } = require("./lib/audio-history");
 const { createMediaBookmarkStore } = require("./lib/media-bookmarks");
 const { createMediaBookmarkHandlers } = require("./lib/media-bookmark-handlers");
 const { createBlobStore } = require("./lib/blob-store");
@@ -412,6 +413,18 @@ const videoNoteHandlers = createVideoNoteHandlers({
 });
 const { routeMediaNotes } = createMediaNoteHandlers({
   authorized, sendJson, audioNoteHandlers, videoNoteHandlers,
+});
+const audioHistory = createAudioHistory({
+  dataDir: DATA_DIR,
+  audioNotes,
+  voiceTurnAudioRefs,
+});
+const { routeAudioHistory } = createAudioHistoryHandlers({
+  history: audioHistory,
+  authorized,
+  sendJson,
+  sendVoiceAudio,
+  sendAudioNote: audioNoteHandlers.sendAudio,
 });
 const mediaBookmarks = createMediaBookmarkStore({ dataDir: DATA_DIR });
 const { routeMediaBookmarks } = createMediaBookmarkHandlers({
@@ -1062,6 +1075,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeMediaBookmarks(request, response, url)) {
+      return;
+    }
+    if (await routeAudioHistory(request, response, url)) {
       return;
     }
     if (await routeMediaNotes(request, response, url)) {

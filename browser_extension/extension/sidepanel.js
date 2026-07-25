@@ -26,6 +26,11 @@ const talkBtn = document.getElementById("talk");
 const form = document.getElementById("form");
 const textInput = document.getElementById("text");
 const sendBtn = document.getElementById("sendBtn");
+const audioHistoryBtn = document.getElementById("audioHistoryBtn");
+const audioHistoryPanel = document.getElementById("audioHistoryPanel");
+const audioHistoryRefreshBtn = document.getElementById("audioHistoryRefresh");
+const audioHistoryStatusEl = document.getElementById("audioHistoryStatus");
+const audioHistoryListEl = document.getElementById("audioHistoryList");
 
 const TURN_WATCHDOG_MS = 90000;
 
@@ -36,6 +41,8 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 let historyRefresh = null;
 let historyRefreshGeneration = 0;
+let audioHistoryBusy = false;
+let nativeAudio = null;
 
 let audioCtx = null;
 let playbackTime = 0;
@@ -311,6 +318,188 @@ releaseFeedbackForm.addEventListener("submit", async (event) => {
     setReleaseBusy(false);
   }
 });
+
+// ---- Durable audio history --------------------------------------------------
+
+async function audioHistoryRequest(path, { method = "GET", body = null, responseType = "json" } = {}) {
+  const config = await getEffectiveGatewayConfig();
+  if (!config.gatewayUrl || !config.gatewayToken) {
+    throw new Error("Configure an authenticated Chief MOA gateway to use audio history.");
+  }
+  const origin = new URL(config.gatewayUrl);
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname);
+  if (origin.protocol !== "https:" && !(origin.protocol === "http:" && loopback)) {
+    throw new Error("Audio history requires HTTPS except on explicit loopback development gateways.");
+  }
+  const response = await fetch(new URL(path, `${config.gatewayUrl.replace(/\/+$/, "")}/`), {
+    method,
+    headers: {
+      authorization: `Bearer ${config.gatewayToken}`,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : null,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      detail = String(payload?.error || payload?.message || detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return responseType === "arrayBuffer" ? response.arrayBuffer() : response.json();
+}
+
+function formatAudioRecordDate(value) {
+  const date = new Date(value || 0);
+  return Number.isNaN(date.getTime()) ? "Unknown time" : date.toLocaleString();
+}
+
+function selectedTranscript(record) {
+  const revisions = Array.isArray(record?.transcript?.revisions) ? record.transcript.revisions : [];
+  return revisions.find((revision) => revision.revision_id === record.transcript.selected_revision_id)
+    || revisions.at(-1)
+    || null;
+}
+
+function renderAudioHistory(records) {
+  const fragment = document.createDocumentFragment();
+  for (const record of records) {
+    const item = document.createElement("article");
+    item.className = "audio-record";
+    item.dataset.audioRecordId = String(record.audio_record_id || "");
+    const summary = document.createElement("div");
+    summary.className = "audio-record-summary";
+    const duration = Number(record.duration_ms);
+    summary.textContent = [
+      formatAudioRecordDate(record.captured_at),
+      record.source_kind === "audio_note" ? "audio note" : "voice turn",
+      record.surface || "unknown surface",
+      Number.isFinite(duration) ? `${(duration / 1000).toFixed(1)}s` : "",
+    ].filter(Boolean).join(" · ");
+    const transcript = document.createElement("div");
+    transcript.className = "audio-record-transcript";
+    transcript.textContent = selectedTranscript(record)?.transcript || "No transcript yet.";
+    const actions = document.createElement("div");
+    actions.className = "audio-record-actions";
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "audio-history-action";
+    play.textContent = "Play";
+    play.addEventListener("click", () => playAudioRecord(record, play));
+    actions.appendChild(play);
+    if (record.retranscribe_href) {
+      const retranscribe = document.createElement("button");
+      retranscribe.type = "button";
+      retranscribe.className = "audio-history-action";
+      retranscribe.textContent = "Retranscribe";
+      retranscribe.addEventListener("click", () => retranscribeAudioRecord(record, retranscribe));
+      actions.appendChild(retranscribe);
+    }
+    const details = document.createElement("details");
+    const label = document.createElement("summary");
+    label.textContent = `Provenance and ${record.transcript?.revisions?.length || 0} transcript version(s)`;
+    details.appendChild(label);
+    const provenance = document.createElement("div");
+    provenance.textContent = [
+      record.provenance?.provider ? `provider: ${record.provenance.provider}` : "",
+      record.provenance?.model ? `model: ${record.provenance.model}` : "",
+      record.provenance?.transcript_source ? `source: ${record.provenance.transcript_source}` : "",
+      record.session_id ? `session: ${record.session_id}` : "",
+      record.source_id ? `source id: ${record.source_id}` : "",
+    ].filter(Boolean).join(" · ");
+    details.appendChild(provenance);
+    for (const revision of record.transcript?.revisions || []) {
+      const row = document.createElement("div");
+      row.className = "audio-record-revision";
+      row.textContent = `Version ${revision.ordinal} · ${revision.source || "unknown"} · ${formatAudioRecordDate(revision.created_at)}\n${revision.transcript || ""}`;
+      details.appendChild(row);
+    }
+    item.append(summary, transcript, actions, details);
+    fragment.appendChild(item);
+  }
+  if (!records.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No retained audio recordings were found.";
+    fragment.appendChild(empty);
+  }
+  audioHistoryListEl.replaceChildren(fragment);
+}
+
+async function refreshAudioHistory() {
+  if (audioHistoryBusy) return;
+  audioHistoryBusy = true;
+  audioHistoryRefreshBtn.disabled = true;
+  audioHistoryStatusEl.textContent = "Loading retained recordings…";
+  try {
+    const payload = await audioHistoryRequest("/v1/audio-history?limit=100");
+    const records = Array.isArray(payload?.records) ? payload.records : [];
+    renderAudioHistory(records);
+    audioHistoryStatusEl.textContent = `${records.length} retained recording${records.length === 1 ? "" : "s"}. Originals and transcript versions are preserved.`;
+  } catch (error) {
+    audioHistoryStatusEl.textContent = `Audio history unavailable: ${String(error?.message || error)}`;
+  } finally {
+    audioHistoryBusy = false;
+    audioHistoryRefreshBtn.disabled = false;
+  }
+}
+
+async function playAudioRecord(record, button) {
+  button.disabled = true;
+  button.textContent = "Loading…";
+  try {
+    stopPlayback();
+    if (nativeAudio) {
+      nativeAudio.pause();
+      URL.revokeObjectURL(nativeAudio.src);
+      nativeAudio = null;
+    }
+    const bytes = await audioHistoryRequest(record.audio.playback_href, { responseType: "arrayBuffer" });
+    if (record.audio.encoding === "pcm16") {
+      playAssistantPcm(bytes);
+    } else {
+      const url = URL.createObjectURL(new Blob([bytes], { type: record.audio.content_type || "application/octet-stream" }));
+      nativeAudio = new Audio(url);
+      nativeAudio.addEventListener("ended", () => {
+        URL.revokeObjectURL(url);
+        nativeAudio = null;
+      }, { once: true });
+      await nativeAudio.play();
+    }
+    button.textContent = "Playing";
+    setTimeout(() => { button.textContent = "Play"; }, Math.max(1200, Number(record.duration_ms) || 1200));
+  } catch (error) {
+    audioHistoryStatusEl.textContent = `Playback failed: ${String(error?.message || error)}`;
+    button.textContent = "Play";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function retranscribeAudioRecord(record, button) {
+  if (!confirm("Create a new Chirp transcript version? The original transcript will remain available.")) return;
+  button.disabled = true;
+  button.textContent = "Transcribing…";
+  try {
+    await audioHistoryRequest(record.retranscribe_href, { method: "POST", body: {} });
+    await refreshAudioHistory();
+  } catch (error) {
+    audioHistoryStatusEl.textContent = `Retranscription failed: ${String(error?.message || error)}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Retranscribe";
+  }
+}
+
+audioHistoryBtn.addEventListener("click", () => {
+  const willOpen = audioHistoryPanel.hidden;
+  audioHistoryPanel.hidden = !willOpen;
+  audioHistoryBtn.setAttribute("aria-pressed", String(willOpen));
+  if (willOpen) refreshAudioHistory();
+});
+audioHistoryRefreshBtn.addEventListener("click", refreshAudioHistory);
 
 // One turn at a time. `turn` is null when idle.
 let turn = null;

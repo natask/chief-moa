@@ -84,6 +84,89 @@
       #floatBtn:hover {
         color: var(--text);
       }
+      #audioHistoryBtn {
+        background: #1b1d22;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--accent);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+      #audioHistoryBtn[aria-pressed="true"] {
+        background: var(--accent);
+        color: #101114;
+      }
+      .audio-history {
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 14px;
+        padding-bottom: 14px;
+      }
+      .audio-history[hidden] {
+        display: none;
+      }
+      .audio-history-head {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+      .audio-history-head h2 {
+        font-size: 14px;
+        margin: 0;
+      }
+      #audioHistoryRefresh,
+      .audio-history-action {
+        background: #1b1d22;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        font-size: 11px;
+        padding: 5px 8px;
+      }
+      #audioHistoryStatus {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 0 0 10px;
+      }
+      .audio-record {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        margin-bottom: 9px;
+        padding: 10px;
+      }
+      .audio-record-summary {
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 7px;
+      }
+      .audio-record-transcript {
+        font-size: 13px;
+        line-height: 1.45;
+        margin-bottom: 8px;
+        white-space: pre-wrap;
+      }
+      .audio-record-actions {
+        display: flex;
+        gap: 7px;
+      }
+      .audio-record details {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 8px;
+      }
+      .audio-record-revision {
+        border-top: 1px solid var(--border);
+        margin-top: 6px;
+        padding-top: 6px;
+        white-space: pre-wrap;
+      }
       .floating-note {
         color: var(--muted);
         font-size: 13px;
@@ -430,6 +513,7 @@
       <div class="mark">A.G.</div>
       <div class="status" id="status">Ready.</div>
       <div class="spacer"></div>
+      <button id="audioHistoryBtn" type="button" aria-controls="audioHistoryPanel" aria-pressed="false">History</button>
       <button id="floatBtn" type="button" title="Pop A.G. out into an always-on-top floating window">Float</button>
     </header>
     <main>
@@ -461,6 +545,14 @@
             <button id="releaseFeedbackSubmit" type="submit">Send release-bound feedback</button>
           </form>
         </div>
+      </section>
+      <section id="audioHistoryPanel" class="audio-history" aria-labelledby="audioHistoryTitle" hidden>
+        <div class="audio-history-head">
+          <h2 id="audioHistoryTitle">Audio history</h2>
+          <button id="audioHistoryRefresh" type="button">Refresh</button>
+        </div>
+        <p id="audioHistoryStatus" role="status">Open History to load retained recordings.</p>
+        <div id="audioHistoryList"></div>
       </section>
       <div id="historyError" role="status" hidden>
         <span id="historyErrorText"></span>
