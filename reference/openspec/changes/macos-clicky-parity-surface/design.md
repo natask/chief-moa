@@ -11,6 +11,9 @@ panel says to use it instead of silently advertising a broken shortcut.
 App launch and the first summon show the same compact panel and begin one
 latched voice capture. A second summon commits that capture; it never hides an
 active microphone session. Escape explicitly cancels capture before hiding.
+During capture, a short rolling waveform is computed locally from the PCM16
+frames already destined for the gateway. Only bounded normalized levels enter
+SwiftUI state; no second audio buffer or telemetry path is created.
 Settings and the existing screen-context grant UI remain in a normal deeper
 window reached only through the menu-bar Settings action.
 
@@ -32,6 +35,12 @@ path, query, user info, or fragment. Redirects are rejected. The request uses
 an ephemeral URL session with cookies and caches disabled. Input, request, and
 response sizes are bounded. Only the returned `text` field is displayed; no
 response field can directly execute a local action.
+
+The history control uses the same canonical origin and in-memory bearer token
+to read a bounded current-session projection from `GET /v1/history/messages`.
+It presents that projection inside the panel. The token remains an
+Authorization header rather than URL material, and the Mac app creates no
+parallel conversation/history database.
 
 The user configures the origin and gateway bearer token. The origin has no
 packaged default and is stored in app preferences. The token defaults to empty,

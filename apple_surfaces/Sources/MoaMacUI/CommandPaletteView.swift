@@ -27,6 +27,11 @@ public struct CommandPaletteView: View {
                     Text(model.status).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button { Task { await model.toggleHistory() } } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.plain)
+                .help("Show this session's durable gateway history")
                 Button { editingConnection.toggle() } label: {
                     Image(systemName: model.isConfigured ? "network.badge.shield.half.filled" : "network.slash")
                 }
@@ -39,6 +44,10 @@ public struct CommandPaletteView: View {
 
             if editingConnection {
                 connectionEditor
+            }
+
+            if model.isShowingHistory {
+                history
             }
 
             if !model.reply.isEmpty {
@@ -63,6 +72,13 @@ public struct CommandPaletteView: View {
                 }
                 .padding(12)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            if model.voiceState.isActive {
+                VoiceWaveform(levels: model.voiceLevels)
+                    .frame(height: 34)
+                    .accessibilityLabel("Live microphone level")
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -107,9 +123,10 @@ public struct CommandPaletteView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(16)
-        .frame(width: 480, height: 320, alignment: .top)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.16)))
+        .frame(minWidth: 480, maxWidth: 480, minHeight: 220, maxHeight: 320, alignment: .top)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.16)))
+        .animation(.snappy(duration: 0.22), value: model.voiceState.phase)
         .onAppear { promptFocused = true }
         .onExitCommand(perform: cancelAndDismiss)
     }
@@ -138,12 +155,64 @@ public struct CommandPaletteView: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private var history: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recent gateway history").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Close") { Task { await model.toggleHistory() } }
+                    .buttonStyle(.plain)
+            }
+            if !model.historyStatus.isEmpty {
+                Text(model.historyStatus).font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        ForEach(model.historyEntries) { entry in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.text.isEmpty ? entry.assistantText : entry.text)
+                                    .lineLimit(3)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text("\(entry.type) · \(entry.source)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(8)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+                        }
+                    }
+                }
+                .frame(maxHeight: 110)
+            }
+        }
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private func send() {
         Task { await model.submit(); promptFocused = true }
     }
 
     private func cancelAndDismiss() {
         dismiss()
+    }
+}
+
+private struct VoiceWaveform: View {
+    let levels: [Double]
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 4) {
+            ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
+                Capsule()
+                    .fill(.purple.gradient)
+                    .frame(width: 5, height: max(4, 30 * level))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 12)
+        .background(.purple.opacity(0.08), in: Capsule())
+        .animation(.linear(duration: 0.08), value: levels)
     }
 }
 #endif

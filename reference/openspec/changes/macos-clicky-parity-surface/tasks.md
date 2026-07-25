@@ -32,7 +32,12 @@
 
 ## 4. Later parity stages
 
-- [ ] 4.1 Add shared Aggie thread/history/run event presentation.
+- [x] 4.1a Add a bounded authenticated recent-session history view backed only
+      by the canonical gateway projection.
+- [ ] 4.1b Add full shared Aggie thread/run event and audio-attachment
+      presentation.
+- [x] 4.1c Add local PCM-derived waveform feedback alongside existing live
+      partial/final transcript presentation.
 - [ ] 4.2 Add visual pointer/caption guidance as inert overlays.
 - [ ] 4.3 Complete semantic AX proposal validation, approval, execution, and
       durable receipts from `privacy-first-macos-surface`.
