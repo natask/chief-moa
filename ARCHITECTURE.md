@@ -1096,7 +1096,9 @@ only the engine URL/session token.
 The extension also advertises a first-party local browser facade through the
 gateway device-tool broker. Its dedicated vocabulary covers navigation,
 description-to-Google/Amazon search, snapshot/query/text/wait/screenshot, and
-click/fill/type. Page tools accept explicit tab IDs and either fresh bounded
+click/fill/type. It also exposes direct tab list/open/focus/close/reload,
+bounded console and network observations, and a read-only permission-status
+probe. Page tools accept explicit tab IDs and either fresh bounded
 element indexes or semantic role/name/label/placeholder/test-ID locators. The
 extension resolves semantic targets against browser-local page evidence,
 executes actions through the existing local validator, preserves risky-click
@@ -1104,6 +1106,16 @@ confirmation, and returns bounded receipts with retryable target failures.
 This facade is A.G. code running inside the A.G. extension; Tweeks MCP/native
 messaging is behavioral prior art only and is not a runtime adapter or
 dependency.
+
+Local-file navigation is part of that same facade, not a host-filesystem
+reader. The manifest declares `file:///*`, but Chrome keeps it inactive until
+the user turns on **Allow access to file URLs** in the extension's Details
+page. The extension checks `chrome.extension.isAllowedFileSchemeAccess()` on
+every file navigation, advertises the current boolean in its device heartbeat,
+and returns the exact one-time Chrome instruction when access is off. It never
+changes that toggle or reads a path outside a browser-visible `file://`
+document. Page/file contents remain untrusted evidence and all existing action
+and receipt bounds still apply.
 
 Ordinary typed commands and finalized browser-voice transcripts pass through a
 small deterministic browser-command classifier before any model-backed turn.

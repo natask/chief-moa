@@ -41,6 +41,18 @@ the fixture tab. Voice-policy tests prove the same final transcript is diverted
 to the browser run path. Ambiguous current-page and image-deictic searches do
 not execute locally.
 
+- [x] 0.7 Complete the first-party control facade with explicit tab focus,
+      bounded console/network diagnostics, and Chrome-mediated `file://`
+      navigation. Detect `isAllowedFileSchemeAccess()` for every local-file
+      request, report the exact Chrome toggle when disabled, advertise current
+      permission state, and retain gateway-bound local receipts without adding
+      a native host or host-filesystem reader.
+
+Acceptance: permission-off and permission-on unit tests prove file navigation
+fails with one actionable instruction or proceeds with the exact URL; the
+manifest declares only browser-visible file access; diagnostics cap observation
+time and returned entries; extension verify, smoke, and real-CDP smoke pass.
+
 Acceptance: the user's correction and unresolved surface choice are recorded
 durably rather than silently collapsed into an explanation-first roadmap.
 
