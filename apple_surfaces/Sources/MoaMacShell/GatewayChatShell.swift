@@ -69,10 +69,15 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var status = "Ready"
     @Published public private(set) var isSending = false
     @Published public private(set) var voiceState = VoiceTranscriptState()
+    @Published public private(set) var voiceLevels = Array(repeating: 0.08, count: 18)
+    @Published public private(set) var historyEntries: [GatewayHistoryEntry] = []
+    @Published public private(set) var isShowingHistory = false
+    @Published public private(set) var historyStatus = ""
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
     private let voiceController: any VoiceCaptureControlling
+    private let historyLoader: any GatewayHistoryLoading
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -81,18 +86,21 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         self.init(
             store: SystemGatewayConnectionStore(),
             sender: URLSessionGatewayChatSender(),
-            voiceController: VoiceCaptureController()
+            voiceController: VoiceCaptureController(),
+            historyLoader: URLSessionGatewayHistoryLoader()
         )
     }
 
     public init(
         store: any GatewayConnectionStore,
         sender: any GatewayChatSending,
-        voiceController: (any VoiceCaptureControlling)? = nil
+        voiceController: (any VoiceCaptureControlling)? = nil,
+        historyLoader: (any GatewayHistoryLoading)? = nil
     ) {
         self.store = store
         self.sender = sender
         self.voiceController = voiceController ?? VoiceCaptureController()
+        self.historyLoader = historyLoader ?? URLSessionGatewayHistoryLoader()
         origin = store.loadOrigin()
         token = ""
         sessionID = store.loadSessionID()
@@ -153,6 +161,31 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         reply = ""
         status = "Ready"
         voiceState.apply(.reset)
+        voiceLevels = Array(repeating: 0.08, count: 18)
+        historyEntries = []
+        isShowingHistory = false
+        historyStatus = ""
+    }
+
+    public func toggleHistory() async {
+        if isShowingHistory {
+            isShowingHistory = false
+            return
+        }
+        guard let url = URL(string: origin), isConfigured else {
+            historyStatus = "Connect to your gateway first"
+            isShowingHistory = true
+            return
+        }
+        isShowingHistory = true
+        historyStatus = "Loading durable history…"
+        do {
+            historyEntries = try await historyLoader.load(origin: url, bearerToken: token, sessionID: sessionID)
+            historyStatus = historyEntries.isEmpty ? "No turns in this session yet" : ""
+        } catch {
+            historyEntries = []
+            historyStatus = "Could not load gateway history"
+        }
     }
 
     /// One explicit summon starts a latched capture. The next summon commits
@@ -179,7 +212,12 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
                 origin: url,
                 bearerToken: token,
                 sessionID: sessionID,
-                turnID: turnID
+                turnID: turnID,
+                levelHandler: { [weak self] level in
+                    guard let self, self.voiceGeneration == generation else { return }
+                    self.voiceLevels.removeFirst()
+                    self.voiceLevels.append(level)
+                }
             ) { [weak self] event in
                 guard let self, self.voiceGeneration == generation else { return }
                 self.voiceState.apply(.server(event))
@@ -212,6 +250,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         guard !wasStarting else { return }
         do {
             try await voiceController.stopAndCommit()
+            voiceLevels = Array(repeating: 0.08, count: 18)
         } catch {
             voiceState.apply(.interrupted("Microphone capture was interrupted"))
             await voiceController.cancel()
@@ -222,6 +261,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         voiceGeneration &+= 1
         voiceReleaseRequested = false
         await voiceController.cancel()
+        voiceLevels = Array(repeating: 0.08, count: 18)
         if voiceState.isActive {
             voiceState.apply(.interrupted("Transcription canceled"))
         }

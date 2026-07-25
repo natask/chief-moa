@@ -27,6 +27,26 @@ public struct GatewayVoiceAudioFrame: Equatable, Sendable {
     }
 }
 
+/// A bounded, presentation-only level derived from the same PCM16 frames sent
+/// to the gateway. It never retains microphone samples.
+public enum VoiceLevelMeter {
+    public static func normalizedLevel(forPCM16 data: Data) -> Double {
+        guard data.count >= MemoryLayout<Int16>.size, data.count.isMultiple(of: 2) else { return 0 }
+        let sampleCount = data.count / MemoryLayout<Int16>.size
+        let meanSquare = data.withUnsafeBytes { raw -> Double in
+            let samples = raw.bindMemory(to: Int16.self)
+            let sum = samples.reduce(into: 0.0) { partial, sample in
+                let value = Double(sample) / Double(Int16.max)
+                partial += value * value
+            }
+            return sum / Double(sampleCount)
+        }
+        // Lift quiet speech without allowing a single malformed frame to
+        // escape the view's 0...1 geometry.
+        return min(1, max(0, sqrt(meanSquare) * 2.4))
+    }
+}
+
 public struct GatewayVoiceSessionStart: Sendable {
     public static let maximumEventBytes = 8 * 1024
 

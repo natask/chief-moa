@@ -73,3 +73,37 @@ identifiers MAY remain in app preferences.
   or terminates
 - **THEN** no prior bearer token is restored
 - **AND** the in-memory token is empty after disconnect or stop
+
+### Requirement: Voice capture provides local, non-retained level feedback
+
+While a voice turn is active, the macOS companion SHALL derive a bounded
+normalized level from the same PCM16 frames being sent to the gateway and show
+it as a waveform. The level path SHALL NOT retain or separately upload audio.
+
+#### Scenario: Active capture receives PCM
+
+- **WHEN** the capture adapter emits a valid PCM16 frame
+- **THEN** the command surface updates a bounded `0...1` waveform sample
+- **AND** the existing gateway audio frame is unchanged
+- **AND** stopping, canceling, or resetting capture clears the waveform
+
+### Requirement: Durable session history stays gateway-owned
+
+The compact macOS companion SHALL provide an authenticated in-place view of
+recent canonical history for its current session. It SHALL read
+`GET /v1/history/messages` from the configured Chief Moa gateway and SHALL NOT
+create a client-local history database or place the bearer token in a URL.
+
+#### Scenario: A connected user opens history
+
+- **WHEN** the user selects the history control
+- **THEN** the app requests only the current session's bounded recent messages
+- **AND** sends the session-only bearer token in the authorization header
+- **AND** renders returned text as inert, non-executable presentation
+
+#### Scenario: History is unavailable
+
+- **WHEN** the gateway is unconfigured, unauthorized, unavailable, or returns
+  malformed content
+- **THEN** the panel reports the failure without leaking the token or falling
+  back to a private client history

@@ -228,6 +228,21 @@ private struct UnusedChatSender: GatewayChatSending {
     }
 }
 
+private struct StubHistoryLoader: GatewayHistoryLoading {
+    func load(origin: URL, bearerToken: String, sessionID: String) async throws -> [GatewayHistoryEntry] {
+        [
+            GatewayHistoryEntry(
+                id: "voice:session:turn",
+                type: "voice_turn",
+                source: "moa-macos",
+                text: "durable fixture",
+                assistantText: "",
+                createdAt: "2026-07-25T00:00:00Z"
+            ),
+        ]
+    }
+}
+
 @MainActor private final class StubCaptureController: VoiceCaptureControlling {
     var handler: (@MainActor @Sendable (GatewayVoiceServerEvent) -> Void)?
     var starts = 0
@@ -235,6 +250,7 @@ private struct UnusedChatSender: GatewayChatSending {
     var cancels = 0
 
     func start(origin: URL, bearerToken: String, sessionID: String, turnID: String,
+               levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
                eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void) async throws {
         starts += 1
         handler = eventHandler
@@ -264,7 +280,8 @@ private struct UnusedChatSender: GatewayChatSending {
         origin: URL(string: "https://moa.example")!,
         bearerToken: "gateway-token",
         sessionID: "session",
-        turnID: "turn"
+        turnID: "turn",
+        levelHandler: { _ in }
     ) { events.append($0) }
     #expect(microphone.starts == 1)
     #expect(await transport.tokens == ["gateway-token"])
@@ -293,12 +310,26 @@ private struct UnusedChatSender: GatewayChatSending {
             origin: URL(string: "https://moa.example")!,
             bearerToken: "gateway-token",
             sessionID: "session",
-            turnID: "turn"
+            turnID: "turn",
+            levelHandler: { _ in }
         ) { _ in }
     }
     #expect(microphone.starts == 0)
     #expect(await transport.starts.isEmpty)
     await #expect(throws: VoiceCaptureError.notActive) { try await controller.stopAndCommit() }
+}
+
+@Test func pcmLevelMeterIsBoundedAndTracksSilenceAndSignal() {
+    #expect(VoiceLevelMeter.normalizedLevel(forPCM16: Data()) == 0)
+    #expect(VoiceLevelMeter.normalizedLevel(forPCM16: Data([0, 0, 0, 0])) == 0)
+    var samples = [Int16.max, Int16.min + 1]
+    let loud = samples.withUnsafeBytes { Data($0) }
+    #expect(VoiceLevelMeter.normalizedLevel(forPCM16: loud) == 1)
+    samples = [1_000, -1_000]
+    let quiet = samples.withUnsafeBytes { Data($0) }
+    let value = VoiceLevelMeter.normalizedLevel(forPCM16: quiet)
+    #expect(value > 0)
+    #expect(value < 1)
 }
 
 @Test func urlSessionTransportRejectsBadPCMBeforeSocketLookup() async {
@@ -337,5 +368,20 @@ private struct UnusedChatSender: GatewayChatSending {
     #expect(model.prompt.isEmpty)
     await model.cancelVoice()
     #expect(capture.cancels == 1)
+}
+
+@MainActor @Test func commandModelLoadsAuthenticatedSessionHistoryInPlace() async {
+    let model = CommandModel(
+        store: VoiceTestConnectionStore(),
+        sender: UnusedChatSender(),
+        historyLoader: StubHistoryLoader()
+    )
+    model.token = "gateway-token"
+    await model.toggleHistory()
+    #expect(model.isShowingHistory)
+    #expect(model.historyEntries.map(\.text) == ["durable fixture"])
+    #expect(model.historyStatus.isEmpty)
+    await model.toggleHistory()
+    #expect(!model.isShowingHistory)
 }
 #endif

@@ -231,6 +231,7 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         bearerToken: String,
         sessionID: String,
         turnID: String,
+        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
         eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
     ) async throws
     func stopAndCommit() async throws
@@ -266,6 +267,7 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         bearerToken: String,
         sessionID: String,
         turnID: String,
+        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
         eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
     ) async throws {
         guard !active else { throw VoiceCaptureError.alreadyActive }
@@ -274,6 +276,8 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         try await transport.connect(start: start, bearerToken: bearerToken, turnID: turnID, eventHandler: eventHandler)
         do {
             try microphone.start { [transport] data in
+                let level = VoiceLevelMeter.normalizedLevel(forPCM16: data)
+                Task { @MainActor in levelHandler(level) }
                 Task { try? await transport.sendAudio(data) }
             }
             active = true
