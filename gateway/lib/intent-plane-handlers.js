@@ -6,6 +6,10 @@ function createIntentPlaneHandlers({ plane, readJsonBody, sendJson, cleanError }
       if (request.method === "GET" && url.pathname === "/v1/intent-plane") {
         sendJson(response, 200, await plane.projection({
           status: url.searchParams.get("status") || "",
+          tenant_id: url.searchParams.get("tenant_id") || "",
+          namespace_id: url.searchParams.get("namespace_id") || "",
+          sphere: url.searchParams.get("sphere") || "",
+          project_id: url.searchParams.get("project_id") || "",
           limit: url.searchParams.get("limit") || undefined,
           offset: url.searchParams.get("offset") || undefined,
         }));
@@ -39,9 +43,14 @@ function createIntentPlaneHandlers({ plane, readJsonBody, sendJson, cleanError }
           return true;
         }
       }
-      const agent = url.pathname.match(/^\/v1\/intent-plane\/agents\/([^/]+)\/progress$/);
+      const agent = url.pathname.match(/^\/v1\/intent-plane\/agents\/([^/]+)\/(progress|heartbeat)$/);
       if (agent && request.method === "POST") {
-        sendJson(response, 200, { agent: await plane.progressAgent(decodeURIComponent(agent[1]), await readJsonBody(request)) });
+        const agentId = decodeURIComponent(agent[1]);
+        const body = await readJsonBody(request);
+        const result = agent[2] === "heartbeat"
+          ? await plane.heartbeatAgent(agentId, body)
+          : await plane.progressAgent(agentId, body);
+        sendJson(response, 200, { agent: result });
         return true;
       }
       const receipt = url.pathname.match(/^\/v1\/intent-plane\/notifications\/([^/]+)\/receipt$/);

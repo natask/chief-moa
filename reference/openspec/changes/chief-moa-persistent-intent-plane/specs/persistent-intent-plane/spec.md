@@ -36,3 +36,16 @@ with pending receipt state. A receipt SHALL idempotently mark it received.
 The intent plane SHALL execute no external action, persist no credentials, and
 SHALL NOT claim current Codex subagent identities persist without explicit
 adapter registration.
+
+### Requirement: logical placement remains reversible
+
+Every intent SHALL carry tenant, namespace, sphere, and project placement
+metadata. Changing placement SHALL append state without changing stable intent,
+agent, run, or artifact identities. These labels SHALL NOT be represented as
+authorization boundaries while one gateway principal reads the whole plane.
+
+### Requirement: hosted authority detects disappeared agents
+
+A non-terminal registered agent MAY establish a bounded heartbeat lease. The
+projection SHALL report unleased, healthy, stale, or terminal after restart.
+Expiration SHALL NOT autonomously launch a duplicate agent.

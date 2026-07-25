@@ -46,6 +46,11 @@ test("authenticated CRUD, projection, explanation and receipts are wired", async
     authority_summary: "test only", current_run_id: "route_run", idempotency_key: "route-register",
   });
   assert.equal(registered.status, 201, JSON.stringify(registered.json));
+  const heartbeat = await call("POST", "/v1/intent-plane/agents/route_agent/heartbeat", {
+    progress: "alive", lease_duration_ms: 60000, idempotency_key: "route-heartbeat",
+  });
+  assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
+  assert.equal(heartbeat.json.agent.recovery_state, "healthy");
   assert.equal((await call("POST", "/v1/intent-plane/agents/route_agent/progress", {
     status: "completed", progress: "done", latest_recap: "complete",
     artifact_refs: ["artifact:route"], idempotency_key: "route-progress",
@@ -61,6 +66,7 @@ test("authenticated CRUD, projection, explanation and receipts are wired", async
   assert.equal(patched.status, 200);
   const projection = await call("GET", "/v1/intent-plane");
   assert.equal(projection.json.schema, "moa.intent-plane.v1");
+  assert.equal(projection.json.intents[0].namespace_id, "namespace_default");
   assert.equal(projection.json.notifications[0].receipt_state, "pending");
   const receipt = await call("POST", `/v1/intent-plane/notifications/${projection.json.notifications[0].notification_id}/receipt`, {
     actor: "route-user", note: "shown", idempotency_key: "route-receipt",

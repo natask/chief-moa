@@ -183,3 +183,90 @@ test("stable agent identity cannot move between intents and list is bounded", as
   assert.deepEqual(page.page, { offset: 1, limit: 1, returned: 1, total: 2 });
   assert.equal(page.intents[0].intent_id, "intent_two");
 });
+
+test("one physical plane supports reversible routing metadata", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_scope",
+    title: "Scope",
+    objective: "Route without physical partitioning",
+    tenant_id: "nat",
+    namespace_id: "work",
+    sphere: "company",
+    project_id: "chief-moa",
+    user_confirmed: true,
+    idempotency_key: "scope-create",
+  });
+  assert.equal((await f.plane.projection({ namespace_id: "work" })).intents.length, 1);
+  assert.equal((await f.plane.projection({ namespace_id: "personal" })).intents.length, 0);
+
+  const moved = await f.plane.updateIntent("intent_scope", {
+    namespace_id: "personal",
+    sphere: "personal",
+    project_id: "research",
+    idempotency_key: "scope-move",
+  });
+  assert.equal(moved.namespace_id, "personal");
+  assert.equal(moved.project_id, "research");
+
+  const restarted = createIntentPlane({ events: f.events, now: f.now });
+  const explained = await restarted.explain("intent_scope");
+  assert.equal(explained.intent.namespace_id, "personal");
+  assert.equal(explained.intent.project_id, "research");
+});
+
+test("agent heartbeat exposes durable lease and restart recovery state", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_lease", title: "Lease", objective: "Detect disappeared agents",
+    user_confirmed: true, idempotency_key: "lease-create",
+  });
+  await f.plane.registerAgent({
+    agent_id: "agent_lease",
+    intent_id: "intent_lease",
+    launch_reason: "Run on the local Mac",
+    runtime_type: "codex",
+    execution_location: "macbook",
+    endpoint_ref: "codex://thread/stable",
+    recovery_policy: "relaunch",
+    idempotency_key: "lease-register",
+  });
+  await assert.rejects(() => f.plane.registerAgent({
+    agent_id: "agent_secret",
+    intent_id: "intent_lease",
+    launch_reason: "unsafe",
+    endpoint_ref: "https://runtime.invalid/callback?token=secret",
+    idempotency_key: "lease-secret",
+  }), /must not contain credentials/);
+  const heartbeat = await f.plane.heartbeatAgent("agent_lease", {
+    progress: "working",
+    lease_duration_ms: 60_000,
+    idempotency_key: "lease-heartbeat",
+  });
+  assert.equal(heartbeat.recovery_state, "healthy");
+  assert.equal(heartbeat.runtime_type, "codex");
+  assert.equal(heartbeat.recovery_policy, "relaunch");
+  const replay = await f.plane.heartbeatAgent("agent_lease", {
+    progress: "working",
+    lease_duration_ms: 60_000,
+    idempotency_key: "lease-heartbeat",
+  });
+  assert.equal(replay.lease_expires_at, heartbeat.lease_expires_at);
+  await assert.rejects(() => f.plane.heartbeatAgent("agent_lease", {
+    progress: "different",
+    lease_duration_ms: 60_000,
+    idempotency_key: "lease-heartbeat",
+  }), /idempotency collision/);
+
+  const stale = createIntentPlane({
+    events: f.events,
+    now: () => "2026-07-26T00:00:00.000Z",
+  });
+  const view = await stale.projection();
+  assert.equal(view.agents[0].recovery_state, "stale");
+  await assert.rejects(() => stale.heartbeatAgent("agent_lease", {
+    status: "completed", progress: "invalid",
+  }), /heartbeat status/);
+});
