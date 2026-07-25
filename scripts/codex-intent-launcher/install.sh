@@ -9,6 +9,8 @@ mkdir -p "$install_root" "$bin_dir"
 chmod 700 "$install_root"
 install -m 700 "$script_dir/cli.js" "$install_root/cli.js"
 install -m 600 "$script_dir/lib.js" "$install_root/lib.js"
+install -m 600 "$script_dir/direct-owner-prompt.md" "$install_root/direct-owner-prompt.md"
+install -m 600 "$script_dir/README.md" "$install_root/README.md"
 ln -sfn "$install_root/cli.js" "$bin_dir/moa-codex-intent"
 
 printf 'Installed %s\n' "$bin_dir/moa-codex-intent"

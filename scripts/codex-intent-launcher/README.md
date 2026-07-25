@@ -14,19 +14,31 @@ cross-session chat identities.
 - Requires `--user-confirmed` before admitting an intention.
 - Registers launch reason, launcher provenance, capabilities, and bounded
   authority before starting by default.
+- Starts each attempt through the hosted run-start command. Reusing a stable
+  owner after a terminal attempt requires explicit `--reopen` and receives a
+  different run ID.
 - Persists queued, running, progress, and terminal state locally with `0600`
   files.
 - Writes stdout, stderr, final recap, and a terminal receipt as durable artifact
   references.
 - Converts completion to an intent-plane completion ping. A blocked, cancelled,
-  or failed owner moves the intent to `needs_user`, which creates a durable ping.
+  or failed owner moves the intent to `needs_user`, which creates a durable,
+  run-bound ping.
+- Checkpoints terminal agent and intent transitions separately with immutable
+  payloads and stable idempotency keys, so a restart resumes the missing stage
+  without changing the recap or duplicating the completed stage.
 - Reconciles a lost adapter process or response stream. If a local PID vanished
   without a terminal receipt, it reports `blocked`; it never invents completion.
 - Sends bounded heartbeats while the supervised process is alive. During a
   staged server rollout, a missing heartbeat route remains a visible
   `remote_pending` condition and does not stop local receipt capture.
 - Keeps the gateway token out of state, logs, command arguments, and the
-  launched Codex process environment.
+  launched Codex process environment. It also removes known Chief Moa control,
+  deployment, OAuth, speech, and provider credentials from that environment.
+- Requires HTTPS for hosted gateways. Plain HTTP is accepted only for loopback
+  development endpoints.
+- Binds PID liveness to an operating-system process-start identity. A reused PID
+  cannot silently inherit an old run.
 
 The default is fail-closed: a command does not start until hosted admission
 succeeds. `--allow-offline` is an explicit exception; `reconcile` later uploads
@@ -77,6 +89,13 @@ The generic `launch` form can supervise any non-interactive command:
 moa-codex-intent launch <same metadata options> -- /usr/bin/true
 ```
 
+Do not place credentials in raw command arguments. They are visible to the
+operating system while a process runs. The adapter rejects common credential
+flags, Bearer values, URL userinfo, and sensitive query parameters. An opaque
+secret without a recognizable name cannot be detected, so use an approved
+secret store or a narrowly scoped environment variable. Chief Moa credentials
+are removed even when inherited.
+
 ## Inspect, update, and recover
 
 ```sh
@@ -90,6 +109,10 @@ Run `reconcile` at login or from an existing local supervisor. The current slice
 does not install a LaunchAgent automatically because persistent background
 execution and secret retrieval require a separate, explicit macOS authority
 decision.
+
+After a terminal attempt, start another attempt for the same stable owner with
+the same namespace/project/intent/agent keys and add `--reopen`. Omitting it
+fails visibly rather than mutating a completed owner implicitly.
 
 ## Honest limitations and migration path
 

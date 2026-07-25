@@ -227,10 +227,11 @@ move a completed, failed, or cancelled agent back to a non-terminal state.
 Starting a later attempt is an explicit command:
 `POST /v1/intent-plane/agents/{agent_id}/runs`. It requires a new
 `current_run_id`; a running agent cannot start another run. Reopening a
-completed intent requires `reopen_intent: true`. A cancelled intent cannot
-reopen. The command appends a run-start event, resets liveness, preserves the
-prior run as provenance, and returns the agent and intent projections. Exact
-replay returns the projection at that run-start event rather than later state.
+blocked, needs-user, or completed intent requires `reopen_intent: true` and
+returns it to active. A cancelled intent cannot reopen. The command appends a
+run-start event, resets liveness, preserves the prior run as provenance, and
+returns the agent and intent projections. Exact replay returns the projection
+at that run-start event rather than later state.
 
 ## Leases, heartbeats, idempotency, and reconciliation
 
@@ -249,7 +250,9 @@ The reconciler:
 7. releases or expires the claim.
 
 A replacement receives a new run ID but retains the intent and appropriate
-agent identity. At most one live recovery claim may exist per run.
+agent identity. Explicit reopen moves a blocked, needs-user, or completed
+owning intent back to active; cancelled never reopens. At most one live recovery
+claim may exist per run.
 
 ## Routing, steering, and context compaction
 

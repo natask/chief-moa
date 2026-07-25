@@ -4,9 +4,10 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 const SCHEMA = "moa.codex-intent-launcher.v1";
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const TERMINAL = new Set(["completed", "failed", "cancelled", "blocked"]);
 const AGENT_STATUSES = new Set(["running", "blocked", "completed", "failed", "cancelled"]);
 
@@ -73,6 +74,11 @@ function artifactDir(stateDir, runId) {
 function validateGatewayUrl(raw) {
   const parsed = new URL(required(raw, "gateway URL", 1_000));
   if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("gateway URL must use http or https");
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const loopback = hostname === "localhost" || hostname === "::1" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  if (parsed.protocol !== "https:" && !loopback) {
+    throw new Error("gateway URL must use https except for a loopback development endpoint");
+  }
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.search = "";
   parsed.hash = "";
@@ -163,14 +169,25 @@ class IntentPlaneClient {
     });
   }
 
-  progressAgent(state, status, progress, { recap = "", artifactRefs = [] } = {}) {
+  progressAgent(state, status, progress, { recap = "", artifactRefs = [], idempotencyKey = "" } = {}) {
     return this.request("POST", `/v1/intent-plane/agents/${encodeURIComponent(state.agent_id)}/progress`, {
       status,
       progress: clean(progress),
       current_run_id: state.adapter_run_id,
       latest_recap: clean(recap),
       artifact_refs: artifactRefs.slice(0, 40),
-      idempotency_key: `codex-adapter:progress:${state.adapter_run_id}:${state.remote_sequence}:${status}`,
+      idempotency_key: idempotencyKey || `codex-adapter:progress:${state.adapter_run_id}:${state.remote_sequence}:${status}`,
+    });
+  }
+
+  startAgentRun(state, { reopenIntent = false, idempotencyKey = "" } = {}) {
+    return this.request("POST", `/v1/intent-plane/agents/${encodeURIComponent(state.agent_id)}/runs`, {
+      current_run_id: state.adapter_run_id,
+      reopen_intent: reopenIntent,
+      progress: "Codex owner process is starting.",
+      latest_recap: "",
+      artifact_refs: state.artifact_refs,
+      idempotency_key: idempotencyKey || `codex-adapter:start:${state.adapter_run_id}`,
     });
   }
 
@@ -184,13 +201,14 @@ class IntentPlaneClient {
     });
   }
 
-  updateIntent(state, status, nextAction, artifactRefs = []) {
+  updateIntent(state, status, nextAction, artifactRefs = [], { idempotencyKey = "" } = {}) {
     return this.request("PATCH", `/v1/intent-plane/intents/${encodeURIComponent(state.intent_id)}`, {
       status,
       owner_agent_id: state.agent_id,
       next_action: clean(nextAction),
       artifact_refs: artifactRefs.slice(0, 40),
-      idempotency_key: `codex-adapter:intent:${state.adapter_run_id}:${state.remote_sequence}:${status}`,
+      current_run_id: state.adapter_run_id,
+      idempotency_key: idempotencyKey || `codex-adapter:intent:${state.adapter_run_id}:${state.remote_sequence}:${status}`,
     });
   }
 
@@ -234,13 +252,41 @@ function publicState(state) {
 }
 
 function processAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  return processSnapshot(pid).alive;
+}
+
+function processSnapshot(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { alive: false, identity: "" };
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
-    return error?.code === "EPERM";
+    if (error?.code !== "EPERM") return { alive: false, identity: "" };
   }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = stat.lastIndexOf(")");
+    const fields = stat.slice(close + 2).split(/\s+/);
+    if (fields[0] === "Z") return { alive: false, identity: `linux:${fields[19] || ""}` };
+    return { alive: true, identity: `linux:${required(fields[19], "process start identity", 120)}` };
+  } catch {
+    try {
+      const started = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "ppid=", "-o", "comm="], {
+        encoding: "utf8",
+        timeout: 2_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return started ? { alive: true, identity: `ps:${started.replace(/\s+/g, " ")}` } : { alive: false, identity: "" };
+    } catch {
+      return { alive: false, identity: "" };
+    }
+  }
+}
+
+function processMatches(pid, expectedIdentity) {
+  const expected = clean(expectedIdentity, 240);
+  if (!expected) return false;
+  const snapshot = processSnapshot(pid);
+  return snapshot.alive && snapshot.identity === expected;
 }
 
 function listStateFiles(stateDir) {
@@ -260,23 +306,70 @@ function terminalMapping(status) {
 }
 
 async function syncProgress(client, state, status, progress, options = {}) {
-  if (!AGENT_STATUSES.has(status)) throw new Error(`unsupported adapter status: ${status}`);
+  validateAgentStatus(status);
   state.remote_sequence = Number(state.remote_sequence || 0) + 1;
   await client.progressAgent(state, status, progress, options);
   state.remote_pending = false;
 }
 
-async function syncTerminal(client, state) {
+function validateAgentStatus(status) {
+  const result = required(status, "status", 40);
+  if (!AGENT_STATUSES.has(result)) throw new Error(`unsupported adapter status: ${result}`);
+  return result;
+}
+
+function prepareTerminalSync(state) {
+  if (state.terminal_sync) return state.terminal_sync;
   const mapping = terminalMapping(state.status);
-  await syncProgress(client, state, mapping.agent, state.progress || state.terminal_reason || state.status, {
-    recap: state.latest_recap,
-    artifactRefs: state.artifact_refs,
-  });
-  state.remote_sequence += 1;
   const next = state.status === "completed"
     ? state.latest_recap || "The Codex owner completed its bounded task."
     : state.terminal_reason || state.progress || "The Codex owner needs attention.";
-  await client.updateIntent(state, mapping.intent, next, state.artifact_refs);
+  state.terminal_sync = {
+    schema: SCHEMA,
+    run_id: state.adapter_run_id,
+    status: state.status,
+    agent: {
+      done: false,
+      status: mapping.agent,
+      progress: state.progress || state.terminal_reason || state.status,
+      recap: state.latest_recap || "",
+      artifact_refs: [...(state.artifact_refs || [])],
+      idempotency_key: `codex-adapter:terminal-agent:${state.adapter_run_id}:${mapping.agent}`,
+    },
+    intent: {
+      done: false,
+      status: mapping.intent,
+      next_action: next,
+      artifact_refs: [...(state.artifact_refs || [])],
+      idempotency_key: `codex-adapter:terminal-intent:${state.adapter_run_id}:${mapping.intent}`,
+    },
+  };
+  return state.terminal_sync;
+}
+
+async function syncTerminal(client, state, { persist = () => {} } = {}) {
+  const checkpoint = prepareTerminalSync(state);
+  persist(state);
+  if (!checkpoint.agent.done) {
+    await client.progressAgent(state, checkpoint.agent.status, checkpoint.agent.progress, {
+      recap: checkpoint.agent.recap,
+      artifactRefs: checkpoint.agent.artifact_refs,
+      idempotencyKey: checkpoint.agent.idempotency_key,
+    });
+    checkpoint.agent.done = true;
+    persist(state);
+  }
+  if (!checkpoint.intent.done) {
+    await client.updateIntent(
+      state,
+      checkpoint.intent.status,
+      checkpoint.intent.next_action,
+      checkpoint.intent.artifact_refs,
+      { idempotencyKey: checkpoint.intent.idempotency_key },
+    );
+    checkpoint.intent.done = true;
+    persist(state);
+  }
   state.remote_pending = false;
 }
 
@@ -294,6 +387,9 @@ module.exports = {
   listStateFiles,
   makeRunId,
   processAlive,
+  processMatches,
+  processSnapshot,
+  prepareTerminalSync,
   publicState,
   readJson,
   required,
@@ -301,6 +397,7 @@ module.exports = {
   stateFile,
   syncProgress,
   syncTerminal,
+  validateAgentStatus,
   validateGatewayUrl,
   writeJsonAtomic,
 };

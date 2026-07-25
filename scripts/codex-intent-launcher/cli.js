@@ -17,13 +17,15 @@ const {
   ensurePrivateDir,
   listStateFiles,
   makeRunId,
-  processAlive,
+  processMatches,
+  processSnapshot,
   publicState,
   readJson,
   required,
   stateFile,
   syncProgress,
   syncTerminal,
+  validateAgentStatus,
   validateGatewayUrl,
   writeJsonAtomic,
 } = require("./lib");
@@ -58,8 +60,8 @@ Optional:
   --gateway <url>                  Defaults to MOA_GATEWAY_URL
   --token-env <name>               Defaults to MOA_GATEWAY_TOKEN
   --launcher-agent-id <id>
-  --tenant-id <id>                 Defaults to global
-  --sphere <name>                  Defaults to default
+  --tenant-id <id>                 Defaults to tenant_global
+  --sphere <name>                  Defaults to personal
   --capability <name>              Repeatable
   --authority-summary <text>
   --sensitivity <normal|sensitive|restricted>
@@ -67,6 +69,7 @@ Optional:
   --artifact <path-or-ref>         Repeatable
   --foreground                     Wait instead of returning after durable launch
   --allow-offline                  Launch if the hosted plane is temporarily unavailable
+  --reopen                         Explicitly start a new run for a terminal owner
   --state-dir <path>               Defaults to ~/.local/state/chief-moa/codex-intent-launcher
   --heartbeat-seconds <number>     Defaults to 60; minimum 15
 
@@ -85,7 +88,7 @@ durable state. It strips the gateway token from the launched command environment
 function parse(argv) {
   const values = {};
   const repeatable = new Set(["capability", "artifact"]);
-  const booleans = new Set(["user-confirmed", "foreground", "allow-offline", "remote"]);
+  const booleans = new Set(["user-confirmed", "foreground", "allow-offline", "remote", "reopen"]);
   const divider = argv.indexOf("--");
   const optionArgs = divider === -1 ? argv : argv.slice(0, divider);
   const command = divider === -1 ? [] : argv.slice(divider + 1);
@@ -112,6 +115,9 @@ function parse(argv) {
 
 function config(values, env = process.env) {
   const tokenEnv = clean(values["token-env"], 160) || "MOA_GATEWAY_TOKEN";
+  if (!/^[A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET)$/.test(tokenEnv)) {
+    throw new Error("token environment name must be an uppercase TOKEN, KEY, or SECRET variable");
+  }
   const token = env[tokenEnv];
   const gatewayUrl = values.gateway || env.MOA_GATEWAY_URL;
   return {
@@ -120,6 +126,44 @@ function config(values, env = process.env) {
     gatewayUrl: gatewayUrl ? validateGatewayUrl(gatewayUrl) : "",
     stateDir: path.resolve(values["state-dir"] || defaultStateDir(env)),
   };
+}
+
+const CHIEF_MOA_CREDENTIAL_ENV = new Set([
+  "MOA_GATEWAY_TOKEN",
+  "AGEE_GATEWAY_TOKEN",
+  "MOA_CONTROL_PLANE_TOKEN",
+  "MOA_DEPLOY_USER_TOKEN",
+  "MOA_DEPLOY_REVIEWER_TOKEN",
+  "MOA_PREVIEW_DEPLOYER_TOKEN",
+  "MOA_PRODUCTION_PROMOTER_TOKEN",
+  "MOA_MAIN_MACHINE_SSH_KEY",
+  "MOA_ANDROID_KEYSTORE_B64",
+  "MOA_ANDROID_KEYSTORE_PASSWORD",
+  "MOA_ANDROID_KEY_PASSWORD",
+  "ACCOUNT_CREDENTIAL_KEY",
+  "ACCOUNT_OAUTH_GOOGLE_CLIENT_SECRET",
+  "ACCOUNT_OAUTH_GITHUB_CLIENT_SECRET",
+  "CHIRP_ACCESS_TOKEN",
+  "GCP_SERVICE_ACCOUNT_KEY",
+  "GEMINI_API_KEY",
+  "VERTEX_EXPRESS_API_KEY",
+]);
+
+function childEnvironment(env, selectedTokenEnv) {
+  const result = { ...env };
+  for (const name of new Set([...CHIEF_MOA_CREDENTIAL_ENV, selectedTokenEnv])) delete result[name];
+  return result;
+}
+
+function assertSafeCommand(command) {
+  const sensitiveName = /(?:^|[-_])(?:access[-_]?token|token|secret|password|passwd|api[-_]?key|authorization|credential)(?:=|$)/i;
+  const credentialUrl = /^[a-z][a-z0-9+.-]*:\/\/[^/\s]+:[^@\s]+@|[?&](?:token|access_?token|api_?key|secret|signature|sig|authorization)=/i;
+  for (const argument of command) {
+    const value = String(argument);
+    if (sensitiveName.test(value) || credentialUrl.test(value) || /\bBearer\s+\S+/i.test(value)) {
+      throw new Error("command arguments appear to contain a credential; pass secrets through an approved secret store or narrowly scoped environment instead");
+    }
+  }
 }
 
 function clientFor(settings) {
@@ -131,6 +175,7 @@ function clientFor(settings) {
 function launchState(values, command, settings) {
   if (values["user-confirmed"] !== true) throw new Error("--user-confirmed is required");
   if (!Array.isArray(command) || command.length === 0) throw new Error("a command is required after --");
+  assertSafeCommand(command);
   const identity = buildIdentity({
     namespace: values.namespace,
     project: values.project,
@@ -153,8 +198,8 @@ function launchState(values, command, settings) {
     agent_id: identity.agentId,
     namespace: identity.namespace,
     project: identity.project,
-    tenant_id: clean(values["tenant-id"], 160) || "global",
-    sphere: clean(values.sphere, 160) || "default",
+    tenant_id: clean(values["tenant-id"], 160) || "tenant_global",
+    sphere: clean(values.sphere, 160) || "personal",
     intent_key: identity.intentKey,
     agent_key: identity.agentKey,
     title: required(values.title, "title", 240),
@@ -190,6 +235,12 @@ function launchState(values, command, settings) {
     worker_pid: null,
     remote_sequence: 0,
     remote_pending: true,
+    reopen_requested: values.reopen === true,
+    start_sync: {
+      done: false,
+      idempotency_key: `codex-adapter:start:${adapterRunId}`,
+      reopen_intent: values.reopen === true,
+    },
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -198,6 +249,23 @@ function launchState(values, command, settings) {
 async function admit(client, state) {
   await client.createIntent(state);
   await client.registerAgent(state);
+}
+
+async function startRemoteRun(client, state, persist = () => {}) {
+  state.start_sync ||= {
+    done: false,
+    idempotency_key: `codex-adapter:start:${state.adapter_run_id}`,
+    reopen_intent: Boolean(state.reopen_requested),
+  };
+  persist(state);
+  if (state.start_sync.done) return;
+  await client.startAgentRun(state, {
+    reopenIntent: state.start_sync.reopen_intent,
+    idempotencyKey: state.start_sync.idempotency_key,
+  });
+  state.start_sync.done = true;
+  state.remote_pending = false;
+  persist(state);
 }
 
 function writeLaunchSpec(state, command, values, settings) {
@@ -209,6 +277,7 @@ function writeLaunchSpec(state, command, values, settings) {
     state_file: state.state_file,
     command,
     stdin_file: values["stdin-file"] ? path.resolve(values["stdin-file"]) : "",
+    stdin_files: (values["stdin-files"] || []).map((item) => path.resolve(item)),
   });
   return file;
 }
@@ -229,7 +298,9 @@ async function launch(values, command) {
   const state = launchState(values, command, settings);
   writeJsonAtomic(state.state_file, state);
   try {
-    await admit(clientFor(settings), state);
+    const client = clientFor(settings);
+    await admit(client, state);
+    await startRemoteRun(client, state, (next) => writeJsonAtomic(next.state_file, next));
     state.remote_pending = false;
   } catch (error) {
     state.progress = `Hosted admission failed: ${clean(error.message, 1_000)}`;
@@ -241,6 +312,11 @@ async function launch(values, command) {
   const specFile = writeLaunchSpec(state, command, values, settings);
   const child = spawnWorker(specFile, Boolean(values.foreground));
   state.worker_pid = child.pid;
+  state.worker_pid_identity = processSnapshot(child.pid).identity;
+  if (!state.worker_pid_identity) {
+    child.kill("SIGTERM");
+    throw new Error("could not establish a stable launcher-worker identity");
+  }
   state.updated_at = new Date().toISOString();
   writeJsonAtomic(state.state_file, state);
   if (values.foreground) {
@@ -280,6 +356,7 @@ async function worker(specFile) {
   }
   state.status = "running";
   state.pid = process.pid;
+  state.pid_identity = processSnapshot(process.pid).identity;
   state.started_at = new Date().toISOString();
   state.updated_at = state.started_at;
   state.progress = "Codex owner process started.";
@@ -288,7 +365,7 @@ async function worker(specFile) {
   if (client) {
     try {
       if (state.remote_pending) await admit(client, state);
-      await syncProgress(client, state, "running", state.progress);
+      await startRemoteRun(client, state, (next) => writeJsonAtomic(next.state_file, next));
       writeJsonAtomic(state.state_file, state);
     } catch (error) {
       state.remote_pending = true;
@@ -297,9 +374,15 @@ async function worker(specFile) {
     }
   }
 
-  const childEnv = { ...process.env };
-  delete childEnv[state.token_env];
-  const stdin = spec.stdin_file ? fs.openSync(spec.stdin_file, "r") : "ignore";
+  const childEnv = childEnvironment(process.env, state.token_env);
+  const stdinFiles = (spec.stdin_files || [spec.stdin_file]).filter(Boolean);
+  let stdin = "ignore";
+  if (stdinFiles.length) {
+    const combined = path.join(outputDirectory, `.launch-input-${crypto.randomUUID()}`);
+    fs.writeFileSync(combined, stdinFiles.map((file) => fs.readFileSync(file, "utf8")).join("\n\n"), { mode: 0o600 });
+    stdin = fs.openSync(combined, "r");
+    fs.unlinkSync(combined);
+  }
   let exitCode = 1;
   let signal = "";
   let heartbeatTimer = null;
@@ -311,6 +394,11 @@ async function worker(specFile) {
       stdio: [stdin, stdout, stderr],
     });
     state.pid = child.pid;
+    state.pid_identity = processSnapshot(child.pid).identity;
+    if (!state.pid_identity) {
+      child.kill("SIGTERM");
+      throw new Error("could not establish a stable child-process identity");
+    }
     state.updated_at = new Date().toISOString();
     writeJsonAtomic(state.state_file, state);
     if (client) {
@@ -375,7 +463,11 @@ async function worker(specFile) {
   writeJsonAtomic(state.state_file, state);
   if (client) {
     try {
-      await syncTerminal(client, state);
+      if (!state.start_sync?.done) {
+        await admit(client, state);
+        await startRemoteRun(client, state, (next) => writeJsonAtomic(next.state_file, next));
+      }
+      await syncTerminal(client, state, { persist: (next) => writeJsonAtomic(next.state_file, next) });
       writeJsonAtomic(state.state_file, state);
     } catch (error) {
       state.remote_pending = true;
@@ -391,9 +483,12 @@ async function progress(values) {
   const runId = required(values.run, "run", 200);
   const file = stateFile(settings.stateDir, runId);
   const state = readJson(file);
-  const status = required(values.status, "status", 40);
+  const status = validateAgentStatus(values.status);
   const message = required(values.message, "message");
   const recap = clean(values.recap);
+  if (state.terminal_sync) {
+    throw new Error("terminal synchronization is already checkpointed; its status, recap, and artifacts are immutable");
+  }
   const artifacts = [...new Set([...(state.artifact_refs || []), ...(values.artifact || [])])].slice(0, 40);
   state.status = status;
   state.progress = message;
@@ -404,7 +499,10 @@ async function progress(values) {
   if (TERMINAL.has(status)) state.finished_at ||= state.updated_at;
   writeJsonAtomic(file, state);
   const client = clientFor(settings);
-  if (TERMINAL.has(status)) await syncTerminal(client, state);
+  if (TERMINAL.has(status)) {
+    if (!state.start_sync?.done) await startRemoteRun(client, state, (next) => writeJsonAtomic(next.state_file, next));
+    await syncTerminal(client, state, { persist: (next) => writeJsonAtomic(next.state_file, next) });
+  }
   else await syncProgress(client, state, status, message, { recap, artifactRefs: artifacts });
   writeJsonAtomic(file, state);
   process.stdout.write(`${JSON.stringify(publicState(state), null, 2)}\n`);
@@ -416,7 +514,7 @@ async function reconcile(values) {
   const results = [];
   for (const file of listStateFiles(settings.stateDir)) {
     const state = readJson(file);
-    if (state.status === "running" && !processAlive(state.pid)) {
+    if (state.status === "running" && !processMatches(state.pid, state.pid_identity)) {
       state.status = "blocked";
       state.finished_at = new Date().toISOString();
       state.updated_at = state.finished_at;
@@ -425,7 +523,8 @@ async function reconcile(values) {
       state.pid = null;
       state.remote_pending = true;
       writeJsonAtomic(file, state);
-    } else if (state.status === "queued" && state.worker_pid && !processAlive(state.worker_pid)) {
+    } else if (state.status === "queued" && state.worker_pid
+      && !processMatches(state.worker_pid, state.worker_pid_identity)) {
       state.status = "blocked";
       state.finished_at = new Date().toISOString();
       state.updated_at = state.finished_at;
@@ -437,7 +536,12 @@ async function reconcile(values) {
     if (state.remote_pending) {
       try {
         await admit(client, state);
-        if (TERMINAL.has(state.status)) await syncTerminal(client, state);
+        if (!state.start_sync?.done) {
+          await startRemoteRun(client, state, (next) => writeJsonAtomic(next.state_file, next));
+        }
+        if (TERMINAL.has(state.status)) {
+          await syncTerminal(client, state, { persist: (next) => writeJsonAtomic(next.state_file, next) });
+        }
         else if (state.status === "running") await syncProgress(client, state, "running", state.progress || "Running.", {
           recap: state.latest_recap,
           artifactRefs: state.artifact_refs,
@@ -467,7 +571,7 @@ async function status(values) {
 function codexCommand(values) {
   const promptFile = path.resolve(required(values["prompt-file"], "prompt file", 2_000));
   if (!fs.statSync(promptFile).isFile()) throw new Error("prompt file must be a file");
-  values["stdin-file"] = promptFile;
+  values["stdin-files"] = [path.join(__dirname, "direct-owner-prompt.md"), promptFile];
   const summaryFile = values["summary-file"] || path.join(
     path.resolve(values["state-dir"] || defaultStateDir()),
     "summaries",
@@ -515,4 +619,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { admit, codexCommand, config, launchState, main, parse };
+module.exports = {
+  admit,
+  assertSafeCommand,
+  childEnvironment,
+  codexCommand,
+  config,
+  launchState,
+  main,
+  parse,
+  startRemoteRun,
+};

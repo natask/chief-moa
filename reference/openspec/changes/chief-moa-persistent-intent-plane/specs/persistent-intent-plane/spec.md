@@ -57,6 +57,9 @@ non-terminal state. Starting another attempt SHALL require an explicit new run
 identity. Reopening a completed intent SHALL require explicit request;
 cancelled intents SHALL NOT reopen.
 
+Explicit reopen SHALL return a blocked, needs-user, or completed owning intent
+to active before the new run begins.
+
 ### Requirement: terminal pings are run-specific
 
 Completion and needs-user notification identity SHALL bind the owning intent,

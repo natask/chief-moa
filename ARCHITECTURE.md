@@ -106,6 +106,15 @@ Moa Gateway
   process API, and the adapter does not claim direct cross-session chat or
   resumability without a runtime-supplied session handle.
 
+  Each local attempt uses the hosted agent run-start command. Reusing a stable
+  terminal owner requires an explicit reopen and a new run identity. Terminal
+  agent and intent updates are separate checkpointed stages with run-bound
+  idempotency and notification identity. The adapter prepends a direct-worker
+  contract with numeric child limit zero, rejects recognizable secrets in raw
+  arguments, removes Chief Moa credentials from the child environment, requires
+  HTTPS outside loopback, and binds local liveness to PID plus process-start
+  identity.
+
   The same gateway binary runs in `local`, `self-host`, or `hosted` mode.
   Remote modes bind to `0.0.0.0`, require `MOA_GATEWAY_TOKEN` and
   `DATABASE_URL`, trust proxy headers only when configured, and should publish a

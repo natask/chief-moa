@@ -462,10 +462,11 @@ function createIntentPlane({
     const intent = currentState.intents.get(current.intent_id);
     if (!intent) throw new Error("owning intent not found");
     if (intent.status === "cancelled") throw new Error("cancelled intent cannot reopen");
-    if (intent.status === "completed" && input.reopen_intent !== true) {
-      throw new Error("completed intent requires reopen_intent true");
+    const reopenableIntent = ["blocked", "needs_user", "completed"].includes(intent.status);
+    if (reopenableIntent && input.reopen_intent !== true) {
+      throw new Error(`${intent.status} intent requires reopen_intent true`);
     }
-    if (intent.status === "completed") {
+    if (reopenableIntent) {
       await updateIntent(intent.intent_id, {
         status: "active",
         current_run_id: runId,

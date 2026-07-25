@@ -379,3 +379,39 @@ test("explicit run start reopens a completed agent and pings each run separately
   });
   assert.deepEqual(delayedStartReplay, started);
 });
+
+test("explicit run reopen returns a needs-user intent to active", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_retry", title: "Retry", objective: "Retry failed work",
+    user_confirmed: true, idempotency_key: "retry-create",
+  });
+  await f.plane.registerAgent({
+    agent_id: "agent_retry", intent_id: "intent_retry", launch_reason: "retry",
+    current_run_id: "run_failed", idempotency_key: "retry-register",
+  });
+  await f.plane.progressAgent("agent_retry", {
+    status: "running", progress: "started", idempotency_key: "retry-running",
+  });
+  await f.plane.progressAgent("agent_retry", {
+    status: "failed", progress: "failed", idempotency_key: "retry-failed",
+  });
+  await f.plane.updateIntent("intent_retry", {
+    status: "needs_user", current_run_id: "run_failed", next_action: "Retry",
+    idempotency_key: "retry-needs-user",
+  });
+  await assert.rejects(() => f.plane.startAgentRun("agent_retry", {
+    current_run_id: "run_rejected", progress: "retry without authority",
+    idempotency_key: "retry-rejected",
+  }), /needs_user intent requires reopen_intent true/);
+  const reopened = await f.plane.startAgentRun("agent_retry", {
+    current_run_id: "run_reopened",
+    reopen_intent: true,
+    progress: "retry with authority",
+    idempotency_key: "retry-reopened",
+  });
+  assert.equal(reopened.intent.status, "active");
+  assert.equal(reopened.agent.status, "running");
+  assert.equal(reopened.agent.current_run_id, "run_reopened");
+});
