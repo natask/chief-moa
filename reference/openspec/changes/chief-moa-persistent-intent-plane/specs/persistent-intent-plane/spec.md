@@ -49,3 +49,16 @@ authorization boundaries while one gateway principal reads the whole plane.
 A non-terminal registered agent MAY establish a bounded heartbeat lease. The
 projection SHALL report unleased, healthy, stale, or terminal after restart.
 Expiration SHALL NOT autonomously launch a duplicate agent.
+
+### Requirement: terminal state reopens only through a new run
+
+Progress SHALL NOT move a completed, failed, or cancelled agent into a
+non-terminal state. Starting another attempt SHALL require an explicit new run
+identity. Reopening a completed intent SHALL require explicit request;
+cancelled intents SHALL NOT reopen.
+
+### Requirement: terminal pings are run-specific
+
+Completion and needs-user notification identity SHALL bind the owning intent,
+run, terminal transition, and idempotency identity. A later run SHALL create a
+distinct notification and an exact retry SHALL return the original one.

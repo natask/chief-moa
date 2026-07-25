@@ -11,6 +11,8 @@
       recovery, context compaction, export, and reversible partitioning.
 - [x] Add reversible tenant/namespace/sphere/project placement and filters.
 - [x] Add agent runtime provenance, heartbeat leases, and stale detection.
+- [x] Add explicit repeated-run start, terminal transition enforcement, and
+      per-run terminal notification identity.
 - [ ] Add exclusive recovery claims and addressed steering messages.
 - [ ] Add typed relations and versioned artifact/recap aggregates.
 - [ ] Add scoped launcher/device identities before multi-user deployment.

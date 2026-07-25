@@ -8,6 +8,7 @@ const EVENT_TYPES = Object.freeze([
   "intent_plane.agent.registered",
   "intent_plane.agent.progressed",
   "intent_plane.agent.heartbeat",
+  "intent_plane.agent.run_started",
   "intent_plane.notification.created",
   "intent_plane.notification.received",
 ]);
@@ -15,6 +16,15 @@ const INTENT_STATUSES = new Set(["admitted", "active", "blocked", "needs_user", 
 const AGENT_STATUSES = new Set(["registered", "running", "blocked", "completed", "failed", "cancelled"]);
 const SENSITIVITIES = new Set(["normal", "sensitive", "restricted"]);
 const TERMINAL_AGENT_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const AGENT_STATUS_TRANSITIONS = Object.freeze({
+  registered: new Set(["registered", "running", "blocked", "failed", "cancelled"]),
+  running: new Set(["running", "blocked", "completed", "failed", "cancelled"]),
+  blocked: new Set(["blocked", "running", "completed", "failed", "cancelled"]),
+  completed: new Set(["completed"]),
+  failed: new Set(["failed"]),
+  cancelled: new Set(["cancelled"]),
+});
+const SENSITIVE_REFERENCE_KEY = /^(?:auth|authorization|code|credential|jwt|key|password|passwd|secret|sig|signature|token|access_?token|api_?key)$/i;
 
 function clean(value, max = 2_000) {
   const result = String(value || "").trim();
@@ -54,8 +64,21 @@ function texts(value, maxItems = 40) {
 
 function safeReference(value, label) {
   const result = clean(value, 800);
-  if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s]+:[^@\s]+@/i.test(result)
-    || /[?&](?:token|access_?token|api_?key|secret|signature|sig|authorization)=/i.test(result)
+  if (!result) return result;
+  let parsed;
+  try {
+    parsed = new URL(result);
+  } catch {
+    parsed = null;
+  }
+  const sensitiveParams = (params) =>
+    [...params.keys()].some((key) => SENSITIVE_REFERENCE_KEY.test(key));
+  const fragment = parsed ? parsed.hash.replace(/^#/, "") : "";
+  const fragmentParams = new URLSearchParams(fragment.replace(/^\?/, ""));
+  if ((parsed && (parsed.username || parsed.password))
+    || (parsed && sensitiveParams(parsed.searchParams))
+    || (fragment && sensitiveParams(fragmentParams))
+    || /(?:^|[?&#;])(?:auth|authorization|code|credential|jwt|key|password|passwd|secret|sig|signature|token|access_?token|api_?key)=/i.test(result)
     || /\bBearer\s+\S+/i.test(result)) {
     throw new Error(`${label} must not contain credentials`);
   }
@@ -118,7 +141,8 @@ function reduce(events) {
         updated_at: event.occurred_at,
       });
     } else if (event.event_type === "intent_plane.agent.progressed"
-      || event.event_type === "intent_plane.agent.heartbeat") {
+      || event.event_type === "intent_plane.agent.heartbeat"
+      || event.event_type === "intent_plane.agent.run_started") {
       const current = agents.get(payload.agent_id);
       if (current) agents.set(payload.agent_id, { ...current, ...payload, version: event.stream_version, updated_at: event.occurred_at });
     } else if (event.event_type === "intent_plane.notification.created") {
@@ -176,6 +200,36 @@ function createIntentPlane({
       const match = page.find((event) => event.idempotency_key === key);
       if (match || page.length < 500) return match;
     }
+  }
+
+  async function agentAtVersion(agentId, version) {
+    const rows = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await events.listEvents({
+        stream_id: streamId("agent", agentId),
+        order: "asc",
+        offset,
+        limit: 500,
+      });
+      rows.push(...page.filter((event) => event.stream_version <= version));
+      if (page.length < 500 || page.some((event) => event.stream_version >= version)) break;
+    }
+    return reduce(rows).agents.get(agentId);
+  }
+
+  async function intentAtVersion(intentId, version) {
+    const rows = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await events.listEvents({
+        stream_id: streamId("intent", intentId),
+        order: "asc",
+        offset,
+        limit: 500,
+      });
+      rows.push(...page.filter((event) => event.stream_version <= version));
+      if (page.length < 500 || page.some((event) => event.stream_version >= version)) break;
+    }
+    return reduce(rows).intents.get(intentId);
   }
 
   async function append(kind, id, operation, type, payload, rawKey, expectedVersion) {
@@ -250,17 +304,24 @@ function createIntentPlane({
       namespace_id: input.namespace_id === undefined ? current.namespace_id : scopedId(input.namespace_id, current.namespace_id, "namespace_id"),
       sphere: input.sphere === undefined ? current.sphere : scopedId(input.sphere, current.sphere, "sphere"),
       project_id: input.project_id === undefined ? current.project_id : scopedId(input.project_id, current.project_id, "project_id"),
+      last_transition_run_id: input.current_run_id === undefined && input.run_id === undefined
+        ? (current.last_transition_run_id || "")
+        : clean(input.current_run_id || input.run_id, 160),
     };
     await append("intent", intentId, "update", EVENT_TYPES[1], payload, input.idempotency_key || `${intentId}:${current.version + 1}`, current.version);
     if (status === "completed" || status === "needs_user") {
-      const notificationId = `notification_${crypto.createHash("sha256").update(`${intentId}:${status}`).digest("hex").slice(0, 24)}`;
+      const transitionKey = required(input.idempotency_key || `${intentId}:${current.version + 1}`, "idempotency_key", 240);
+      const runId = payload.last_transition_run_id || "";
+      const notificationId = `notification_${crypto.createHash("sha256")
+        .update(`${intentId}:${status}:${runId}:${transitionKey}`).digest("hex").slice(0, 24)}`;
       await createNotification({
         notification_id: notificationId,
         intent_id: intentId,
+        run_id: runId,
         kind: status,
         title: status === "completed" ? `Completed: ${payload.title}` : `Needs you: ${payload.title}`,
         message: payload.next_action || payload.objective,
-        idempotency_key: `intent-plane:notification:${intentId}:${status}`,
+        idempotency_key: `intent-plane:notification:${intentId}:${status}:${runId}:${transitionKey}`,
       });
     }
     return (await state()).intents.get(intentId);
@@ -304,6 +365,9 @@ function createIntentPlane({
     if (!current) throw new Error("agent not found");
     const status = clean(input.status, 40) || current.status;
     if (!AGENT_STATUSES.has(status)) throw new Error("unsupported agent status");
+    if (!AGENT_STATUS_TRANSITIONS[current.status]?.has(status)) {
+      throw new Error(`illegal agent status transition: ${current.status} -> ${status}; start a new run explicitly`);
+    }
     const payload = {
       agent_id: agentId,
       intent_id: current.intent_id,
@@ -346,7 +410,7 @@ function createIntentPlane({
       if (prior.payload?.request_fingerprint !== requestFingerprint) {
         throw new Error("agent heartbeat idempotency collision");
       }
-      return agentWithRecovery(current, now());
+      return agentWithRecovery(await agentAtVersion(agentId, prior.stream_version), prior.occurred_at);
     }
     const heartbeatAt = now();
     const heartbeatMs = Date.parse(heartbeatAt);
@@ -369,6 +433,71 @@ function createIntentPlane({
     return agentWithRecovery((await state()).agents.get(agentId), heartbeatAt);
   }
 
+  async function startAgentRun(agentId, input = {}) {
+    const currentState = await state();
+    const current = currentState.agents.get(agentId);
+    if (!current) throw new Error("agent not found");
+    const runId = required(input.current_run_id || input.run_id, "current_run_id", 160);
+    const rawKey = input.idempotency_key || `${agentId}:run:${runId}`;
+    const canonicalKey = idempotencyKey("agent", agentId, "run-start", rawKey);
+    const requestFingerprint = crypto.createHash("sha256").update(JSON.stringify({
+      current_run_id: runId,
+      reopen_intent: input.reopen_intent === true,
+      progress: clean(input.progress || input.last_progress),
+      latest_recap: input.latest_recap === undefined ? null : clean(input.latest_recap),
+      artifact_refs: input.artifact_refs === undefined ? null : texts(input.artifact_refs),
+    })).digest("hex");
+    const prior = await eventByIdempotency("agent", agentId, canonicalKey);
+    if (prior) {
+      if (prior.payload?.request_fingerprint !== requestFingerprint) {
+        throw new Error("agent run-start idempotency collision");
+      }
+      return {
+        agent: agentWithRecovery(await agentAtVersion(agentId, prior.stream_version), prior.occurred_at),
+        intent: await intentAtVersion(current.intent_id, prior.payload?.intent_version_at_start),
+      };
+    }
+    if (current.current_run_id === runId) throw new Error("current_run_id must identify a new run");
+    if (current.status === "running") throw new Error("running agent cannot start another run");
+    const intent = currentState.intents.get(current.intent_id);
+    if (!intent) throw new Error("owning intent not found");
+    if (intent.status === "cancelled") throw new Error("cancelled intent cannot reopen");
+    if (intent.status === "completed" && input.reopen_intent !== true) {
+      throw new Error("completed intent requires reopen_intent true");
+    }
+    if (intent.status === "completed") {
+      await updateIntent(intent.intent_id, {
+        status: "active",
+        current_run_id: runId,
+        next_action: clean(input.progress || input.last_progress) || "Run started.",
+        idempotency_key: `${rawKey}:reopen-intent`,
+      });
+    }
+    const intentAtStart = (await state()).intents.get(current.intent_id);
+    const runStartedAt = now();
+    const payload = {
+      agent_id: agentId,
+      intent_id: current.intent_id,
+      status: "running",
+      last_progress: clean(input.progress || input.last_progress) || "Run started.",
+      current_run_id: runId,
+      latest_recap: input.latest_recap === undefined ? current.latest_recap : clean(input.latest_recap),
+      artifact_refs: input.artifact_refs === undefined ? (current.artifact_refs || []) : texts(input.artifact_refs),
+      previous_run_id: current.current_run_id || "",
+      run_sequence: Number(current.run_sequence || 0) + 1,
+      run_started_at: runStartedAt,
+      intent_version_at_start: intentAtStart.version,
+      last_heartbeat_at: "",
+      lease_expires_at: "",
+      request_fingerprint: requestFingerprint,
+    };
+    await append("agent", agentId, "run-start", EVENT_TYPES[5], payload, rawKey, current.version);
+    return {
+      agent: agentWithRecovery((await state()).agents.get(agentId), runStartedAt),
+      intent: intentAtStart,
+    };
+  }
+
   async function createNotification(input = {}) {
     const currentState = await state();
     const notificationId = clean(input.notification_id, 160) || idFactory("notification");
@@ -377,6 +506,7 @@ function createIntentPlane({
     const payload = {
       notification_id: notificationId,
       intent_id: required(input.intent_id, "intent_id", 160),
+      run_id: clean(input.run_id, 160),
       kind: required(input.kind, "kind", 40),
       title: required(input.title, "title", 240),
       message: clean(input.message),
@@ -389,7 +519,7 @@ function createIntentPlane({
       assertExactReplay(await firstPayload("notification", notificationId), payload, "notification");
       return existing;
     }
-    await append("notification", notificationId, "create", EVENT_TYPES[5], payload, rawKey, 0);
+    await append("notification", notificationId, "create", EVENT_TYPES[6], payload, rawKey, 0);
     return (await state()).notifications.get(notificationId);
   }
 
@@ -397,7 +527,7 @@ function createIntentPlane({
     const current = (await state()).notifications.get(notificationId);
     if (!current) throw new Error("notification not found");
     if (current.receipt_state === "received") return current;
-    await append("notification", notificationId, "receipt", EVENT_TYPES[6], {
+    await append("notification", notificationId, "receipt", EVENT_TYPES[7], {
       notification_id: notificationId,
       intent_id: current.intent_id,
       receipt: { actor: clean(input.actor, 160) || "user", note: clean(input.note, 800), at: now() },
@@ -460,6 +590,7 @@ function createIntentPlane({
     registerAgent,
     progressAgent,
     heartbeatAgent,
+    startAgentRun,
     createNotification,
     receiveNotification,
     projection,
@@ -469,16 +600,21 @@ function createIntentPlane({
 
 function agentWithRecovery(agent, projectedAt) {
   if (!agent) return agent;
-  if (TERMINAL_AGENT_STATUSES.has(agent.status)) {
-    return { ...agent, recovery_state: "terminal" };
+  const {
+    request_fingerprint: _requestFingerprint,
+    intent_version_at_start: _intentVersionAtStart,
+    ...publicAgent
+  } = agent;
+  if (TERMINAL_AGENT_STATUSES.has(publicAgent.status)) {
+    return { ...publicAgent, recovery_state: "terminal" };
   }
-  if (!agent.last_heartbeat_at || !agent.lease_expires_at) {
-    return { ...agent, recovery_state: "unleased" };
+  if (!publicAgent.last_heartbeat_at || !publicAgent.lease_expires_at) {
+    return { ...publicAgent, recovery_state: "unleased" };
   }
   const projectedMs = Date.parse(projectedAt);
-  const expiryMs = Date.parse(agent.lease_expires_at);
+  const expiryMs = Date.parse(publicAgent.lease_expires_at);
   return {
-    ...agent,
+    ...publicAgent,
     recovery_state: Number.isFinite(projectedMs) && Number.isFinite(expiryMs) && projectedMs > expiryMs
       ? "stale"
       : "healthy",
