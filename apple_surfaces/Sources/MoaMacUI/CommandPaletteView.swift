@@ -37,7 +37,7 @@ public struct CommandPaletteView: View {
                     .help("Hide")
             }
 
-            if editingConnection || !model.isConfigured {
+            if editingConnection {
                 connectionEditor
             }
 
@@ -102,12 +102,12 @@ public struct CommandPaletteView: View {
                 .font(.caption2)
                 .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
 
-            Text("\(shortcutLabel) to toggle · Return to send · hold the mic to transcribe · no screen context attached")
+            Text("\(shortcutLabel) again to finish · hold the mic for push-to-talk · no screen context attached")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
-        .padding(18)
-        .frame(width: 560, height: 420, alignment: .top)
+        .padding(16)
+        .frame(width: 480, height: 320, alignment: .top)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.16)))
         .onAppear { promptFocused = true }
@@ -140,10 +140,7 @@ public struct CommandPaletteView: View {
     }
 
     private func cancelAndDismiss() {
-        Task {
-            await model.cancelVoice()
-            dismiss()
-        }
+        dismiss()
     }
 }
 #endif

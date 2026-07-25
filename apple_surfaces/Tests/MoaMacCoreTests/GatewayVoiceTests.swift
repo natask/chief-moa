@@ -318,19 +318,19 @@ private struct UnusedChatSender: GatewayChatSending {
     }
 }
 
-@MainActor @Test func commandModelPresentsExactPartialAndFinalTranscriptWithoutInsertion() async {
+@MainActor @Test func commandModelSummonStartsLatchedCaptureAndSecondSummonCommits() async {
     let capture = StubCaptureController()
     let model = CommandModel(
         store: VoiceTestConnectionStore(),
         sender: UnusedChatSender(),
         voiceController: capture
     )
-    await model.startVoice()
+    await model.handleSummon()
     #expect(capture.starts == 1)
     #expect(model.voiceState.phase == .listening)
     #expect(model.voiceState.partial == "protected fixture phrase")
     #expect(model.prompt.isEmpty)
-    await model.finishVoice()
+    await model.handleSummon()
     #expect(capture.commits == 1)
     #expect(model.voiceState.phase == .completed)
     #expect(model.voiceState.final == "protected fixture phrase")

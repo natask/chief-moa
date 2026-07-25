@@ -21,7 +21,10 @@ private final class CommandPanel: NSPanel {
 
     func setShortcutLabel(_ value: String) { shortcutLabel = value }
 
-    func toggle() { panel?.isVisible == true ? hide() : show() }
+    func invoke() {
+        show()
+        Task { await model.handleSummon() }
+    }
 
     func show() {
         let panel = panel ?? makePanel()
@@ -34,16 +37,19 @@ private final class CommandPanel: NSPanel {
     }
 
     func hide() {
-        panel?.orderOut(nil)
-        previousApplication?.activate(options: [])
-        previousApplication = nil
+        Task {
+            await model.cancelVoice()
+            panel?.orderOut(nil)
+            previousApplication?.activate(options: [])
+            previousApplication = nil
+        }
     }
 
     private func makePanel() -> CommandPanel {
         let view = CommandPaletteView(model: model, shortcutLabel: shortcutLabel) { [weak self] in self?.hide() }
         let hosting = NSHostingView(rootView: view)
         let panel = CommandPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -83,11 +89,17 @@ private final class CommandPanel: NSPanel {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         registerHotKey()
+        CommandPanelController.shared.invoke()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let handler { RemoveEventHandler(handler) }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        CommandPanelController.shared.invoke()
+        return false
     }
 
     private func registerHotKey() {
@@ -98,7 +110,7 @@ private final class CommandPanel: NSPanel {
             let status = GetEventParameter(carbonEvent, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                                            MemoryLayout<EventHotKeyID>.size, nil, &identifier)
             guard status == noErr, identifier.signature == OSType(0x4D4F4143), identifier.id == 1 else { return status }
-            Task { @MainActor in CommandPanelController.shared.toggle() }
+            Task { @MainActor in CommandPanelController.shared.invoke() }
             return noErr
         }, 1, &event, nil, &handler)
         guard handlerStatus == noErr else {
@@ -124,7 +136,7 @@ struct MoaMacApp: App {
 
     var body: some Scene {
         MenuBarExtra("Aggie", systemImage: "sparkles") {
-            Button("Open Aggie") { CommandPanelController.shared.show() }
+            Button("Speak with Aggie") { CommandPanelController.shared.invoke() }
                 .keyboardShortcut(" ", modifiers: .control)
             SettingsLink { Text("Privacy & Screen Context…") }
             Divider()

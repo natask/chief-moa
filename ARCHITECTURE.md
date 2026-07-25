@@ -345,10 +345,11 @@ companion versus seamless-assistant UX remains an explicit product decision.
 The macOS-only `MoaMac` product adds the native proactive surface:
 
 ```text
-menu-bar app or Control-Space
-  -> app-owned compact command panel (no AX read or pixel capture)
-  -> bounded authenticated POST /v1/chat to the user-configured gateway
-  -> inert assistant text rendered in the panel
+explicit app launch, menu-bar Speak, or Control-Space
+  -> one app-owned compact command panel (no AX read or pixel capture)
+  -> first invocation starts one latched literal WS voice capture
+  -> second invocation commits that capture and keeps feedback visible
+  -> typed Send remains a bounded authenticated POST /v1/chat
 ```
 
 The command panel stores the canonical gateway origin in app preferences and
@@ -356,8 +357,8 @@ the gateway bearer token in Keychain. It contains no packaged destination or
 provider credentials, rejects redirects, uses an ephemeral URL session, and
 never attaches screen context implicitly. Provider selection and credentials
 remain gateway-owned. This is the first daily companion slice; ticketed live
-voice, shared session-event presentation, pointer overlays, and approved native
-actions remain staged work.
+assistant audio replies, shared session-event presentation, pointer overlays,
+and approved native actions remain staged work.
 
 The privacy-scoped proactive flow remains separate:
 
@@ -394,6 +395,16 @@ element/state fingerprint binding, and fsync-backed pending/terminal receipts
 are wired and audited. The current ad-hoc-signed QA bundle is compilation and
 package evidence only; it has not been launched or TCC-tested and is not a
 production signing/notarization artifact.
+
+`MoaMac` has one singleton compact invocation panel. Explicit app launch, the
+registered global shortcut, or the menu-bar Speak action shows that panel and
+starts one latched literal voice capture. Repeating the summon commits the same
+capture; it never hides an active microphone session. Explicit dismissal
+cancels before hiding. The Privacy & Screen Context settings scene is reachable
+only through its explicit menu action and grants no authority to the invocation
+panel. The browser extension remains a separate browser-owned dictation surface;
+neither surface borrows the other's microphone, clipboard, tab, AX, or action
+authority.
 
 ## Runtime Flows
 
@@ -1953,10 +1964,16 @@ queues.
   Control-Space registration, and floating command-panel ownership.
 - `apple_surfaces/Sources/MoaMacCore/GatewayChat.swift`: bounded canonical
   macOS chat request and inert reply decoding.
+- `apple_surfaces/Sources/MoaMacCore/GatewayVoice.swift`: bounded literal voice
+  session envelope, PCM frame, server-event, and capture-state contracts.
 - `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: Keychain-backed
-  gateway connection state and redirect-rejecting ephemeral chat transport.
-- `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact typed
-  companion surface; it does not own Accessibility or capture authority.
+  gateway connection state, summon lifecycle, and redirect-rejecting ephemeral
+  chat transport.
+- `apple_surfaces/Sources/MoaMacShell/GatewayVoiceShell.swift`: explicit
+  microphone capture and authenticated voice WebSocket adapter.
+- `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact
+  voice/typed companion surface; it does not own Accessibility or pixel-capture
+  authority.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,

@@ -31,8 +31,8 @@ proposal before any platform-local action runs.
 - `release_control_plane`: persistent release authority contract and domain
   model above applications, clients, and build/QA runners.
 - `apple_surfaces`: shared Aggie authority library plus the native menu-bar
-  `MoaMac` typed companion, privacy-scoped observation/suggestion surface, and
-  ad-hoc-signed QA bundle tooling.
+  `MoaMac` voice/typed companion, privacy-scoped observation/suggestion surface,
+  and ad-hoc-signed QA bundle tooling.
 
 ## Common commands
 

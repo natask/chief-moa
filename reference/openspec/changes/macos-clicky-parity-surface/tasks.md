@@ -17,15 +17,24 @@
 - [ ] 2.3 Install the QA bundle only when it will not disturb an existing app or
       TCC identity; otherwise record the installation blocker and artifact.
 
-## 3. Parity stages
+## 3. Voice invocation
 
-- [ ] 3.1 Add ticketed `WS /v1/voice/sessions` push-to-talk and gateway audio
-      playback without local provider keys.
-- [ ] 3.2 Add shared Aggie thread/history/run event presentation.
-- [ ] 3.3 Add visual pointer/caption guidance as inert overlays.
-- [ ] 3.4 Complete semantic AX proposal validation, approval, execution, and
+- [x] 3.1 Add ticketed `WS /v1/voice/sessions` literal voice capture without
+      local provider keys.
+- [x] 3.2 Make app launch and global summon open the one compact panel directly
+      in latched capture; a second summon commits, while Escape cancels before
+      hiding.
+- Acceptance: one explicit launch/summon produces one visible capture surface,
+  repeating the summon commits the same turn, and no active capture becomes
+  hidden.
+
+## 4. Later parity stages
+
+- [ ] 4.1 Add shared Aggie thread/history/run event presentation.
+- [ ] 4.2 Add visual pointer/caption guidance as inert overlays.
+- [ ] 4.3 Complete semantic AX proposal validation, approval, execution, and
       durable receipts from `privacy-first-macos-surface`.
-- [ ] 3.5 Produce a Developer ID-signed, hardened, notarized, stapled universal
+- [ ] 4.4 Produce a Developer ID-signed, hardened, notarized, stapled universal
       artifact with rollback and isolated TCC evidence.
-- [ ] 3.6 Add explicit local subscription-harness adapters and self-host
+- [ ] 4.5 Add explicit local subscription-harness adapters and self-host
       provisioning without extracting vendor CLI OAuth tokens.

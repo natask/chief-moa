@@ -1,17 +1,33 @@
 ## ADDED Requirements
 
-### Requirement: The macOS companion is summonable without observation
+### Requirement: The macOS companion uses one explicitly invoked capture surface
 
 The macOS surface SHALL provide a menu-bar entry and a global summon shortcut
-for a compact typed command panel. Summoning, dismissing, or submitting this
-panel SHALL NOT implicitly read Accessibility context or capture pixels.
+for one compact command panel. App launch and the first summon SHALL show that
+same panel and begin a latched voice capture. A second summon SHALL commit the
+active capture rather than hiding it. Explicit dismissal SHALL cancel capture
+before hiding. These actions SHALL NOT implicitly read Accessibility context or
+capture pixels.
 
 #### Scenario: User summons the assistant
 
 - **WHEN** the user presses the registered global shortcut
-- **THEN** the app shows and focuses its compact command panel
-- **AND** no Accessibility grant, AX traversal, screen capture, or network call
-  occurs until the user submits a turn
+- **THEN** the app shows and focuses its sole compact command panel
+- **AND** begins one visible microphone capture against the configured gateway
+- **AND** no Accessibility grant, AX traversal, or screen capture occurs
+
+#### Scenario: User repeats the summon
+
+- **WHEN** the compact panel has an active capture and the user invokes the
+  global shortcut again
+- **THEN** the same capture is committed exactly once
+- **AND** the panel remains visible for transcript or failure feedback
+
+#### Scenario: User dismisses the surface
+
+- **WHEN** capture is active and the user presses Escape or the close control
+- **THEN** capture is canceled before the sole panel is hidden
+- **AND** no second or persistent settings panel is opened
 
 ### Requirement: Typed turns use the configured Aggie gateway
 

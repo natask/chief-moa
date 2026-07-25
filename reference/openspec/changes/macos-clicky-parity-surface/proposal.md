@@ -12,8 +12,9 @@ other surfaces.
 ## What Changes
 
 - Turn `MoaMac` into a menu-bar application with no persistent Dock presence.
-- Add a global `Control+Space` summon shortcut and compact floating command
-  panel for typed turns.
+- Add a global `Control+Space` summon shortcut and one compact floating command
+  panel for voice capture and typed turns. App launch and first summon begin
+  latched capture; the next summon commits it.
 - Store only the configured gateway origin and bearer token locally. The token
   remains in Keychain; raw provider credentials and consumer-subscription
   tokens never enter the app.
@@ -28,7 +29,8 @@ other surfaces.
 
 ## Milestone
 
-The first artifact is a private QA application. It proves the daily typed
-companion loop against a configured self-hosted or hosted gateway. Voice,
-session-event streaming, semantic actions, signed universal distribution, and
-conversational self-host provisioning remain separately reviewable stages.
+The first artifact is a private QA application. It proves the daily typed and
+literal voice-capture companion loop against a configured self-hosted or hosted
+gateway. Assistant voice replies, session-event history, semantic actions,
+signed universal distribution, and conversational self-host provisioning remain
+separately reviewable stages.

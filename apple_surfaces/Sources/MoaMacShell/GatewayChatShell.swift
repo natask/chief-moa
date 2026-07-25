@@ -149,6 +149,16 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         voiceState.apply(.reset)
     }
 
+    /// One explicit summon starts a latched capture. The next summon commits
+    /// that same turn, even when the microphone or socket is still starting.
+    public func handleSummon() async {
+        if voiceState.isActive {
+            await finishVoice()
+        } else {
+            await startVoice()
+        }
+    }
+
     public func startVoice() async {
         guard !voiceState.isActive else { return }
         voiceGeneration &+= 1

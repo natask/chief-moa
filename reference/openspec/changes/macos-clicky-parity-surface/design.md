@@ -3,14 +3,16 @@
 ## Product shell
 
 `MoaMac` runs as an `LSUIElement` menu-bar application. `Control+Space` uses
-the public Carbon hot-key registration API and toggles an app-owned `NSPanel`.
+the public Carbon hot-key registration API and invokes one app-owned `NSPanel`.
 If that system combination is already reserved, registration falls back to
 `Option+Space` and the command panel shows the shortcut that actually won.
 If neither registration succeeds, the menu-bar entry remains available and the
 panel says to use it instead of silently advertising a broken shortcut.
-The panel is centered on the active screen, can become key for text entry, and
-hides on Escape. Settings and the existing screen-context grant UI remain in a
-normal deeper window.
+App launch and the first summon show the same compact panel and begin one
+latched voice capture. A second summon commits that capture; it never hides an
+active microphone session. Escape explicitly cancels capture before hiding.
+Settings and the existing screen-context grant UI remain in a normal deeper
+window reached only through the menu-bar Settings action.
 
 ## Gateway boundary
 
@@ -41,6 +43,10 @@ remain gateway/execution-machine concerns.
 Summoning or submitting the command panel performs no AX traversal or screen
 capture. The existing screen-context screen is a separate explicit product
 grant with its own release mode, scope, preview, and revocation lifecycle.
+Voice capture is separately user-invoked by app launch, the registered shortcut,
+or the menu-bar Speak action. It sends only PCM and the bounded voice-session
+envelope to the configured gateway; it does not inherit screen-context
+authority.
 
 ## Release boundary
 
