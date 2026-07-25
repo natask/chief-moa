@@ -12,7 +12,7 @@ const {
   generatePcm16Tone: generateProviderTone,
 } = require("./voice-providers");
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
-const { canonicalVoice } = require("./profile-options");
+const { effectiveProfileForSession } = require("./voice-session-profile");
 const {
   hasPartialEndpointPlayback, normalizeAssistantAudioSegment: normalizeSegmentRaw,
   normalizePlaybackProgress: normalizeProgressRaw, normalizeProgressStage,
@@ -1140,6 +1140,9 @@ class VoiceSessionConnection {
       ...(providerResult?.streaming ? { streaming: true } : {}),
       ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
       ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
+      // Speak-forever narration metadata; absent on non-narration turns.
+      ...(Number.isFinite(providerResult?.narration_rounds) ? { narration_rounds: providerResult.narration_rounds } : {}),
+      ...(providerResult?.narration_stop_reason ? { narration_stop_reason: providerResult.narration_stop_reason } : {}),
     });
 
     // Generation is complete, but endpoint playback may still have a queued
@@ -1333,6 +1336,10 @@ class VoiceSessionConnection {
         )),
         ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
         ...(providerResult?.tts_language_mismatch ? { tts_language_mismatch: true } : {}),
+        // Speak-forever narration metadata on the canonical record; absent on
+        // non-narration turns.
+        ...(Number.isFinite(providerResult?.narration_rounds) ? { narration_rounds: providerResult.narration_rounds } : {}),
+        ...(providerResult?.narration_stop_reason ? { narration_stop_reason: providerResult.narration_stop_reason } : {}),
         stage_timings: sanitizeStageTimings(turn.providerEvents?.stageTimings),
         transcript_language_rejected: providerResult?.transcript_language_rejected === true || turn.transcriptLanguageRejected === true,
         // The restricted INPUT languages the STT leg recognized, captured at
@@ -1749,35 +1756,6 @@ function sanitizePersonaText(value, max) {
     .slice(0, max);
 }
 
-function effectiveProfileForSession(profile, event) {
-  const base = profile && typeof profile === "object" ? profile : {};
-  const override = event?.profile_override && typeof event.profile_override === "object" && !Array.isArray(event.profile_override)
-    ? event.profile_override
-    : event?.profileOverride && typeof event.profileOverride === "object" && !Array.isArray(event.profileOverride)
-      ? event.profileOverride
-      : {};
-  const next = { ...base };
-  const voice = canonicalVoice(String(override.voice || event?.voice || ""));
-  if (voice) {
-    next.voice = voice;
-  }
-  const modality = String(override.response_modality || override.responseModality || "").trim().toLowerCase();
-  if (modality === "speech" || modality === "text" || modality === "auto") {
-    next.response_modality = modality;
-  }
-  // Session-scoped delivery controls (a pet that talks fast, a slow-reader
-  // mode): same validation band as the profile store, never persisted.
-  const rate = Number(override.speaking_rate ?? override.speakingRate);
-  if (Number.isFinite(rate) && rate >= 0.5 && rate <= 2) {
-    next.speaking_rate = Math.round(rate * 100) / 100;
-  }
-  const tone = sanitizePersonaText(override.voice_tone ?? override.voiceTone ?? "", 160);
-  if (tone) {
-    next.voice_tone = tone;
-  }
-  return next;
-}
-
 // Tear down the streaming STT recognizer without finalizing (cancel/close/
 // interrupt paths). The commit path finalizes via runSttStage instead; here the
 // turn is terminal, so we just destroy the gRPC stream. Best-effort, never
@@ -2152,4 +2130,5 @@ module.exports = {
   createVoiceSessionServer,
   generatePcm16Tone: generateProviderTone,
   VoiceSessionConnection,
+  effectiveProfileForSession,
 };

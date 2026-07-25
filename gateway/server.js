@@ -13,6 +13,10 @@ const {
 const { voiceProviderNames, createVoiceProvider, reportVoiceStreamingFault } = require("./lib/voice-providers");
 const { createSpeakStreamSanitizer } = require("./lib/voice-chunker");
 const {
+  speakForeverEnabled, speakForeverCaps, narrationToolDefs, narrationDirective,
+  narrationActionCalled, runNarrationLoop,
+} = require("./lib/voice-narration");
+const {
   livekitConfigured,
   livekitStatus,
   mintRoomToken,
@@ -8407,6 +8411,12 @@ async function runCascadedVoiceReasoningInner(input) {
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
   const personaBlock = sessionPersonaBlock(input?.persona);
+  // Speak-forever narration (VOICE_SPEAK_FOREVER, default off): the tools and
+  // directive appear only when this turn can stream chunked audio — the
+  // narration loop reuses the streaming pipeline and never runs without it.
+  const narrationTools = typeof input?.on_speak_delta === "function" && typeof input?.on_speak_drain === "function"
+    ? narrationToolDefs(process.env, { modality: String(input?.response_modality || "") })
+    : [];
   const messages = [{ role: "user", content: transcript }];
   const systemBlocks = [
     contextArtifact?.text || "",
@@ -8419,6 +8429,7 @@ async function runCascadedVoiceReasoningInner(input) {
     languageControl,
     deliveryDirective,
     toolAckDirective,
+    narrationTools.length ? narrationDirective() : "",
     languageDirective,
   ].filter(Boolean);
   const modelMessages = systemBlocks.length
@@ -8450,6 +8461,9 @@ async function runCascadedVoiceReasoningInner(input) {
   }
   if (voiceExecuteToolEnabled()) {
     toolDefs.push(cascadedExecuteToolDef(toolCallInput));
+  }
+  if (narrationTools.length) {
+    toolDefs.push(...narrationTools);
   }
   // Streaming: when the voice pipeline passes on_speak_delta, run the
   // streaming twin of the tool loop and forward final-answer deltas through
@@ -8500,10 +8514,49 @@ async function runCascadedVoiceReasoningInner(input) {
       ...(typeof input?.is_turn_active === "function" ? { isActive: input.is_turn_active } : {}),
     })
     : await callModelToolLoop(modelMessages, profile, toolDefs);
+  // Speak-forever narration loop (OpenSpec voice-speak-forever-output-loop):
+  // when the model engaged narration (begin_continuous_narration) or the
+  // session override asked for it, self-prompt the model for the next beat
+  // through the SAME sanitizer and pipeline until it finishes, the user
+  // interrupts, or a hard cap trips. One turn, one audio envelope.
+  let narration = null;
+  if (speakForeverEnabled()
+      && (input?.speak_forever === true || narrationActionCalled(toolTurn.tool_results, "begin_continuous_narration"))) {
+    if (speakSanitizer && narrationTools.length) {
+      narration = await runNarrationLoop({
+        messages: modelMessages,
+        initialResult: toolTurn,
+        callRound: (msgs) => callModelToolLoopStreaming(msgs, profile, toolDefs, {
+          onTextDelta: (delta) => speakSanitizer.push(delta),
+          ...(typeof input?.is_turn_active === "function" ? { isActive: input.is_turn_active } : {}),
+        }),
+        ...(typeof input?.is_turn_active === "function" ? { isActive: input.is_turn_active } : {}),
+        drainBelow: (limit) => input.on_speak_drain(limit),
+        segmentsEnqueued: typeof input?.speak_segments === "function" ? input.speak_segments : () => 0,
+        speakCapped: () => speakSanitizer.capped(),
+        caps: speakForeverCaps(),
+      });
+    } else {
+      // Narration was requested but the streaming pipeline is unavailable
+      // (kill switch, tripped breaker, text modality): one ordinary round,
+      // honestly labeled — a non-streaming narration loop is deliberately
+      // not built.
+      narration = {
+        text: String(toolTurn.text || ""),
+        rounds: 1,
+        stop_reason: "streaming_unavailable",
+        tool_results: toolTurn.tool_results,
+      };
+    }
+  }
+  const turnToolResults = narration ? narration.tool_results : toolTurn.tool_results;
+  const narrationFields = narration
+    ? { narration_rounds: narration.rounds, narration_stop_reason: narration.stop_reason || "finished" }
+    : {};
   if (speakSanitizer) {
     speakSanitizer.end();
   }
-  const text = String(toolTurn.text || "");
+  const text = String((narration ? narration.text : toolTurn.text) || "");
   stashContextDecision(input?.session_id || input?.conversation_id || "", input?.turn_id || "", { decision: contextDecision, thread: filingThread });
   // Re-read the profile: a tool may have changed voice_max_chars this turn.
   const effectiveAfter = agentProfile.effective(profileOptions);
@@ -8521,13 +8574,13 @@ async function runCascadedVoiceReasoningInner(input) {
   // companion_motion and page_tweak). The cascaded provider carries these on the
   // turn result and the session server forwards each as its own client event —
   // model output stays a proposal; the client runtime validates and executes.
-  const turnActions = collectCascadedToolActions(toolTurn.tool_results);
+  const turnActions = collectCascadedToolActions(turnToolResults);
   // The model judged that no reply is wanted (stay_silent tool). Return the
   // silent-control shape: nothing spoken, nothing displayed, playback stopped.
   // Any text the model produced alongside the call is deliberately dropped —
   // silence means silence.
-  const staySilent = Array.isArray(toolTurn.tool_results)
-    && toolTurn.tool_results.some((entry) => entry?.result?.action?.type === "stay_silent");
+  const staySilent = Array.isArray(turnToolResults)
+    && turnToolResults.some((entry) => entry?.result?.action?.type === "stay_silent");
   if (staySilent) {
     return {
       speak: "",
@@ -8538,6 +8591,7 @@ async function runCascadedVoiceReasoningInner(input) {
       model: effectiveAfter.model || MODEL_ID,
       classification: "control",
       actions: [{ type: "control", name: "stop" }],
+      ...narrationFields,
       context: contextResponseBlock(filingThread, contextDecision, contextArtifact),
     };
   }
@@ -8550,6 +8604,7 @@ async function runCascadedVoiceReasoningInner(input) {
     model: effectiveAfter.model || MODEL_ID,
     classification: "chat",
     ...(turnActions.length ? { actions: turnActions } : {}),
+    ...narrationFields,
     context: contextResponseBlock(
       filingThread,
       contextDecision,
@@ -9164,6 +9219,12 @@ async function recordStreamingVoiceTurn(turn) {
       ...(turn.spoken_progress && typeof turn.spoken_progress === "object" && !Array.isArray(turn.spoken_progress)
         ? { spoken_progress: turn.spoken_progress }
         : {}),
+      // Speak-forever narration metadata (absent on non-narration turns): how
+      // many self-prompt rounds ran and why the narration stopped.
+      ...(Number.isFinite(Number(turn.narration_rounds)) ? {
+        narration_rounds: Number(turn.narration_rounds),
+        narration_stop_reason: String(turn.narration_stop_reason || ""),
+      } : {}),
       error: String(turn.error || ""),
     },
   };
@@ -9386,6 +9447,22 @@ async function recordStreamingVoiceTurn(turn) {
 // recorded a playback cutoff (spoken_progress from the frame->text ledger),
 // name the exact words where speech stopped so a "continue" resumes there
 // instead of restarting or re-answering.
+// A completed speak-forever narration turn's reply can be tens of kilobytes.
+// Head-truncation would quote the narration's opening and drop where it
+// stopped; keep the TAIL so a "continue" request anchors on the last words.
+// Non-narration turns keep the head-truncating behavior unchanged.
+const NARRATION_CONTEXT_TAIL_CHARS = 1500;
+function contextAssistantSnippet(voiceSession, text, cap) {
+  const value = String(text || "");
+  if (!Number.isFinite(Number(voiceSession?.narration_rounds))) {
+    return truncate(value, cap);
+  }
+  if (value.length <= NARRATION_CONTEXT_TAIL_CHARS) {
+    return value;
+  }
+  return `[...narration elided...] ${value.slice(-NARRATION_CONTEXT_TAIL_CHARS)}`;
+}
+
 function interruptedAssistantLabel(voiceSession) {
   const spoken = String(voiceSession?.spoken_progress?.spoken_text || "").trim();
   if (!spoken) {
@@ -9429,7 +9506,11 @@ function voiceLiveContextPrompt(turn) {
     lines.push("", "Recent turns, oldest to newest:");
     for (const record of records) {
       const user = truncate(contextUserTranscript(record.transcript, record.transcript_source), 480);
-      const assistant = truncate(String(record.response?.display || record.response?.speak || record.response?.text || ""), 480);
+      const assistant = contextAssistantSnippet(
+        record.references?.voice_session,
+        String(record.response?.display || record.response?.speak || record.response?.text || ""),
+        480
+      );
       const interrupted = record.references?.voice_session?.incomplete === true || record.classification === "interrupted";
       lines.push(`- user (${record.classification || "turn"}, ${record.profile_version || "profile_unknown"}): ${user || "(empty)"}`);
       if (assistant) {
@@ -9886,7 +9967,11 @@ function durableSessionContextBlock(options = {}) {
     lines.push("", "Recent voice turns, oldest to newest:");
     for (const turn of voiceTurns) {
       const user = truncate(contextUserTranscript(turn.transcript, turn.transcript_source), 500);
-      const assistant = truncate(String(turn.response?.display || turn.response?.text || turn.response?.speak || ""), 500);
+      const assistant = contextAssistantSnippet(
+        turn.references?.voice_session,
+        String(turn.response?.display || turn.response?.text || turn.response?.speak || ""),
+        500
+      );
       const interrupted = turn.references?.voice_session?.incomplete === true || turn.classification === "interrupted";
       lines.push(`- user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`);
       if (assistant) {
@@ -10102,7 +10187,11 @@ function buildCanonicalContextArtifact(options = {}) {
     for (const turn of voiceTurns) {
       const sourceId = `voice:${sanitizeLooseId(turn.id || turn.turn_id || "turn")}`;
       const user = truncate(contextUserTranscript(turn.transcript, turn.transcript_source), 500);
-      const assistant = truncate(String(turn.response?.display || turn.response?.text || turn.response?.speak || ""), 500);
+      const assistant = contextAssistantSnippet(
+        turn.references?.voice_session,
+        String(turn.response?.display || turn.response?.text || turn.response?.speak || ""),
+        500
+      );
       const interrupted = turn.references?.voice_session?.incomplete === true || turn.classification === "interrupted";
       const lines = [`- [${sourceId}] user (${turn.classification || "turn"}, branch=${turn.branch_id || "default"}): ${user || "(empty)"}`];
       if (assistant) {

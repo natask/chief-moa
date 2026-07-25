@@ -10,6 +10,10 @@ const { buildChirpTranscriptionPrompt } = require("./chirp-transcription-prompt"
 const { createSttStage, createReasonerStage, createTtsStage } = require("./voice-stages");
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
+const {
+  PROVIDER_TYPES, PROVIDER_CAPABILITY_FLAGS, providerName, registryProviderId,
+  capabilities, buildVoiceProviderRegistry,
+} = require("./voice-provider-registry");
 const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
 const { phoneActionGeminiDeclaration } = require("./surface-skills");
 const {
@@ -32,138 +36,26 @@ const CHIRP_MAX_PROMPT_LANGUAGE_CODES = 2;
 const CHIRP_AUTO_LANGUAGE_CODES = Object.freeze(["auto"]);
 const GEMINI_LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const VERTEX_LIVE_EXPRESS_ENDPOINT = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent";
-const PROVIDER_TYPES = ["native_live", "stt", "reasoning", "tts"];
-const PROVIDER_CAPABILITY_FLAGS = [
-  "duplex_audio",
-  "barge_in",
-  "server_vad",
-  "partial_transcripts",
-  "assistant_audio",
-  "voice_output",
-  "transcription_only",
-  "mid_session_profile_update",
-  "language_hints",
-  "provider_session_resume",
-  "streaming_tts",
-  "streaming_reasoning",
-];
-const PROVIDER_ALIASES = Object.freeze({
-  test: "loopback",
-  "google-chirp": "chirp",
-  chirp3: "chirp",
-  "chirp-3": "chirp",
-});
-const VOICE_PROVIDER_REGISTRY = Object.freeze({
-  native_live: Object.freeze({
-    loopback: providerRegistryEntry({
-      id: "loopback",
-      label: "Loopback transport QA",
-      capabilities: {
-        assistant_audio: true,
-        voice_output: true,
-      },
-      configured: () => true,
-      create: (options) => new LoopbackVoiceProvider(options),
-    }),
-    "gemini-live": providerRegistryEntry({
-      id: "gemini-live",
-      label: "Gemini Live",
-      capabilities: {
-        duplex_audio: true,
-        barge_in: true,
-        server_vad: true,
-        partial_transcripts: true,
-        assistant_audio: true,
-        voice_output: true,
-        language_hints: true,
-      },
-      configured: (env) => Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY),
-      create: (options) => new GeminiLiveVoiceProvider(options, {
-        provider: "gemini-live",
-        defaultModel: DEFAULT_GEMINI_LIVE_MODEL,
-        defaultEndpoint: GEMINI_LIVE_ENDPOINT,
-        authMode: "google-ai-api-key",
-      }),
-    }),
-    "vertex-live": providerRegistryEntry({
-      id: "vertex-live",
-      label: "Vertex Live",
-      capabilities: {
-        duplex_audio: true,
-        barge_in: true,
-        server_vad: true,
-        partial_transcripts: true,
-        assistant_audio: true,
-        voice_output: true,
-        language_hints: true,
-      },
-      configured: vertexLiveConfigured,
-      create: (options) => new GeminiLiveVoiceProvider(options, {
-        provider: "vertex-live",
-        defaultModel: DEFAULT_VERTEX_LIVE_MODEL,
-        defaultEndpoint: VERTEX_LIVE_EXPRESS_ENDPOINT,
-        authMode: "vertex",
-      }),
-    }),
+// The registry data (provider catalog, capability flags, alias tables) lives
+// in voice-provider-registry.js; the concrete provider classes stay here and
+// arrive as factories.
+const VOICE_PROVIDER_REGISTRY = buildVoiceProviderRegistry({
+  chirpConfigured,
+  vertexLiveConfigured,
+  createLoopback: (options) => new LoopbackVoiceProvider(options),
+  createGeminiLive: (options) => new GeminiLiveVoiceProvider(options, {
+    provider: "gemini-live",
+    defaultModel: DEFAULT_GEMINI_LIVE_MODEL,
+    defaultEndpoint: GEMINI_LIVE_ENDPOINT,
+    authMode: "google-ai-api-key",
   }),
-  stt: Object.freeze({
-    chirp: providerRegistryEntry({
-      id: "chirp",
-      label: "Google Chirp 3 Speech-to-Text",
-      capabilities: {
-        partial_transcripts: false,
-        transcription_only: true,
-        language_hints: true,
-      },
-      configured: chirpConfigured,
-      create: (options) => new CascadedVoiceProvider(options),
-    }),
+  createVertexLive: (options) => new GeminiLiveVoiceProvider(options, {
+    provider: "vertex-live",
+    defaultModel: DEFAULT_VERTEX_LIVE_MODEL,
+    defaultEndpoint: VERTEX_LIVE_EXPRESS_ENDPOINT,
+    authMode: "vertex",
   }),
-  reasoning: Object.freeze({
-    gateway: providerRegistryEntry({
-      id: "gateway",
-      label: "A.G. gateway voice-turn router",
-      capabilities: {
-        streaming_reasoning: true,
-      },
-      configured: () => true,
-    }),
-  }),
-  tts: Object.freeze({
-    "android-tts": providerRegistryEntry({
-      id: "android-tts",
-      label: "Android local TextToSpeech",
-      capabilities: {
-        voice_output: true,
-      },
-      configured: () => true,
-    }),
-    "cloud-tts": providerRegistryEntry({
-      id: "cloud-tts",
-      label: "Google Cloud Text-to-Speech (Chirp 3 HD where available)",
-      capabilities: {
-        voice_output: true,
-        streaming_tts: true,
-      },
-      configured: chirpConfigured,
-    }),
-    "gemini-tts": providerRegistryEntry({
-      id: "gemini-tts",
-      label: "Gemini 3.1 Flash TTS (Cloud TTS modelName)",
-      capabilities: {
-        voice_output: true,
-        language_hints: true,
-        streaming_tts: true,
-      },
-      configured: chirpConfigured,
-    }),
-    none: providerRegistryEntry({
-      id: "none",
-      label: "No hosted TTS",
-      capabilities: {},
-      configured: () => true,
-    }),
-  }),
+  createCascaded: (options) => new CascadedVoiceProvider(options),
 });
 
 const CLOUD_TTS_DEFAULT_VOICES = Object.freeze({
@@ -175,14 +67,6 @@ const GEMINI_TTS_DEFAULT_MODEL = "gemini-3.1-flash-tts-preview";
 const GEMINI_TTS_DEFAULT_VOICE = "Kore";
 const CLOUD_TTS_ENDPOINT = "https://texttospeech.googleapis.com/v1/text:synthesize";
 const CLOUD_TTS_V1BETA1_ENDPOINT = "https://texttospeech.googleapis.com/v1beta1/text:synthesize";
-const PROVIDER_ALIASES_TTS = Object.freeze({
-  "chirp-tts": "cloud-tts",
-  "cloud-text-to-speech": "cloud-tts",
-  "google-tts": "cloud-tts",
-  "gemini-flash-tts": "gemini-tts",
-  "gemini-3.1-flash-tts": "gemini-tts",
-  "gemini-tts-preview": "gemini-tts",
-});
 
 class TurnSupersededError extends Error {
   constructor(message) {
@@ -290,10 +174,6 @@ function voiceProviderNames(env) {
   };
 }
 
-function providerName(value) {
-  return String(value || "").trim().toLowerCase().replace(/_/g, "-");
-}
-
 function allSameProvider(names, provider) {
   return names.stt === provider && names.llm === provider && names.tts === provider;
 }
@@ -343,20 +223,6 @@ function voiceRuntimeStatus(options) {
     capabilities: registry.capabilities,
     provider_registry: registry.providers,
   };
-}
-
-function providerRegistryEntry(entry) {
-  return Object.freeze({
-    id: entry.id,
-    label: entry.label,
-    provider_type: "native_live",
-    capabilities: Object.freeze(capabilities(entry.capabilities || {})),
-    configured: entry.configured,
-    // Optional instantiation factory: entries that can build a full transport
-    // provider (native_live bundles, or the cascaded STT anchor) define it, so
-    // adding a provider is one registry entry instead of an if/else branch.
-    create: typeof entry.create === "function" ? entry.create : null,
-  });
 }
 
 function selectedRuntimeMode(names) {
@@ -470,19 +336,6 @@ function providerEntryConfigured(entry, env) {
     return false;
   }
   return Boolean(entry.configured(env || process.env));
-}
-
-function registryProviderId(value) {
-  const normalized = providerName(value);
-  return PROVIDER_ALIASES[normalized] || PROVIDER_ALIASES_TTS[normalized] || normalized;
-}
-
-function capabilities(overrides) {
-  const result = {};
-  for (const flag of PROVIDER_CAPABILITY_FLAGS) {
-    result[flag] = Boolean(overrides[flag]);
-  }
-  return result;
 }
 
 function vertexLiveConfigured(env) {
@@ -933,6 +786,14 @@ class CascadedVoiceProvider {
           // Gateway-produced interim speech (tool-call acknowledgment): spoken
           // NOW as its own chunk, not buffered by the sentence chunker.
           on_speak_say: (text) => pipeline.pushImmediate(text),
+          // Speak-forever narration seams (threaded only when the streaming
+          // pipeline exists — the narration loop never runs without it): the
+          // session-scoped override requests the loop, the drain gate paces
+          // model rounds behind playback, and the segment count feeds the
+          // loop's hard cap. All inert unless VOICE_SPEAK_FOREVER=1 server-side.
+          speak_forever: this.profileForTurn(turn)?.speak_forever === true,
+          on_speak_drain: (limit) => pipeline.drainBelow(limit),
+          speak_segments: () => pipeline.segmentsEnqueued(),
         } : {}),
         // Turn liveness for the reasoner's unbounded auto-continuation loop:
         // a barge-in must stop the model from generating for a dead turn.
@@ -1183,6 +1044,12 @@ class CascadedVoiceProvider {
       ...(options.streaming && Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
       ...(Number.isFinite(options.reasonerFirstDeltaMs) ? { reasoner_first_delta_ms: Math.max(0, Math.round(options.reasonerFirstDeltaMs)) } : {}),
       ...(options.ttsLanguageMismatch ? { tts_language_mismatch: true } : {}),
+      // Speak-forever narration metadata (absent on non-narration turns):
+      // self-prompt round count and why the narration stopped.
+      ...(Number.isFinite(reasoning.narration_rounds) ? {
+        narration_rounds: Math.max(1, Math.round(reasoning.narration_rounds)),
+        ...(reasoning.narration_stop_reason ? { narration_stop_reason: String(reasoning.narration_stop_reason) } : {}),
+      } : {}),
       // Client-forwardable action envelopes proposed by the reasoner's tools
       // this turn (e.g. companion_motion). The session server forwards each as
       // its own client event; absent on turns with no proposed action.
@@ -1249,7 +1116,28 @@ class CascadedVoiceProvider {
     let emitChain = Promise.resolve();
     let permits = this.ttsConcurrency();
     const waiters = [];
+    const drainWaiters = [];
     let forceTimer = null;
+
+    // Pacing-gate support (speak-forever narration): how far generation has
+    // run ahead of the socket. Buffered = enqueued segments minus sent
+    // segments. A terminal pipeline resolves {ok:false} so the narration loop
+    // never awaits a drain that can no longer happen.
+    const drainState = (limit) => {
+      if (state.superseded) return { ok: false, reason: "superseded" };
+      if (state.failed) return { ok: false, reason: "failed" };
+      if (state.nextSegmentIndex - state.emitted < limit) return { ok: true };
+      return null;
+    };
+    const flushDrainWaiters = () => {
+      for (let index = drainWaiters.length - 1; index >= 0; index -= 1) {
+        const status = drainState(drainWaiters[index].limit);
+        if (status) {
+          const [waiter] = drainWaiters.splice(index, 1);
+          waiter.resolve(status);
+        }
+      }
+    };
 
     const isActive = () => (typeof hooks.isTurnActive === "function" ? hooks.isTurnActive() !== false : true);
     const acquire = () => {
@@ -1278,6 +1166,7 @@ class CascadedVoiceProvider {
       state.superseded = true;
       abortController.abort();
       clearForceTimer();
+      flushDrainWaiters();
     };
     const markFailed = (error) => {
       if (state.superseded || state.failed) return;
@@ -1285,6 +1174,7 @@ class CascadedVoiceProvider {
       state.ttsError = state.ttsError || cleanError(error);
       abortController.abort();
       clearForceTimer();
+      flushDrainWaiters();
       console.warn(JSON.stringify({
         level: "warn",
         at: "cascaded_tts_stream_failed",
@@ -1377,6 +1267,7 @@ class CascadedVoiceProvider {
         if (!state.firstAudioAtMs) {
           state.firstAudioAtMs = Date.now();
         }
+        flushDrainWaiters();
       }).catch((error) => {
         if (isTurnSupersededError(error)) {
           markSuperseded();
@@ -1472,6 +1363,23 @@ class CascadedVoiceProvider {
       },
       deltaCount() {
         return state.deltaCount;
+      },
+      // Pacing gate for the speak-forever narration loop: resolves {ok:true}
+      // when fewer than `limit` synthesized segments are waiting on the
+      // socket, or {ok:false, reason} when the pipeline can no longer make
+      // progress (superseded/failed), so a narration round never awaits a
+      // dead pipeline.
+      drainBelow(limit) {
+        const bound = Math.max(1, Math.floor(Number(limit) || 0) || 1);
+        const status = drainState(bound);
+        if (status) {
+          return Promise.resolve(status);
+        }
+        return new Promise((resolve) => drainWaiters.push({ limit: bound, resolve }));
+      },
+      // Total segments enqueued this turn, for the narration segment cap.
+      segmentsEnqueued() {
+        return state.nextSegmentIndex;
       },
       cancel() {
         markSuperseded();

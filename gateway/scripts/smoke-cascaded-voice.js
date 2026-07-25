@@ -35,7 +35,10 @@ const {
   voiceStreamingTripped,
 } = require(path.join(GATEWAY_DIR, "lib", "voice-providers"));
 const { createSpeakStreamSanitizer } = require(path.join(GATEWAY_DIR, "lib", "voice-chunker"));
-const { VoiceSessionConnection } = require(path.join(GATEWAY_DIR, "lib", "voice-session-server"));
+const { VoiceSessionConnection, effectiveProfileForSession } = require(path.join(GATEWAY_DIR, "lib", "voice-session-server"));
+const {
+  NARRATION_CONTINUE_PROMPT, speakForeverEnabled, speakForeverCaps, narrationToolDefs, runNarrationLoop,
+} = require(path.join(GATEWAY_DIR, "lib", "voice-narration"));
 const { recordStreamingVoiceTurn, durableSessionContextBlock, server } = require(path.join(GATEWAY_DIR, "server"));
 
 main().catch((error) => {
@@ -80,6 +83,12 @@ async function main() {
     await stalePlaybackProgressIsRejected(tempDir);
     await spokenProgressPersistsOnInterruptedTurn(tempDir);
     await spokenProgressWalksAndroidPlayedMs(tempDir);
+    await speakForeverLoopsUntilFinishTool(tempDir);
+    await speakForeverHaltsOnCancel(tempDir);
+    await speakForeverRespectsRoundCap(tempDir);
+    await speakForeverPacingBoundsBuffer(tempDir);
+    await speakForeverKillSwitchInert();
+    await speakForeverStaySilentWins();
     console.log("smoke-cascaded-voice: ok");
   } finally {
     global.fetch = previousFetch;
@@ -1200,7 +1209,7 @@ function streamingProviderEnv(extra = {}) {
   };
 }
 
-function makeStreamingConnection(tempDir, tag, provider, events) {
+function makeStreamingConnection(tempDir, tag, provider, events, records) {
   const dataDir = path.join(tempDir, `session-${tag}`);
   const sessionsDir = path.join(dataDir, "voice-sessions");
   const providerEventsFile = path.join(dataDir, "voice-provider-events.jsonl");
@@ -1210,7 +1219,12 @@ function makeStreamingConnection(tempDir, tag, provider, events) {
     sessionsDir,
     providerEventsFile,
     voiceProvider: provider,
-    onTurnCompleted: async (record) => record,
+    onTurnCompleted: async (record) => {
+      if (Array.isArray(records)) {
+        records.push(record);
+      }
+      return record;
+    },
   });
 }
 
@@ -1848,6 +1862,312 @@ async function spokenProgressWalksAndroidPlayedMs(tempDir) {
   assert.equal(progress.played_ms, 130, "the Android playback clock must persist on spoken_progress");
   assert.equal(progress.client_reported, true);
   assert.equal(progress.spoken_text, "First sentence leaves early.");
+}
+
+function narrationToolCall(type) {
+  return { name: type, result: { ok: true, action: { type } } };
+}
+
+// Speak-forever: the narration loop self-prompts three rounds through ONE
+// streaming turn — one assistant_audio_start ... frames ... assistant_audio_done
+// envelope — ends on the finish_narration tool, and both turn_done and the
+// canonical record carry narration_rounds/narration_stop_reason.
+async function speakForeverLoopsUntilFinishTool(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "tell me a story until i say stop", calls });
+  const beats = [
+    "Sure.",
+    "Here is a much longer second narration beat that clearly crosses the sixty character minimum mark.",
+    "And the third narration beat also runs far enough past sixty characters to form its own chunk.",
+  ];
+  const events = [];
+  const records = [];
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      assert.equal(typeof input.on_speak_drain, "function", "streaming turns must offer on_speak_drain");
+      assert.equal(typeof input.speak_segments, "function", "streaming turns must offer speak_segments");
+      assert.equal(input.speak_forever, false, "no session override was sent on this turn");
+      let round = 1;
+      input.on_speak_delta(`${beats[0]} `);
+      const narration = await runNarrationLoop({
+        messages: [],
+        initialResult: { text: beats[0], tool_results: [narrationToolCall("begin_continuous_narration")] },
+        callRound: async () => {
+          round += 1;
+          input.on_speak_delta(`${beats[round - 1]} `);
+          return {
+            text: beats[round - 1],
+            tool_results: round === 3 ? [narrationToolCall("finish_narration")] : [],
+          };
+        },
+        drainBelow: (limit) => input.on_speak_drain(limit),
+        segmentsEnqueued: input.speak_segments,
+        caps: speakForeverCaps({}),
+      });
+      assert.equal(narration.stop_reason, "finished", "the finish_narration tool must end the loop");
+      const speak = narration.text;
+      return {
+        speak,
+        display: speak,
+        language: "en-US",
+        model: "test-model",
+        classification: "chat",
+        narration_rounds: narration.rounds,
+        narration_stop_reason: narration.stop_reason,
+      };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "speak-forever-loop", provider, events, records);
+  await startStreamingTurn(connection, "speak-forever-loop");
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_speak-forever-loop" });
+
+  const types = events.map((event) => event.type);
+  assert.equal(types.filter((t) => t === "assistant_audio_start").length, 1, "one audio envelope for the whole narration");
+  assert.equal(types.filter((t) => t === "assistant_audio_done").length, 1, "one assistant_audio_done for the whole narration");
+  assert.ok(events.filter((e) => e.type === "binary").length >= 3, "each narration beat must stream audio frames");
+  const done = events.find((e) => e.type === "turn_done");
+  assert.equal(done.status, "completed");
+  assert.equal(done.narration_rounds, 3, "turn_done must carry the narration round count");
+  assert.equal(done.narration_stop_reason, "finished", "turn_done must carry the narration stop reason");
+  const record = records.find((r) => Number.isFinite(r?.narration_rounds));
+  assert.ok(record, "the canonical record must carry narration metadata");
+  assert.equal(record.narration_rounds, 3);
+  assert.equal(record.narration_stop_reason, "finished");
+  assert.ok(record.assistant_text.includes(beats[2]), "the stored reply must contain every narrated beat");
+}
+
+// Barge-in mid-narration: a cancel_turn lands after the first beat's audio;
+// the loop observes the dead turn before starting round 2 (stop reason
+// "interrupted"), no further frames are emitted, and the interrupted canonical
+// record persists spoken_progress through the shipped ledger chain.
+async function speakForeverHaltsOnCancel(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "keep narrating forever", calls });
+  const events = [];
+  const records = [];
+  let narrationResult = null;
+  let releaseLoop;
+  const gate = new Promise((resolve) => {
+    releaseLoop = resolve;
+  });
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      const first = "First narration sentence leaves early and runs long enough to form a full audio chunk.";
+      input.on_speak_delta(`${first} `);
+      await waitFor(() => events.some((e) => e.type === "binary"), 5000, "first narration frame before the barge-in");
+      await gate;
+      narrationResult = await runNarrationLoop({
+        messages: [],
+        initialResult: { text: first, tool_results: [narrationToolCall("begin_continuous_narration")] },
+        callRound: async () => {
+          throw new Error("round 2 must never start after the barge-in");
+        },
+        isActive: () => input.is_turn_active(),
+        drainBelow: (limit) => input.on_speak_drain(limit),
+        segmentsEnqueued: input.speak_segments,
+        caps: speakForeverCaps({}),
+      });
+      return {
+        speak: narrationResult.text,
+        display: narrationResult.text,
+        language: "en-US",
+        model: "test-model",
+        classification: "chat",
+        narration_rounds: narrationResult.rounds,
+        narration_stop_reason: narrationResult.stop_reason,
+      };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "speak-forever-cancel", provider, events, records);
+  await startStreamingTurn(connection, "speak-forever-cancel");
+  const commitPromise = connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_speak-forever-cancel" }).catch((error) => {
+    throw new Error(`narration commit must not reject on interruption: ${error?.message || error}`);
+  });
+  await waitFor(() => (connection.turn?.assistantSegments?.length || 0) >= 1, 5000, "frame->text ledger before the cancel");
+
+  await connection.handleCancelTurn({ type: "cancel_turn", turn_id: "turn_speak-forever-cancel", played_segments: 1 });
+  const marker = events.length;
+  releaseLoop();
+  await commitPromise;
+  await delayMs(120);
+
+  assert.ok(narrationResult, "the narration loop must have run");
+  assert.equal(narrationResult.stop_reason, "interrupted", "a barge-in must stop the loop before the next round");
+  assert.equal(narrationResult.rounds, 1, "no self-prompt round may start after the barge-in");
+  assert.ok(!events.slice(marker).some((e) => e.type === "binary"), "no frames after the barge-in");
+  const canceled = records.find((record) => record.status === "canceled");
+  assert.ok(canceled, "the interrupted narration must persist a canonical record");
+  const progress = canceled.spoken_progress;
+  assert.ok(progress, "the interrupted narration must persist spoken_progress");
+  assert.equal(progress.segments_played, 1);
+  assert.ok(String(progress.spoken_text || "").startsWith("First narration sentence"), "spoken_text must quote the played narration prefix");
+}
+
+// The finite round cap ends the loop gracefully with stop reason
+// "capped_rounds"; caps are env-tunable with the documented defaults.
+async function speakForeverRespectsRoundCap(tempDir) {
+  assert.equal(speakForeverCaps({ VOICE_SPEAK_FOREVER_MAX_ROUNDS: "7" }).maxRounds, 7, "round cap must be env-tunable");
+  assert.deepEqual(
+    speakForeverCaps({}),
+    { maxRounds: 25, maxSegments: 200, maxMs: 600000, maxBufferedSegments: 6 },
+    "documented cap defaults"
+  );
+  const calls = [];
+  stubFetch({ sttTranscript: "narrate without end", calls });
+  const long = "Another narration beat that keeps going and clearly crosses the sixty character minimum mark.";
+  const events = [];
+  const records = [];
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta("Sure. ");
+      const narration = await runNarrationLoop({
+        messages: [],
+        initialResult: { text: "Sure.", tool_results: [narrationToolCall("begin_continuous_narration")] },
+        callRound: async () => {
+          input.on_speak_delta(`${long} `);
+          return { text: long, tool_results: [] };
+        },
+        drainBelow: (limit) => input.on_speak_drain(limit),
+        segmentsEnqueued: input.speak_segments,
+        caps: { ...speakForeverCaps({}), maxRounds: 2 },
+      });
+      assert.equal(narration.rounds, 2, "the loop must stop at the round cap");
+      return {
+        speak: narration.text,
+        display: narration.text,
+        language: "en-US",
+        model: "test-model",
+        classification: "chat",
+        narration_rounds: narration.rounds,
+        narration_stop_reason: narration.stop_reason,
+      };
+    },
+  });
+  const connection = makeStreamingConnection(tempDir, "speak-forever-cap", provider, events, records);
+  await startStreamingTurn(connection, "speak-forever-cap");
+  await connection.handleCommitTurn({ type: "commit_turn", turn_id: "turn_speak-forever-cap" });
+
+  const done = events.find((e) => e.type === "turn_done");
+  assert.equal(done.status, "completed", "a capped narration still completes the turn");
+  assert.equal(done.narration_rounds, 2);
+  assert.equal(done.narration_stop_reason, "capped_rounds");
+  const record = records.find((r) => Number.isFinite(r?.narration_rounds));
+  assert.equal(record?.narration_stop_reason, "capped_rounds");
+}
+
+// Pacing gate (design D4): round k+1's model call may not start until the
+// pipeline has drained below the buffered-segment bound. sendAudio is held by
+// the harness, so the gate's opening is driven purely by released sends — no
+// clocks involved.
+async function speakForeverPacingBoundsBuffer(tempDir) {
+  const calls = [];
+  stubFetch({ sttTranscript: "paced narration", calls });
+  const s1 = "Sure.";
+  const s2 = "Here is a much longer second sentence that clearly crosses the sixty character minimum mark.";
+  const s3 = "And the third sentence also runs far enough past sixty characters to form its own chunk.";
+  const events = [];
+  const blockedSends = [];
+  let roundTwoStarted = false;
+  const hooks = {
+    ...recordingHooks(events),
+    sendAudio: async (chunk) => {
+      events.push({ type: "audio", bytes: chunk.length });
+      await new Promise((resolve) => blockedSends.push(resolve));
+    },
+  };
+  const provider = createVoiceProvider({
+    env: streamingProviderEnv(),
+    reasoner: async (input) => {
+      input.on_speak_delta(`${s1} ${s2} `);
+      const narration = await runNarrationLoop({
+        messages: [],
+        initialResult: { text: `${s1} ${s2}`, tool_results: [narrationToolCall("begin_continuous_narration")] },
+        callRound: async () => {
+          roundTwoStarted = true;
+          input.on_speak_delta(`${s3} `);
+          return { text: s3, tool_results: [narrationToolCall("finish_narration")] };
+        },
+        drainBelow: (limit) => input.on_speak_drain(limit),
+        segmentsEnqueued: input.speak_segments,
+        caps: { ...speakForeverCaps({}), maxBufferedSegments: 1 },
+      });
+      return {
+        speak: narration.text,
+        display: narration.text,
+        language: "en-US",
+        model: "test-model",
+        classification: "chat",
+        narration_rounds: narration.rounds,
+        narration_stop_reason: narration.stop_reason,
+      };
+    },
+  });
+  const resultPromise = provider.processTurn(makeTurn(tempDir, "speak-forever-pacing"), hooks);
+  await waitFor(() => blockedSends.length >= 1, 5000, "first narration send in flight");
+  await delayMs(80);
+  assert.equal(roundTwoStarted, false, "round 2 must wait for the pacing gate while both chunks are unsent");
+  blockedSends.shift()();
+  await waitFor(() => blockedSends.length >= 1, 5000, "second narration send in flight");
+  await delayMs(80);
+  assert.equal(roundTwoStarted, false, "one released send still leaves the buffer at the bound");
+  blockedSends.shift()();
+  await waitFor(() => roundTwoStarted, 5000, "the pacing gate opens once sends catch up");
+  await waitFor(() => blockedSends.length >= 1, 5000, "round 2's chunk send in flight");
+  blockedSends.shift()();
+  const result = await resultPromise;
+  assert.equal(result.narration_rounds, 2);
+  assert.equal(result.narration_stop_reason, "finished");
+  assert.equal(result.tts_segments, 3, "all three narration chunks must have been emitted");
+}
+
+// Kill switch: with the master env off (the default) the narration tools are
+// not exposed and nothing narration-shaped can engage; the session override
+// field itself still validates so a client can send it ahead of enablement.
+async function speakForeverKillSwitchInert() {
+  assert.equal(speakForeverEnabled({}), false, "VOICE_SPEAK_FOREVER defaults OFF");
+  assert.equal(speakForeverEnabled({ VOICE_SPEAK_FOREVER: "0" }), false);
+  assert.equal(speakForeverEnabled({ VOICE_SPEAK_FOREVER: "1" }), true);
+  assert.deepEqual(narrationToolDefs({}), [], "tools absent when the master env is off");
+  assert.deepEqual(narrationToolDefs({ VOICE_SPEAK_FOREVER: "1" }, { modality: "text" }), [], "tools absent on a deliberate text-only turn");
+  const defs = narrationToolDefs({ VOICE_SPEAK_FOREVER: "1" }, { modality: "auto" });
+  assert.deepEqual(defs.map((def) => def.name), ["begin_continuous_narration", "finish_narration"]);
+  assert.deepEqual(defs[0].handler(), { ok: true, action: { type: "begin_continuous_narration" } });
+  assert.deepEqual(defs[1].handler(), { ok: true, action: { type: "finish_narration" } });
+  const profile = effectiveProfileForSession({}, { profile_override: { speak_forever: true } });
+  assert.equal(profile.speak_forever, true, "the session override must validate onto the effective profile");
+  assert.equal(
+    effectiveProfileForSession({}, { profile_override: { speak_forever: "yes" } }).speak_forever,
+    undefined,
+    "a non-boolean override must be dropped"
+  );
+}
+
+// stay_silent wins over narration: a round that calls stay_silent ends the
+// loop with stop reason "silenced", and the union tool_results carry the call
+// so the reasoner's existing silent-control path drops the whole reply.
+async function speakForeverStaySilentWins() {
+  const messages = [];
+  const narration = await runNarrationLoop({
+    messages,
+    initialResult: { text: "First beat.", tool_results: [narrationToolCall("begin_continuous_narration")] },
+    callRound: async () => ({ text: "", tool_results: [narrationToolCall("stay_silent")] }),
+    drainBelow: async () => ({ ok: true }),
+    segmentsEnqueued: () => 0,
+    caps: speakForeverCaps({}),
+  });
+  assert.equal(narration.stop_reason, "silenced", "stay_silent must end the narration loop");
+  assert.equal(narration.rounds, 2);
+  assert.ok(
+    narration.tool_results.some((entry) => entry?.result?.action?.type === "stay_silent"),
+    "the union tool_results must carry stay_silent so the silent-control path wins"
+  );
+  assert.ok(
+    messages.some((message) => message.role === "user" && message.content === NARRATION_CONTINUE_PROMPT),
+    "each self-prompt round must use the narration continue prompt"
+  );
 }
 
 function makeTurn(tempDir, tag, overrides = {}) {
