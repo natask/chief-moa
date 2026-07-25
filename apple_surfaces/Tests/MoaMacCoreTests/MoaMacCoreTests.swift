@@ -224,14 +224,14 @@ private actor FakeChatSender: GatewayChatSending {
 }
 
 @MainActor @Test func macShellSafeStoppedControlsRemainInert() async {
-    let model = SurfaceModel()
+    let model = SurfaceModel(loadToken: { nil })
     #expect(model.paused)
     model.resume()
     await model.pause()
     await model.stop()
     model.selectFrontmost()
     await model.start()
-    _ = StatusView().body
+    _ = StatusView(model: model).body
 }
 
 
@@ -295,7 +295,7 @@ private actor FakeChatSender: GatewayChatSending {
 
     let identity = ProcessIdentity(bundleID: "test.coverage", pid: ProcessInfo.processInfo.processIdentifier,
                                    processStart: NSRunningApplication.current.launchDate ?? now, signingIdentity: "test:coverage")
-    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App")
+    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App", loadToken: { nil })
     model.saveToken()
     #expect(model.status == "Gateway connection save failed")
     model.mode = .askEachTime

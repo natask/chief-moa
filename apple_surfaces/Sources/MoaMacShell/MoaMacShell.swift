@@ -155,14 +155,17 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
     private let grants = GrantStore(); private lazy var coordinator = SuggestionCoordinator(grants: grants)
     private var identity: ProcessIdentity?; private var observer: AXSession?; private var task: Task<Void, Never>?; private var generation: UInt64 = 0
     private let inspectIdentity: @MainActor (NSRunningApplication) -> ProcessIdentity?
-    public init() {
+    public convenience init() {
+        self.init(loadToken: KeychainToken.load)
+    }
+    init(loadToken: () -> String?) {
         inspectIdentity = ProcessInspector.identity
-        token = KeychainToken.load() ?? ""
+        token = loadToken() ?? ""
         origin = UserDefaults.standard.string(forKey: "moa.gateway.origin") ?? ""
     }
-    init(selectedIdentity: ProcessIdentity, appName: String) {
+    init(selectedIdentity: ProcessIdentity, appName: String, loadToken: () -> String?) {
         inspectIdentity = { _ in selectedIdentity }
-        token = KeychainToken.load() ?? ""
+        token = loadToken() ?? ""
         identity = selectedIdentity
         self.appName = appName
     }
