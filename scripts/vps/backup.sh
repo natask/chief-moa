@@ -49,11 +49,16 @@ else
 fi
 
 echo "Snapshotting DATA_DIR..."
+# The host-side OTA publisher intentionally creates root-owned rollback and
+# transaction evidence inside the shared volume. Read the volume as container
+# root so those protected paths remain part of the backup; this command is
+# read-only and writes the archive only to stdout.
+#
 # GNU tar exits 1 (warning) when a file changes while being read, which is
 # routine against a live gateway that appends to /data. The archive is still
 # written and restore-check.sh validates it. Tolerate exit 1; fail on >= 2.
 tar_status=0
-compose exec -T gateway tar -czf - -C /data . > "$tmp_dir/data-dir.tar.gz" || tar_status=$?
+compose exec -T --user 0:0 gateway tar -czf - -C /data . > "$tmp_dir/data-dir.tar.gz" || tar_status=$?
 if [ "$tar_status" -gt 1 ]; then
   echo "DATA_DIR snapshot failed (tar exit $tar_status)." >&2
   exit "$tar_status"
