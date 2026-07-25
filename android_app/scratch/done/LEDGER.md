@@ -1,3 +1,4 @@
+- Made Android OTA publication verify the exact public HTTPS origin supplied by the deployment authority instead of relying on an optional container alias — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Made Android launcher and Assistant invocations reuse one manual latched overlay turn while keeping the control center explicit — agent: Codex/GPT-5 — 4b4d6a1e
 - Made Android overlay launches converge on one orb owner, applied the existing 70% mobile size with live resize geometry, and raised idle visibility to 30% while preserving hold-drag and removal — agent: Codex/GPT-5 — 365f4e2d
 - Added a visible one-tap Copy action to finalized Android voice transcript rows with exact-text clipboard behavior and an inline copied receipt — agent: Codex/GPT-5 — 0166b808

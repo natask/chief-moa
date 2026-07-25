@@ -53,6 +53,8 @@ in the target file.
 Publication succeeds only after the running VPS gateway container uses its own
 `MOA_GATEWAY_TOKEN` to fetch the authenticated public manifest and APK and
 matches their release id, version, size, and SHA-256 to the local candidate.
+The verifier receives the declared HTTPS origin from the deployment entrypoint;
+it does not depend on an optional runtime environment alias for that origin.
 The token does not leave the container. A public verification failure prevents
 the deploy marker from moving and preserves the remote publication receipt for
 exact retry. Optional ADB installation produces a separate receipt: no attached

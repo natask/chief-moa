@@ -64,6 +64,10 @@
       acknowledgement before cleanup.
 - [x] Add credential-free failure-path smoke coverage and run it in the Android
       OTA CI build before any manual production publish job.
+- [x] Make the repo deployment entrypoint resolve the tracked, non-secret
+      production VPS target, require exact authenticated public manifest/APK
+      verification with the token confined to the running gateway container,
+      and record optional ADB installation separately from publication.
 
 ## Verification/deploy lane
 
