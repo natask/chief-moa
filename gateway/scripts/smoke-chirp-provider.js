@@ -105,6 +105,31 @@ async function main() {
     assert.equal(result.assistant_text, "");
     assert.equal(result.transcription_only, true);
 
+    // Provider language metadata can be empty on a wrong-script result. The
+    // Unicode policy must still stop it before reasoning/storage/rendering.
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [{ alternatives: [{ transcript: "नमस्ते" }] }],
+      }),
+    });
+    const rejected = await provider.processTurn(turn, {
+      onTranscriptFinal: async () => assert.fail("wrong-script transcript must not be emitted"),
+    });
+    assert.equal(rejected.transcript, "");
+    assert.equal(rejected.transcript_language_rejected, true);
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url, options });
+      const body = JSON.parse(String(options.body || "{}"));
+      state.lastBody = body;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ alternatives: [{ transcript: "hello from chirp" }] }] }),
+      };
+    };
+
     // Language restriction: status must report restricted recognition and the
     // chirp_3 requirement for am-ET.
     assert.equal(status.language_recognition, "restricted", "en-US,am-ET must be a restricted language list, not auto");

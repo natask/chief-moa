@@ -33,6 +33,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { WebSocket } = require("ws");
 const { createVoiceSessionServer } = require("../lib/voice-session-server");
+const { errorRate, inspectTranscriptScript } = require("../lib/transcript-quality");
 
 const AUDIO_FORMAT = { encoding: "pcm16", sample_rate: 16000, channels: 1 };
 const FIXTURE_DIR = path.join(__dirname, "..", "test", "fixtures", "voice");
@@ -68,6 +69,9 @@ async function main() {
     id: r.id,
     language: r.language,
     wer: Number(r.wer.toFixed(3)),
+    cer: Number(r.cer.toFixed(3)),
+    wrong_script: r.scriptQuality.accepted === false,
+    script_policy: r.scriptQuality.policy,
     assistant_audio_bytes: r.assistantAudioBytes,
     judge: r.judge ? r.judge.verdict : "skipped",
     pass: r.pass,
@@ -79,9 +83,13 @@ async function main() {
     mode: LIVE ? "live" : "fixtures",
     judge: JUDGE ? "on" : "off",
     wer_tolerance: WER_TOLERANCE,
+    wrong_script_rate: results.length
+      ? results.filter((result) => result.scriptQuality.accepted === false).length / results.length
+      : 0,
     fixtures: table,
     checks: [
       "each fixture's input transcript matches its expected text within the WER tolerance",
+      "English/Amharic fixtures contain only Latin/Ethiopic letters; wrong-script output fails visibly",
       "each fixture produces assistant audio with non-zero bytes",
       "the user audio is stored byte-for-byte, including a frame sent before session_ready (no leading-audio loss)",
       LIVE
@@ -116,6 +124,8 @@ async function runFixture(fixture) {
   const outcome = await driveTurn(provider, fixture);
 
   const wer = wordErrorRate(fixture.expected_transcript, outcome.transcript);
+  const cer = errorRate(fixture.expected_transcript, outcome.transcript, "character");
+  const scriptQuality = inspectTranscriptScript(outcome.transcript, [fixture.language, ...(fixture.alternative_languages || [])]);
   const transcriptMatch = wer <= WER_TOLERANCE;
   const audioOk = outcome.assistantAudioBytes > 0;
   // Byte-for-byte, not just non-empty: driveTurn sends the first frame before
@@ -130,6 +140,7 @@ async function runFixture(fixture) {
 
   const pass =
     transcriptMatch &&
+    scriptQuality.accepted &&
     audioOk &&
     storedOk &&
     !outcome.error &&
@@ -139,6 +150,8 @@ async function runFixture(fixture) {
     id: fixture.id,
     language: fixture.language,
     wer,
+    cer,
+    scriptQuality,
     transcriptMatch,
     assistantAudioBytes: outcome.assistantAudioBytes,
     storedPcmBytes: outcome.storedPcmBytes,

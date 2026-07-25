@@ -11,7 +11,7 @@ const { createSttStage, createReasonerStage, createTtsStage } = require("./voice
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
 const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
-
+const { inspectTranscriptScript } = require("./transcript-quality");
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
   sample_rate: 16000,
@@ -841,7 +841,7 @@ class CascadedVoiceProvider {
         assistant_text: "",
         audio_format: CLIENT_AUDIO_FORMAT,
         transcription_only: true,
-        transcript_language_rejected: transcription.languageRejected === true,
+        transcript_language_rejected: transcription.languageRejected === true, transcript_quality: transcription.transcript_quality || null,
       };
     }
 
@@ -1164,7 +1164,7 @@ class CascadedVoiceProvider {
       // turn, never a failure; `tts_error` is only set on a real synthesis fault.
       modality: options.modality || this.replyModality(),
       tts_error: options.ttsError || "",
-      transcript_language_rejected: transcription.languageRejected === true,
+      transcript_language_rejected: transcription.languageRejected === true, transcript_quality: transcription.transcript_quality || null,
       classification: reasoning.classification || "chat",
       // Additive streaming metadata (absent on non-streaming turns; old code
       // reading new records ignores it, new code reading old records treats
@@ -3681,10 +3681,10 @@ function extractSpeechTranscript(response, activeLanguageCodes = []) {
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+  const scriptQuality = inspectTranscriptScript(accepted, activeLanguageCodes);
   return {
-    text: accepted,
-    languageRejected: rejected > 0 && !accepted,
-    rejected_results: rejected,
+    text: scriptQuality.accepted ? accepted : "", languageRejected: (rejected > 0 && !accepted) || !scriptQuality.accepted,
+    rejected_results: rejected, transcript_quality: scriptQuality,
   };
 }
 

@@ -963,15 +963,16 @@ class VoiceSessionConnection {
       || providerEvents.assistantAudioStarted
       || turn.assistantAudioBytes > 0;
     if (!transcript && !hasAssistantOutput) {
+      const transcriptFailureReason = providerResult?.transcript_quality?.reason === "wrong_script" ? "wrong_script" : "stt_empty";
       await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
-        reason: "stt_empty",
+        reason: transcriptFailureReason,
         audio_bytes: turn.audioBytes,
-        transcript_language_rejected: providerResult?.transcript_language_rejected === true,
+        transcript_language_rejected: providerResult?.transcript_language_rejected === true, transcript_quality: providerResult?.transcript_quality || null,
       });
       writeTurnMetadata(turn, {
         status: "no_speech",
         completed_at: nowIso(),
-        transcript_language_rejected: providerResult?.transcript_language_rejected === true,
+        transcript_language_rejected: providerResult?.transcript_language_rejected === true, transcript_quality: providerResult?.transcript_quality || null,
       });
       turn.status = "no_speech";
       this.stopTurnProgress();
@@ -981,7 +982,7 @@ class VoiceSessionConnection {
         branch_id: turn.branchId,
         turn_id: turn.turnId,
         status: "no_speech",
-        reason: "stt_empty",
+        reason: transcriptFailureReason,
         reply_language: turnReplyLanguage(turn, providerResult, null),
         input_languages: turnInputLanguages(turn),
       });
@@ -990,7 +991,6 @@ class VoiceSessionConnection {
       }
       return;
     }
-
     writeTurnMetadata(turn, {
       status: "committed",
       committed_at: nowIso(),
