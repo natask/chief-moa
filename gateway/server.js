@@ -2224,6 +2224,24 @@ async function routeIntentRuntime(request, response, url) {
       sendJson(response, 201, { intent: await intentRuntime.capture(body) });
       return true;
     }
+    if (method === "POST" && pathname === "/v1/intent-runtime/launch") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, await intentRuntime.launch(body));
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/intent-runtime/messages") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, await intentRuntime.ingestMessage(body));
+      return true;
+    }
+    if (method === "GET" && pathname === "/v1/intent-runtime/neglected") {
+      sendJson(response, 200, await intentRuntime.neglected({
+        project_id: url.searchParams.get("project_id") || "",
+        before_ms: url.searchParams.get("before_ms") || undefined,
+        limit: url.searchParams.get("limit") || undefined,
+      }));
+      return true;
+    }
     if (method === "GET" && pathname === "/v1/intent-runtime/intents") {
       const intents = await intentRuntime.list({
         project_id: url.searchParams.get("project_id") || "",
@@ -2250,7 +2268,7 @@ async function routeIntentRuntime(request, response, url) {
       sendJson(response, 200, await intentRuntime.rehydrate(body));
       return true;
     }
-    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery))?$/);
+    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery|context-packet|claim|progress))?$/);
     if (intentMatch) {
       const intentId = decodeURIComponent(intentMatch[1]);
       const action = intentMatch[2] || "";
@@ -2270,6 +2288,25 @@ async function routeIntentRuntime(request, response, url) {
           return true;
         }
         sendJson(response, 200, { delivery });
+        return true;
+      }
+      if (method === "GET" && action === "context-packet") {
+        const packet = await intentRuntime.contextPacket(intentId);
+        if (!packet) {
+          sendJson(response, 404, { error: "intent not found" });
+          return true;
+        }
+        sendJson(response, 200, { context_packet: packet });
+        return true;
+      }
+      if (method === "POST" && action === "claim") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.claim(intentId, body) });
+        return true;
+      }
+      if (method === "POST" && action === "progress") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.recordProgress(intentId, body) });
         return true;
       }
       if (method === "POST" && action === "transition") {
