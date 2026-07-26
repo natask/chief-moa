@@ -96,7 +96,7 @@ final class MoaVoiceSamplePlayer {
             }
 
             @Override
-            public void onPlaybackStopped() {
+            public void onPlaybackStopped(boolean drained) {
             }
 
             @Override

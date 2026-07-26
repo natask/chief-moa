@@ -45,6 +45,11 @@ final class MoaAssistantAudioProgressTracker {
         );
     }
 
+    boolean isFullyPlayed(long playedPcmFrames) {
+        return emittedPcmBytes > 0L
+                && clampPlayedBytes(playedPcmFrames) >= emittedPcmBytes;
+    }
+
     private long clampPlayedBytes(long playedPcmFrames) {
         long playedBytes = MoaAudioPlaybackController.pcmFramesToBytes(Math.max(0L, playedPcmFrames));
         if (playedBytes < 0L) {

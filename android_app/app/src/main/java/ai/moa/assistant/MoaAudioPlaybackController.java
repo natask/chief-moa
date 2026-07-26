@@ -38,7 +38,7 @@ final class MoaAudioPlaybackController {
     interface Callback {
         void onPlaybackStarted();
 
-        void onPlaybackStopped();
+        void onPlaybackStopped(boolean drained);
 
         void onPlaybackError(String message, Throwable error);
     }
@@ -263,6 +263,10 @@ final class MoaAudioPlaybackController {
     }
 
     void stop() {
+        stop(false);
+    }
+
+    private void stop(boolean drained) {
         synchronized (lock) {
             if (!playing && audioTrack == null) {
                 return;
@@ -283,8 +287,46 @@ final class MoaAudioPlaybackController {
             releaseAudioTrack();
         }
         if (callback != null) {
-            callback.onPlaybackStopped();
+            callback.onPlaybackStopped(drained);
         }
+    }
+
+    void drainAndStop(long timeoutMs) {
+        long playedAtStart;
+        long writtenAtStart;
+        synchronized (lock) {
+            playedAtStart = currentPlayedPcmFramesLocked();
+            writtenAtStart = totalPcmFramesWritten;
+        }
+        long remainingFrames = Math.max(0L, writtenAtStart - playedAtStart);
+        long expectedRemainingMs = remainingFrames * 1000L / SAMPLE_RATE_HZ;
+        final long boundedTimeoutMs = Math.max(
+                1000L,
+                Math.min(Math.min(timeoutMs, 60000L), expectedRemainingMs + 2000L));
+        new Thread(() -> {
+            long deadline = android.os.SystemClock.elapsedRealtime() + boundedTimeoutMs;
+            boolean drained = false;
+            while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                synchronized (lock) {
+                    if (!playing || audioTrack == null) {
+                        return;
+                    }
+                    drained = totalPcmFramesWritten > 0L
+                            && currentPlayedPcmFramesLocked() >= totalPcmFramesWritten;
+                }
+                if (drained) break;
+                try {
+                    Thread.sleep(20L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (!drained && callback != null) {
+                callback.onPlaybackError("Audio playback drain timed out.", null);
+            }
+            stop(drained);
+        }, "moa-audio-drain").start();
     }
 
     private void releaseAudioTrack() {

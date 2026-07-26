@@ -67,6 +67,7 @@ public final class MainActivity extends Activity {
     private TextView receiptsStatus;
     private TextView settingsStatus;
     private TextView companionStatus;
+    private TextView voiceE2eStatus;
     private TextView orbScaleValue;
     private Button overlayButton;
     private Button accessibilityButton;
@@ -252,6 +253,7 @@ public final class MainActivity extends Activity {
         receiptsStatus = statRow(card, "Receipts", "Checking...");
         settingsStatus = statRow(card, "Settings", settingsSummaryText());
         companionStatus = statRow(card, "Companion", MoaPrefs.companionStatus(this));
+        voiceE2eStatus = statRow(card, "Mobile voice E2E", MoaVoiceE2eMetricsStore.summary(this));
 
         sessionHistoryStatus = label("Recent shared history", MoaColors.MUTED, 12, true);
         sessionHistoryStatus.setPadding(0, dp(14), 0, dp(8));
@@ -897,6 +899,10 @@ public final class MainActivity extends Activity {
         if (companionStatus != null) {
             companionStatus.setText(MoaPrefs.companionStatus(this));
             companionStatus.setTextColor(MoaColors.OK);
+        }
+        if (voiceE2eStatus != null) {
+            voiceE2eStatus.setText(MoaVoiceE2eMetricsStore.summary(this));
+            voiceE2eStatus.setTextColor(MoaColors.OK);
         }
 
         String gatewayUrl = MoaPrefs.gatewayUrl(this);

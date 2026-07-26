@@ -37,6 +37,10 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 - **AND** displays a live transcript overlay
 - **AND** releasing the orb submits the best available speech without waiting
   for the continuous-loop silence timeout
+- **AND** normal release drains captured audio and commits the owned voice
+  controller exactly once, even if transport activity changes during release
+- **AND** Android gesture cancellation or hold-drag cancellation submits no
+  commit and retains explicit cancel semantics
 
 #### Scenario: Continuous loop commits after short silence
 - **WHEN** the user starts a continuous voice launch path and speaks a short utterance
@@ -113,6 +117,25 @@ surface as Android Assistant rather than opening the full control center.
 - **THEN** Android starts or reuses the one overlay service
 - **AND** starts or commits the current latched manual turn
 - **AND** does not render `MainActivity`
+
+### Requirement: Recoverable Voice Failure
+Unexpected voice failures SHALL remain recoverable from the compact voice
+surface without reviving an intentionally superseded session.
+
+#### Scenario: Unexpected voice failure is recoverable
+- **WHEN** an active voice turn fails unexpectedly
+- **THEN** the overlay shows a concise failure state with an accessible
+  `Record again` control
+- **AND** activating that control starts exactly one fresh reviewable voice
+  draft
+- **AND** stale or repeated activation cannot start another capture
+
+#### Scenario: Intentional voice teardown is quiet
+- **WHEN** Android cancels or replaces a voice session because the user
+  discarded, closed, or started a replacement turn
+- **THEN** close and error callbacks from the superseded session do not render
+  a generic voice failure
+- **AND** no retry affordance remains authorized for that superseded session
 
 ### Requirement: Reviewable Tap Voice Draft
 When voice-first gestures are enabled, the Android overlay SHALL treat a tap
@@ -254,3 +277,39 @@ the gateway profile-control path instead of leaving them as provider-only chat.
   per voice with a session-only voice override
 - **AND** the saved profile voice remains unchanged unless the user chooses a
   specific voice
+
+### Requirement: Mobile Voice End-to-End Benchmark Evidence
+The working interpretation of the user's undefined term "BNC" SHALL be
+documented as mobile voice end-to-end benchmark/confidence evidence until the
+user supplies a different expansion. Android SHALL measure this evidence
+locally without granting the gateway new telemetry authority.
+
+#### Scenario: Successful audible turn
+- **WHEN** microphone capture starts, the user commits, a result arrives, and
+  hosted audio is enabled
+- **THEN** Android records monotonic capture, commit, first-result, playback,
+  confirmed device-drain, and terminal timings
+- **AND** audible success is counted only after the AudioTrack playback head
+  reaches every accepted PCM frame
+
+#### Scenario: Playback does not drain
+- **WHEN** the playback head does not reach every accepted PCM frame within the
+  bounded drain timeout
+- **THEN** Android stops playback without first flushing away measurement
+  evidence
+- **AND** records a playback drain timeout rather than a completed audible turn
+
+#### Scenario: Rolling on-device diagnostics
+- **WHEN** voice turns complete, fail, or are intentionally torn down
+- **THEN** Android retains at most 100 bounded outcome samples in private app
+  storage
+- **AND** the full app shows completion, failure, teardown, audible-success,
+  p50, and p95 end-to-end evidence
+- **AND** samples contain no transcript, audio, URL, token, raw session id, raw
+  turn id, or exception content
+
+#### Scenario: Lifecycle ordering
+- **WHEN** a turn reaches a terminal outcome
+- **THEN** later asynchronous callbacks cannot append new stages
+- **AND** an unexpected active socket close is a connection failure while an
+  intentional user cancel, replacement, or destroy remains a teardown

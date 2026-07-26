@@ -49,6 +49,10 @@ public final class MoaAssistantAudioProgressTrackerTest {
         assertEquals(16000L, beyondEnd.playedPcmBytes);
         assertEquals(10, beyondEnd.assistantTextChars);
         assertEquals(1, beyondEnd.assistantSegmentIndex);
+        assertFalse(tracker.isFullyPlayed(
+                MoaAudioPlaybackController.pcmBytesToFrames(15998)));
+        assertTrue(tracker.isFullyPlayed(
+                MoaAudioPlaybackController.pcmBytesToFrames(16000)));
     }
 
     @Test
