@@ -831,6 +831,16 @@ reasoner sees the delivery state (modality, TTS availability, the previous
 turn's `tts_error`) as a hint block, so "why did you answer in text?" gets a
 truthful answer and the model can change `response_modality` by tool call.
 
+Hosted speech completion is independently receipted from text-turn completion.
+`turn_done` reports `tts_delivery` (`complete`, `partial`, `failed`, or
+`not_requested`), `tts_complete`, emitted segments, the exclusive assistant-text
+bound represented by emitted PCM, and the full reply length. A later-segment
+synthesis fault therefore keeps the completed assistant text while identifying
+the exact unheard suffix. Android may send an idempotent same-socket
+`retry_tts {turn_id,retry_id,from_text_char}` request; the gateway synthesizes
+only that stored suffix, does not rerun reasoning, and closes the attempt with
+`tts_retry_done`. Reusing a retry id returns its receipt without replaying audio.
+
 ### Streaming cascaded voice
 
 ```text

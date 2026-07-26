@@ -864,22 +864,10 @@ class CascadedVoiceProvider {
       return this.cascadedResult(transcript, reasoning, false, transcription);
     }
     const modality = this.replyModality(turn);
-    // Gate hoisting: the reply (OUTPUT) language and modality are pinned ONCE,
-    // BEFORE the LLM stream starts, so chunk 1 can synthesize mid-stream with
-    // the turn-pinned voice. A mid-turn profile language switch takes effect
-    // next turn; a post-stream language divergence is recorded as
-    // tts_language_mismatch instead of re-synthesizing.
     const pinnedLanguage = this.replyLanguage(turn);
-    // Like the language, the TTS voice is pinned ONCE per turn, from the turn's
-    // effective profile (which carries a validated session_start voice
-    // override), so every streamed chunk speaks with the same voice and a
-    // per-session voice never leaks into other sessions.
     const pinnedVoice = this.ttsVoiceName(turn.effectiveProfile);
-    // Delivery pace/tone are pinned per turn like the voice, so every streamed
-    // chunk speaks at one speed; a mid-turn change applies next turn.
     const pinnedRate = this.speakingRate(turn.effectiveProfile);
     const pinnedTone = this.voiceTone(turn.effectiveProfile);
-    // The factor the client resamples by (1.0 unless Gemini-TTS client-rate mode).
     const clientRate = this.clientPlaybackRate(pinnedRate);
     const turnStartedAtMs = Date.now();
     const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
@@ -981,11 +969,6 @@ class CascadedVoiceProvider {
       await hooks.onAssistantText(speak);
     }
 
-    // Leg 3 (streaming) — the pipelined per-chunk TTS already synthesized and
-    // emitted audio while the reasoner streamed. Flush the tail, then fold the
-    // pipeline outcome into the result. finish() never throws: a mid-stream
-    // synthesis fault degrades to a text-only remainder with tts_error set and
-    // a superseded turn aborts silently.
     if (pipeline) {
       if (speak && pipeline.deltaCount() === 0 && ttsText) {
         // The reasoner streamed no deltas (non-streaming provider or fallback
@@ -1002,8 +985,6 @@ class CascadedVoiceProvider {
       try {
         stream = await pipeline.finish();
       } catch (error) {
-        // finish() must never throw; if it does, that is a pipeline-guard
-        // escape: count it on the breaker and degrade to text-only.
         reportVoiceStreamingFault(`streaming_pipeline_escape: ${cleanError(error)}`);
         streamError = cleanError(error);
       }
@@ -1030,9 +1011,13 @@ class CascadedVoiceProvider {
       const extras = {
         modality,
         ttsError: streamTtsError,
+        ttsDelivery: streamTtsError ? (streamSpoke ? "partial" : "failed") : (streamSpoke ? "complete" : "not_requested"),
         streaming: true,
         firstAudioMs: stream?.firstAudioMs,
         ttsSegments: stream ? stream.segments : 0,
+        ttsFailedSegmentIndex: stream?.failedSegmentIndex,
+        ttsSpokenTextEnd: stream?.spokenTextEnd,
+        ttsReplyTextChars: speak.length,
         reasonerFirstDeltaMs: stream?.firstDeltaMs,
       };
       const finalLanguage = String(reasoning.language || "").trim().toLowerCase();
@@ -1153,7 +1138,15 @@ class CascadedVoiceProvider {
     }
     this.lastTtsError = ttsError;
 
-    return this.cascadedResult(transcript, reasoning, spoke, transcription, { modality, ttsError });
+    return this.cascadedResult(transcript, reasoning, spoke, transcription, {
+      modality,
+      ttsError,
+      ttsDelivery: ttsError ? "failed" : (spoke ? "complete" : "not_requested"),
+      ttsSegments: spoke ? 1 : 0,
+      ttsFailedSegmentIndex: ttsError ? 0 : null,
+      ttsSpokenTextEnd: spoke ? speak.length : 0,
+      ttsReplyTextChars: speak.length,
+    });
   }
 
   cascadedResult(transcript, reasoning, spoke, transcription = {}, options = {}) {
@@ -1174,6 +1167,17 @@ class CascadedVoiceProvider {
       // turn, never a failure; `tts_error` is only set on a real synthesis fault.
       modality: options.modality || this.replyModality(),
       tts_error: options.ttsError || "",
+      tts_delivery: options.ttsDelivery || (spoke ? "complete" : "not_requested"),
+      tts_complete: options.ttsDelivery === "complete" || (!options.ttsDelivery && spoke),
+      tts_spoken_text_end: Number.isFinite(options.ttsSpokenTextEnd)
+        ? Math.max(0, Math.round(options.ttsSpokenTextEnd))
+        : 0,
+      tts_reply_text_chars: Number.isFinite(options.ttsReplyTextChars)
+        ? Math.max(0, Math.round(options.ttsReplyTextChars))
+        : String(reasoning.speak || "").trim().length,
+      ...(Number.isInteger(options.ttsFailedSegmentIndex) && options.ttsFailedSegmentIndex >= 0
+        ? { tts_failed_segment_index: options.ttsFailedSegmentIndex }
+        : {}),
       transcript_language_rejected: transcription.languageRejected === true,
       classification: reasoning.classification || "chat",
       // Additive streaming metadata (absent on non-streaming turns; old code
@@ -1181,7 +1185,7 @@ class CascadedVoiceProvider {
       // absence as the non-streaming default).
       ...(options.streaming ? { streaming: true } : {}),
       ...(Number.isFinite(options.firstAudioMs) ? { first_audio_ms: Math.max(0, Math.round(options.firstAudioMs)) } : {}),
-      ...(options.streaming && Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
+      ...(Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
       ...(Number.isFinite(options.reasonerFirstDeltaMs) ? { reasoner_first_delta_ms: Math.max(0, Math.round(options.reasonerFirstDeltaMs)) } : {}),
       ...(options.ttsLanguageMismatch ? { tts_language_mismatch: true } : {}),
       // Client-forwardable action envelopes proposed by the reasoner's tools
@@ -1220,15 +1224,6 @@ class CascadedVoiceProvider {
     return Math.max(1, Math.min(4, numberFrom(this.env.VOICE_TTS_CONCURRENCY, 2)));
   }
 
-  // The pipelined per-chunk TTS emitter. Sanitized reply deltas stream in; the
-  // chunker cuts sentence/clause chunks; at most `ttsConcurrency()` synthesize
-  // requests run concurrently while emission stays STRICTLY ordered through a
-  // promise chain (chunk n+1's PCM is held until chunk n's sendAudio resolves).
-  // Nothing here may throw out of finish(): a synthesis fault degrades the
-  // remainder to text-only with tts_error set, and a TurnSupersededError from
-  // the session-server write guard aborts silently (no tts_error, no events
-  // for the dead turn). One nulled stream crash-looped this gateway 24 times
-  // in a day; the guard lives on the write, not only in callers.
   createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice, speakingRate, tone, playbackRate }) {
     const provider = this;
     const chunker = createSpeechChunker(this.chunkerOptions());
@@ -1245,7 +1240,9 @@ class CascadedVoiceProvider {
       superseded: false,
       finished: false,
       ttsError: "",
+      failedSegmentIndex: null,
       firstAudioAtMs: 0,
+      spokenTextEnd: 0,
     };
     let emitChain = Promise.resolve();
     let permits = this.ttsConcurrency();
@@ -1280,10 +1277,13 @@ class CascadedVoiceProvider {
       abortController.abort();
       clearForceTimer();
     };
-    const markFailed = (error) => {
+    const markFailed = (error, segmentIndex = null) => {
       if (state.superseded || state.failed) return;
       state.failed = true;
       state.ttsError = state.ttsError || cleanError(error);
+      if (Number.isInteger(segmentIndex) && segmentIndex >= 0) {
+        state.failedSegmentIndex = segmentIndex;
+      }
       abortController.abort();
       clearForceTimer();
       console.warn(JSON.stringify({
@@ -1295,9 +1295,7 @@ class CascadedVoiceProvider {
       }));
     };
 
-    // Synthesis faults are caught HERE, at the source, so a failed chunk stops
-    // later chunks from ever issuing their requests (not merely from emitting).
-    const synthesizeChunk = async (text) => {
+    const synthesizeChunk = async (text, segmentIndex) => {
       await acquire();
       try {
         if (state.superseded || state.failed) {
@@ -1320,7 +1318,7 @@ class CascadedVoiceProvider {
         if (state.superseded || state.failed || error?.name === "AbortError") {
           return null;
         }
-        markFailed(error);
+        markFailed(error, segmentIndex);
         return null;
       } finally {
         release();
@@ -1335,15 +1333,12 @@ class CascadedVoiceProvider {
       if (!normalizedText) {
         return;
       }
-      // The reasoner chunker normalizes away boundary whitespace. Preserve the
-      // one-character separator used by the stored assistant reply so segment
-      // offsets remain usable when reconstructing the unheard suffix.
       const textStart = state.textCursor + (state.textCursor > 0 ? 1 : 0);
       const textEnd = textStart + normalizedText.length;
       const segmentIndex = state.nextSegmentIndex;
       state.nextSegmentIndex += 1;
       state.textCursor = textEnd;
-      const synthPromise = synthesizeChunk(normalizedText);
+      const synthPromise = synthesizeChunk(normalizedText, segmentIndex);
       emitChain = emitChain.then(async () => {
         const synthesized = await synthPromise;
         if (!synthesized || state.superseded || state.failed) {
@@ -1367,14 +1362,12 @@ class CascadedVoiceProvider {
             pcm_ms: pcmDurationMs(pcm.length, CLIENT_AUDIO_FORMAT),
           });
         }
-        // The segment metadata rides along so the session server can keep a
-        // frame->reply-text ledger: on interruption it is the only way to know
-        // which words were already spoken (binary PCM frames carry no text).
         await hooks.sendAudio(pcm, {
           segmentIndex,
           segmentText: normalizedText,
         });
         state.emitted += 1;
+        state.spokenTextEnd = Math.max(state.spokenTextEnd, textEnd);
         if (!state.firstAudioAtMs) {
           state.firstAudioAtMs = Date.now();
         }
@@ -1383,7 +1376,7 @@ class CascadedVoiceProvider {
           markSuperseded();
           return;
         }
-        markFailed(error);
+        markFailed(error, segmentIndex);
       });
     };
 
@@ -1435,10 +1428,6 @@ class CascadedVoiceProvider {
           state.style = value;
         }
       },
-      // Zero-delta fallback: the reasoner returned a COMPLETE reply without
-      // streaming any deltas (non-streaming provider, fallback path, stubs).
-      // Speak it as ONE chunk — the pre-streaming single-call shape — instead
-      // of re-chunking text that is already fully known.
       pushFinalText(text) {
         if (state.superseded || state.failed || state.finished) {
           return;
@@ -1489,7 +1478,16 @@ class CascadedVoiceProvider {
         clearForceTimer();
         if (state.started && !state.superseded) {
           try {
-            await hooks.onAssistantAudioDone();
+            await hooks.onAssistantAudioDone({
+              complete: !state.failed,
+              tts_delivery: state.failed ? (state.emitted > 0 ? "partial" : "failed") : "complete",
+              tts_segments: state.emitted,
+              ...(Number.isInteger(state.failedSegmentIndex)
+                ? { tts_failed_segment_index: state.failedSegmentIndex }
+                : {}),
+              tts_spoken_text_end: state.spokenTextEnd,
+              ...(state.ttsError ? { tts_error: state.ttsError } : {}),
+            });
           } catch (error) {
             if (isTurnSupersededError(error)) {
               markSuperseded();
@@ -1501,12 +1499,13 @@ class CascadedVoiceProvider {
         return {
           spoke: state.emitted > 0 && !state.superseded,
           segments: state.emitted,
-          // A superseded turn is silent: no tts_error, no events for it.
           ttsError: state.superseded ? "" : state.ttsError,
           superseded: state.superseded,
           started: state.started,
           firstAudioMs: state.firstAudioAtMs ? state.firstAudioAtMs - turnStartedAtMs : null,
           firstDeltaMs: state.firstDeltaAtMs ? state.firstDeltaAtMs - turnStartedAtMs : null,
+          failedSegmentIndex: state.failedSegmentIndex,
+          spokenTextEnd: state.spokenTextEnd,
         };
       },
     };
