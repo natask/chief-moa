@@ -156,6 +156,8 @@ public final class MoaAgentRunTrackerTest {
         assertEquals(MoaAgentRunTracker.FollowUpResolution.Kind.BOUND, resolved.kind);
         assertEquals("run-a", resolved.runId);
         assertEquals("intent-a", resolved.intentId);
+        assertEquals("intent-a", tracker.intentIdForRun("run-a"));
+        assertEquals("", tracker.intentIdForRun("missing"));
 
         assertEquals(MoaAgentRunTracker.FollowUpResolution.Kind.NONE,
                 tracker.resolveFollowUp("session-a", "missing").kind);
