@@ -30,6 +30,9 @@ proposal before any platform-local action runs.
   runs.
 - `release_control_plane`: persistent release authority contract and domain
   model above applications, clients, and build/QA runners.
+- `agent_switchboard`: separately configured conversational router that reads
+  the intent plane, records visible reversible decisions, and invokes only
+  injected launcher and durable-message capabilities.
 - `apple_surfaces`: shared Aggie authority library plus the native menu-bar
   `MoaMac` voice/typed companion, privacy-scoped observation/suggestion surface,
   and ad-hoc-signed QA bundle tooling.

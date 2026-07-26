@@ -17,6 +17,21 @@ permission-scoped Surface (Android, browser, macOS, Windows, iOS, ...)
 Moa must not collapse into a prompt-only chat app. Product decisions, execution
 state, and verification evidence belong in repo files.
 
+## Agent Switchboard
+
+`agent_switchboard` is a client-side routing boundary above the persistent
+intent plane. It accepts chronological message envelopes with optional surface
+context, reads current intents and pending attention before routing, and emits
+inspectable decisions separately from execution.
+
+The switchboard does not own downstream work. Launch and reopen operations use
+an injected launcher capability. Steering uses an injected durable-message
+capability only when that runtime reports support. Every proposed route is
+linked to its source envelope; applied routes add resulting intent, message,
+and run receipts. Reversal adds a compensating decision and retains history.
+The gateway remains unchanged and is accessed through the public intent-plane
+HTTP seam.
+
 ## System Boundary
 
 ```text
