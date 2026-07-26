@@ -5,7 +5,7 @@ with the user.
 
 ## 0. Capture Audit And Alignment
 
-- [ ] 0.1 With user-authorized gateway credentials, run a read-only production
+- [ ] 0.1 `[in-progress: bounded first slice; no implementation claimed]` With user-authorized gateway credentials, run a read-only production
   audit reporting counts, time coverage, source coverage, missing transcripts,
   incomplete turns, and pagination/truncation risk without copying raw content
   into logs.

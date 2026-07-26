@@ -18,10 +18,14 @@ Every ticket has one observable acceptance check.
   Acceptance: proposal.md's USER DECISIONS section shows a confirmed choice, not a
   recommendation, for each of the five.
 
-- [x] 0.2 `[blocked: consolidation]` Land `codex/vps-agent-control-plane` and
-  `worktree-agent-af6a296e02865afd2` to master so the MOA_MODE server changes, the
-  Docker/compose stack, the worker-pull control plane, the account-connection
-  store, and the VPS scripts are on the mainline this change builds on.
+- [x] 0.2a Inventory the required consolidation inputs from
+  `codex/vps-agent-control-plane` and `worktree-agent-af6a296e02865afd2`.
+  Acceptance: the inventory names the expected MOA_MODE server changes,
+  Docker/compose stack, worker-pull control plane, account-connection store, and
+  VPS scripts.
+
+- [ ] 0.2b `[blocked: consolidation]` Land the inventoried inputs on the
+  canonical mainline this change builds on.
   Acceptance: master contains `gateway/Dockerfile`, `docker-compose.yml`, the
   `MOA_MODE` block in `server.js`, `gateway/lib/account-connections.js`, and
   `scripts/vps/*`, and `cd gateway && npm run check` passes on master.

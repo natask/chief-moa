@@ -1,6 +1,6 @@
 ## 1. Taxonomy And Contract Definition
 
-- [ ] 1.1 Write the version-move contract spec: `list(query)`, `move(version,
+- [ ] 1.1 `[in-progress: bounded first slice; no implementation claimed]` Write the version-move contract spec: `list(query)`, `move(version,
       metadata)`, `rollback(version, metadata)` signatures and the shared
       receipt shape (`{ok, layer, from_version, to_version, reason, changed,
       actor}`), keyed against `agent-profile.js`'s existing

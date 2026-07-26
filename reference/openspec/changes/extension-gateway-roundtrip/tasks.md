@@ -1,8 +1,21 @@
 ## 1. Round Trip
 
 - [x] 1.1 Set gateway URL + token in extension options; confirm `/health` succeeds (gatewayHealth). — verified live: `smoke:gateway` writes the gateway URL into `chrome.storage.local` and `GET http://10.147.17.6:8787/health` returns `200 {ok:true}`.
-- [x] 1.2 Open the overlay via Cmd+, on the demo page, submit a command, and confirm the rendered reply originates from `/v1/voice/turns`. — implemented + asserted in `smoke:gateway` (real overlay `run` submit → background `POST /v1/voice/turns`, recorder confirms the endpoint, reply renders into the one-current-intent result stack above the preserved input draft). Awaiting `AGEE_GATEWAY_TOKEN` to confirm live (200); the harness self-test with an invalid token proved the live POST to `/v1/voice/turns` is exercised, not stubbed.
-- [x] 1.3 Run "describe page" and confirm the rendered description originates from `/v1/chat`. — implemented + asserted in `smoke:gateway` (real `describe` → background `POST /v1/chat`, recorder confirms the endpoint, description renders into the one-current-intent surface). Awaiting `AGEE_GATEWAY_TOKEN` to confirm live (200); invalid-token self-test proved the live POST to `/v1/chat` is exercised.
+- [x] 1.2a Implement and deterministically assert overlay command routing through
+      `POST /v1/voice/turns`. The recorder-backed `smoke:gateway` assertion
+      proves the endpoint is exercised rather than stubbed.
+- [ ] 1.2b With user-authorized `AGEE_GATEWAY_TOKEN`, confirm the overlay
+      command receives a live `200` reply from `/v1/voice/turns` and renders it.
+      Acceptance: a timestamped live receipt records the gateway origin,
+      endpoint, response status, and rendered result without recording the token.
+- [x] 1.3a Implement and deterministically assert describe-page routing through
+      `POST /v1/chat`. The recorder-backed `smoke:gateway` assertion proves the
+      endpoint is exercised rather than stubbed.
+- [ ] 1.3b With user-authorized `AGEE_GATEWAY_TOKEN`, confirm describe-page
+      receives a live `200` reply from `/v1/chat` and renders it.
+      Acceptance: a timestamped live receipt records the gateway origin,
+      endpoint, response status, and rendered description without recording the
+      token.
 - [x] 1.4 Disconnect/unauthorize the gateway and confirm a clear, non-silent error renders in the overlay. — verified live: with no token, the command hits `POST /v1/voice/turns` → `401`, and the overlay renders the clear error in the result stack above the preserved input draft with a red status dot.
 - [x] 1.5 Note the confirmed round-trip sequence in `browser_extension/README.md`. — added a "Verify the gateway round-trip" section documenting the health → command → describe → loud-failure sequence and the `smoke:gateway` script.
 - [x] 1.6 Route browser voice through the gateway streaming voice session, not browser-native STT/TTS. — implemented short-lived `/v1/voice/session-ticket` auth for browser WebSockets, streams PCM16 to `/v1/voice/sessions`, and plays returned assistant PCM audio. Verified by `gateway/scripts/smoke-browser-voice-ticket.js`.

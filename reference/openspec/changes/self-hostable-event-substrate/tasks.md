@@ -10,7 +10,10 @@
 - [x] 2.1 Mirror voice turns and provider-event summaries into the event substrate.
 - [x] 2.2 Mirror chat turns and broker events into the event substrate.
 - [x] 2.3 Mirror agent run lifecycle/events into the event substrate.
-- [x] 2.4 Mirror browser tasks, tool requests, and receipts into the event substrate. Approval events are still pending.
+- [x] 2.4a Mirror browser tasks, tool requests, and receipts into the event substrate.
+- [ ] 2.4b Mirror approval lifecycle events into the event substrate.
+      Acceptance: request, approve/deny, expiry, and execution-binding events
+      append idempotently and can be queried by the owning task.
 - [x] 2.5 Mirror work-graph events/artifacts or link the existing Postgres work graph as a projection source.
 
 ## 3. Projections
@@ -49,7 +52,10 @@
 ## 8. Verification
 
 - [x] 8.1 Gateway: `cd gateway && npm run check`.
-- [x] 8.2 Gateway smoke: event append/query and idempotency. Projection rebuild/import smoke is still pending.
+- [x] 8.2a Gateway smoke: event append/query and idempotency.
+- [ ] 8.2b Gateway smoke: import and projection rebuild.
+      Acceptance: importing the same fixture twice and rebuilding projections
+      yields the same event, checkpoint, and read-model counts.
 - [ ] 8.3 Android receipt sync: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`.
 - [ ] 8.4 Browser receipt sync: `cd browser_extension && npm run verify && npm run smoke`.
 - [ ] 8.5 Deploy changed surfaces with `bash scripts/deploy.sh auto` after implementation commits.

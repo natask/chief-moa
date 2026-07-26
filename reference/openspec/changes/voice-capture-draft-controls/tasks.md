@@ -1,6 +1,6 @@
 ## 1. Store and protocol
 
-- [ ] 1.1 Add revisioned bounded draft persistence, quota, boot recovery, and
+- [ ] 1.1 `[in-progress: bounded first slice; no implementation claimed]` Add revisioned bounded draft persistence, quota, boot recovery, and
   content-free discard/consume tombstones.
 - [ ] 1.2 Add draft-mode WebSocket start and pause/resume/park/discard controls.
 - [ ] 1.3 Route SEND through existing `commit_turn` provider orchestration.

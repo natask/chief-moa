@@ -1,6 +1,6 @@
 ## 1. Domain
 
-- [ ] 1.1 Add the product-events-backed intent reducer and legal transition
+- [ ] 1.1 `[in-progress: bounded first slice; no implementation claimed]` Add the product-events-backed intent reducer and legal transition
   commands.
 - [ ] 1.2 Add typed relations, idempotency, focus push/pop, and restart tests.
 - [ ] 1.3 Add bounded project/intent rehydration with source receipts.

@@ -5,7 +5,7 @@ the root license.
 
 ## 0. Alignment And Isolation
 
-- [ ] 0.1 Confirm the release shape, root license, first required client, and
+- [ ] 0.1 `[in-progress: bounded first slice; no implementation claimed]` Confirm the release shape, root license, first required client, and
       prerelease version in `proposal.md`.
 - [ ] 0.2 Create a clean release branch/worktree from the intended base commit;
       do not include unrelated voice or source-decomposition work.

@@ -5,7 +5,7 @@ are aligned with the user.
 
 ## 0. Alignment
 
-- [ ] 0.1 Align on same-app capture as the first surface.
+- [ ] 0.1 `[in-progress: bounded first slice; no implementation claimed]` Align on same-app capture as the first surface.
 - [ ] 0.2 Align on self-report-only first scope, screenshot retention, redaction,
   and the architecture/implementation authority selector.
 - [ ] 0.3 Define request states, evidence bounds, project-confidence threshold,

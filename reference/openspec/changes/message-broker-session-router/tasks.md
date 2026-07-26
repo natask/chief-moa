@@ -10,7 +10,10 @@
 
 ## 2. Session / Project Candidate Lookup
 
-- [x] 2.1 Expose active sessions, projects, active runs, and recent turns as broker candidates. Subproject records are still pending.
+- [x] 2.1a Expose active sessions, projects, active runs, and recent turns as broker candidates.
+- [ ] 2.1b Expose durable subproject records as broker candidates.
+      Acceptance: a message naming a stored subproject selects that exact
+      candidate and records the inspectable match reason.
 - [x] 2.2 Match messages to existing candidates using deterministic recency/text heuristics first.
 - [x] 2.3 Keep every match reason inspectable.
 
