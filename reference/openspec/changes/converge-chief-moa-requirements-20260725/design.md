@@ -70,4 +70,7 @@ manual QA. If those cannot prove the claim, record `blocked` or
 2. stable identifiers are unique;
 3. every incomplete row has a next action and acceptance check;
 4. `verified_complete` always has exact evidence and independent verification;
-5. the checked-in ledger exactly matches deterministic generation.
+5. old generic placeholder phrases, exact requirement-as-acceptance
+   tautologies, and generic one-word acceptance claims are rejected;
+6. each next action retains task-specific operation/scope tokens; and
+7. the checked-in ledger exactly matches deterministic generation.

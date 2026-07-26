@@ -5,7 +5,12 @@ are aligned with the user.
 
 ## 0. Alignment
 
-- [ ] 0.1 `[in-progress: bounded first slice; no implementation claimed]` Align on same-app capture as the first surface.
+- [ ] 0.0 `[in-progress: bounded first slice; no implementation claimed]`
+  Draft one same-app-capture decision row naming the owning surface, captured
+  fields, excluded fields, and authority required to persist a proposal.
+  Acceptance: the reviewed row names one owner, explicit included/excluded
+  fields, and confirms that capture grants no implementation authority.
+- [ ] 0.1 Align on same-app capture as the first surface.
 - [ ] 0.2 Align on self-report-only first scope, screenshot retention, redaction,
   and the architecture/implementation authority selector.
 - [ ] 0.3 Define request states, evidence bounds, project-confidence threshold,

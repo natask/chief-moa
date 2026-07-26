@@ -5,7 +5,13 @@ acceptance matrix, and workflow authority split are aligned with the user.
 
 ## 0. Architecture Alignment
 
-- [ ] 0.1 `[in-progress: bounded first slice; no implementation claimed]` Confirm that the primary objective is fluent and useful voice across
+- [ ] 0.0 `[in-progress: bounded first slice; no implementation claimed]` Draft
+  one objective-boundary row for an Android spoken turn, naming start state,
+  useful end state, deterministic evidence, real-device evidence, and authority;
+  do not define the full cross-surface matrix in this slice.
+  Acceptance: the reviewed row distinguishes deterministic from real-device
+  evidence and leaves user-operated authority explicit.
+- [ ] 0.1 Confirm that the primary objective is fluent and useful voice across
   Android, browser, gateway/provider, and deployed operations.
 - [ ] 0.2 Align on the five result states: `passed`, `failed`, `blocked`,
   `not_measured`, and `stale`; do not add a generic skipped state.

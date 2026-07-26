@@ -1,6 +1,12 @@
 ## 1. Store and protocol
 
-- [ ] 1.1 `[in-progress: bounded first slice; no implementation claimed]` Add revisioned bounded draft persistence, quota, boot recovery, and
+- [ ] 1.0 `[in-progress: bounded first slice; no implementation claimed]`
+  Define one content-free draft-envelope fixture containing only draft id,
+  revision, byte count, creation time, and state; exclude persistence, quota,
+  recovery, and audio bytes from this slice.
+  Acceptance: a reviewed fixture accepts one bounded envelope and rejects an
+  envelope containing audio content or an unknown state.
+- [ ] 1.1 Add revisioned bounded draft persistence, quota, boot recovery, and
   content-free discard/consume tombstones.
 - [ ] 1.2 Add draft-mode WebSocket start and pause/resume/park/discard controls.
 - [ ] 1.3 Route SEND through existing `commit_turn` provider orchestration.

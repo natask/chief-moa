@@ -5,7 +5,13 @@ with the user.
 
 ## 0. Capture Audit And Alignment
 
-- [ ] 0.1 `[in-progress: bounded first slice; no implementation claimed]` With user-authorized gateway credentials, run a read-only production
+- [ ] 0.0 `[in-progress: bounded first slice; no implementation claimed]`
+  Inventory only the existing chat-turn and voice-turn read paths in a bounded
+  table with route, store, pagination input, and completeness signal; do not
+  access production or raw content in this slice.
+  Acceptance: a reviewed table contains one row for each existing chat-turn and
+  voice-turn read path and marks every missing pagination/completeness field.
+- [ ] 0.1 With user-authorized gateway credentials, run a read-only production
   audit reporting counts, time coverage, source coverage, missing transcripts,
   incomplete turns, and pagination/truncation risk without copying raw content
   into logs.

@@ -68,7 +68,22 @@ function parseTasks(file) {
 function acceptanceFor(task) {
   const explicit = task.text.match(/Acceptance:\s*(.*)$/i);
   if (explicit) return normalize(explicit[1]);
-  return `Record observable evidence that the exact source task is satisfied: ${task.text}`;
+  const requirement = requirementFor(task);
+  return `A reviewed fixture names inputs, expected outputs, and a verification command for "${requirement}".`;
+}
+
+function requirementFor(task) {
+  return normalize(task.text.split(/\bAcceptance:/i)[0]);
+}
+
+function plannedNextAction(task) {
+  const requirement = requirementFor(task);
+  if (/Acceptance:/i.test(task.text)) {
+    return task.sourceChecked
+      ? `Independently verify the claimed result for "${requirement}" using the named acceptance artifact, state, or command.`
+      : `Produce the named artifact or observable state for "${requirement}", then run its source acceptance check.`;
+  }
+  return `Define an acceptance fixture for "${requirement}" in ${path.dirname(task.path)} before product implementation.`;
 }
 
 function classify(task) {
@@ -79,26 +94,27 @@ function classify(task) {
       ? `Source checkbox claims completion at ${task.path}:${task.line}; no independent evidence registered.`
       : "No implementation evidence registered.",
     independent: "",
-    next: `Execute the smallest bounded portion of this source task and record exact evidence at ${task.path}:${task.line}.`,
+    next: plannedNextAction(task),
     acceptance: acceptanceFor(task),
     blocker: "",
     duplicates: "",
   };
 
-  if (/\[blocked(?::|\])/i.test(task.text)) {
+  const explicitlyStillUnresolved = /\b(still pending|awaiting|waits? on|requires? user|not yet|remains? blocked)\b/i.test(task.text);
+  if (/\[blocked(?::|\])/i.test(task.text) && (!task.sourceChecked || explicitlyStillUnresolved)) {
     base.status = "blocked";
     base.blocker = normalize(task.text.match(/\[blocked[^\]]*\]/i)?.[0] || "Named source blocker");
-    base.next = `Resolve or obtain authority for ${base.blocker}, then execute the source acceptance check.`;
+    base.next = `Resolve or obtain authority for ${base.blocker} before producing the named result for "${requirementFor(task)}".`;
   }
-  if (/\[decision:/i.test(task.text)) {
+  if (/\[decision:/i.test(task.text) && (!task.sourceChecked || explicitlyStillUnresolved)) {
     base.status = "blocked";
     base.blocker = normalize(task.text.match(/\[decision:[^\]]*\]/i)?.[0] || "User decision");
-    base.next = `Obtain the named user decision without silently selecting it, then execute the source task.`;
+    base.next = `Obtain ${base.blocker} without silently selecting it before producing the named result for "${requirementFor(task)}".`;
   }
   if (/\[in-progress: bounded first slice; no implementation claimed\]/i.test(task.text)) {
     base.status = "in_progress";
     base.evidence = "Bounded first slice selected in source; no implementation claimed.";
-    base.next = `Complete only the bounded first slice named at ${task.path}:${task.line} and record its observable result.`;
+    base.next = `Produce only the explicitly bounded artifact for "${requirementFor(task)}" and run its stated acceptance check.`;
   }
 
   if (
@@ -108,7 +124,7 @@ function classify(task) {
     base.evidence =
       "Commit f6ec029f616cbedd48b9a50b20946639e34ae66c; Swift tests/static scan in that change; installed and dist executable SHA-256 624068bf65ae520bf695594591ea9791105d49faf08e6ec5b2cb7f57478ec4a2.";
     base.next =
-      "Have an independent verifier inspect commit f6ec029f and rerun the non-privileged Swift/static checks.";
+      `Have an independent verifier inspect commit f6ec029f and verify "${requirementFor(task)}" with the non-privileged Swift/static checks.`;
     base.acceptance =
       "Independent verification confirms entered tokens remain memory-only and clear on disconnect/stop.";
     base.blocker = "Independent verification receipt is not yet registered.";
@@ -120,7 +136,7 @@ function classify(task) {
     base.evidence =
       "Commit f6ec029f616cbedd48b9a50b20946639e34ae66c adds apple_surfaces/scripts/scan-moa-mac.sh persistence-pattern checks.";
     base.next =
-      "Have an independent verifier rerun the non-privileged source/binary scan and record its output.";
+      `Have an independent verifier verify "${requirementFor(task)}" by rerunning the non-privileged source/binary scan.`;
     base.acceptance =
       "Independent scan rejects Keychain/SecItem/generic-password persistence in runnable Apple sources and the packaged binary.";
     base.blocker = "Independent verification receipt is not yet registered.";
@@ -174,6 +190,33 @@ for (const row of rows) {
   row.duplicates = peers.join(", ");
 }
 for (const row of rows) {
+  const forbiddenGeneric = [
+    "Execute the smallest bounded portion of this source task",
+    "Record observable evidence that the exact source task is satisfied",
+    "source task is satisfied",
+  ];
+  if (forbiddenGeneric.some((phrase) => row.next.includes(phrase) || row.acceptance.includes(phrase))) {
+    throw new Error(`generic placeholder phrase remains: ${row.id}`);
+  }
+  const requirement = requirementFor(row);
+  if (normalize(row.acceptance).toLowerCase() === normalize(requirement).toLowerCase()) {
+    throw new Error(`tautological acceptance repeats requirement: ${row.id}`);
+  }
+  const specificTokens = new Set(
+    requirement.toLowerCase().match(/[a-z0-9_./:-]{4,}/g) || [],
+  );
+  const observableText = `${row.next} ${row.acceptance}`.toLowerCase();
+  const overlap = [...specificTokens].filter((token) => observableText.includes(token));
+  if (specificTokens.size > 0 && overlap.length < Math.min(2, specificTokens.size)) {
+    throw new Error(`next action/acceptance is not task-specific: ${row.id}`);
+  }
+  const nextOverlap = [...specificTokens].filter((token) => row.next.toLowerCase().includes(token));
+  if (specificTokens.size > 0 && nextOverlap.length < Math.min(2, specificTokens.size)) {
+    throw new Error(`next action does not retain task operation/scope: ${row.id}`);
+  }
+  if (/^(done|complete|task completed|requirement satisfied|works as expected)\.?$/i.test(normalize(row.acceptance))) {
+    throw new Error(`overly generic acceptance: ${row.id}`);
+  }
   if (row.status !== "verified_complete" && (!row.next || !row.acceptance)) {
     throw new Error(`incomplete row lacks next action/acceptance: ${row.id}`);
   }

@@ -1,6 +1,12 @@
 ## 1. Taxonomy And Contract Definition
 
-- [ ] 1.1 `[in-progress: bounded first slice; no implementation claimed]` Write the version-move contract spec: `list(query)`, `move(version,
+- [ ] 1.0 `[in-progress: bounded first slice; no implementation claimed]` Map
+      only the proposed `list(query)` result fields to the existing
+      `agent-profile.js` `versions()` return shape in a fixture table; do not
+      define `move` or `rollback` in this slice.
+      Acceptance: the fixture has one row per `list(query)` field, names its
+      exact `versions()` source field, and contains no unmapped field.
+- [ ] 1.1 Write the version-move contract spec: `list(query)`, `move(version,
       metadata)`, `rollback(version, metadata)` signatures and the shared
       receipt shape (`{ok, layer, from_version, to_version, reason, changed,
       actor}`), keyed against `agent-profile.js`'s existing
