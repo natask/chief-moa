@@ -93,6 +93,12 @@ test("follow-up rejects missing parents, empty text, and invalid continuations",
     text: "wrong scope", branch_id: "other",
   });
   assert.equal(mismatch.response.status, 409);
+  assert.equal((await route(harness.handlers, "POST", "/v1/agent/runs/parent/followups", {
+    text: "wrong conversation", conversation_id: "conv_other",
+  })).response.status, 409);
+  assert.equal((await route(harness.handlers, "POST", "/v1/agent/runs/parent/followups", {
+    text: "wrong session alias", session_id: "conv_other",
+  })).response.status, 409);
 });
 
 test("worker follow-up preserves parent defaults and queues without execution", async () => {
@@ -116,15 +122,16 @@ test("local follow-up honors overrides, session context, and output fallbacks", 
     ...harness.runs.get("parent"), output: "", stderr: "old error", stdout: "old stdout",
   });
   const body = {
-    prompt: "next", source: "phone", session_id: "session_1", branch_id: "branch_parent",
+    prompt: "next", source: "phone", session_id: "conv_parent", branch_id: "branch_parent",
     intent_id: "intent_parent",
-    all_branches_context: true, conversation_id: "conv_new", harness: "codex",
+    all_branches_context: true, conversation_id: "conv_parent", harness: "codex",
     working_dir: "/work", screen: { text: "evidence" }, profile_version: "v2",
   };
   const result = await route(harness.handlers, "POST", "/v1/agent/runs/parent/followups", body);
   assert.equal(result.response.status, 202);
   assert.deepEqual(harness.calls.executed, ["run_1"]);
-  assert.deepEqual(harness.calls.contexts[0], { sessionId: "session_1", branchId: "branch_parent", allBranches: true });
+  assert.deepEqual(harness.calls.contexts[0], { sessionId: "conv_parent", branchId: "branch_parent", allBranches: true });
+  assert.equal(harness.calls.created[0].conversation_id, "conv_parent");
   assert.equal(harness.calls.created[0].harness, "codex");
   assert.equal(harness.calls.created[0].branch_id, "branch_parent");
   assert.equal(harness.calls.created[0].intent_id, "intent_parent");
@@ -134,20 +141,23 @@ test("local follow-up honors overrides, session context, and output fallbacks", 
 test("repeated follow-ups preserve the same branch and intent on every child", async () => {
   const harness = makeHarness();
   const first = await route(harness.handlers, "POST", "/v1/agent/runs/parent/followups", {
-    text: "first", branch_id: "branch_parent", intent_id: "intent_parent",
+    text: "first", conversation_id: "conv_parent", session_id: "conv_parent",
+    branch_id: "branch_parent", intent_id: "intent_parent",
   });
   assert.equal(first.response.status, 202);
   const second = await route(harness.handlers, "POST", "/v1/agent/runs/run_1/followups", {
-    text: "second", branch_id: "branch_parent", intent_id: "intent_parent",
+    text: "second", conversation_id: "conv_parent", session_id: "conv_parent",
+    branch_id: "branch_parent", intent_id: "intent_parent",
   });
   assert.equal(second.response.status, 202);
   assert.deepEqual(harness.calls.created.map((run) => ({
     parent_run_id: run.parent_run_id,
+    conversation_id: run.conversation_id,
     branch_id: run.branch_id,
     intent_id: run.intent_id,
   })), [
-    { parent_run_id: "parent", branch_id: "branch_parent", intent_id: "intent_parent" },
-    { parent_run_id: "run_1", branch_id: "branch_parent", intent_id: "intent_parent" },
+    { parent_run_id: "parent", conversation_id: "conv_parent", branch_id: "branch_parent", intent_id: "intent_parent" },
+    { parent_run_id: "run_1", conversation_id: "conv_parent", branch_id: "branch_parent", intent_id: "intent_parent" },
   ]);
 });
 

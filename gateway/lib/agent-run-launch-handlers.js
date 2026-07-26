@@ -62,7 +62,13 @@ function createAgentRunLaunchHandlers({
     const requestedBranchId = String(body.branch_id || parentBranchId);
     const parentIntentId = String(parent.intent_id || "");
     const requestedIntentId = String(body.intent_id || parentIntentId);
-    if (requestedBranchId !== parentBranchId || (parentIntentId && requestedIntentId !== parentIntentId)) {
+    const parentSessionId = String(parent.conversation_id || parent.session_id || "");
+    const suppliedConversationId = body.conversation_id === undefined ? parentSessionId : String(body.conversation_id);
+    const suppliedSessionId = body.session_id === undefined ? parentSessionId : String(body.session_id);
+    if (requestedBranchId !== parentBranchId
+      || (parentIntentId && requestedIntentId !== parentIntentId)
+      || suppliedConversationId !== parentSessionId
+      || suppliedSessionId !== parentSessionId) {
       sendJson(response, 409, { error: "follow-up scope does not match parent run" });
       return;
     }
@@ -77,14 +83,14 @@ function createAgentRunLaunchHandlers({
       "New user follow-up:", text,
     ].join("\n");
     const prompt = agentPromptWithSessionContext(continuationPrompt, {
-      sessionId: body.session_id || body.conversation_id || parent.conversation_id,
+      sessionId: parentSessionId,
       branchId: parentBranchId,
       allBranches: body.all_branches_context === true,
     });
     let run;
     try {
       run = createAgentRun({
-        conversation_id: body.conversation_id || parent.conversation_id,
+        conversation_id: parentSessionId,
         source: body.source || "android-follow-up",
         harness: body.harness || parent.harness,
         working_dir: body.working_dir || parent.working_dir,

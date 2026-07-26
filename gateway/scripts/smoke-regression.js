@@ -910,7 +910,8 @@ async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   const parentDetail = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
   const response = await postJson(`${baseUrl}/v1/agent/runs/${parentRunId}/followups`, {
     source: "smoke-regression",
-    conversation_id: "smoke_session",
+    conversation_id: parentDetail.run.conversation_id,
+    session_id: parentDetail.run.conversation_id,
     branch_id: parentDetail.run.branch_id,
     intent_id: parentDetail.run.intent_id,
     prompt: "use this follow-up context",
@@ -932,14 +933,15 @@ async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   assertPersistedRun(dataDir, childRunId, {
     status: "completed",
     harness: parentDetail.run.harness,
-    conversation_id: "smoke_session",
+    conversation_id: parentDetail.run.conversation_id,
     parent_run_id: parentRunId,
     branch_id: parentDetail.run.branch_id,
     intent_id: parentDetail.run.intent_id,
   });
   const repeated = await postJson(`${baseUrl}/v1/agent/runs/${childRunId}/followups`, {
     source: "smoke-regression",
-    conversation_id: "smoke_session",
+    conversation_id: childDetail.run.conversation_id,
+    session_id: childDetail.run.conversation_id,
     branch_id: childDetail.run.branch_id,
     intent_id: childDetail.run.intent_id,
     prompt: "continue the same intent again",
