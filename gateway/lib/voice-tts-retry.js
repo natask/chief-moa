@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const MAX_RETRIES_PER_TURN = 3;
 const MAX_RECEIPTS = 32;
+const TTS_RECOVERY_WINDOW_MS = 60000;
 
 async function handleTtsRetry(connection, event, helpers) {
   const turn = connection.turn;
@@ -107,4 +108,23 @@ function identity(turn, retryId, type, details) {
   return { type, session_id: turn.sessionId, branch_id: turn.branchId, turn_id: turn.turnId, retry_id: retryId, ...details };
 }
 
-module.exports = { handleTtsRetry, MAX_RECEIPTS, MAX_RETRIES_PER_TURN };
+function retainTtsRecoveryTurn(connection, turn, timeoutMs = TTS_RECOVERY_WINDOW_MS) {
+  clearTimeout(turn.ttsRecoveryTimer);
+  turn.ttsRecoveryTimer = setTimeout(() => {
+    turn.ttsRecovery = null;
+    turn.ttsRecoveryTimer = null;
+    if (connection.turn === turn) connection.turn = null;
+  }, timeoutMs);
+  turn.ttsRecoveryTimer.unref?.();
+}
+
+function releaseTtsRecoveryTurn(connection, turn) {
+  clearTimeout(turn?.ttsRecoveryTimer);
+  if (turn) turn.ttsRecoveryTimer = null;
+  if (connection.turn === turn) connection.turn = null;
+}
+
+module.exports = {
+  handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn, MAX_RECEIPTS,
+  MAX_RETRIES_PER_TURN, TTS_RECOVERY_WINDOW_MS,
+};

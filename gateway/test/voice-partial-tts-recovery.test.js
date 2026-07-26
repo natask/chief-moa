@@ -116,6 +116,59 @@ test("a second-chunk TTS failure is explicit and the unheard suffix can be retri
   }
 });
 
+test("a fully failed first TTS chunk remains reachable for successful retry", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-failed-tts-"));
+  let synthesisCall = 0;
+  const provider = createVoiceProvider({
+    env: {
+      MOA_MODE: "local", VOICE_PROVIDER: "chirp",
+      VOICE_REASONING_PROVIDER: "gateway", VOICE_TTS_PROVIDER: "cloud-tts",
+      VOICE_STREAMING: "1", CHIRP_MODEL: "chirp_3",
+      GCP_PROJECT_ID: "test-project", CHIRP_ACCESS_TOKEN: "test-token",
+    },
+    reasoner: async (input) => {
+      input.on_speak_delta("Only sentence.");
+      return { speak: "Only sentence.", display: "Only sentence.", language: "en-US", classification: "chat" };
+    },
+  });
+  provider.synthesizeSpeech = async () => {
+    synthesisCall += 1;
+    if (synthesisCall === 1) throw new Error("deterministic first chunk failure");
+    return Buffer.alloc(320, 1);
+  };
+  const voiceServer = createVoiceSessionServer({ dataDir: tempDir, voiceProvider: provider });
+  const server = http.createServer();
+  server.on("upgrade", (request, socket, head) => voiceServer.handleUpgrade(request, socket, head));
+  let client;
+  try {
+    const port = await listen(server);
+    client = await connect(`ws://127.0.0.1:${port}${voiceServer.endpoint}`);
+    client.ws.send(JSON.stringify({
+      type: "session_start", session_id: "failed_session", conversation_id: "failed_session",
+      branch_id: "default", turn_id: "failed_turn", source: "failed-tts-test", format: FORMAT,
+    }));
+    await client.waitFor("session_ready");
+    client.ws.send(JSON.stringify({ type: "text_turn", turn_id: "failed_turn", text: "please answer" }));
+    const done = await client.waitFor("turn_done");
+    assert.equal(done.tts_delivery, "failed");
+    assert.equal(done.tts_complete, false);
+    assert.equal(done.tts_spoke, false);
+    assert.equal(done.tts_spoken_text_end, 0);
+    client.ws.send(JSON.stringify({
+      type: "retry_tts", turn_id: "failed_turn", retry_id: "failed_retry", from_text_char: 0,
+    }));
+    const retried = await client.waitFor("tts_retry_done");
+    assert.equal(retried.status, "completed");
+    assert.equal(retried.tts_delivery, "complete");
+    assert.equal(synthesisCall, 2);
+  } finally {
+    client?.ws.terminate();
+    await new Promise((resolve) => voiceServer.close(resolve));
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("retry_tts rejects unauthorized receipts, offsets, missing ids, and excess attempts", async () => {
   const harness = retryHarness();
   await handleTtsRetry(harness.connection, { type: "retry_tts", turn_id: "turn_a", from_text_char: 5 }, harness.helpers);

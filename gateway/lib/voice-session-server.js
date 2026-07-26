@@ -20,7 +20,7 @@ const {
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
 const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
-const { handleTtsRetry } = require("./voice-tts-retry");
+const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -1144,7 +1144,8 @@ class VoiceSessionConnection {
 
     // the session so a barge-in during that tail can report its checkpoint.
     // Text-only turns still close immediately for old-client compatibility.
-    if (!hasPlaybackTail && this.turn === turn) {
+    if (turn.ttsRecovery) retainTtsRecoveryTurn(this, turn);
+    if (!hasPlaybackTail && !turn.ttsRecovery && this.turn === turn) {
       this.turn = null;
     }
   }
@@ -1316,7 +1317,6 @@ class VoiceSessionConnection {
         // history distinguishes a text-only turn from a synthesis fault.
         modality: providerResult?.modality || "",
         tts_error: providerResult?.tts_error || "",
-        // Additive streaming metadata on the canonical record. Old code
         // reading new records ignores these; new code reading old records
         // treats absence as the non-streaming default.
         ...(providerResult?.streaming ? { streaming: true } : {}),
@@ -1350,7 +1350,6 @@ class VoiceSessionConnection {
   }
 
   async failCommittedTurn(turn, providerEvents, error) {
-    // A failed terminal receipt cannot rewrite the already-durable outcome.
     if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
     }
@@ -1544,6 +1543,7 @@ class VoiceSessionConnection {
     }
 
     const turn = this.turn;
+    if (turn.ttsRecovery && turn.status === "completed") return releaseTtsRecoveryTurn(this, turn);
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     if (turn.status !== "recording" && hasPartialEndpointPlayback(turn)) turn.recordedCanonical = false;
     turn.status = status;
