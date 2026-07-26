@@ -145,6 +145,49 @@ public final class MoaAgentRunTrackerTest {
     }
 
     @Test
+    public void followUpBindingNeverCapturesARunFromAnotherSessionOrBranch() throws Exception {
+        MoaAgentRunTracker tracker = new MoaAgentRunTracker();
+        tracker.track(scopedRun("run-a", "session-a", "branch-a", "intent-a"));
+        tracker.track(scopedRun("run-b", "session-a", "branch-b", "intent-b"));
+        tracker.track(scopedRun("run-c", "session-c", "branch-a", "intent-c"));
+
+        MoaAgentRunTracker.FollowUpResolution resolved =
+                tracker.resolveFollowUp("session-a", "branch-a");
+        assertEquals(MoaAgentRunTracker.FollowUpResolution.Kind.BOUND, resolved.kind);
+        assertEquals("run-a", resolved.runId);
+        assertEquals("intent-a", resolved.intentId);
+
+        assertEquals(MoaAgentRunTracker.FollowUpResolution.Kind.NONE,
+                tracker.resolveFollowUp("session-a", "missing").kind);
+    }
+
+    @Test
+    public void concurrentDifferentIntentsAreExplicitlyAmbiguous() throws Exception {
+        MoaAgentRunTracker tracker = new MoaAgentRunTracker();
+        tracker.track(scopedRun("run-a1", "session-a", "branch-a", "intent-a"));
+        tracker.track(scopedRun("run-b1", "session-a", "branch-a", "intent-b"));
+
+        MoaAgentRunTracker.FollowUpResolution resolved =
+                tracker.resolveFollowUp("session-a", "branch-a");
+        assertEquals(MoaAgentRunTracker.FollowUpResolution.Kind.AMBIGUOUS, resolved.kind);
+        assertEquals("", resolved.runId);
+        assertEquals(2, resolved.candidateCount);
+    }
+
+    @Test
+    public void concurrentRunsForOneIntentContinueItsMostRecentRun() throws Exception {
+        MoaAgentRunTracker tracker = new MoaAgentRunTracker();
+        tracker.track(scopedRun("run-old", "session-a", "branch-a", "intent-a"));
+        tracker.track(scopedRun("run-new", "session-a", "branch-a", "intent-a"));
+
+        MoaAgentRunTracker.FollowUpResolution resolved =
+                tracker.resolveFollowUp("session-a", "branch-a");
+        assertEquals(MoaAgentRunTracker.FollowUpResolution.Kind.BOUND, resolved.kind);
+        assertEquals("run-new", resolved.runId);
+        assertEquals("intent-a", resolved.intentId);
+    }
+
+    @Test
     public void completionTextBoundsIdentifiersAndOmitsBlankPreview() {
         MoaAgentRunTracker.State longId = new MoaAgentRunTracker.State("12345678901");
         longId.status = "canceled";
@@ -184,5 +227,17 @@ public final class MoaAgentRunTrackerTest {
                 .put("active", active)
                 .put("harness", harness)
                 .put("output_preview", output);
+    }
+
+    private static JSONObject scopedRun(
+            String id,
+            String sessionId,
+            String branchId,
+            String intentId
+    ) throws Exception {
+        return run(id, "running", true, "codex", "")
+                .put("conversation_id", sessionId)
+                .put("branch_id", branchId)
+                .put("intent_id", intentId);
     }
 }
