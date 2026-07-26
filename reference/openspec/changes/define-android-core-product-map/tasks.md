@@ -178,3 +178,35 @@ Release evidence: commit `b99379b0` built candidate
 The VPS backup/preflight gate failed before publication, so the active OTA head
 did not move. No authorized phone was attached; the candidate is neither
 installed nor physically smoked.
+
+## 14. Mobile Voice Finish Recovery
+
+- [x] 14.1 Make normal push-to-talk release commit the owned streaming
+      controller exactly once instead of gating finish on transient transport
+      activity.
+- [x] 14.2 Keep Android `ACTION_CANCEL`, hold-drag cancellation, discard, and
+      barge-in replacement as explicit non-commit paths.
+- [x] 14.3 Give unexpected voice and private-turn startup failures one
+      accessible, generation-bound `Record again` action.
+- [x] 14.4 Add deterministic gesture/session tests for capture then normal
+      finish, intentional cancellation, deferred startup, stale close, and
+      one-shot retry.
+- [ ] 14.5 Complete physical-phone QA and confirm gateway evidence contains one
+      `commit_turn` and no `cancel_turn` for a normal hold/release turn.
+
+## 15. Mobile Voice End-to-End Benchmark Evidence
+
+- [x] 15.1 Add content-free Android lifecycle timings from actual microphone,
+      socket/result, AudioTrack playback, drain, and terminal seams.
+- [x] 15.2 Replace fixed-delay playback completion with bounded playback-head
+      drain confirmation and an explicit timeout outcome.
+- [x] 15.3 Retain at most 100 private on-device terminal samples and expose
+      completion/failure/teardown, audible-success, p50, and p95 in the full app.
+- [x] 15.4 Hash existing session/turn identity for local lifecycle correlation;
+      never retain raw identity, content, credentials, URLs, or exception text.
+- [x] 15.5 Add deterministic ordering tests for PCM receipt, audio-done drain
+      ownership, immediate turn completion, disabled playback, playback errors,
+      post-terminal suppression, and concurrent metrics retention.
+- [ ] 15.6 Establish the real-phone benchmark with repeated audible success,
+      playback-disabled, cancel/replacement, connection-loss, and drain-timeout
+      trials against the exact installed APK.

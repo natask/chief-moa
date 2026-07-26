@@ -231,7 +231,11 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 if (doublePressActive) {
                     doublePressActive = false;
                     lastTapCandidate = false;
-                    onPressToTalkRelease.run();
+                    if (action == MotionEvent.ACTION_UP) {
+                        onPressToTalkRelease.run();
+                    } else {
+                        onPressToTalkCancel.run();
+                    }
                     return true;
                 }
                 if (doublePressPending) {
@@ -321,10 +325,15 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             case MotionEvent.ACTION_CANCEL:
                 cancelVoiceFirstHold();
                 if (voiceFirstHoldActive) {
-                    // Release of a confirmed press-to-talk: commit the turn.
+                    // A real release commits; Android gesture cancellation stays
+                    // an explicit non-commit path.
                     voiceFirstHoldActive = false;
                     resetVoiceFirstTapChord();
-                    onPressToTalkRelease.run();
+                    if (action == MotionEvent.ACTION_UP) {
+                        onPressToTalkRelease.run();
+                    } else {
+                        onPressToTalkCancel.run();
+                    }
                     return true;
                 }
                 // No hold consumed the warm mic, so drop it.

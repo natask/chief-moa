@@ -117,6 +117,7 @@ public final class OverlayService extends Service {
     private Runnable pendingAutoDismiss;
     private Runnable pendingContinuousVoiceRestart;
     private Runnable pendingStreamingTurnWatchdog;
+    private final MoaVoiceFailureRetry voiceFailureRetry = new MoaVoiceFailureRetry();
     private boolean streamingTurnAutoCommit;
     private boolean streamingTurnContinuous;
     private boolean streamingTurnRetried;
@@ -143,6 +144,8 @@ public final class OverlayService extends Service {
     private boolean continuousVoiceLoop;
     private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
+    private final MoaPushToTalkFinish pushToTalkFinish = new MoaPushToTalkFinish();
+    private boolean forcedReviewableVoiceDraft;
     private boolean recordModeEnabled;
     private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin =
             MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
@@ -934,7 +937,7 @@ public final class OverlayService extends Service {
     }
 
     private boolean reviewableVoiceDraftActive() {
-        return MoaPrefs.voiceFirstGestures(this)
+        return (MoaPrefs.voiceFirstGestures(this) || forcedReviewableVoiceDraft)
                 && continuousVoiceLoop
                 && !pushToTalkVoiceTurn
                 && !currentStreamingTurnCommitRequested
@@ -1020,6 +1023,7 @@ public final class OverlayService extends Service {
     }
 
     private void discardVoiceDraft() {
+        forcedReviewableVoiceDraft = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
@@ -1040,6 +1044,7 @@ public final class OverlayService extends Service {
             return;
         }
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        forcedReviewableVoiceDraft = false;
         suppressFirstTapTurnEmptyCue = false;
         continuousVoiceLoop = false;
         cancelContinuousVoiceRestart();
@@ -1123,7 +1128,10 @@ public final class OverlayService extends Service {
                     assistant,
                     rowText,
                     entry.copyableText(),
-                    entry.finalText);
+                    entry.finalText,
+                    assistant
+                            && i == count - 1
+                            && voiceFailureRetry.isAvailable(streamingVoiceGeneration));
             attachSwipeDismiss(row, entry);
             voiceTranscriptColumn.addView(row);
             boolean newestAssistant = assistant && i == count - 1;
@@ -1253,7 +1261,8 @@ public final class OverlayService extends Service {
             boolean assistant,
             String text,
             String copyableText,
-            boolean finalText) {
+            boolean finalText,
+            boolean showRecordAgain) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
 
@@ -1306,6 +1315,20 @@ public final class OverlayService extends Service {
         body.setMaxWidth(Math.min(getResources().getDisplayMetrics().widthPixels - dp(92), dp(430)));
         body.setAlpha(text.isEmpty() ? 0.48f : finalText ? 1f : 0.82f);
         bubble.addView(body);
+        if (showRecordAgain) {
+            TextView recordAgain = pill("Record again", 0x243D8BFF, 0xFF9BC1FF);
+            recordAgain.setContentDescription("Record voice again");
+            recordAgain.setMinWidth(dp(48));
+            recordAgain.setMinHeight(dp(48));
+            recordAgain.setGravity(Gravity.CENTER);
+            recordAgain.setFocusable(true);
+            recordAgain.setOnClickListener(v -> retryFailedVoiceCapture());
+            LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            retryParams.topMargin = dp(10);
+            bubble.addView(recordAgain, retryParams);
+        }
 
         wrap.addView(rowHeader);
         wrap.addView(bubble);
@@ -1957,11 +1980,9 @@ public final class OverlayService extends Service {
             // path the overlay was left in THINKING forever; reset it to READY
             // with a visible notice instead of a silent hang.
             if (fromVoice) {
-                String notice = "I didn't get a reply. Tap to try again.";
-                updateVoiceAssistantTranscript(notice);
-                setVoiceRuntimeState(VoiceRuntimeState.READY);
-                updateMicState();
-                holdVoiceReplyThenContinueOrDismiss();
+                showStreamingVoiceFailure(
+                        "Voice returned no reply.",
+                        streamingVoiceGeneration);
             }
             return;
         }
@@ -2674,10 +2695,11 @@ public final class OverlayService extends Service {
     // the capture that hold started (streaming turn or audio note) WITHOUT
     // committing it, so the gesture becomes a plain drag. Nothing is sent.
     private void handleOrbPushToTalkCancel() {
+        pushToTalkFinish.intentionalCancel();
         if (audioNoteActive) {
             cancelAudioNoteCapture();
         }
-        if (pushToTalkVoiceTurn || streamingVoiceActive()) {
+        if (pushToTalkVoiceTurn || streamingVoiceController != null) {
             cancelStreamingVoice();
         }
         pushToTalkVoiceTurn = false;
@@ -2694,6 +2716,7 @@ public final class OverlayService extends Service {
         }
         loadSettings();
         pushToTalkVoiceTurn = true;
+        pushToTalkFinish.start();
         if (streamingVoiceAvailable()) {
             continuousVoiceLoop = false;
             cancelContinuousVoiceRestart();
@@ -2714,9 +2737,10 @@ public final class OverlayService extends Service {
             finishAudioNoteCapture(false);
             return;
         }
-        if (!pushToTalkVoiceTurn) {
-            return;
-        }
+        MoaPushToTalkFinish.Action finishAction = pushToTalkFinish.normalFinish(
+                streamingBranchSwitchPending,
+                streamingVoiceController != null,
+                voiceController.isCommandListening());
         pushToTalkVoiceTurn = false;
         if (orbView != null) {
             orbView.setHeld(false);
@@ -2724,17 +2748,17 @@ public final class OverlayService extends Service {
         // Released while an incognito / new-thread branch switch is still in
         // flight: the session has not opened yet, so remember to commit as soon
         // as it does instead of dropping the release.
-        if (streamingBranchSwitchPending && streamingVoiceController == null) {
+        if (finishAction == MoaPushToTalkFinish.Action.DEFER_UNTIL_OPEN) {
             streamingCommitPendingOpen = true;
             setVoiceRuntimeState(VoiceRuntimeState.SENDING);
             updateMicState();
             return;
         }
-        if (streamingVoiceActive() && streamingVoiceController != null) {
+        if (finishAction == MoaPushToTalkFinish.Action.COMMIT_STREAMING) {
             commitStreamingVoiceTurnNow();
             return;
         }
-        if (voiceController.isCommandListening()) {
+        if (finishAction == MoaPushToTalkFinish.Action.COMMIT_LOCAL) {
             voiceController.commitCurrentSpeech();
             setVoiceRuntimeState(VoiceRuntimeState.THINKING);
             updateMicState();
@@ -2789,10 +2813,7 @@ public final class OverlayService extends Service {
             // timeout as a persistent message instead of wiping the transcript.
             stopStreamingVoiceKeepingCard();
             String failure = "The voice turn timed out.";
-            updateVoiceAssistantTranscript(failure);
-            speakOverlayNotice(failure);
-            setVoiceRuntimeState(VoiceRuntimeState.ERROR);
-            updateMicState();
+            showStreamingVoiceFailure(failure, streamingVoiceGeneration);
         };
         mainHandler.postDelayed(pendingStreamingTurnWatchdog, STREAMING_TURN_WATCHDOG_MS);
     }
@@ -2870,7 +2891,9 @@ public final class OverlayService extends Service {
     private void dismissOverlayUi(boolean clearVoiceLog) {
         cancelAudioNoteCapture();
         discardWarmMic();
+        pushToTalkFinish.intentionalCancel();
         pushToTalkVoiceTurn = false;
+        forcedReviewableVoiceDraft = false;
         continuousVoiceLoop = false;
         suppressFirstTapTurnEmptyCue = false;
         nextManualVoiceFollowsActiveRun = false;
@@ -3170,7 +3193,12 @@ public final class OverlayService extends Service {
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
         cancelStreamingTurnWatchdog();
-        if (streamingVoiceActive()) {
+        boolean controllerPresent = streamingVoiceController != null;
+        streamingVoiceGeneration = voiceFailureRetry.invalidateForIntentionalTeardown(
+                streamingVoiceGeneration,
+                controllerPresent);
+        if (controllerPresent) {
+            // Make callbacks from this intentional teardown stale before close.
             streamingVoiceController.cancel();
             streamingVoiceController = null;
             nextStreamingTurnFollowsActiveRun = false;
@@ -3187,7 +3215,12 @@ public final class OverlayService extends Service {
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
         cancelStreamingTurnWatchdog();
-        if (streamingVoiceActive()) {
+        boolean controllerPresent = streamingVoiceController != null;
+        streamingVoiceGeneration = voiceFailureRetry.invalidateForIntentionalTeardown(
+                streamingVoiceGeneration,
+                controllerPresent);
+        if (controllerPresent) {
+            // A discard, replacement, or card close is not a failed voice turn.
             streamingVoiceController.cancel();
             streamingVoiceController = null;
             nextStreamingTurnFollowsActiveRun = false;
@@ -3218,6 +3251,7 @@ public final class OverlayService extends Service {
     }
 
     private void startContinuousStreamingVoiceTurn() {
+        forcedReviewableVoiceDraft = false;
         if (!streamingVoiceAvailable()) {
             startLocalVoiceTurn(false, false);
             return;
@@ -3239,6 +3273,7 @@ public final class OverlayService extends Service {
 
     private void startStreamingVoiceTurn(boolean autoCommitOnSilence, boolean continuousLoop) {
         loadSettings();
+        voiceFailureRetry.invalidate();
         // Any prior in-flight branch switch is now stale, and a fresh start
         // clears any pending commit-on-open.
         invalidatePendingBranchSwitch();
@@ -3311,11 +3346,10 @@ public final class OverlayService extends Service {
                     if (orbView != null) {
                         orbView.setHeld(false);
                     }
-                    String notice = "Couldn't start a private turn. Try again.";
                     showTranscriptOverlay("");
-                    updateVoiceAssistantTranscript(notice);
-                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
-                    updateMicState();
+                    showStreamingVoiceFailure(
+                            "Couldn't start a private turn.",
+                            streamingVoiceGeneration);
                     return;
                 }
                 String branchToUse = switchOk ? resolvedBranch : "default";
@@ -3395,6 +3429,13 @@ public final class OverlayService extends Service {
                 }
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
                 updateMicState();
+            }
+
+            @Override
+            public void onAudioCaptured() {
+                if (isCurrentStreamingGeneration(generation) && pushToTalkVoiceTurn) {
+                    pushToTalkFinish.audioObserved();
+                }
             }
 
             @Override
@@ -3603,11 +3644,8 @@ public final class OverlayService extends Service {
                     speakOverlayNotice(notice);
                     setVoiceRuntimeState(VoiceRuntimeState.READY);
                 } else if ("error".equals(turnStatus)) {
-                    String notice = "The voice turn failed. Tap to try again.";
-                    updateVoiceAssistantTranscript(notice);
-                    speakOverlayNotice(notice);
-                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
-                    continuousVoiceLoop = false;
+                    showStreamingVoiceFailure("Voice failed.", generation);
+                    return;
                 }
                 updateMicState();
                 mainHandler.postDelayed(() -> {
@@ -3631,17 +3669,7 @@ public final class OverlayService extends Service {
                 // committed and in flight, say so instead of resetting silently.
                 if (currentStreamingTurnCommitRequested) {
                     currentStreamingTurnCommitRequested = false;
-                    String notice = "Voice connection dropped — try again.";
-                    updateVoiceAssistantTranscript(notice);
-                    speakOverlayNotice(notice);
-                    setVoiceRuntimeState(VoiceRuntimeState.ERROR);
-                    continuousVoiceLoop = false;
-                    updateMicState();
-                    mainHandler.postDelayed(() -> {
-                        if (isCurrentStreamingGeneration(generation)) {
-                            showReadyForNextVoiceTurn(generation);
-                        }
-                    }, 900);
+                    showStreamingVoiceFailure("Voice connection dropped.", generation);
                     return;
                 }
                 if (continuousVoiceLoop && currentStreamingTranscript.isEmpty() && voiceAssistantTranscript.isEmpty()) {
@@ -3677,17 +3705,9 @@ public final class OverlayService extends Service {
                 // Raw socket/provider diagnostics stay in logcat. The transcript
                 // gets one short line, and errors never land in the chat history.
                 String notice = shortVoiceFailureNotice(message);
-                updateVoiceAssistantTranscript(notice);
-                speakOverlayNotice("The voice turn failed. Tap to try again.");
-                setVoiceRuntimeState(VoiceRuntimeState.ERROR);
-                continuousVoiceLoop = false;
-                mainHandler.postDelayed(() -> {
-                    if (isCurrentStreamingGeneration(generation)) {
-                        showReadyForNextVoiceTurn(generation);
-                    }
-                }, 900);
+                showStreamingVoiceFailure(notice, generation);
             }
-        });
+        }, this);
         if (!pendingReplacementTurnId.isEmpty()) {
             streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());
             pendingReplacementTurnId = "";
@@ -3738,7 +3758,27 @@ public final class OverlayService extends Service {
                 || normalized.contains("could not resolve")) {
             return "Voice can't connect. Check the gateway URL in the Moa app.";
         }
-        return "The voice turn failed. Tap to try again.";
+        return "Voice failed.";
+    }
+
+    private void showStreamingVoiceFailure(String notice, int generation) {
+        if (!isCurrentStreamingGeneration(generation)) {
+            return;
+        }
+        continuousVoiceLoop = false;
+        voiceFailureRetry.arm(generation);
+        updateVoiceAssistantTranscript(notice);
+        speakOverlayNotice(notice);
+        setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+        updateMicState();
+    }
+
+    private void retryFailedVoiceCapture() {
+        voiceFailureRetry.consumeAndRun(streamingVoiceGeneration, () -> {
+            forcedReviewableVoiceDraft = true;
+            renderVoiceTranscriptRows();
+            startReviewableVoiceDraft();
+        });
     }
 
     private void recoverStreamingVoiceTurn(int generation) {
