@@ -27,7 +27,7 @@ intents.
 | 1 | `intent:chief-moa:global-intent-authority` | awaiting_verification | Yes | Reverify PR #63 corrections |
 | 2 | `intent:chief-moa:codex-launcher-adapter` | awaiting_verification | Yes, after or with authority contract integration | Reverify PR #62 corrections against PR #63 |
 | 3 | `intent:chief-moa:agent-switchboard-direct-binding` | draft | Yes, after authority API is accepted | Specify and implement directory resolution and conversation binding |
-| 4 | `intent:chief-moa:fd-exhaustion-diagnosis` | blocked | Yes, from an unaffected terminal/runtime | Measure PIDs, limits, descriptor ownership, and lifecycle |
+| 4 | `intent:chief-moa:fd-exhaustion-diagnosis` | draft | Yes | Measure PIDs, limits, descriptor ownership, and lifecycle |
 | 5 | `intent:chief-moa:amharic-english-retry-evaluation` | draft | Yes | Assign/resume an owner and run repeated same-audio trials |
 | 6 | `intent:chief-moa:wrong-script-policy` | candidate | Yes, after retry evidence informs policy | Independently verify candidate `62343c58` |
 | 7 | `intent:chief-moa:audio-history-library` | awaiting_verification | Yes | Assign/resume verifier for PR #60 |
@@ -156,7 +156,9 @@ intents.
 - **Current owner:** none active.
 - **Status:** `draft` (runnable serialized and currently unassigned).
 - **Evidence:** conversation records the neutral-tournament protocol and candidate families. The attempted multi-agent evaluation wave disconnected; no durable adjudicated artifact was found.
-- **Blockers:** FD/stream instability and unbounded fan-out.
+- **Blockers:** no current blocker under serialized execution. The earlier
+  unbounded fan-out failed during FD/stream instability and remains a
+  historical failure mode and concurrency risk.
 - **Dependencies:** serialized evaluation policy; stable taxonomy of system layers.
 - **Next bounded action:** persist a layer-neutral definition sheet, then run evaluators sequentially with hidden candidate identities and one independent adjudicator.
 - **Acceptance criteria:** at least three serious candidates per layer; consistent rubric; evaluator independence; falsification conditions; rejected-term ledger; ambiguity and audience tests.
@@ -491,12 +493,13 @@ intents.
 
 The conversation also contained personal reflections about dating, family,
 career, relationships, public identity, joining Etched, social media/podcasts,
-speech improvement, and company formation. They are valuable source material,
-but many were exploratory rather than explicit authorization to take external
-actions. The thought-extraction system may propose reversible notes or intents
-from them. It must not contact people, publish content, apply to companies,
-buy devices, schedule events, or make relationship decisions without a clear
-current request and appropriate authority.
+speech improvement, and company formation. Internal speech-coaching research
+and a private-by-default media pipeline are tracked above as product/candidate
+intents. That does not authorize medical diagnosis, contacting people,
+publishing content, applying to companies, buying devices, scheduling events,
+or making relationship decisions. The thought-extraction system may propose
+reversible notes or intents from exploratory material, but external actions
+still require a clear current request and appropriate authority.
 
 ## Operational policy for this ledger
 
