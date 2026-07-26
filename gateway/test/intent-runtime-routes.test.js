@@ -122,6 +122,7 @@ test("ordinary messages route into durable intents with packet, claim, and progr
     body: {
       agent_id: "agent_route_worker",
       run_id: "run_route_worker",
+      fencing_token: claimed.json.intent.fencing_token,
       idempotency_key: "route-progress-1",
       expected_intent_version: claimed.json.intent.version,
       progress: "Created the operational contract.",
@@ -131,6 +132,49 @@ test("ordinary messages route into durable intents with packet, claim, and progr
   });
   assert.equal(progressed.status, 200, JSON.stringify(progressed.json));
   assert.equal(progressed.json.intent.latest_progress, "Created the operational contract.");
+});
+
+test("product routes enforce server ownership and immutable revision heads", async () => {
+  const forged = await call("POST", "/v1/intent-runtime/products", {
+    body: {
+      owner_id: "usr_foreign",
+      product_id: "product_route_forbidden",
+      product_type: "text_document",
+      idempotency_key: "forged-owner",
+    },
+  });
+  assert.equal(forged.status, 400);
+
+  const created = await call("POST", "/v1/intent-runtime/products", {
+    body: {
+      product_id: "product_route_document",
+      product_type: "text_document",
+      title: "Route document",
+      idempotency_key: "product-route-create",
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.json));
+  const revised = await call("POST", "/v1/intent-runtime/products/product_route_document/revisions", {
+    body: {
+      revision_id: "revision_route_1",
+      expected_head_revision_id: "",
+      ref: "blob://route/1",
+      content_hash: "hash_route_1",
+      idempotency_key: "product-route-revision",
+    },
+  });
+  assert.equal(revised.status, 201, JSON.stringify(revised.json));
+  assert.equal(revised.json.product.head_revision_id, "revision_route_1");
+  const conflict = await call("POST", "/v1/intent-runtime/products/product_route_document/revisions", {
+    body: {
+      revision_id: "revision_route_conflict",
+      expected_head_revision_id: "",
+      ref: "blob://route/conflict",
+      content_hash: "hash_route_conflict",
+      idempotency_key: "product-route-conflict",
+    },
+  });
+  assert.equal(conflict.status, 400);
 });
 
 test("transition advances lifecycle and rejects illegal jumps", async () => {

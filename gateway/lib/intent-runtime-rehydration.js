@@ -58,6 +58,7 @@ function createInitialState(intentId = "") {
     plan_refs: [],
     run_refs: [],
     artifact_refs: [],
+    product_heads: [],
     evidence_refs: [],
     action_refs: [],
     approval_refs: [],
@@ -66,6 +67,7 @@ function createInitialState(intentId = "") {
     next_step: "",
     owner_agent_id: "",
     current_run_id: "",
+    fencing_token: "",
     run_lease_expires_at: "",
     latest_progress: "",
     source_revisions: [],
@@ -206,6 +208,18 @@ function validateEventForStream(event, state) {
     if (payload.agent_id !== state.owner_agent_id || payload.run_id !== state.current_run_id) {
       return "progress writer does not own the current run";
     }
+    if (!payload.fencing_token || payload.fencing_token !== state.fencing_token) {
+      return "progress writer has a stale fencing token";
+    }
+  }
+  if (event.event_type === "intent.product_linked") {
+    if (!text(payload.product_id, 160) || !text(payload.revision_id, 160) || !text(payload.content_hash, 160)) {
+      return "product link requires product_id, revision_id, and content_hash";
+    }
+  }
+  if (event.event_type === "intent.run_released") {
+    if (!state.current_run_id || payload.run_id !== state.current_run_id) return "release must target current run";
+    if (!payload.fencing_token || payload.fencing_token !== state.fencing_token) return "release has stale fencing token";
   }
   if (state.exists && TRANSITION_EVENT_TYPES.includes(event.event_type)) {
     const allowed = ALLOWED_TRANSITIONS[state.lifecycle_state];
@@ -353,11 +367,32 @@ function applyIntentEvent(state, event) {
       current.owner_agent_id = text(payload.agent_id, 160);
       current.current_run_id = text(payload.run_id, 160);
       current.run_lease_expires_at = text(payload.lease_expires_at, 80);
+      current.fencing_token = text(payload.fencing_token, 160);
       current.run_refs = appendUnique(current.run_refs, [text(payload.run_id, 160)], MAX_ITEMS.refs);
+      break;
+    case "intent.run_released":
+      current.owner_agent_id = "";
+      current.current_run_id = "";
+      current.run_lease_expires_at = "";
+      current.fencing_token = "";
       break;
     case "intent.progress_recorded":
       current.latest_progress = text(payload.progress, 2_000);
       break;
+    case "intent.product_linked": {
+      const head = {
+        product_id: text(payload.product_id, 160),
+        revision_id: text(payload.revision_id, 160),
+        content_hash: text(payload.content_hash, 160),
+        ref: text(payload.ref, 400),
+        direction: text(payload.direction, 40),
+        event_id: event.event_id,
+      };
+      current.product_heads = current.product_heads
+        .filter((item) => item.product_id !== head.product_id);
+      current.product_heads.push(head);
+      break;
+    }
     case "intent.connected":
       if (payload.relation_type && payload.target_intent_id) {
         current.relations = appendUnique(current.relations, [{

@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -12,7 +13,12 @@ const {
   EventStreamVersionConflictError,
 } = require("../lib/event-substrate");
 const { createIntentRuntime } = require("../lib/intent-runtime");
-const { validateIntentContextPacket } = require("../lib/intent-context-packet");
+const {
+  validateIntentContextPacket,
+  packetContent,
+  stableJson: stablePacketJson,
+} = require("../lib/intent-context-packet");
+const { createIntentProductAuthority } = require("../lib/intent-products");
 
 function makeRuntime(tempDir, nowValues = ["2026-07-11T01:00:00.000Z"], eventsOverride) {
   let nowIndex = 0;
@@ -254,6 +260,7 @@ test("ordinary message ingestion preserves chronology, routes visibly, and suppo
   const first = await restarted.recordProgress(launched.intent_id, {
     agent_id: "agent_worker_1",
     run_id: "run_worker_1",
+    fencing_token: claimed.fencing_token,
     idempotency_key: "progress-1",
     expected_intent_version: expectedVersion,
     progress: "Implemented the first bounded slice.",
@@ -265,6 +272,7 @@ test("ordinary message ingestion preserves chronology, routes visibly, and suppo
   await assert.rejects(() => restarted.recordProgress(launched.intent_id, {
     agent_id: "agent_worker_1",
     run_id: "run_worker_1",
+    fencing_token: claimed.fencing_token,
     idempotency_key: "progress-stale",
     expected_intent_version: expectedVersion,
     progress: "Conflicting stale write.",
@@ -281,6 +289,188 @@ test("ordinary message ingestion preserves chronology, routes visibly, and suppo
   assert.throws(() => validateIntentContextPacket(freshPacket, {
     expectedIntentId: "intent_wrong_route",
   }), /wrong intent/);
+});
+
+test("fenced lease recovery and immutable product revisions complete through an attention item", async () => {
+  const substrate = makeGlobalIdempotencyFakeSubstrate();
+  const first = makeRuntime("/unused", ["2026-07-26T01:00:00.000Z"], substrate);
+  const products = createIntentProductAuthority({
+    events: substrate,
+    ownerId: "usr_owner",
+    now: () => "2026-07-26T01:00:00.000Z",
+  });
+  const product = await products.createProduct({
+    product_id: "product_contract",
+    product_type: "text_document",
+    title: "Intent contract",
+    idempotency_key: "product-create",
+  });
+  const revision1 = await products.createRevision(product.product_id, {
+    revision_id: "revision_contract_1",
+    expected_head_revision_id: "",
+    ref: "blob://contract/1",
+    content: "first",
+    provenance_refs: ["message://source-1"],
+    idempotency_key: "revision-1",
+  });
+  const revision1Retry = await products.createRevision(product.product_id, {
+    revision_id: "revision_contract_1",
+    expected_head_revision_id: "",
+    ref: "blob://contract/1",
+    content: "first",
+    provenance_refs: ["message://source-1"],
+    idempotency_key: "revision-1",
+  });
+  assert.equal(revision1Retry.head_revision_id, revision1.head_revision_id);
+  const receipt = await first.ingestMessage({
+    message: `Create the intent system. ${"source ".repeat(600)}`,
+    idempotency_key: "e2e-message",
+    artifact_context: {
+      artifact_id: product.product_id,
+      version: revision1.head_revision_id,
+      ref: "blob://contract/1",
+    },
+    routing: { action: "new_intent" },
+    constraints: [{ summary: "Never publish without explicit approval." }],
+    completion_criteria: ["A fenced worker produces an independently evidenced product revision."],
+  });
+  await first.linkProduct(receipt.intent_id, {
+    product_id: product.product_id,
+    revision_id: revision1.head_revision_id,
+    content_hash: revision1.revisions.at(-1).content_hash,
+    ref: "blob://contract/1",
+    direction: "input",
+    idempotency_key: "link-input",
+  });
+  const packet = await first.contextPacket(receipt.intent_id);
+  const claim1 = await first.claim(receipt.intent_id, {
+    agent_id: "agent_before_loss",
+    run_id: "run_before_loss",
+    lease_seconds: 60,
+    expected_intent_version: packet.intent_version,
+    idempotency_key: "claim-before-loss",
+  });
+  await assert.rejects(() => first.claim(receipt.intent_id, {
+    agent_id: "agent_conflict",
+    run_id: "run_conflict",
+    lease_seconds: 60,
+    idempotency_key: "claim-conflict",
+  }), /unexpired run claim/);
+  await assert.rejects(() => first.claim(receipt.intent_id, {
+    agent_id: "changed-shape",
+    run_id: "run_before_loss",
+    lease_seconds: 60,
+    idempotency_key: "claim-before-loss",
+  }), /idempotency collision/);
+
+  const recovered = makeRuntime("/unused", ["2026-07-26T01:02:00.000Z"], substrate);
+  const beforeRecovery = await recovered.get(receipt.intent_id);
+  const claim2 = await recovered.claim(receipt.intent_id, {
+    agent_id: "agent_after_loss",
+    run_id: "run_after_loss",
+    lease_seconds: 300,
+    reassignment_authority: "lease_expired_recovery",
+    expected_intent_version: beforeRecovery.version,
+    idempotency_key: "claim-after-loss",
+  });
+  await assert.rejects(() => first.recordProgress(receipt.intent_id, {
+    agent_id: "agent_before_loss",
+    run_id: "run_before_loss",
+    fencing_token: claim1.fencing_token,
+    progress: "stale writer",
+    idempotency_key: "stale-progress",
+  }), /lease expired|does not own|stale fencing/);
+
+  const progressed = await recovered.recordProgress(receipt.intent_id, {
+    agent_id: "agent_after_loss",
+    run_id: "run_after_loss",
+    fencing_token: claim2.fencing_token,
+    expected_intent_version: claim2.version,
+    progress: "Produced and evaluated the candidate.",
+    evidence_refs: ["test://independent-evaluation"],
+    next_step: "Record the verified output product.",
+    idempotency_key: "fenced-progress",
+  });
+  const revision2 = await products.createRevision(product.product_id, {
+    revision_id: "revision_contract_2",
+    expected_head_revision_id: revision1.head_revision_id,
+    ref: "blob://contract/2",
+    content: "verified second",
+    provenance_refs: ["intent://" + receipt.intent_id, "test://independent-evaluation"],
+    idempotency_key: "revision-2",
+  });
+  await assert.rejects(() => products.createRevision(product.product_id, {
+    revision_id: "revision_conflict",
+    expected_head_revision_id: revision1.head_revision_id,
+    ref: "blob://contract/conflict",
+    content: "conflict",
+    idempotency_key: "revision-conflict",
+  }), /product head conflict/);
+  const repository = await products.createProduct({
+    product_id: "product_repo",
+    product_type: "git_repository",
+    title: "Chief MOA",
+    storage_policy: "external_reference",
+    idempotency_key: "repo-create",
+  });
+  const commit = await products.createRevision(repository.product_id, {
+    revision_id: "revision_commit_abc123",
+    expected_head_revision_id: "",
+    ref: "git+https://github.com/natask/chief-moa.git@abc123",
+    content_hash: "abc123",
+    provenance_refs: ["intent://" + receipt.intent_id],
+    idempotency_key: "repo-commit",
+  });
+  const linked = await recovered.linkProduct(receipt.intent_id, {
+    product_id: product.product_id,
+    revision_id: revision2.head_revision_id,
+    content_hash: revision2.revisions.at(-1).content_hash,
+    ref: "blob://contract/2",
+    direction: "output",
+    expected_intent_version: progressed.version,
+    idempotency_key: "link-output",
+  });
+  const repoLinked = await recovered.linkProduct(receipt.intent_id, {
+    product_id: repository.product_id,
+    revision_id: commit.head_revision_id,
+    content_hash: commit.revisions.at(-1).content_hash,
+    ref: commit.revisions.at(-1).ref,
+    direction: "output",
+    expected_intent_version: linked.version,
+    idempotency_key: "link-repo-output",
+  });
+  const finalPacket = await recovered.contextPacket(receipt.intent_id);
+  assert.deepEqual(new Set(finalPacket.product_heads.map((item) => item.revision_id)),
+    new Set([revision2.head_revision_id, commit.head_revision_id]));
+  const forged = structuredClone(finalPacket);
+  forged.continuation_allowed = true;
+  forged.source_bounds.truncated = true;
+  forged.packet_digest = crypto.createHash("sha256").update(stablePacketJson(packetContent(forged))).digest("hex");
+  assert.throws(() => validateIntentContextPacket(forged, {
+    signingKey: "intent-runtime-test-signing-key",
+  }), /signature mismatch/);
+  const truncated = structuredClone(finalPacket);
+  truncated.source_bounds.truncated = true;
+  truncated.compaction.source_truncated = true;
+  truncated.continuation_allowed = false;
+  assert.throws(() => validateIntentContextPacket(truncated), /digest mismatch|incomplete/);
+
+  const completed = await recovered.transition(receipt.intent_id, {
+    type: "intent.completed",
+    outcome: "Independent evidence confirms the product revision.",
+    evidence_refs: ["test://independent-evaluation"],
+    expected_intent_version: repoLinked.version,
+    idempotency_key: "candidate-complete",
+  });
+  const attention = await recovered.createAttentionItem(receipt.intent_id, {
+    attention_id: "attention_contract_complete",
+    kind: "completion",
+    title: "Intent contract completed",
+    summary: completed.outcome,
+    evidence_refs: ["test://independent-evaluation", "blob://contract/2"],
+    idempotency_key: "attention-complete",
+  });
+  assert.equal(attention.state, "pending");
 });
 
 test("mutation validation ignores caller limits and terminal intents cannot restart", async () => {

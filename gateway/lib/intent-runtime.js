@@ -38,6 +38,7 @@ const MESSAGE_ROUTE_ACTIONS = new Set([
   "launch_new_agent",
   "request_decision",
   "update_artifact",
+  "status_query",
 ]);
 
 function stableJson(value) {
@@ -63,11 +64,18 @@ function sameEventShape(a, b, options = {}) {
     && stableJson(comparablePayload(a, options)) === stableJson(comparablePayload(b, options));
 }
 
-function createIntentRuntime({ events, idFactory, now } = {}) {
+function createIntentRuntime({
+  events,
+  idFactory,
+  now,
+  ownerId = "usr_owner",
+  packetSigningKey = "intent-runtime-test-signing-key",
+} = {}) {
   if (!events || typeof events.appendEvent !== "function" || typeof events.listEvents !== "function") {
     throw new Error("intent runtime requires an event substrate with appendEvent/listEvents");
   }
   const makeId = typeof idFactory === "function" ? idFactory : createDefaultIdFactory();
+  const authorityOwnerId = requireBoundedText(ownerId, MAX_TEXT.id, "owner_id");
   const intentQueues = new Map();
 
   async function withIntentSerialization(intentIds, task) {
@@ -565,6 +573,7 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
       generatedAt: typeof now === "function" ? now() : new Date().toISOString(),
       compactionModel: options.compaction_model || options.compactionModel,
       compactionVersion: options.compaction_version || options.compactionVersion,
+      signingKey: packetSigningKey,
     });
   }
 
@@ -623,6 +632,9 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     const raw = String(input.message || input.raw_text || input.rawText || "");
     if (!raw.trim()) throw new Error("message is required");
     if (raw.length > 64_000) throw new Error("message exceeds max length 64000");
+    if (input.owner_id && input.owner_id !== authorityOwnerId) {
+      throw new Error("caller-selected owner is forbidden");
+    }
     const key = requireBoundedText(input.idempotency_key || input.idempotencyKey, 180, "idempotency_key");
     const workspaceId = text(input.workspace_id || input.workspaceId || "default", 120) || "default";
     const messageId = `message_${crypto.createHash("sha256").update(`${workspaceId}:${key}`).digest("hex").slice(0, 32)}`;
@@ -631,6 +643,7 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     const ingested = await appendMessageStreamEvent(streamId, "message.ingested", `message:${messageId}:ingested`, {
       message_id: messageId,
       workspace_id: workspaceId,
+      owner_id: authorityOwnerId,
       raw_text: raw,
       source_digest: crypto.createHash("sha256").update(raw).digest("hex"),
       source: input.source && typeof input.source === "object" ? input.source : {},
@@ -659,7 +672,7 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
 
     let intent = null;
     let packet = null;
-    if (["new_intent", "fork_intent"].includes(action)) {
+    if (["new_intent", "fork_intent", "observation", "note"].includes(action)) {
       const launched = await launch({
         ...input,
         message: raw,
@@ -684,6 +697,24 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
         provenance: { message_id: messageId, routing_event_id: routed.event_id },
       });
       packet = await contextPacket(targetIntentId);
+    } else if (action === "status_query") {
+      if (!targetIntentId) throw new Error("status query requires intent_id");
+      intent = await get(targetIntentId);
+      if (!intent?.exists) throw new Error("intent not found");
+      packet = await contextPacket(targetIntentId);
+    } else if (action === "steer_existing_agent" || action === "launch_new_agent") {
+      if (!targetIntentId) throw new Error(`${action} requires intent_id`);
+      intent = await appendIntentEvent(targetIntentId, {
+        ...input,
+        idempotency_key: `${key}:${action}`,
+      }, action === "steer_existing_agent"
+        ? "intent.agent_steer_requested"
+        : "intent.agent_launch_requested", {
+        message_id: messageId,
+        agent_id: text(routing.agent_id || routing.agentId, MAX_TEXT.id),
+        request: text(raw, MAX_TEXT.note),
+      });
+      packet = await contextPacket(targetIntentId);
     }
     return {
       message_id: messageId,
@@ -701,17 +732,72 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     const safeIntentId = requireBoundedText(intentId, MAX_TEXT.id, "intent_id");
     const rawKey = input.idempotency_key || input.idempotencyKey || "claim";
     const claimKey = namespaceIdempotencyKey(safeIntentId, "run_claimed", rawKey);
-    if (await readIdempotentEvent(claimKey)) {
-      return rehydrateIntent(events, safeIntentId, input.limits || {});
-    }
     const agentId = requireBoundedText(input.agent_id || input.agentId, MAX_TEXT.id, "agent_id");
     const runId = requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id");
     const leaseSeconds = Math.max(60, Math.min(Number(input.lease_seconds || input.leaseSeconds || 900), 86_400));
-    const leaseExpiresAt = new Date(Date.parse(currentIsoTime()) + leaseSeconds * 1_000).toISOString();
-    return appendIntentEvent(safeIntentId, input, "intent.run_claimed", {
+    const requestFingerprint = crypto.createHash("sha256").update(stableJson({
       agent_id: agentId,
       run_id: runId,
-      lease_expires_at: leaseExpiresAt,
+      lease_seconds: leaseSeconds,
+      reassign: input.reassign === true,
+      reassignment_authority: text(input.reassignment_authority, 80),
+    })).digest("hex");
+    const prior = await readIdempotentEvent(claimKey);
+    if (prior) {
+      if (prior.payload?.request_fingerprint !== requestFingerprint) {
+        throw new Error("run claim idempotency collision");
+      }
+      return rehydrateIntent(events, safeIntentId, input.limits || {});
+    }
+    return withIntentSerialization([safeIntentId], async () => {
+      const state = await authoritativeState(safeIntentId);
+      const expected = input.expected_intent_version ?? input.expectedIntentVersion;
+      if (expected !== undefined && Number(expected) !== state.version) {
+        throw new Error(`intent version conflict: expected ${expected}, current ${state.version}`);
+      }
+      const nowIso = currentIsoTime();
+      const activeLease = state.current_run_id && Date.parse(state.run_lease_expires_at || "") > Date.parse(nowIso);
+      const replacingClaim = Boolean(state.current_run_id && state.current_run_id !== runId);
+      if (activeLease && input.reassign !== true) throw new Error("intent already has an unexpired run claim");
+      if (activeLease && input.reassign === true && input.reassignment_authority !== "owner") {
+        throw new Error("active run reassignment requires owner authority");
+      }
+      if (replacingClaim && !activeLease
+        && !["lease_expired_recovery", "owner"].includes(input.reassignment_authority)) {
+        throw new Error("expired run reassignment requires explicit recovery authority");
+      }
+      const descriptor = durableEvent({
+        intentId: safeIntentId,
+        eventType: "intent.run_claimed",
+        idempotencyKey: claimKey,
+        payload: {
+          intent_id: safeIntentId,
+          agent_id: agentId,
+          run_id: runId,
+          lease_expires_at: new Date(Date.parse(nowIso) + leaseSeconds * 1_000).toISOString(),
+          fencing_token: `fence_${crypto.randomUUID()}`,
+          request_fingerprint: requestFingerprint,
+          replaced_run_id: state.current_run_id || "",
+        },
+      });
+      await appendVerified(withExpectedVersion(descriptor, state.version));
+      return rehydrateIntent(events, safeIntentId, input.limits || {});
+    });
+  }
+
+  async function releaseClaim(intentId, input = {}) {
+    const state = await authoritativeState(intentId);
+    const authority = input.release_authority;
+    if (authority !== "owner"
+      && !(authority === "claimant" && input.agent_id === state.owner_agent_id)) {
+      throw new Error("release requires owner or current claimant authority");
+    }
+    return appendIntentEvent(intentId, input, "intent.run_released", {
+      run_id: requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id"),
+      fencing_token: requireBoundedText(input.fencing_token || input.fencingToken, MAX_TEXT.id, "fencing_token"),
+      reason: text(input.reason, MAX_TEXT.detail),
+      release_authority: authority,
+      released_by_agent_id: text(input.agent_id, MAX_TEXT.id),
     });
   }
 
@@ -724,14 +810,36 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     if (!progress && !nextStep && !blockers.length && !evidenceRefs.length && !artifactRefs.length) {
       throw new Error("progress update must contain a meaningful change");
     }
+    const state = await authoritativeState(intentId);
+    const agentId = requireBoundedText(input.agent_id || input.agentId, MAX_TEXT.id, "agent_id");
+    const runId = requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id");
+    const fencingToken = requireBoundedText(input.fencing_token || input.fencingToken, MAX_TEXT.id, "fencing_token");
+    if (state.owner_agent_id !== agentId || state.current_run_id !== runId) {
+      throw new Error("progress writer does not own the current run");
+    }
+    if (state.fencing_token !== fencingToken) throw new Error("progress writer has a stale fencing token");
+    if (Date.parse(state.run_lease_expires_at || "") <= Date.parse(currentIsoTime())) {
+      throw new Error("run claim lease expired");
+    }
     return appendIntentEvent(intentId, input, "intent.progress_recorded", {
-      agent_id: requireBoundedText(input.agent_id || input.agentId, MAX_TEXT.id, "agent_id"),
-      run_id: requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id"),
+      agent_id: agentId,
+      run_id: runId,
+      fencing_token: fencingToken,
       progress,
       next_step: nextStep,
       blockers,
       evidence_refs: evidenceRefs,
       artifact_refs: artifactRefs,
+    });
+  }
+
+  async function linkProduct(intentId, input = {}) {
+    return appendIntentEvent(intentId, input, "intent.product_linked", {
+      product_id: requireBoundedText(input.product_id || input.productId, MAX_TEXT.id, "product_id"),
+      revision_id: requireBoundedText(input.revision_id || input.revisionId, MAX_TEXT.id, "revision_id"),
+      content_hash: requireBoundedText(input.content_hash || input.contentHash, 160, "content_hash"),
+      ref: requireBoundedText(input.ref, MAX_TEXT.ref, "ref"),
+      direction: ["input", "output"].includes(input.direction) ? input.direction : "output",
     });
   }
 
@@ -749,6 +857,35 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     return { ...result, items, neglected_count: items.length };
   }
 
+  async function createAttentionItem(intentId, input = {}) {
+    const safeIntentId = requireBoundedText(intentId, MAX_TEXT.id, "intent_id");
+    const state = await authoritativeState(safeIntentId);
+    const attentionId = text(input.attention_id || input.attentionId, MAX_TEXT.id) || `attention_${crypto.randomUUID()}`;
+    const descriptor = {
+      stream_id: `attention:${attentionId}`,
+      event_type: "attention.item_created",
+      idempotency_key: `attention:${attentionId}:${requireBoundedText(input.idempotency_key || input.idempotencyKey || "create", 160, "idempotency_key")}`,
+      occurred_at: currentIsoTime(),
+      actor: { kind: "gateway", id: "intent-runtime" },
+      authority: { boundary: "intent-runtime", execution: "attention_only" },
+      correlation_id: safeIntentId,
+      causation_id: state.last_event_id,
+      payload: {
+        attention_id: attentionId,
+        intent_id: safeIntentId,
+        kind: text(input.kind || "completion", 80),
+        title: requireBoundedText(input.title, 240, "title"),
+        summary: text(input.summary, MAX_TEXT.note),
+        evidence_refs: normalizeRefs(input.evidence_refs || input.evidenceRefs),
+        state: "pending",
+      },
+    };
+    const prior = await existingIdempotentEvent(descriptor);
+    if (prior) return prior.payload;
+    await appendVerified(withExpectedVersion(descriptor, 0));
+    return descriptor.payload;
+  }
+
   return {
     capture,
     transition,
@@ -763,8 +900,11 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     launch,
     ingestMessage,
     claim,
+    releaseClaim,
     recordProgress,
+    linkProduct,
     neglected,
+    createAttentionItem,
     limits: {
       list_page_size: 500,
       default_rehydrate_event_limit: MAX_MUTATION_EVENT_LIMIT,

@@ -95,6 +95,7 @@ const { createWorkHistoryStore } = require("./lib/work-history");
 const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
 const { createIntentRuntime } = require("./lib/intent-runtime");
+const { createIntentProductAuthority } = require("./lib/intent-products");
 const { createIntentWorkflow } = require("./lib/intent-workflow");
 const { createIntentPlane } = require("./lib/intent-plane");
 const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
@@ -668,7 +669,12 @@ const semanticTelemetry = createSemanticTelemetryStore({
 // The intent runtime is the canonical identity/revision authority for delivery
 // work. Construct it before work-history handlers so current user-authored work
 // can be linked to tasks and inert queued proposals in one idempotent workflow.
-const intentRuntime = createIntentRuntime({ events: eventSubstrate });
+const intentRuntime = createIntentRuntime({
+  events: eventSubstrate,
+  ownerId: ownerUserId(),
+  packetSigningKey: MOA_GATEWAY_TOKEN || ownerUserId(),
+});
+const intentProducts = createIntentProductAuthority({ events: eventSubstrate, ownerId: ownerUserId() });
 const intentWorkflow = createIntentWorkflow({ intentRuntime, workHistory });
 const intentPlane = createIntentPlane({ events: eventSubstrate });
 const { routeIntentPlane } = createIntentPlaneHandlers({
@@ -2242,6 +2248,26 @@ async function routeIntentRuntime(request, response, url) {
       }));
       return true;
     }
+    if (method === "POST" && pathname === "/v1/intent-runtime/products") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, { product: await intentProducts.createProduct(body) });
+      return true;
+    }
+    const productMatch = pathname.match(/^\/v1\/intent-runtime\/products\/([^/]+)(?:\/revisions)?$/);
+    if (productMatch) {
+      const productId = decodeURIComponent(productMatch[1]);
+      if (method === "GET" && !pathname.endsWith("/revisions")) {
+        const product = await intentProducts.get(productId);
+        if (!product) sendJson(response, 404, { error: "product not found" });
+        else sendJson(response, 200, { product });
+        return true;
+      }
+      if (method === "POST" && pathname.endsWith("/revisions")) {
+        const body = await readJsonBody(request);
+        sendJson(response, 201, { product: await intentProducts.createRevision(productId, body) });
+        return true;
+      }
+    }
     if (method === "GET" && pathname === "/v1/intent-runtime/intents") {
       const intents = await intentRuntime.list({
         project_id: url.searchParams.get("project_id") || "",
@@ -2268,7 +2294,7 @@ async function routeIntentRuntime(request, response, url) {
       sendJson(response, 200, await intentRuntime.rehydrate(body));
       return true;
     }
-    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery|context-packet|claim|progress))?$/);
+    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery|context-packet|claim|release|progress|products|attention))?$/);
     if (intentMatch) {
       const intentId = decodeURIComponent(intentMatch[1]);
       const action = intentMatch[2] || "";
@@ -2304,9 +2330,24 @@ async function routeIntentRuntime(request, response, url) {
         sendJson(response, 200, { intent: await intentRuntime.claim(intentId, body) });
         return true;
       }
+      if (method === "POST" && action === "release") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.releaseClaim(intentId, body) });
+        return true;
+      }
       if (method === "POST" && action === "progress") {
         const body = await readJsonBody(request);
         sendJson(response, 200, { intent: await intentRuntime.recordProgress(intentId, body) });
+        return true;
+      }
+      if (method === "POST" && action === "products") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.linkProduct(intentId, body) });
+        return true;
+      }
+      if (method === "POST" && action === "attention") {
+        const body = await readJsonBody(request);
+        sendJson(response, 201, { attention: await intentRuntime.createAttentionItem(intentId, body) });
         return true;
       }
       if (method === "POST" && action === "transition") {

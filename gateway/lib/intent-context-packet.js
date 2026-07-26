@@ -22,6 +22,7 @@ function boundedText(value, max = 2_000) {
 function packetContent(packet) {
   return {
     schema: packet.schema,
+    packet_id: packet.packet_id,
     intent_id: packet.intent_id,
     intent_version: packet.intent_version,
     lifecycle_state: packet.lifecycle_state,
@@ -34,10 +35,12 @@ function packetContent(packet) {
     active_priorities: packet.active_priorities,
     run_refs: packet.run_refs,
     artifact_heads: packet.artifact_heads,
+    product_heads: packet.product_heads,
     citations: packet.citations,
     source_bounds: packet.source_bounds,
     compaction: packet.compaction,
     continuation_text: packet.continuation_text,
+    continuation_allowed: packet.continuation_allowed,
   };
 }
 
@@ -141,6 +144,7 @@ async function buildIntentContextPacket({
   generatedAt,
   compactionModel = "deterministic_projection",
   compactionVersion = "intent-context-packet-v1",
+  signingKey,
 } = {}) {
   if (!events?.listEvents) throw new Error("context packet requires event substrate");
   if (!state?.exists || !state.intent_id) throw new Error("context packet requires an existing intent");
@@ -186,6 +190,13 @@ async function buildIntentContextPacket({
     active_priorities: (state.active_priorities || []).map((item) => boundedText(item)).filter(Boolean),
     run_refs: [...(state.run_refs || [])],
     artifact_heads: artifacts,
+    product_heads: (state.product_heads || []).map((item) => ({
+      product_id: boundedText(item.product_id, 160),
+      revision_id: boundedText(item.revision_id, 160),
+      content_hash: boundedText(item.content_hash, 160),
+      ref: boundedText(item.ref, 400),
+      citation: citation(rows.find((event) => event.event_id === item.event_id)),
+    })).filter((item) => item.product_id && item.revision_id && item.citation.event_id),
     citations,
     source_bounds: {
       first_event_id: rows[0].event_id,
@@ -203,27 +214,49 @@ async function buildIntentContextPacket({
     },
   };
   core.continuation_text = continuationText(core);
-  const packetDigest = digest(core);
+  core.continuation_allowed = !truncated
+    && Boolean(core.objective.citation.event_id)
+    && constraints.length === (state.constraints || []).length
+    && decisions.length === (state.decisions || []).length
+    && acceptance.length === (state.completion_criteria || []).length;
+  const identityDigest = digest(core);
+  core.packet_id = `intent_packet_${identityDigest.slice(0, 32)}`;
+  const packetDigest = digest(packetContent(core));
+  const packetSignature = signingKey
+    ? crypto.createHmac("sha256", signingKey).update(packetDigest).digest("hex")
+    : "";
   return {
     ...core,
-    packet_id: `intent_packet_${packetDigest.slice(0, 32)}`,
     packet_digest: packetDigest,
+    packet_signature: packetSignature,
     generated_at: boundedText(generatedAt, 80) || new Date().toISOString(),
-    continuation_allowed: !truncated
-      && Boolean(core.objective.citation.event_id)
-      && constraints.length === (state.constraints || []).length
-      && acceptance.length === (state.completion_criteria || []).length,
   };
 }
 
-function validateIntentContextPacket(packet, { expectedIntentId, expectedIntentVersion } = {}) {
+function validateIntentContextPacket(packet, { expectedIntentId, expectedIntentVersion, signingKey } = {}) {
   if (!packet || packet.schema !== PACKET_SCHEMA) throw new Error("unsupported context packet schema");
   if (expectedIntentId && packet.intent_id !== expectedIntentId) throw new Error("context packet routed to wrong intent");
   if (expectedIntentVersion !== undefined && Number(packet.intent_version) !== Number(expectedIntentVersion)) {
     throw new Error(`stale context packet: expected intent version ${expectedIntentVersion}, packet has ${packet.intent_version}`);
   }
   if (digest(packetContent(packet)) !== packet.packet_digest) throw new Error("context packet digest mismatch");
-  if (!packet.continuation_allowed) throw new Error("context packet is incomplete and cannot launch");
+  if (signingKey) {
+    const expectedSignature = crypto.createHmac("sha256", signingKey).update(packet.packet_digest).digest("hex");
+    if (!packet.packet_signature
+      || packet.packet_signature.length !== expectedSignature.length
+      || !crypto.timingSafeEqual(Buffer.from(packet.packet_signature), Buffer.from(expectedSignature))) {
+      throw new Error("context packet signature mismatch");
+    }
+  }
+  const derivedAllowed = packet.source_bounds?.truncated !== true
+    && packet.compaction?.source_truncated !== true
+    && Boolean(packet.objective?.citation?.event_id)
+    && (packet.constraints || []).every((item) => item?.citation?.event_id)
+    && (packet.decisions || []).every((item) => item?.citation?.event_id)
+    && (packet.acceptance_criteria || []).every((item) => item?.citation?.event_id);
+  if (packet.continuation_allowed !== derivedAllowed || !derivedAllowed) {
+    throw new Error("context packet is incomplete and cannot launch");
+  }
   if (!packet.objective?.citation?.event_id) throw new Error("context packet objective lacks citation");
   for (const item of [
     ...(packet.constraints || []),
