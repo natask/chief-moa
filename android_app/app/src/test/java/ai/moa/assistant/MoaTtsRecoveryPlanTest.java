@@ -21,15 +21,18 @@ public final class MoaTtsRecoveryPlanTest {
     }
 
     @Test
-    public void partialFallsBackToWholeReplyForMissingOrDriftedBoundary() throws Exception {
+    public void partialFailsClosedForMissingOrDriftedBoundary() throws Exception {
         JSONObject drifted = new JSONObject()
                 .put("tts_delivery", "partial")
                 .put("tts_spoken_text_end", 6)
                 .put("tts_reply_text_chars", 12);
         MoaTtsRecoveryPlan plan = MoaTtsRecoveryPlan.fromTurnDone(drifted, "hello world");
 
-        assertEquals(0, plan.fromTextChar);
-        assertEquals("hello world", plan.text);
+        assertFalse(plan.shouldRetry());
+        assertEquals(-1, plan.fromTextChar);
+        assertEquals("", plan.text);
+        assertFalse(MoaTtsRecoveryPlan.fromTurnDone(new JSONObject()
+                .put("tts_delivery", "partial"), "hello world").shouldRetry());
     }
 
     @Test
@@ -61,7 +64,47 @@ public final class MoaTtsRecoveryPlanTest {
                 .put("tts_reply_text_chars", 11)
                 .put("tts_error", "x".repeat(300)), "hello world");
 
-        assertEquals(0, plan.fromTextChar);
+        assertFalse(plan.shouldRetry());
+        assertEquals(-1, plan.fromTextChar);
         assertEquals(240, plan.error.length());
+    }
+
+    @Test
+    public void partialRejectsFractionalOverflowAndUnboundedProtocolNumbers() throws Exception {
+        for (Number hostile : new Number[] {
+                6.5D, -1D, Double.NaN, Double.POSITIVE_INFINITY,
+                ((long) Integer.MAX_VALUE) + 1L
+        }) {
+            for (String key : new String[] {"tts_spoken_text_end", "tts_reply_text_chars"}) {
+                JSONObject event = numericEvent(key, hostile)
+                        .put("tts_delivery", "partial")
+                        .put("tts_spoken_text_end", 6)
+                        .put("tts_reply_text_chars", 11);
+                assertFalse(MoaTtsRecoveryPlan.fromTurnDone(event, "hello world").shouldRetry());
+                assertEquals(-1, MoaTtsRecoveryPlan.exactNonNegativeInt(event, key));
+            }
+        }
+        assertFalse(MoaTtsRecoveryPlan.fromTurnDone(new JSONObject()
+                .put("tts_delivery", "partial")
+                .put("tts_spoken_text_end", 12)
+                .put("tts_reply_text_chars", 11), "hello world").shouldRetry());
+        assertFalse(MoaTtsRecoveryPlan.fromTurnDone(new JSONObject()
+                .put("tts_delivery", "partial")
+                .put("tts_spoken_text_end", 11)
+                .put("tts_reply_text_chars", 11), "hello world").shouldRetry());
+    }
+
+    private static JSONObject numericEvent(String key, Number value) {
+        return new JSONObject() {
+            @Override
+            public boolean has(String candidate) {
+                return key.equals(candidate) || super.has(candidate);
+            }
+
+            @Override
+            public Object opt(String candidate) {
+                return key.equals(candidate) ? value : super.opt(candidate);
+            }
+        };
     }
 }

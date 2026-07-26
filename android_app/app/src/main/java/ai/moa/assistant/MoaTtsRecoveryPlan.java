@@ -39,11 +39,15 @@ final class MoaTtsRecoveryPlan {
             int boundary = exactNonNegativeInt(event, "tts_spoken_text_end");
             int declaredChars = exactNonNegativeInt(event, "tts_reply_text_chars");
             boolean reliable = boundary >= 0
+                    && declaredChars >= 0
                     && declaredChars == fullText.length()
-                    && boundary <= declaredChars;
-            if (reliable) {
-                from = boundary;
+                    && boundary <= declaredChars
+                    && boundary < declaredChars;
+            if (!reliable) {
+                return new MoaTtsRecoveryPlan(
+                        delivery, -1, "", boundedError(event));
             }
+            from = boundary;
         }
         return new MoaTtsRecoveryPlan(
                 delivery,
@@ -71,7 +75,7 @@ final class MoaTtsRecoveryPlan {
         }
     }
 
-    private static int exactNonNegativeInt(JSONObject event, String key) {
+    static int exactNonNegativeInt(JSONObject event, String key) {
         if (event == null || !event.has(key)) {
             return -1;
         }
@@ -79,8 +83,14 @@ final class MoaTtsRecoveryPlan {
         if (!(value instanceof Number)) {
             return -1;
         }
-        long parsed = ((Number) value).longValue();
-        return parsed < 0L || parsed > Integer.MAX_VALUE ? -1 : (int) parsed;
+        double parsed = ((Number) value).doubleValue();
+        if (!Double.isFinite(parsed)
+                || parsed < 0D
+                || parsed > Integer.MAX_VALUE
+                || parsed != Math.rint(parsed)) {
+            return -1;
+        }
+        return (int) parsed;
     }
 
     private static String boundedError(JSONObject event) {
