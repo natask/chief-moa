@@ -65,6 +65,27 @@ test("fails visibly after one retry and never returns the rejected candidate", a
   assert.equal(result.transcript_quality.attempts, 2);
 });
 
+test("a retry timeout carries fail-closed quality evidence", async () => {
+  await assert.rejects(
+    () => finalizeTranscriptCandidate({
+      text: "यह गलत लिपि में आया",
+      languageCodes: ["en-US", "am-ET"],
+      retry: async () => {
+        const error = new Error("recognize timed out");
+        error.name = "AbortError";
+        throw error;
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, "TRANSCRIPT_QUALITY_RETRY_FAILED");
+      assert.equal(error.transcript_quality.accepted, false);
+      assert.equal(error.transcript_quality.status, "rejected_after_retry_error");
+      assert.equal(error.transcript_quality.attempts, 2);
+      return true;
+    },
+  );
+});
+
 test("retry prompt is bounded and derives its script evidence from the profile", () => {
   const quality = inspectTranscriptScript("यह गलत लिपि में आया", ["en-US", "am-ET"]);
   const prompt = buildTranscriptRetryPrompt("Transcribe verbatim.", quality);

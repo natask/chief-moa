@@ -219,10 +219,57 @@ test("rejected finalized sidecar is client-visible and absent from canonical his
   }
 });
 
+test("sidecar retry timeout cannot restore transcript, reasoning, or history", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-native-sidecar-timeout-"));
+  try {
+    const recorded = [];
+    const provider = new FakeHybridProvider({
+      sidecarText: "",
+      transcriptQualityError: {
+        accepted: false,
+        reason: "retry_failed",
+        status: "rejected_after_retry_error",
+        attempts: 2,
+      },
+      nativeAssistantText: "already reasoned native response",
+    });
+    const ws = new FakeWs();
+    const connection = new VoiceSessionConnection(ws, {
+      request: { headers: {} },
+      sessionsDir: path.join(tempDir, "voice-sessions"),
+      providerEventsFile: path.join(tempDir, "voice-provider-events.jsonl"),
+      voiceProvider: provider,
+      onTurnCompleted: (turn) => recorded.push(turn),
+    });
+    fs.mkdirSync(path.join(tempDir, "voice-sessions"), { recursive: true });
+    connection.start();
+    ws.emit("message", json({
+      type: "session_start", session_id: "timeout_session",
+      turn_id: "timeout_turn", format: CLIENT_AUDIO_FORMAT,
+    }), false);
+    await settle(() => sentEvents(ws).some((event) => event.type === "session_ready"));
+    ws.emit("message", Buffer.from([1, 0, 2, 0]), true);
+    ws.emit("message", json({ type: "commit_turn", turn_id: "timeout_turn" }), false);
+    await settle(() => sentEvents(ws).some((event) => event.type === "turn_done"));
+
+    const events = sentEvents(ws);
+    const done = events.find((event) => event.type === "turn_done");
+    assert.equal(done.reason, "transcript_quality_rejected");
+    assert.equal(done.transcript_quality.status, "rejected_after_retry_error");
+    assert.equal(events.some((event) => event.type === "transcript_final"), false);
+    assert.equal(events.some((event) => event.type === "assistant_text"), false);
+    assert.equal(recorded.length, 0);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 class FakeHybridProvider {
   constructor(options) {
     this.sidecarText = options.sidecarText;
     this.transcriptQuality = options.transcriptQuality || null;
+    this.transcriptQualityError = options.transcriptQualityError || null;
+    this.nativeAssistantText = options.nativeAssistantText || "";
     this.liveFrames = [];
     this.sidecarFrames = [];
     this.liveCanceled = 0;
@@ -256,7 +303,7 @@ class FakeHybridProvider {
         model: "test-native-model",
         transcript: "native candidate",
         transcript_source: "stt",
-        assistant_text: "",
+        assistant_text: this.nativeAssistantText,
         audio_format: CLIENT_AUDIO_FORMAT,
       }),
       sendText: () => {},
@@ -280,6 +327,11 @@ class FakeHybridProvider {
   }
 
   async finalizeStreamingSttSession(turn) {
+    if (this.transcriptQualityError) {
+      const error = new Error("transcript quality retry failed: recognize timed out");
+      error.transcript_quality = this.transcriptQualityError;
+      throw error;
+    }
     const result = await turn.sttStream.finalize();
     if (this.transcriptQuality) {
       return { text: "", transcript_quality: this.transcriptQuality };

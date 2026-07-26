@@ -10,6 +10,25 @@ const SCRIPT_PATTERNS = Object.freeze({
 const MIN_UNEXPECTED_LETTERS = 4;
 const MIN_UNEXPECTED_RATE = 0.6;
 
+class TranscriptQualityRetryError extends Error {
+  constructor(cause, quality) {
+    super(`transcript quality retry failed: ${String(cause?.message || cause || "unknown error")}`);
+    this.name = "TranscriptQualityRetryError";
+    this.code = "TRANSCRIPT_QUALITY_RETRY_FAILED";
+    this.cause = cause;
+    this.transcript_quality = {
+      ...quality,
+      accepted: false,
+      reason: "retry_failed",
+      attempts: 2,
+      retry_performed: true,
+      status: "rejected_after_retry_error",
+      initial_reason: quality.reason,
+      initial_script_letters: quality.script_letters,
+    };
+  }
+}
+
 function normalizedLanguageCodes(languageCodes) {
   return (Array.isArray(languageCodes) ? languageCodes : [])
     .map((code) => String(code || "").trim().toLowerCase())
@@ -107,7 +126,12 @@ async function finalizeTranscriptCandidate({ text, languageCodes, retry }) {
     };
   }
 
-  const retried = await retry(initial);
+  let retried;
+  try {
+    retried = await retry(initial);
+  } catch (error) {
+    throw new TranscriptQualityRetryError(error, initial);
+  }
   const retryText = String(retried?.text || "").trim();
   const retryQuality = inspectTranscriptScript(retryText, languageCodes);
   const accepted = retryQuality.accepted && Boolean(retryText);
@@ -189,6 +213,7 @@ function selectFinalTranscript(providerResult, providerEvents) {
 }
 
 module.exports = {
+  TranscriptQualityRetryError,
   buildTranscriptRetryPrompt,
   finalizeRetainedAudioTranscript,
   finalizeStreamingOrBatchTranscript,
