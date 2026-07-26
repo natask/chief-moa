@@ -134,14 +134,15 @@ public final class OverlayService extends Service {
     private String gatewayUrl = "";
     private String gatewayToken = "";
     private String conversationId = "";
+    private String activeBranchId = "default";
     private boolean currentStreamingTurnRouted;
     private boolean currentStreamingTurnCommitRequested;
     private String currentStreamingTranscript = "";
     private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private final MoaAgentRunTracker agentRuns = new MoaAgentRunTracker();
     private boolean agentRunPolling;
-    private boolean nextManualVoiceFollowsActiveRun;
-    private boolean nextStreamingTurnFollowsActiveRun;
+    private String nextManualVoiceFollowUpRunId = "";
+    private String nextStreamingVoiceFollowUpRunId = "";
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
     private boolean voiceInvocationLatched;
@@ -254,6 +255,7 @@ public final class OverlayService extends Service {
                     if (!sharedId.equals(conversationId)) {
                         conversationId = sharedId;
                         MoaPrefs.setConversationId(this, sharedId);
+                        activeBranchId = MoaPrefs.conversationBranchId(this, sharedId);
                     }
                 });
             } catch (Exception ignored) {
@@ -412,6 +414,7 @@ public final class OverlayService extends Service {
         gatewayUrl = safe(MoaPrefs.gatewayUrl(this));
         gatewayToken = safe(MoaPrefs.gatewayToken(this));
         conversationId = MoaPrefs.conversationId(this);
+        activeBranchId = MoaPrefs.conversationBranchId(this, conversationId);
         applyCachedVoiceProfile();
     }
 
@@ -1838,8 +1841,8 @@ public final class OverlayService extends Service {
         }
         boolean forcedAgent = nextVoiceRunsAgent;
         nextVoiceRunsAgent = false;
-        boolean manualVoiceFollowUp = fromVoice && nextManualVoiceFollowsActiveRun;
-        nextManualVoiceFollowsActiveRun = false;
+        String manualVoiceFollowUpRunId = fromVoice ? nextManualVoiceFollowUpRunId : "";
+        nextManualVoiceFollowUpRunId = "";
 
         MoaActionBroker.LocalActionResult localAction = actionBroker.tryHandleLocalCommand(text);
         if (localAction.handled) {
@@ -1847,8 +1850,8 @@ public final class OverlayService extends Service {
             return;
         }
 
-        if (manualVoiceFollowUp) {
-            requestAgentRunFollowUp(text, true);
+        if (!manualVoiceFollowUpRunId.isEmpty()) {
+            requestAgentRunFollowUp(manualVoiceFollowUpRunId, text, true);
             return;
         }
 
@@ -1931,7 +1934,7 @@ public final class OverlayService extends Service {
     private JSONObject voiceTurnRequestBody(String userText, boolean fromVoice, boolean forcedAgent) throws JSONException {
         JSONObject body = gatewayRequestBody();
         body.put("session_id", conversationId);
-        body.put("branch_id", "default");
+        body.put("branch_id", activeBranchId);
         body.put("turn_id", "turn_" + UUID.randomUUID().toString());
         body.put("transcript", userText);
         body.put("text", userText);
@@ -1951,6 +1954,7 @@ public final class OverlayService extends Service {
 
     private void deliverVoiceTurnReply(JSONObject response, String userText, boolean fromVoice, boolean forcedAgent) {
         updateConversationId(response.optString("conversation_id", ""));
+        updateActiveBranchId(MoaGatewayClient.branchIdFromTurn(response));
         String display = response.optString("display", "").trim();
         String speakText = response.optString("speak", "").trim();
         String text = display.isEmpty() ? response.optString("text", speakText).trim() : display;
@@ -2094,6 +2098,7 @@ public final class OverlayService extends Service {
                 MoaGatewayClient.GatewayTextResponse reply = gatewayClient().chat(requestBody);
                 mainHandler.post(() -> {
                     updateConversationId(reply.conversationId);
+                    updateActiveBranchId(reply.branchId);
                     deliverReply(reply.notSaved ? MoaContextControlState.appendNotSaved(reply.text) : reply.text, fromVoice);
                 });
             } catch (Exception error) {
@@ -2114,6 +2119,7 @@ public final class OverlayService extends Service {
         try {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
+            body.put("branch_id", activeBranchId);
             body.put("source", "android-overlay");
             body.put("device_id", androidDeviceId());
             body.put("wait", false);
@@ -2140,8 +2146,7 @@ public final class OverlayService extends Service {
         }, "moa-agent-run").start();
     }
 
-    private void requestAgentRunFollowUp(String text, boolean fromVoice) {
-        String parentRunId = activeFollowUpRunId();
+    private void requestAgentRunFollowUp(String parentRunId, String text, boolean fromVoice) {
         if (parentRunId.isEmpty()) {
             requestVoiceTurn(text, fromVoice, true);
             return;
@@ -2151,6 +2156,7 @@ public final class OverlayService extends Service {
         try {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
+            body.put("branch_id", activeBranchId);
             body.put("source", "android-overlay");
             body.put("device_id", androidDeviceId());
             body.put("prompt", text);
@@ -2179,6 +2185,7 @@ public final class OverlayService extends Service {
     private JSONObject gatewayRequestBody() throws JSONException {
         JSONObject body = new JSONObject();
         body.put("conversation_id", conversationId);
+        body.put("branch_id", activeBranchId);
         body.put("source", "android-overlay");
         body.put("device_id", androidDeviceId());
         actionBroker.putScreenContext(body);
@@ -2197,10 +2204,6 @@ public final class OverlayService extends Service {
         return body;
     }
 
-    // Attach the explicit client thread control to an HTTP turn body (chat or
-    // voice turn). Incognito is a persistent mode and always wins; the one-shot
-    // new-thread arm is consumed by the turn it rides on. The gateway treats an
-    // explicit context_action as an override that beats the model's own choice.
     private void applyContextControls(JSONObject body) throws JSONException {
         if (contextControls.applyTo(body)) {
             refreshContextControls();
@@ -2531,10 +2534,6 @@ public final class OverlayService extends Service {
         return "Ready".equals(runStatus) ? MoaPrefs.companionCompactStatus(this) : runStatus;
     }
 
-    private String activeFollowUpRunId() {
-        return agentRuns.activeFollowUpRunId();
-    }
-
     private String agentRunStatusText() {
         return agentRuns.statusText();
     }
@@ -2546,6 +2545,20 @@ public final class OverlayService extends Service {
         }
         conversationId = value;
         MoaPrefs.setConversationId(this, value);
+        activeBranchId = MoaPrefs.conversationBranchId(this, value);
+    }
+
+    private void updateActiveBranchId(String returnedBranchId) {
+        String value = safe(returnedBranchId);
+        if (value.isEmpty() || value.startsWith("inc-")) return;
+        activeBranchId = value;
+        MoaPrefs.setConversationBranchId(this, conversationId, value);
+    }
+    private String scopedFollowUpRunId() {
+        if (contextControls.isNewThreadArmed() || contextControls.isIncognitoEnabled()) return "";
+        MoaAgentRunTracker.FollowUpResolution resolution =
+                agentRuns.resolveFollowUp(conversationId, activeBranchId);
+        return resolution.kind == MoaAgentRunTracker.FollowUpResolution.Kind.BOUND ? resolution.runId : "";
     }
 
     private String agentPromptFrom(String text) {
@@ -2718,8 +2731,8 @@ public final class OverlayService extends Service {
             if (orbView != null) {
                 orbView.setHeld(true);
             }
-            nextStreamingTurnFollowsActiveRun = agentRuns.hasRuns();
-            nextManualVoiceFollowsActiveRun = false;
+            nextStreamingVoiceFollowUpRunId = scopedFollowUpRunId();
+            nextManualVoiceFollowUpRunId = "";
             startStreamingVoiceTurn(false, false);
             return;
         }
@@ -2852,14 +2865,15 @@ public final class OverlayService extends Service {
         if (value.isEmpty() || currentStreamingTurnRouted) {
             return false;
         }
-        if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
+        if (!nextStreamingVoiceFollowUpRunId.isEmpty()) {
+            String followUpRunId = nextStreamingVoiceFollowUpRunId;
             currentStreamingTurnRouted = true;
             currentStreamingTurnCommitRequested = false;
-            nextStreamingTurnFollowsActiveRun = false;
+            nextStreamingVoiceFollowUpRunId = "";
             addMessage(false, value);
             updateVoiceUserTranscript(value, true);
             setVoiceRuntimeState(VoiceRuntimeState.THINKING);
-            requestAgentRunFollowUp(value, true);
+            requestAgentRunFollowUp(followUpRunId, value, true);
             MoaStreamingVoiceSessionController controller = streamingVoiceController;
             if (controller != null) {
                 controller.cancel();
@@ -2891,7 +2905,7 @@ public final class OverlayService extends Service {
         pushToTalkVoiceTurn = false;
         continuousVoiceLoop = false;
         suppressFirstTapTurnEmptyCue = false;
-        nextManualVoiceFollowsActiveRun = false;
+        nextManualVoiceFollowUpRunId = "";
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
@@ -3167,8 +3181,8 @@ public final class OverlayService extends Service {
         if (orbView != null) {
             orbView.setHeld(true);
         }
-        nextManualVoiceFollowsActiveRun = agentRuns.hasRuns();
-        nextStreamingTurnFollowsActiveRun = agentRuns.hasRuns();
+        nextManualVoiceFollowUpRunId = scopedFollowUpRunId();
+        nextStreamingVoiceFollowUpRunId = nextManualVoiceFollowUpRunId;
         resetVoiceTurnTranscript();
         showTranscriptOverlay("");
         setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
@@ -3192,7 +3206,7 @@ public final class OverlayService extends Service {
         if (streamingVoiceActive()) {
             streamingVoiceController.cancel();
             streamingVoiceController = null;
-            nextStreamingTurnFollowsActiveRun = false;
+            nextStreamingVoiceFollowUpRunId = "";
         }
         // Deliberately does NOT call voiceController.stopQuietly(): on the
         // streaming path the local recognizer is idle, and stopQuietly would
@@ -3209,7 +3223,7 @@ public final class OverlayService extends Service {
         if (streamingVoiceActive()) {
             streamingVoiceController.cancel();
             streamingVoiceController = null;
-            nextStreamingTurnFollowsActiveRun = false;
+            nextStreamingVoiceFollowUpRunId = "";
             removeTranscriptOverlay();
             updateMicState();
             return;
@@ -3262,21 +3276,14 @@ public final class OverlayService extends Service {
             refreshContextControls();
         }
         if (!choice.requiresBranchSwitch()) {
-            openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, "default", false);
+            openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, activeBranchId, false);
             return;
         }
         resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, choice.action);
     }
 
-    // Resolve the thread branch for an incognito / new-thread streaming voice turn
-    // off the main thread, then open the session on the returned branch. The fast
-    // (default-branch) path never enters here, so ordinary voice keeps its
-    // immediate socket connect. An incognito switch that fails is surfaced rather
-    // than silently opening a persisted session, keeping the incognito guarantee.
     private void resolveThreadBranchThenOpenStreamingVoice(boolean autoCommit, boolean continuous, String action) {
         final boolean incognito = "incognito".equals(action);
-        // Release any prior controller/timers so the mic and socket are free while
-        // the branch resolves, mirroring openStreamingVoiceSession's entry.
         cancelContinuousVoiceRestart();
         cancelStreamingTurnWatchdog();
         if (streamingVoiceController != null) {
@@ -3309,28 +3316,29 @@ public final class OverlayService extends Service {
             final String resolvedBranch = branch;
             mainHandler.post(() -> {
                 if (token != streamingSwitchToken) {
-                    // Superseded by a newer start, cancel, or dismiss.
                     return;
                 }
                 streamingBranchSwitchPending = false;
                 boolean switchOk = !resolvedBranch.isEmpty();
-                if (incognito && !switchOk) {
-                    // Never open a persisted session for an incognito request; that
-                    // would break the "nothing is stored" guarantee.
+                if (!switchOk) {
                     streamingCommitPendingOpen = false;
                     pushToTalkVoiceTurn = false;
                     if (orbView != null) {
                         orbView.setHeld(false);
                     }
-                    String notice = "Couldn't start a private turn. Try again.";
+                    String notice = incognito
+                            ? "Couldn't start a private turn. Try again."
+                            : "Couldn't start a new thread. Try again.";
                     showTranscriptOverlay("");
                     updateVoiceAssistantTranscript(notice);
                     setVoiceRuntimeState(VoiceRuntimeState.ERROR);
                     updateMicState();
                     return;
                 }
-                String branchToUse = switchOk ? resolvedBranch : "default";
-                openStreamingVoiceSession(autoCommit, continuous, branchToUse, incognito && switchOk);
+                if (!incognito) {
+                    updateActiveBranchId(resolvedBranch);
+                }
+                openStreamingVoiceSession(autoCommit, continuous, resolvedBranch, incognito);
             });
         }, "moa-thread-switch").start();
     }
@@ -3388,9 +3396,6 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
-                // If the user already released (commit deferred until now), the
-                // turn is in flight: promote to THINKING and drop the watchdog's
-                // "sending" state instead of falling back to LISTENING.
                 if (voiceRuntimeState == VoiceRuntimeState.SENDING || currentStreamingTurnCommitRequested) {
                     markStreamingTurnProgressing();
                 } else {
@@ -3447,12 +3452,13 @@ public final class OverlayService extends Service {
                 String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
-                    if (nextStreamingTurnFollowsActiveRun || agentRuns.hasRuns()) {
+                    if (!nextStreamingVoiceFollowUpRunId.isEmpty()) {
+                        String followUpRunId = nextStreamingVoiceFollowUpRunId;
                         currentStreamingTurnRouted = true;
-                        nextStreamingTurnFollowsActiveRun = false;
+                        nextStreamingVoiceFollowUpRunId = "";
                         addMessage(false, transcript);
                         updateVoiceUserTranscript(transcript, true);
-                        requestAgentRunFollowUp(transcript, true);
+                        requestAgentRunFollowUp(followUpRunId, transcript, true);
                     } else if (shouldRouteStreamingTranscriptThroughMoa(transcript)) {
                         routeStreamingTranscriptThroughMoa(transcript);
                     } else {
@@ -3568,7 +3574,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if (!currentStreamingTurnRouted) {
-                    nextStreamingTurnFollowsActiveRun = false;
+                    nextStreamingVoiceFollowUpRunId = "";
                     recordCurrentStreamingAssistant();
                     if (streamingTurnIncognito) {
                         markCurrentReplyNotSaved();
@@ -3721,7 +3727,7 @@ public final class OverlayService extends Service {
                 }
                 voiceInvocationLatched = false;
                 cancelStreamingTurnWatchdog();
-                nextStreamingTurnFollowsActiveRun = false;
+                nextStreamingVoiceFollowUpRunId = "";
                 Log.w(TAG, "streaming voice error: " + safe(message), error);
                 if (isRecoverableStreamingVoiceError(message)) {
                     recoverStreamingVoiceTurn(generation);
@@ -3755,15 +3761,9 @@ public final class OverlayService extends Service {
         } else {
             streamingVoiceController.setTurnIdentity("", androidDeviceId());
         }
-        // Hand over the gesture-warmed mic (or the mic pre-warmed during the
-        // continuous re-arm gap) so the session goes live instantly and, for
-        // push-to-talk, drains the pre-roll. Null here means a cold start.
         streamingVoiceController.setPrewarmedCapture(adoptWarmMic());
         streamingVoiceController.startSession();
         if (streamingCommitPendingOpen) {
-            // The user released while the branch was still resolving. Commit the
-            // turn now that the session exists so it does not hang listening; a
-            // near-empty capture returns a no_speech turn_done rather than a stall.
             streamingCommitPendingOpen = false;
             mainHandler.post(this::commitStreamingVoiceTurnNow);
         }
@@ -3929,7 +3929,7 @@ public final class OverlayService extends Service {
         currentStreamingTurnRouted = true;
         currentStreamingTurnCommitRequested = false;
         cancelStreamingTurnWatchdog();
-        nextStreamingTurnFollowsActiveRun = false;
+        nextStreamingVoiceFollowUpRunId = "";
         if (addUserMessage) {
             addMessage(false, transcript);
         }

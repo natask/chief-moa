@@ -498,6 +498,13 @@ and cross-surface: single click toggles current-thread capture; a still hold is
 push-to-talk in that thread and release sends; double-click toggles capture in a
 fresh thread; triple-click cancels without sending and opens chat. Starting a
 fresh-thread capture cancels an active current-thread capture without sending.
+Android stores the resolved non-incognito branch with the shared session and
+reuses it for later single-click chat, HTTP voice, streaming voice, and socket
+reconnects; a fresh-thread switch failure stops the turn instead of silently
+filing it on `default`. Automatic agent follow-ups bind only to active runs in
+that exact session and branch. One intent may continue its most recent run, but
+concurrent runs for different intents are ambiguous and fall through normal
+intent resolution rather than using a globally recent run.
 Large movement after a hold starts cancels capture and escapes into drag. No
 separate X/Send side controls own disposition, and normal manual turns never
 wait for silence detection. The one open chat/transcript card follows the orb
