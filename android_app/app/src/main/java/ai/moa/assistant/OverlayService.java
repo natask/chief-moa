@@ -3542,7 +3542,8 @@ public final class OverlayService extends Service {
             }
 
             @Override
-            public void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+            public void onTurnDone(String turnId, String status, boolean transcriptionOnly,
+                    boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
@@ -3569,6 +3570,21 @@ public final class OverlayService extends Service {
                 }
                 String turnStatus = safe(status);
                 if ("completed".equals(turnStatus)) {
+                    MoaTtsRecoveryPlan recovery = MoaTtsRecoveryPlan.fromTurnDone(
+                            terminalEvent, voiceAssistantTranscript);
+                    if (MoaPrefs.spokenRepliesEnabled(OverlayService.this) && recovery.shouldRetry()) {
+                        streamingAssistantAudioPlaying = false;
+                        pendingContinuousVoiceRestartAfterAudio = false;
+                        setVoiceRuntimeState(VoiceRuntimeState.RECOVERING);
+                        String retryId = UUID.randomUUID().toString();
+                        if (streamingVoiceController != null
+                                && streamingVoiceController.retryTts(turnId, retryId, recovery.fromTextChar)) {
+                            resetStreamingTurnWatchdog();
+                            updateMicState();
+                            return;
+                        }
+                        Log.w(TAG, "hosted TTS recovery could not be queued delivery=" + recovery.delivery);
+                    }
                     // Local TTS is disabled by policy (hosted audio only), so this
                     // returns false. Kept as the single seam for the on-device
                     // engine; a text-only reply is handled by the not-spoken cue.
@@ -3626,6 +3642,30 @@ public final class OverlayService extends Service {
                         showReadyForNextVoiceTurn(generation);
                     }
                 }, 700);
+            }
+
+            @Override
+            public void onTtsRetryDone(String turnId, String retryId, String status,
+                    int fromTextChar, String error) {
+                if (!isCurrentStreamingGeneration(generation)) {
+                    return;
+                }
+                if ("completed".equals(safe(status))) {
+                    resetStreamingTurnWatchdog();
+                    return;
+                }
+                cancelStreamingTurnWatchdog();
+                streamingAssistantAudioPlaying = false;
+                markCurrentReplyNotSpoken();
+                setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+                updateMicState();
+                Log.w(TAG, "hosted TTS recovery failed retryId=" + safe(retryId)
+                        + " fromTextChar=" + fromTextChar + " error=" + safe(error));
+                mainHandler.postDelayed(() -> {
+                    if (isCurrentStreamingGeneration(generation)) {
+                        showReadyForNextVoiceTurn(generation);
+                    }
+                }, VOICE_NOT_SPOKEN_HOLD_MS);
             }
 
             @Override

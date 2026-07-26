@@ -67,7 +67,10 @@ final class MoaStreamingVoiceSessionController {
         // Keepalive during a long reasoning / TTS leg. Re-arms the watchdog.
         void onTurnProgress(String turnId);
 
-        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
+        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke,
+                String replyLanguage, JSONObject terminalEvent);
+
+        void onTtsRetryDone(String turnId, String retryId, String status, int fromTextChar, String error);
 
         void onSessionClosed();
 
@@ -106,6 +109,7 @@ final class MoaStreamingVoiceSessionController {
     // still in flight during the stop keep counting and buffering.
     private boolean commitRequested;
     private boolean assistantAudioStarted;
+    private long playbackDrainGeneration;
     private boolean loggedVoiceActivity;
     private boolean sessionReady;
     private boolean pendingCommitAfterSessionReady;
@@ -481,7 +485,7 @@ final class MoaStreamingVoiceSessionController {
             // and returns to ready immediately.
             Log.i(TAG, "commit with zero captured audio; cancelling and reporting no_speech");
             socket.sendCancelTurn(currentTurnId);
-            handleTurnDone(currentTurnId, "no_speech", false, false, "");
+            handleTurnDone(currentTurnId, "no_speech", false, false, "", new JSONObject());
             return;
         }
         if (!socket.sendCommitTurn(currentTurnId)) {
@@ -537,7 +541,8 @@ final class MoaStreamingVoiceSessionController {
         reportError("Voice gateway did not become ready in time. Tap to try again.", null);
     }
 
-    private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+    private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly,
+            boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
         mainHandler.removeCallbacks(pendingCommitTimeout);
         MoaAudioCaptureController capture;
         MoaAudioPlaybackController playback;
@@ -564,7 +569,25 @@ final class MoaStreamingVoiceSessionController {
         if (playback != null && shouldStopPlayback) {
             playback.stop();
         }
-        post(() -> callback.onTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage));
+        post(() -> callback.onTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke,
+                replyLanguage, terminalEvent));
+    }
+
+    boolean retryTts(String completedTurnId, String retryId, int fromTextChar) {
+        synchronized (lock) {
+            if (gatewaySocket == null || safe(completedTurnId).isEmpty() || safe(retryId).isEmpty()) {
+                return false;
+            }
+            if (playbackController != null) {
+                playbackController.stop();
+            }
+            playbackDrainGeneration++;
+            turnId = completedTurnId;
+            assistantOutputState.begin(completedTurnId);
+            assistantAudioStarted = false;
+            assistantAudioProgress.reset();
+            return gatewaySocket.sendTtsRetry(completedTurnId, retryId, fromTextChar);
+        }
     }
 
     private void reportError(String message, Throwable error) {
@@ -911,29 +934,17 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onAssistantAudioDone(String audioTurnId) {
             MoaAudioPlaybackController playbackToDrain;
+            long drainGeneration;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
                 }
                 playbackToDrain = playbackController;
                 assistantOutputState.suppressSpeech();
+                drainGeneration = ++playbackDrainGeneration;
             }
             Log.i(TAG, "assistantAudioDone");
-            mainHandler.postDelayed(() -> {
-                MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
-                synchronized (lock) {
-                    finalProgress = assistantAudioProgress.snapshot(
-                            playbackToDrain != null ? playbackToDrain.playedPcmFrames() : 0L);
-                    if (playbackController == playbackToDrain) {
-                        assistantAudioStarted = false;
-                    }
-                }
-                maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
-                if (playbackToDrain != null && playbackEnabled) {
-                    playbackToDrain.stop();
-                }
-            }, 800);
-            post(() -> callback.onAssistantAudioDone(audioTurnId));
+            drainPlayback(audioTurnId, playbackToDrain, drainGeneration, SystemClock.elapsedRealtime());
         }
 
         @Override
@@ -942,15 +953,66 @@ final class MoaStreamingVoiceSessionController {
         }
 
         @Override
-        public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+        public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly,
+                boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
             Log.i(TAG, "turnDone status=" + status + " transcriptionOnly=" + transcriptionOnly + " ttsSpoke=" + ttsSpoke);
-            handleTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage);
+            handleTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage, terminalEvent);
+        }
+
+        @Override
+        public void onTtsRetryDone(String completedTurnId, String retryId, String status,
+                int fromTextChar, String error) {
+            post(() -> callback.onTtsRetryDone(completedTurnId, retryId, status, fromTextChar, error));
         }
 
         @Override
         public void onGatewayError(String message) {
             reportError(message, null);
         }
+    }
+
+    private void drainPlayback(String audioTurnId, MoaAudioPlaybackController playback,
+            long drainGeneration, long startedAtMs) {
+        synchronized (lock) {
+            if (drainGeneration != playbackDrainGeneration) {
+                return;
+            }
+        }
+        if (playback == null || !playbackEnabled) {
+            finishDrainedPlayback(audioTurnId, playback);
+            return;
+        }
+        long writtenFrames = playback.writtenPcmFrames();
+        long playedFrames = playback.playedPcmFrames();
+        MoaAudioDrainPolicy.Decision decision = MoaAudioDrainPolicy.decide(
+                writtenFrames, playedFrames, SystemClock.elapsedRealtime() - startedAtMs);
+        if (decision == MoaAudioDrainPolicy.Decision.WAIT) {
+            mainHandler.postDelayed(
+                    () -> drainPlayback(audioTurnId, playback, drainGeneration, startedAtMs),
+                    MoaAudioDrainPolicy.POLL_INTERVAL_MS);
+            return;
+        }
+        if (decision == MoaAudioDrainPolicy.Decision.TIMED_OUT) {
+            Log.w(TAG, "assistant playback drain timed out writtenFrames="
+                    + writtenFrames + " playedFrames=" + playedFrames);
+        }
+        finishDrainedPlayback(audioTurnId, playback);
+    }
+
+    private void finishDrainedPlayback(String audioTurnId, MoaAudioPlaybackController playback) {
+        MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
+        synchronized (lock) {
+            finalProgress = assistantAudioProgress.snapshot(
+                    playback != null ? playback.playedPcmFrames() : 0L);
+            if (playbackController == playback) {
+                assistantAudioStarted = false;
+            }
+        }
+        maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
+        if (playback != null && playbackEnabled) {
+            playback.stop();
+        }
+        post(() -> callback.onAssistantAudioDone(audioTurnId));
     }
 
 }
