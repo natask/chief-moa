@@ -839,7 +839,9 @@ synthesis fault therefore keeps the completed assistant text while identifying
 the exact unheard suffix. Android may send an idempotent same-socket
 `retry_tts {turn_id,retry_id,from_text_char}` request; the gateway synthesizes
 only that stored suffix, does not rerun reasoning, and closes the attempt with
-`tts_retry_done`. Reusing a retry id returns its receipt without replaying audio.
+`tts_retry_done`. The request is admitted only for a recorded partial/failed
+receipt and its exact recorded suffix boundary. Idempotency binds turn, retry
+identity, and request digest; attempts and receipt memory are bounded.
 
 ### Streaming cascaded voice
 

@@ -963,7 +963,6 @@ class CascadedVoiceProvider {
     const ttsText = String(reasoning.tts_text || reasoning.speak || "").trim();
     const ttsStyle = String(reasoning.tts_style || "").trim();
     if (speak) {
-      // Sent when the LLM stream ends. On a multi-chunk streaming turn this
       // deliberately lands BETWEEN binary frames (audio-before-text is the
       // streaming contract); a one-chunk reply may still deliver text first.
       await hooks.onAssistantText(speak);
@@ -1235,6 +1234,8 @@ class CascadedVoiceProvider {
       emitted: 0,
       nextSegmentIndex: 0,
       textCursor: 0,
+      sourceText: "",
+      sourceSearchCursor: 0,
       started: false,
       failed: false,
       superseded: false,
@@ -1278,13 +1279,13 @@ class CascadedVoiceProvider {
       clearForceTimer();
     };
     const markFailed = (error, segmentIndex = null) => {
-      if (state.superseded || state.failed) return;
+      if (state.superseded) return;
+      if (!state.failed) state.ttsError = cleanError(error);
       state.failed = true;
-      state.ttsError = state.ttsError || cleanError(error);
-      if (Number.isInteger(segmentIndex) && segmentIndex >= 0) {
+      if (Number.isInteger(segmentIndex) && segmentIndex >= 0 && (
+        !Number.isInteger(state.failedSegmentIndex) || segmentIndex < state.failedSegmentIndex)) {
         state.failedSegmentIndex = segmentIndex;
       }
-      abortController.abort();
       clearForceTimer();
       console.warn(JSON.stringify({
         level: "warn",
@@ -1298,7 +1299,8 @@ class CascadedVoiceProvider {
     const synthesizeChunk = async (text, segmentIndex) => {
       await acquire();
       try {
-        if (state.superseded || state.failed) {
+        if (state.superseded || (Number.isInteger(state.failedSegmentIndex)
+            && segmentIndex >= state.failedSegmentIndex)) {
           return null;
         }
         const pcm = await provider.ttsStage.synthesize({
@@ -1315,7 +1317,7 @@ class CascadedVoiceProvider {
         }
         return { pcm, text };
       } catch (error) {
-        if (state.superseded || state.failed || error?.name === "AbortError") {
+        if (state.superseded || error?.name === "AbortError") {
           return null;
         }
         markFailed(error, segmentIndex);
@@ -1333,15 +1335,18 @@ class CascadedVoiceProvider {
       if (!normalizedText) {
         return;
       }
-      const textStart = state.textCursor + (state.textCursor > 0 ? 1 : 0);
+      const exactStart = state.sourceText.indexOf(normalizedText, state.sourceSearchCursor);
+      const textStart = exactStart >= 0 ? exactStart : state.textCursor;
       const textEnd = textStart + normalizedText.length;
       const segmentIndex = state.nextSegmentIndex;
       state.nextSegmentIndex += 1;
       state.textCursor = textEnd;
+      state.sourceSearchCursor = textEnd;
       const synthPromise = synthesizeChunk(normalizedText, segmentIndex);
       emitChain = emitChain.then(async () => {
         const synthesized = await synthPromise;
-        if (!synthesized || state.superseded || state.failed) {
+        if (!synthesized || state.superseded || (Number.isInteger(state.failedSegmentIndex)
+            && segmentIndex >= state.failedSegmentIndex)) {
           return;
         }
         const pcm = synthesized.pcm;
@@ -1414,6 +1419,7 @@ class CascadedVoiceProvider {
           return;
         }
         state.deltaCount += 1;
+        state.sourceText += text;
         if (!state.firstDeltaAtMs) {
           state.firstDeltaAtMs = Date.now();
         }
@@ -1437,15 +1443,12 @@ class CascadedVoiceProvider {
           return;
         }
         state.deltaCount += 1;
+        state.sourceText = value;
         if (!state.firstDeltaAtMs) {
           state.firstDeltaAtMs = Date.now();
         }
         enqueue(value);
       },
-      // Gateway-produced interim speech (a tool-call acknowledgment): synthesize
-      // and emit NOW as one standalone chunk, bypassing the sentence chunker so
-      // a short line is never held back waiting for min-chars while a tool runs.
-      // Counted as a delta so the zero-delta fallback never double-speaks.
       pushImmediate(text) {
         if (state.superseded || state.failed || state.finished) {
           return;
@@ -1513,13 +1516,11 @@ class CascadedVoiceProvider {
 
   // The reply-delivery modality from the effective agent profile: "text" (write,
   // no hosted audio), "speech" (speak), or "auto" (default; speak when a hosted
-  // voice can synthesize). Read fresh per turn so a spoken change applies next.
   replyModality(turnOrProfile) {
     const profile = this.profileForTurn(turnOrProfile);
     return String(profile?.response_modality || "auto").trim().toLowerCase() || "auto";
   }
 
-  // Synthesize gateway-produced reply text (today a profile-control confirmation)
   // into hosted reply audio and stream it through the same hooks the cascaded
   // reply uses. The streaming server calls this to SPEAK confirmations that are
   // produced after processTurn — the profile change itself is applied once by the

@@ -65,3 +65,7 @@ also identify the zero-based failed segment and a bounded error.
   rerunning reasoning
 - **AND** returns an idempotent `tts_retry_done` receipt
 - **AND** a duplicate retry id never synthesizes or replays audio twice
+- **AND** retry is authorized only for the exact recorded partial/failed turn
+  and exact recorded suffix boundary
+- **AND** a changed request under the same turn/retry identity conflicts
+- **AND** retry attempts and retained receipts are bounded

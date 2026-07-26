@@ -1021,7 +1021,6 @@ class VoiceSessionConnection {
       assistantAudioFormat,
     });
     const profileControlText = profileControlAssistantText(canonicalRecord);
-    // A voice assistant must speak its confirmations. A profile-control turn is
     // classified non-chat, so the provider returned no spoken reply; the gateway
     // produced the confirmation text while applying the change. Send it as text
     // and, when the provider can synthesize (cascaded pipeline) and the modality
@@ -1102,10 +1101,6 @@ class VoiceSessionConnection {
         ? { tts_failed_segment_index: providerResult.tts_failed_segment_index }
         : {}),
     });
-    // Cascaded path: the reasoner's tools may have proposed client-forwardable
-    // actions (e.g. companion_motion) on providerResult.actions. Forward each as
-    // its own client event before turn_done, the same way the Live tool path
-    // forwards a page_tweak, so the client runtime can apply it.
     if (Array.isArray(providerResult?.actions)) {
       for (const action of providerResult.actions) {
         await this.emitClientAction(turn, action, "");
@@ -1115,6 +1110,13 @@ class VoiceSessionConnection {
 
     const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
     turn.status = hasPlaybackTail ? "playback" : "completed";
+    turn.ttsRecovery = ["partial", "failed"].includes(doneTtsDelivery)
+      && Number.isSafeInteger(doneTtsSpokenTextEnd)
+      && doneTtsSpokenTextEnd >= 0
+      && doneTtsSpokenTextEnd < doneTtsReplyTextChars
+      ? { delivery: doneTtsDelivery, spokenTextEnd: doneTtsSpokenTextEnd,
+        replyTextChars: doneTtsReplyTextChars, assistantText }
+      : null;
     writeTurnMetadata(turn, { status: "completed", completed_at: nowIso() });
     await this.sendTurnDone({
       type: "turn_done",
@@ -1140,8 +1142,6 @@ class VoiceSessionConnection {
       ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
     });
 
-    // Generation is complete, but endpoint playback may still have a queued
-    // tail. Keep audio turns addressable until the client closes or replaces
     // the session so a barge-in during that tail can report its checkpoint.
     // Text-only turns still close immediately for old-client compatibility.
     if (!hasPlaybackTail && this.turn === turn) {
