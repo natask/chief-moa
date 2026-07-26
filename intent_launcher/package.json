@@ -1,0 +1,32 @@
+{
+  "name": "@chief-moa/intent-launcher",
+  "version": "0.1.0",
+  "description": "Standalone CLI and dependency-free SDK for the Chief Moa Intent Management System",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./schemas": "./src/schemas.js"
+  },
+  "bin": {
+    "intent-launcher": "./src/cli.js"
+  },
+  "files": [
+    "src",
+    "examples",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/cli.js && node --test test/*.test.js",
+    "example:dry-run": "node examples/dry-run.js"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
