@@ -5886,6 +5886,7 @@ function createAgentRun(body) {
     source: String(body.source || "unknown").slice(0, 80),
     conversation_id: body.conversation_id ? sanitizeId(body.conversation_id) : "",
     branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default",
+    intent_id: body.intent_id ? sanitizeOptionalBlankId(body.intent_id) : "",
     turn_id: body.turn_id ? sanitizeOptionalBlankId(body.turn_id) : "",
     broker_event_id: body.broker_event_id ? sanitizeOptionalBlankId(body.broker_event_id) : "",
     route_decision_id: body.route_decision_id ? sanitizeOptionalBlankId(body.route_decision_id) : "",

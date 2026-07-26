@@ -123,6 +123,11 @@ final class MoaAgentRunTracker {
         return "";
     }
 
+    String intentIdForRun(String runId) {
+        State state = runs.get(safe(runId));
+        return state == null ? "" : state.intentId;
+    }
+
     FollowUpResolution resolveFollowUp(String sessionId, String branchId) {
         String session = safe(sessionId);
         String branch = safe(branchId);

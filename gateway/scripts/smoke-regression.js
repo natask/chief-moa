@@ -827,6 +827,8 @@ async function assertDirectAsyncAgentRun(baseUrl, dataDir) {
   const response = await postJson(`${baseUrl}/v1/agent/runs`, {
     source: "smoke-regression",
     conversation_id: "smoke_session",
+    branch_id: "smoke_branch",
+    intent_id: "smoke_intent",
     harness: "gemini",
     wait: false,
     prompt: "run a fake smoke command",
@@ -846,6 +848,8 @@ async function assertDirectAsyncAgentRun(baseUrl, dataDir) {
     status: "completed",
     harness: "gemini",
     conversation_id: "smoke_session",
+    branch_id: "smoke_branch",
+    intent_id: "smoke_intent",
   });
   return response.json.run.id;
 }
@@ -903,9 +907,12 @@ async function assertCanceledAgentRun(baseUrl, dataDir) {
 
 async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   assert.ok(parentRunId, "parent run id required");
+  const parentDetail = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
   const response = await postJson(`${baseUrl}/v1/agent/runs/${parentRunId}/followups`, {
     source: "smoke-regression",
     conversation_id: "smoke_session",
+    branch_id: parentDetail.run.branch_id,
+    intent_id: parentDetail.run.intent_id,
     prompt: "use this follow-up context",
   });
 
@@ -914,19 +921,35 @@ async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   const childRunId = response.json.run.id;
   assert.ok(childRunId.startsWith("run_"));
 
-  const parentDetail = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
-  assert.ok(parentDetail.events.some((event) => event.type === "follow_up"));
+  const parentAfterFollowUp = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
+  assert.ok(parentAfterFollowUp.events.some((event) => event.type === "follow_up"));
 
   const childDetail = await waitForRunTerminal(baseUrl, childRunId);
   assert.equal(childDetail.run.status, "completed");
   assert.equal(childDetail.run.parent_run_id, parentRunId);
+  assert.equal(childDetail.run.branch_id, parentDetail.run.branch_id);
+  assert.equal(childDetail.run.intent_id, parentDetail.run.intent_id);
   assertPersistedRun(dataDir, childRunId, {
     status: "completed",
     harness: parentDetail.run.harness,
     conversation_id: "smoke_session",
     parent_run_id: parentRunId,
+    branch_id: parentDetail.run.branch_id,
+    intent_id: parentDetail.run.intent_id,
   });
-  return childRunId;
+  const repeated = await postJson(`${baseUrl}/v1/agent/runs/${childRunId}/followups`, {
+    source: "smoke-regression",
+    conversation_id: "smoke_session",
+    branch_id: childDetail.run.branch_id,
+    intent_id: childDetail.run.intent_id,
+    prompt: "continue the same intent again",
+  });
+  assert.equal(repeated.status, 202);
+  const repeatedDetail = await waitForRunTerminal(baseUrl, repeated.json.run.id);
+  assert.equal(repeatedDetail.run.parent_run_id, childRunId);
+  assert.equal(repeatedDetail.run.branch_id, childDetail.run.branch_id);
+  assert.equal(repeatedDetail.run.intent_id, childDetail.run.intent_id);
+  return repeated.json.run.id;
 }
 
 async function assertFailedAgentRun(baseUrl, dataDir) {

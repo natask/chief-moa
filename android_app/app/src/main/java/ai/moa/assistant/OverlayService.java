@@ -1907,13 +1907,11 @@ public final class OverlayService extends Service {
         try {
             requestBody = voiceTurnRequestBody(userText, fromVoice, forcedAgent);
         } catch (JSONException error) {
-            if (forcedAgent) {
-                requestAgentRun(spokenAgentPrompt(userText), fromVoice);
-            } else {
-                requestGatewayReply(userText, fromVoice);
-            }
+            if (forcedAgent) requestAgentRun(spokenAgentPrompt(userText), fromVoice);
+            else requestGatewayReply(userText, fromVoice);
             return;
         }
+        final boolean exactBoundary = MoaContextControlState.requiresExactBoundary(requestBody);
 
         new Thread(() -> {
             try {
@@ -1921,11 +1919,12 @@ public final class OverlayService extends Service {
                 mainHandler.post(() -> deliverVoiceTurnReply(response, userText, fromVoice, forcedAgent));
             } catch (Exception error) {
                 mainHandler.post(() -> {
-                    if (forcedAgent) {
-                        requestAgentRun(spokenAgentPrompt(userText), fromVoice);
-                    } else {
-                        requestGatewayReply(userText, fromVoice);
+                    if (exactBoundary) {
+                        deliverReply("That new thread could not be started. Try again.", fromVoice, false);
+                        return;
                     }
+                    if (forcedAgent) requestAgentRun(spokenAgentPrompt(userText), fromVoice);
+                    else requestGatewayReply(userText, fromVoice);
                 });
             }
         }, "moa-voice-turn").start();
@@ -2157,6 +2156,7 @@ public final class OverlayService extends Service {
             JSONObject body = new JSONObject();
             body.put("conversation_id", conversationId);
             body.put("branch_id", activeBranchId);
+            body.put("intent_id", agentRuns.intentIdForRun(parentRunId));
             body.put("source", "android-overlay");
             body.put("device_id", androidDeviceId());
             body.put("prompt", text);
