@@ -21,6 +21,7 @@ const {
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
 const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
+const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
@@ -1068,24 +1069,13 @@ class VoiceSessionConnection {
       providerEvents.stageTimings.first_audio_ms = firstAudioMs;
     }
     const doneModality = providerResult?.modality || confirmationTts?.modality || "";
-    const doneTtsError = providerResult?.tts_error || confirmationTts?.tts_error || "";
-    const doneTtsSpoke = confirmationTts && confirmationTts.spoke === true
-      ? true
-      : (typeof providerResult?.tts_spoke === "boolean"
-        ? providerResult.tts_spoke
-        : (providerEvents.assistantAudioStarted ? true : undefined));
-    const doneTtsDelivery = sanitizeTtsDelivery(providerResult?.tts_delivery)
-      || (doneTtsError ? (doneTtsSpoke ? "partial" : "failed") : (doneTtsSpoke ? "complete" : "not_requested"));
-    const doneTtsComplete = doneTtsDelivery === "complete";
-    const doneTtsSegments = Number.isFinite(providerResult?.tts_segments)
-      ? Math.max(0, Math.round(providerResult.tts_segments))
-      : turn.assistantAudioSegments.length;
-    const doneTtsSpokenTextEnd = Number.isFinite(providerResult?.tts_spoken_text_end)
-      ? Math.max(0, Math.round(providerResult.tts_spoken_text_end))
-      : (doneTtsComplete ? assistantText.length : 0);
-    const doneTtsReplyTextChars = Number.isFinite(providerResult?.tts_reply_text_chars)
-      ? Math.max(0, Math.round(providerResult.tts_reply_text_chars))
-      : assistantText.length;
+    const ttsTerminal = summarizeTtsTerminal(
+      providerResult, providerEvents, turn, assistantText, confirmationTts);
+    const {
+      complete: doneTtsComplete, delivery: doneTtsDelivery, error: doneTtsError,
+      replyTextChars: doneTtsReplyTextChars, segments: doneTtsSegments,
+      spokenTextEnd: doneTtsSpokenTextEnd, spoke: doneTtsSpoke,
+    } = ttsTerminal;
     await this.recordProviderEvent(turn, providerEvents, "turn_completed", {
       transcript,
       assistant_text: assistantText,
@@ -2012,13 +2002,6 @@ function normalizeStageName(stage) {
     .replace(/^_+|_+$/g, "")
     .slice(0, 80);
   return value || "unknown";
-}
-
-function sanitizeTtsDelivery(value) {
-  const delivery = String(value || "").trim().toLowerCase();
-  return ["complete", "partial", "failed", "not_requested"].includes(delivery)
-    ? delivery
-    : "";
 }
 
 function sanitizeStageDetails(details) {

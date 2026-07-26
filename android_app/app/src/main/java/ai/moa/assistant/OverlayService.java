@@ -183,47 +183,39 @@ public final class OverlayService extends Service {
             public void onVoiceStateChanged() {
                 updateMicState();
             }
-
             @Override
             public void onShowPanelRequested() {
                 showTranscriptOverlay("");
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
             }
-
             @Override
             public void onAssistantMessage(String text) {
                 addMessage(true, text);
                 updateVoiceAssistantTranscript(text);
             }
-
             @Override
             public void onShowTranscript(String text) {
                 showTranscriptOverlay(text);
                 updateVoiceUserTranscript(text, false);
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
             }
-
             @Override
             public void onUpdateTranscript(String text) {
                 updateVoiceUserTranscript(text, false);
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
             }
-
             @Override
             public void onRemoveTranscript() {
                 removeTranscriptOverlay();
             }
-
             @Override
             public void onComposerText(String text) {
                 setComposerText(text);
             }
-
             @Override
             public void onVoiceTurn(String text) {
                 sendUserMessage(text, true);
             }
-
             @Override
             public void onSpokenReplyFinished() {
                 completeVoiceReplyPlayback();
@@ -361,7 +353,6 @@ public final class OverlayService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return;
         }
-
         NotificationChannel channel = new NotificationChannel(
                 OVERLAY_CHANNEL_ID,
                 "A.G. overlay",
@@ -371,7 +362,6 @@ public final class OverlayService extends Service {
         channel.setShowBadge(false);
         channel.setSound(null, null);
         channel.enableVibration(false);
-
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) {
             manager.createNotificationChannel(channel);
@@ -387,7 +377,6 @@ public final class OverlayService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
         Intent hideIntent = new Intent(this, OverlayService.class).setAction(ACTION_HIDE_OVERLAY);
         PendingIntent hidePendingIntent = PendingIntent.getService(this, 1, hideIntent, flags);
-
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, OVERLAY_CHANNEL_ID);
@@ -504,7 +493,6 @@ public final class OverlayService extends Service {
         if (!Settings.canDrawOverlays(this) || orbView != null || !OVERLAY_OWNER.claim(this)) {
             return;
         }
-
         int size = scaledOrbSizePx();
         orbView = new OrbView(this);
         applyCachedPetVisualState();
@@ -529,7 +517,6 @@ public final class OverlayService extends Service {
                 this::showOrbRemoveTarget, this::updateOrbDragSurfaces,
                 this::finishOrbDrag
         ));
-
         orbView.setAlpha(MoaOrbPresentation.IDLE_ALPHA);
         windowManager.addView(orbView, orbParams);
     }
@@ -721,10 +708,8 @@ public final class OverlayService extends Service {
         if (!Settings.canDrawOverlays(this) || panelView != null) {
             return;
         }
-
         removeTranscriptOverlay();
         loadSettings();
-
         panelView = createPanel();
         int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(20), dp(380));
         panelParams = new WindowManager.LayoutParams(
@@ -742,7 +727,6 @@ public final class OverlayService extends Service {
         // from keyboard animation.
         panelParams.gravity = Gravity.TOP | Gravity.START;
         panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-
         panelView.setOnTouchListener((view, event) -> {
             if (event.getActionMasked() == android.view.MotionEvent.ACTION_OUTSIDE) {
                 dismissOverlayUi();
@@ -750,7 +734,6 @@ public final class OverlayService extends Service {
             }
             return false;
         });
-
         positionSurfaceNearOrb(panelView, panelParams);
         keepSurfaceAnchoredOnRemeasure(panelView);
         windowManager.addView(panelView, panelParams);
@@ -821,7 +804,6 @@ public final class OverlayService extends Service {
         }
         cancelAutoDismiss();
         removePanel();
-
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(MoaDrawables.roundedGradient(MoaColors.RAISED, MoaColors.PANEL_BG, dp(24), MoaColors.PANEL_BORDER, dp(1)));
@@ -831,9 +813,7 @@ public final class OverlayService extends Service {
             card.setOutlineSpotShadowColor(0xFF000000);
             card.setOutlineAmbientShadowColor(0xFF000000);
         }
-
         card.addView(createVoiceHeader());
-
         int transcriptBodyHeight = MoaOverlayWindowLayout.transcriptBodyHeight(
                 getResources().getDisplayMetrics().heightPixels,
                 getResources().getDisplayMetrics().density);
@@ -842,7 +822,6 @@ public final class OverlayService extends Service {
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
         voiceTranscriptScroll.setClipToPadding(false);
         voiceTranscriptScroll.setPadding(0, dp(3), 0, 0);
-
         voiceTranscriptColumn = new LinearLayout(this);
         voiceTranscriptColumn.setOrientation(LinearLayout.VERTICAL);
         voiceTranscriptScroll.addView(voiceTranscriptColumn, new ScrollView.LayoutParams(
@@ -854,14 +833,12 @@ public final class OverlayService extends Service {
                 transcriptBodyHeight
         ));
         renderVoiceTranscriptRows();
-
         FrameLayout shell = new FrameLayout(this);
         shell.setPadding(dp(16), 0, dp(16), 0);
         shell.addView(card, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
-
         int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(12), dp(560));
         transcriptParams = new WindowManager.LayoutParams(
                 width,
@@ -884,22 +861,18 @@ public final class OverlayService extends Service {
     private View createVoiceHeader() {
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
-
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(2), 0, dp(2), dp(4));
-
         PulseDot dot = new PulseDot(this);
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(9), dp(9));
         dotParams.rightMargin = dp(10);
         dotParams.gravity = Gravity.CENTER_VERTICAL;
         header.addView(dot, dotParams);
-
         TextView title = text("Voice", MoaColors.PAPER, 13, true);
         title.setLetterSpacing(0.04f);
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
         TextView delivery = pill(
@@ -916,7 +889,6 @@ public final class OverlayService extends Service {
         hide.setContentDescription("Hide the A.G. orb");
         hide.setOnClickListener(v -> stopSelf());
         header.addView(hide);
-
         // Discoverable whole-card dismiss, matching the chat panel's close pill.
         // Swiping the rows away still works; this closes everything in one tap.
         TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
@@ -925,12 +897,10 @@ public final class OverlayService extends Service {
         header.addView(close);
         attachSurfaceHeaderDrag(header);
         container.addView(header);
-
         voiceLanguageLine = text("", MoaColors.MUTED, 11, false);
         voiceLanguageLine.setLetterSpacing(0.02f);
         voiceLanguageLine.setPadding(dp(2), 0, dp(2), dp(8));
         container.addView(voiceLanguageLine);
-
         updateVoiceHeaderState();
         return container;
     }
@@ -994,12 +964,10 @@ public final class OverlayService extends Service {
         int orbSize = orbParams.width > 0 ? orbParams.width : scaledOrbSizePx();
         int gap = dp(8);
         int margin = dp(12);
-
         int minOrbX = margin + controlSize + gap;
         int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
         int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
         orbParams.x = safeOrbX;
-
         int controlY = orbParams.y + (orbSize - controlSize) / 2;
         controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
         voiceCancelControlParams.x = orbParams.x - gap - controlSize;
@@ -1157,7 +1125,6 @@ public final class OverlayService extends Service {
             private boolean decided;
             private boolean swiping;
             private long downTime;
-
             @Override
             public boolean onTouch(View v, android.view.MotionEvent event) {
                 switch (event.getActionMasked()) {
@@ -1261,19 +1228,16 @@ public final class OverlayService extends Service {
             boolean finalText) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
-
         LinearLayout rowHeader = new LinearLayout(this);
         rowHeader.setOrientation(LinearLayout.HORIZONTAL);
         rowHeader.setGravity(Gravity.CENTER_VERTICAL);
         rowHeader.setPadding(dp(5), 0, dp(5), dp(3));
-
         TextView label = text(assistant ? "A.G." : "You", assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         rowHeader.addView(label, new LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 1f));
-
         if (!copyableText.isEmpty()) {
             TextView copy = pill("Copy", 0x243D8BFF, 0xFF9BC1FF);
             copy.setTextSize(10);
@@ -1282,7 +1246,6 @@ public final class OverlayService extends Service {
             copy.setOnClickListener(v -> copyVoiceTranscript(copyableText, copy));
             rowHeader.addView(copy);
         }
-
         LinearLayout bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
@@ -1294,7 +1257,6 @@ public final class OverlayService extends Service {
         int fill = assistant ? MoaColors.RAISED : MoaColors.USER_BG;
         int stroke = assistant ? MoaColors.RAISED_BORDER : MoaColors.USER_BORDER;
         bubble.setBackground(MoaDrawables.roundedCorners(fill, radii, stroke, dp(1)));
-
         String bodyText = text.isEmpty() ? "..." : text;
         TextView body = text(bodyText, MoaColors.PAPER, assistant ? 15 : 16, false);
         body.setTextIsSelectable(true);
@@ -1311,10 +1273,8 @@ public final class OverlayService extends Service {
         body.setMaxWidth(Math.min(getResources().getDisplayMetrics().widthPixels - dp(92), dp(430)));
         body.setAlpha(text.isEmpty() ? 0.48f : finalText ? 1f : 0.82f);
         bubble.addView(body);
-
         wrap.addView(rowHeader);
         wrap.addView(bubble);
-
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1553,7 +1513,6 @@ public final class OverlayService extends Service {
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(26));
             }
         });
-
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(16), dp(15), dp(16), dp(15));
@@ -1561,10 +1520,8 @@ public final class OverlayService extends Service {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
-
         panel.addView(createHeader());
         panel.addView(createContextControlsRow());
-
         messageScroll = new ScrollView(this);
         messageScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         messageScroll.setVerticalScrollBarEnabled(false);
@@ -1582,7 +1539,6 @@ public final class OverlayService extends Service {
         );
         scrollParams.topMargin = dp(10);
         panel.addView(messageScroll, scrollParams);
-
         panel.addView(createComposer());
         return shell;
     }
@@ -1592,33 +1548,27 @@ public final class OverlayService extends Service {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setPadding(0, 0, 0, dp(4));
-
         PulseDot dot = new PulseDot(this);
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(10), dp(10));
         dotParams.rightMargin = dp(10);
         dotParams.gravity = Gravity.CENTER_VERTICAL;
         header.addView(dot, dotParams);
-
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-
         TextView label = text("A.G.", MoaColors.PAPER, 17, true);
         label.setLetterSpacing(0.02f);
         copy.addView(label);
         runStatusView = text(overlayHeaderStatusText(), MoaColors.MUTED, 11, false);
         copy.addView(runStatusView);
         header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
         recordModePill = pill("Record", 0x16FFFFFF, MoaColors.MUTED);
         recordModePill.setOnClickListener(v -> toggleRecordMode());
         refreshRecordModePill();
         header.addView(recordModePill);
-
         TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
         hide.setContentDescription("Hide the A.G. orb");
         hide.setOnClickListener(v -> stopSelf());
         header.addView(hide);
-
         TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
         close.setContentDescription("Close chat");
         close.setOnClickListener(v -> dismissOverlayUi());
@@ -1639,18 +1589,14 @@ public final class OverlayService extends Service {
         rowParams.topMargin = dp(8);
         row.setLayoutParams(rowParams);
         contextControlsRow = row;
-
         newThreadPill = pill("New thread", 0x16FFFFFF, MoaColors.MUTED);
         newThreadPill.setOnClickListener(v -> toggleNewThreadArmed());
         row.addView(newThreadPill);
-
         incognitoPill = pill("Incognito", 0x16FFFFFF, MoaColors.MUTED);
         incognitoPill.setOnClickListener(v -> toggleIncognito());
         row.addView(incognitoPill);
-
         // Flexible spacer keeps the pills left-aligned; the row tint fills behind.
         row.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
-
         refreshContextControls();
         return row;
     }
@@ -1702,14 +1648,12 @@ public final class OverlayService extends Service {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(dp(6), dp(6), dp(6), dp(6));
         row.setBackground(MoaDrawables.rounded(MoaColors.COMPOSER_BG, dp(26), MoaColors.COMPOSER_BORDER, dp(1)));
-
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         rowParams.topMargin = dp(12);
         row.setLayoutParams(rowParams);
-
         composer = new EditText(this);
         composer.setHint("Message A.G.");
         composer.setHintTextColor(MoaColors.MUTED);
@@ -1722,7 +1666,6 @@ public final class OverlayService extends Service {
         composer.setBackgroundColor(Color.TRANSPARENT);
         composer.setPadding(dp(12), dp(9), dp(8), dp(9));
         row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
         // Round gold send button. 46dp target, gold brand accent.
         TextView send = new TextView(this);
         send.setText("↑");
@@ -1754,7 +1697,6 @@ public final class OverlayService extends Service {
         if (messageColumn == null) {
             return;
         }
-
         messageColumn.removeAllViews();
         if (messages.isEmpty()) {
             TextView empty = text(orbGestureHint(), MoaColors.MUTED, 13, false);
@@ -1778,11 +1720,9 @@ public final class OverlayService extends Service {
     private View messageBubble(ChatMessage message) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
-
         TextView label = text(message.assistant ? "A.G." : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(4), 0, dp(4), dp(3));
-
         LinearLayout bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
@@ -1796,17 +1736,14 @@ public final class OverlayService extends Service {
         int fill = message.assistant ? MoaColors.RAISED : MoaColors.USER_BG;
         int stroke = message.assistant ? MoaColors.RAISED_BORDER : MoaColors.USER_BORDER;
         bubble.setBackground(MoaDrawables.roundedCorners(fill, radii, stroke, dp(1)));
-
         // Cap the text width so a bubble never spans edge to edge (~80%).
         int maxBubbleText = (int) (getResources().getDisplayMetrics().widthPixels * 0.80f) - dp(28) - dp(36);
         TextView body = text(message.text, MoaColors.PAPER, 15, false);
         body.setLineSpacing(dp(4), 1f);
         body.setMaxWidth(maxBubbleText);
         bubble.addView(body);
-
         wrap.addView(label);
         wrap.addView(bubble);
-
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1843,23 +1780,19 @@ public final class OverlayService extends Service {
         nextVoiceRunsAgent = false;
         String manualVoiceFollowUpRunId = fromVoice ? nextManualVoiceFollowUpRunId : "";
         nextManualVoiceFollowUpRunId = "";
-
         MoaActionBroker.LocalActionResult localAction = actionBroker.tryHandleLocalCommand(text);
         if (localAction.handled) {
             deliverReply(localAction.reply, fromVoice);
             return;
         }
-
         if (!manualVoiceFollowUpRunId.isEmpty()) {
             requestAgentRunFollowUp(manualVoiceFollowUpRunId, text, true);
             return;
         }
-
         if (!gatewayUrl.isEmpty() && fromVoice) {
             requestVoiceTurn(text, fromVoice, forcedAgent);
             return;
         }
-
         String agentPrompt = agentPromptFrom(text);
         if (agentPrompt.isEmpty() && (forcedAgent || shouldRunAgentFromVoice(text, fromVoice))) {
             agentPrompt = spokenAgentPrompt(text);
@@ -1876,7 +1809,6 @@ public final class OverlayService extends Service {
             deliverReply("The gateway isn't connected yet. Open the Moa app to set it up.", fromVoice);
             return;
         }
-
         requestGatewayReply(text, fromVoice);
     }
 
@@ -1912,7 +1844,6 @@ public final class OverlayService extends Service {
             return;
         }
         final boolean exactBoundary = MoaContextControlState.requiresExactBoundary(requestBody);
-
         new Thread(() -> {
             try {
                 JSONObject response = gatewayClient().voiceTurn(requestBody);
@@ -1940,7 +1871,6 @@ public final class OverlayService extends Service {
         if (forcedAgent) {
             body.put("forced_action", "agent_run");
         }
-
         JSONObject client = new JSONObject();
         client.put("platform", "android");
         client.put("source", "android-overlay");
@@ -1976,7 +1906,6 @@ public final class OverlayService extends Service {
         if (MoaGatewayClient.turnNotPersisted(response)) {
             text = MoaContextControlState.appendNotSaved(text);
         }
-
         boolean shouldSpeak = fromVoice && !speakText.isEmpty();
         boolean speaking = false;
         addMessage(true, text);
@@ -2028,7 +1957,6 @@ public final class OverlayService extends Service {
                     updateMicState();
                 });
             }
-
             @Override
             public void onSampleText(String voiceId, String text) {
                 mainHandler.post(() -> {
@@ -2037,11 +1965,9 @@ public final class OverlayService extends Service {
                     }
                 });
             }
-
             @Override
             public void onSampleDone(String voiceId, int index, int total) {
             }
-
             @Override
             public void onComplete() {
                 mainHandler.post(() -> {
@@ -2051,7 +1977,6 @@ public final class OverlayService extends Service {
                     holdVoiceReplyThenContinueOrDismiss();
                 });
             }
-
             @Override
             public void onError(String message, Throwable error) {
                 mainHandler.post(() -> {
@@ -2091,7 +2016,6 @@ public final class OverlayService extends Service {
             deliverReply("I couldn't send that. Try again.", fromVoice);
             return;
         }
-
         new Thread(() -> {
             try {
                 MoaGatewayClient.GatewayTextResponse reply = gatewayClient().chat(requestBody);
@@ -2113,7 +2037,6 @@ public final class OverlayService extends Service {
             deliverReply("Agent actions need the A.G. gateway. Set the home-machine URL first.", fromVoice);
             return;
         }
-
         JSONObject requestBody;
         try {
             JSONObject body = new JSONObject();
@@ -2129,7 +2052,6 @@ public final class OverlayService extends Service {
             deliverReply("I could not prepare that home-machine agent run.", fromVoice);
             return;
         }
-
         new Thread(() -> {
             try {
                 JSONObject response = gatewayClient().agentRun(requestBody);
@@ -2150,7 +2072,6 @@ public final class OverlayService extends Service {
             requestVoiceTurn(text, fromVoice, true);
             return;
         }
-
         JSONObject requestBody;
         try {
             JSONObject body = new JSONObject();
@@ -2166,7 +2087,6 @@ public final class OverlayService extends Service {
             deliverReply("I could not prepare the agent follow-up.", fromVoice, false);
             return;
         }
-
         new Thread(() -> {
             try {
                 JSONObject response = gatewayClient().agentRunFollowUp(parentRunId, requestBody);
@@ -2183,23 +2103,9 @@ public final class OverlayService extends Service {
     }
 
     private JSONObject gatewayRequestBody() throws JSONException {
-        JSONObject body = new JSONObject();
-        body.put("conversation_id", conversationId);
-        body.put("branch_id", activeBranchId);
-        body.put("source", "android-overlay");
-        body.put("device_id", androidDeviceId());
-        actionBroker.putScreenContext(body);
-
-        JSONArray history = new JSONArray();
-        int start = Math.max(0, messages.size() - MAX_GATEWAY_MESSAGES);
-        for (int i = start; i < messages.size(); i++) {
-            ChatMessage message = messages.get(i);
-            JSONObject item = new JSONObject();
-            item.put("role", message.assistant ? "assistant" : "user");
-            item.put("content", message.text);
-            history.put(item);
-        }
-        body.put("messages", history);
+        JSONObject body = MoaOverlayGatewayRequests.turnBody(
+                getContentResolver(), conversationId, activeBranchId,
+                messages, MAX_GATEWAY_MESSAGES, actionBroker);
         applyContextControls(body);
         return body;
     }
@@ -2211,12 +2117,7 @@ public final class OverlayService extends Service {
     }
 
     private String androidDeviceId() {
-        String raw = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
-        String safe = raw == null ? "" : raw.replaceAll("[^a-zA-Z0-9_-]", "");
-        if (safe.isEmpty()) {
-            safe = "unknown";
-        }
-        return "android_" + safe;
+        return MoaOverlayGatewayRequests.deviceId(getContentResolver());
     }
 
     private MoaGatewayClient gatewayClient() {
@@ -2247,7 +2148,6 @@ public final class OverlayService extends Service {
         if (gatewayUrl.isEmpty()) {
             return;
         }
-
         JSONObject heartbeat;
         JSONObject claim;
         try {
@@ -2256,7 +2156,6 @@ public final class OverlayService extends Service {
         } catch (JSONException error) {
             return;
         }
-
         deviceClientPollInFlight = true;
         final String url = gatewayUrl;
         final String token = gatewayToken;
@@ -2293,7 +2192,6 @@ public final class OverlayService extends Service {
         body.put("session_id", conversationId);
         body.put("status", "online");
         body.put("local_tool_manifest", androidLocalToolManifest());
-
         JSONObject metadata = new JSONObject();
         metadata.put("source", "android-overlay");
         metadata.put("screen_access_enabled", actionBroker.isScreenAccessEnabled());
@@ -2346,7 +2244,6 @@ public final class OverlayService extends Service {
             if (result.pending) return;
             execution = new MoaToolRequestExecution(result.success, result.reply, result.receipt);
         }
-
         finishClaimedToolRequest(requestId, execution);
     }
     private void handleAsyncToolResult(String requestId, String tool, JSONObject input,
@@ -2491,7 +2388,6 @@ public final class OverlayService extends Service {
             updateAgentRunStatus();
             return;
         }
-
         List<String> ids = agentRuns.ids();
         new Thread(() -> {
             List<MoaAgentRunTracker.State> updates = new ArrayList<>();
@@ -3007,15 +2903,12 @@ public final class OverlayService extends Service {
             public void onPcmChunk(byte[] pcm) {
                 appendAudioNoteChunk(pcm);
             }
-
             @Override
             public void onCaptureStarted() {
             }
-
             @Override
             public void onCaptureStopped() {
             }
-
             @Override
             public void onCaptureError(String message, Throwable error) {
                 mainHandler.post(() -> failAudioNoteCapture(message));
@@ -3119,7 +3012,6 @@ public final class OverlayService extends Service {
         metadata.put("x-moa-surface", "android-overlay");
         metadata.put("x-moa-session-id", sessionId);
         metadata.put("x-moa-duration-ms", Long.toString(durationMs));
-
         String storedMessage = "Note stored (" + seconds + "s)"
                 + (capReached ? " - hit the 5 minute cap." : "");
         new Thread(() -> {
@@ -3390,7 +3282,6 @@ public final class OverlayService extends Service {
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
                 updateMicState();
             }
-
             @Override
             public void onSessionReady(String sessionId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3403,7 +3294,6 @@ public final class OverlayService extends Service {
                 }
                 updateMicState();
             }
-
             @Override
             public void onRecordingStarted() {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3412,7 +3302,6 @@ public final class OverlayService extends Service {
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
                 updateMicState();
             }
-
             @Override
             public void onRecordingStopped() {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3427,7 +3316,6 @@ public final class OverlayService extends Service {
                 armStreamingTurnWatchdog(generation);
                 updateMicState();
             }
-
             @Override
             public void onTranscriptPartial(String turnId, String text) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3442,7 +3330,6 @@ public final class OverlayService extends Service {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);
                 }
             }
-
             @Override
             public void onTranscriptFinal(String turnId, String text) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3467,7 +3354,6 @@ public final class OverlayService extends Service {
                     }
                 }
             }
-
             @Override
             public void onAssistantText(String turnId, String text) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3485,7 +3371,6 @@ public final class OverlayService extends Service {
                     setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 }
             }
-
             @Override
             public void onAssistantAudioStarted(String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3503,7 +3388,6 @@ public final class OverlayService extends Service {
                 setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 updateMicState();
             }
-
             @Override
             public void onAssistantAudioChunk(String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3518,7 +3402,6 @@ public final class OverlayService extends Service {
                     resetStreamingTurnWatchdog();
                 }
             }
-
             @Override
             public void onTurnProgress(String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3528,7 +3411,6 @@ public final class OverlayService extends Service {
                 // watchdog and promote the visible state past "sending".
                 markStreamingTurnProgressing();
             }
-
             @Override
             public void onAssistantAudioDone(String turnId) {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3552,7 +3434,6 @@ public final class OverlayService extends Service {
                     showReadyForNextVoiceTurn(generation);
                 }
             }
-
             @Override
             public void onTurnDone(String turnId, String status, boolean transcriptionOnly,
                     boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
@@ -3658,7 +3539,6 @@ public final class OverlayService extends Service {
                     }
                 }, 700);
             }
-
             @Override
             public void onTtsRetryDone(String turnId, String retryId, String status,
                     int fromTextChar, String error) {
@@ -3682,7 +3562,6 @@ public final class OverlayService extends Service {
                     }
                 }, VOICE_NOT_SPOKEN_HOLD_MS);
             }
-
             @Override
             public void onSessionClosed() {
                 if (!isCurrentStreamingGeneration(generation)) {
@@ -3719,7 +3598,6 @@ public final class OverlayService extends Service {
                     }
                 }, 700);
             }
-
             @Override
             public void onError(String message, Throwable error) {
                 if (!isCurrentStreamingGeneration(generation)) {
