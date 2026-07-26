@@ -49,6 +49,7 @@ function createInitialState(intentId = "") {
     parent_intent_id: "",
     return_to_intent_id: "",
     relations: [],
+    constraints: [],
     decisions: [],
     blockers: [],
     lessons: [],
@@ -57,11 +58,17 @@ function createInitialState(intentId = "") {
     plan_refs: [],
     run_refs: [],
     artifact_refs: [],
+    evidence_refs: [],
     action_refs: [],
     approval_refs: [],
     receipt_refs: [],
     source_receipts: [],
     next_step: "",
+    owner_agent_id: "",
+    current_run_id: "",
+    run_lease_expires_at: "",
+    latest_progress: "",
+    source_revisions: [],
     outcome: "",
     created_at: "",
     updated_at: "",
@@ -178,6 +185,27 @@ function validateEventForStream(event, state) {
   if (event.event_type === "intent.captured") {
     if (!text(payload.statement, MAX_TEXT.statement)) return "captured intent requires statement";
     if (!text(payload.normalized_objective, MAX_TEXT.objective)) return "captured intent requires normalized_objective";
+  }
+  if (event.event_type === "intent.source_recorded") {
+    const rawText = String(payload.raw_text || "");
+    if (!rawText || rawText.length > 64_000) return "source record requires raw_text of at most 64000 characters";
+    if (!text(payload.source_digest, 160)) return "source record requires source_digest";
+  }
+  if (event.event_type === "intent.run_claimed") {
+    if (!text(payload.agent_id, 160) || !text(payload.run_id, 160)) {
+      return "run claim requires agent_id and run_id";
+    }
+    if (!["active", "waiting", "blocked"].includes(state.lifecycle_state)) {
+      return `run claim requires active, waiting, or blocked intent: ${state.lifecycle_state}`;
+    }
+  }
+  if (event.event_type === "intent.progress_recorded") {
+    if (!text(payload.agent_id, 160) || !text(payload.run_id, 160)) {
+      return "progress requires agent_id and run_id";
+    }
+    if (payload.agent_id !== state.owner_agent_id || payload.run_id !== state.current_run_id) {
+      return "progress writer does not own the current run";
+    }
   }
   if (state.exists && TRANSITION_EVENT_TYPES.includes(event.event_type)) {
     const allowed = ALLOWED_TRANSITIONS[state.lifecycle_state];
@@ -300,15 +328,36 @@ function applyIntentEvent(state, event) {
   current.plan_refs = mergeRefs(current.plan_refs, payload, "plan_refs");
   current.run_refs = mergeRefs(current.run_refs, payload, "run_refs");
   current.artifact_refs = mergeRefs(current.artifact_refs, payload, "artifact_refs");
+  current.evidence_refs = mergeRefs(current.evidence_refs, payload, "evidence_refs");
   current.action_refs = mergeRefs(current.action_refs, payload, "action_refs");
   current.approval_refs = mergeRefs(current.approval_refs, payload, "approval_refs");
   current.receipt_refs = mergeRefs(current.receipt_refs, payload, "receipt_refs");
 
   current.decisions = appendTextNotes(current.decisions, normalizeNotes(payload.decisions), MAX_ITEMS.decisions, text(payload.decision, 2_000), event);
+  current.constraints = appendTextNotes(current.constraints, normalizeNotes(payload.constraints), MAX_ITEMS.notes, "", event);
   current.blockers = appendTextNotes(current.blockers, normalizeNotes(payload.blockers), MAX_ITEMS.blockers, text(payload.blocker, 2_000), event);
   current.lessons = appendTextNotes(current.lessons, normalizeNotes(payload.lessons), MAX_ITEMS.notes, text(payload.lesson, 2_000), event);
 
   switch (event.event_type) {
+    case "intent.source_recorded":
+      current.source_revisions = appendUnique(current.source_revisions, [{
+        event_id: event.event_id,
+        revision: Number(payload.revision || current.source_revisions.length + 1),
+        source_digest: text(payload.source_digest, 160),
+        media_type: text(payload.media_type, 80),
+        source_ref: text(payload.source_ref, 400),
+        at: event.occurred_at,
+      }], MAX_ITEMS.sourceReceipts);
+      break;
+    case "intent.run_claimed":
+      current.owner_agent_id = text(payload.agent_id, 160);
+      current.current_run_id = text(payload.run_id, 160);
+      current.run_lease_expires_at = text(payload.lease_expires_at, 80);
+      current.run_refs = appendUnique(current.run_refs, [text(payload.run_id, 160)], MAX_ITEMS.refs);
+      break;
+    case "intent.progress_recorded":
+      current.latest_progress = text(payload.progress, 2_000);
+      break;
     case "intent.connected":
       if (payload.relation_type && payload.target_intent_id) {
         current.relations = appendUnique(current.relations, [{
