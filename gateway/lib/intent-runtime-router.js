@@ -32,6 +32,9 @@ const MAX_ITEMS = Object.freeze({
 
 const INTENT_EVENT_TYPES = Object.freeze([
   "intent.captured",
+  "intent.source_recorded",
+  "intent.run_claimed",
+  "intent.progress_recorded",
   "intent.disambiguated",
   "intent.connected",
   "intent.enriched",
@@ -213,6 +216,7 @@ function normalizeCapturePayload(input = {}, intentId, now) {
     parent_intent_id: requireBoundedText(input.parent_intent_id || input.parentIntentId, MAX_TEXT.id, "parent_intent_id", { allowEmpty: true }),
     return_to_intent_id: requireBoundedText(input.return_to_intent_id || input.returnToIntentId || input.parent_intent_id || input.parentIntentId, MAX_TEXT.id, "return_to_intent_id", { allowEmpty: true }),
     completion_criteria: arrayOfText(input.completion_criteria || input.completionCriteria, MAX_ITEMS.notes, MAX_TEXT.note),
+    constraints: normalizeNotes(input.constraints),
     next_step: text(input.next_step || input.nextStep, MAX_TEXT.note),
     active_priorities: arrayOfText(input.active_priorities || input.activePriorities, MAX_ITEMS.priorities, MAX_TEXT.note),
     plan_refs: normalizeRefs(input.plan_refs || input.planRefs),
@@ -239,6 +243,7 @@ function normalizeMutationPayload(input = {}) {
     lessons: normalizeNotes(input.lessons),
     outcome: text(input.outcome, MAX_TEXT.note),
     completion_criteria: arrayOfText(input.completion_criteria || input.completionCriteria, MAX_ITEMS.notes, MAX_TEXT.note),
+    constraints: normalizeNotes(input.constraints),
     active_priorities: arrayOfText(input.active_priorities || input.activePriorities, MAX_ITEMS.priorities, MAX_TEXT.note),
     plan_refs: normalizeRefs(input.plan_refs || input.planRefs),
     run_refs: normalizeRefs(input.run_refs || input.runRefs),
