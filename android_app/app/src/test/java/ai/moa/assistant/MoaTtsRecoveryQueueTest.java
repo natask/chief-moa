@@ -13,7 +13,7 @@ public final class MoaTtsRecoveryQueueTest {
 
         // assistant_audio_done only starts controller-side draining. Gateway
         // turn_done may follow immediately while prefix PCM remains buffered.
-        assertNull(queue.onTerminal("turn-1", "retry-1", 12));
+        assertNull(queue.onTerminal("turn-1", "retry-1", 12, true));
         assertTrue(queue.hasPending());
 
         MoaTtsRecoveryQueue.Request ready = queue.onPlaybackDrained("turn-1");
@@ -26,7 +26,7 @@ public final class MoaTtsRecoveryQueueTest {
         MoaTtsRecoveryQueue queue = new MoaTtsRecoveryQueue();
 
         assertNull(queue.onPlaybackDrained("turn-1"));
-        MoaTtsRecoveryQueue.Request ready = queue.onTerminal("turn-1", "retry-1", 0);
+        MoaTtsRecoveryQueue.Request ready = queue.onTerminal("turn-1", "retry-1", 0, true);
 
         assertEquals("turn-1", ready.turnId);
         assertEquals(0, ready.fromTextChar);
@@ -35,8 +35,20 @@ public final class MoaTtsRecoveryQueueTest {
     @Test
     public void unrelatedDrainCannotReleasePendingRecovery() {
         MoaTtsRecoveryQueue queue = new MoaTtsRecoveryQueue();
-        assertNull(queue.onTerminal("turn-1", "retry-1", 5));
+        assertNull(queue.onTerminal("turn-1", "retry-1", 5, true));
         assertNull(queue.onPlaybackDrained("turn-other"));
         assertTrue(queue.hasPending());
+    }
+
+    @Test
+    public void failedSynthesisWithZeroPrefixRetriesAtTerminalWithoutAudioDone() {
+        MoaTtsRecoveryQueue queue = new MoaTtsRecoveryQueue();
+
+        MoaTtsRecoveryQueue.Request ready =
+                queue.onTerminal("turn-failed", "retry-full", 0, false);
+
+        assertEquals("turn-failed", ready.turnId);
+        assertEquals("retry-full", ready.retryId);
+        assertEquals(0, ready.fromTextChar);
     }
 }

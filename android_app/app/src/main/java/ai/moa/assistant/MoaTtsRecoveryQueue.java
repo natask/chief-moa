@@ -5,10 +5,16 @@ final class MoaTtsRecoveryQueue {
     private String drainedTurnId = "";
     private Request pending;
 
-    Request onTerminal(String turnId, String retryId, int fromTextChar) {
+    Request onTerminal(String turnId, String retryId, int fromTextChar,
+            boolean prefixAudioRequiresDrain) {
         Request request = new Request(turnId, retryId, Math.max(0, fromTextChar));
         if (!request.valid()) {
             return null;
+        }
+        if (!prefixAudioRequiresDrain) {
+            drainedTurnId = "";
+            pending = null;
+            return request;
         }
         if (request.turnId.equals(drainedTurnId)) {
             drainedTurnId = "";

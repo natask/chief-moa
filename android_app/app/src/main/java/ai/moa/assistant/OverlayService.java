@@ -3490,7 +3490,6 @@ public final class OverlayService extends Service {
                 // visible timeout in ~30s instead of hanging on the gateway's own
                 // 60s backstop.
                 resetStreamingTurnWatchdog();
-                currentStreamingTurnAudioReceived = true;
                 if (currentStreamingTurnRouted) {
                     return;
                 }
@@ -3504,6 +3503,7 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
                 }
+                currentStreamingTurnAudioReceived = true;
                 // Keep the watchdog pushed out while audio keeps flowing; the gap
                 // between frames is ~40ms, so 30s of silence is a genuine stall.
                 // Guarded on active playback so a stray late frame never re-arms a
@@ -3583,7 +3583,8 @@ public final class OverlayService extends Service {
                         setVoiceRuntimeState(VoiceRuntimeState.RECOVERING);
                         String retryId = UUID.randomUUID().toString();
                         MoaTtsRecoveryQueue.Request ready = ttsRecoveryQueue.onTerminal(
-                                turnId, retryId, recovery.fromTextChar);
+                                turnId, retryId, recovery.fromTextChar,
+                                currentStreamingTurnAudioReceived);
                         updateMicState();
                         if (ready != null) {
                             startQueuedTtsRecovery(ready, generation);
