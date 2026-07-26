@@ -165,9 +165,64 @@ test("fallback, cancel, replacement, and socket close tear down both streams", a
   }
 });
 
+test("rejected finalized sidecar is client-visible and absent from canonical history", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-native-sidecar-quality-"));
+  try {
+    const recorded = [];
+    const provider = new FakeHybridProvider({
+      sidecarText: "",
+      transcriptQuality: {
+        accepted: false,
+        reason: "wrong_script",
+        status: "rejected_after_retry",
+        attempts: 2,
+        retry_performed: true,
+      },
+    });
+    const ws = new FakeWs();
+    const connection = new VoiceSessionConnection(ws, {
+      request: { headers: {} },
+      sessionsDir: path.join(tempDir, "voice-sessions"),
+      providerEventsFile: path.join(tempDir, "voice-provider-events.jsonl"),
+      voiceProvider: provider,
+      agentProfile: null,
+      contextProvider: null,
+      toolHandler: null,
+      onTurnCompleted: (turn) => recorded.push(turn),
+    });
+    fs.mkdirSync(path.join(tempDir, "voice-sessions"), { recursive: true });
+    connection.start();
+
+    ws.emit("message", json({
+      type: "session_start",
+      session_id: "quality_session",
+      turn_id: "quality_turn",
+      format: CLIENT_AUDIO_FORMAT,
+    }), false);
+    await settle(() => sentEvents(ws).some((event) => event.type === "session_ready"));
+    ws.emit("message", Buffer.from([1, 0, 2, 0]), true);
+    ws.emit("message", json({ type: "commit_turn", turn_id: "quality_turn" }), false);
+    await settle(() => sentEvents(ws).some((event) => event.type === "turn_done"));
+
+    const done = sentEvents(ws).find((event) => event.type === "turn_done");
+    assert.equal(done.status, "no_speech");
+    assert.equal(done.reason, "transcript_quality_rejected");
+    assert.equal(done.transcript_quality.status, "rejected_after_retry");
+    assert.equal(
+      sentEvents(ws).some((event) => event.type === "transcript_final"),
+      false,
+      "no rejected or fallback candidate reaches the finalized client hook",
+    );
+    assert.equal(recorded.length, 0, "no rejected candidate enters canonical history");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 class FakeHybridProvider {
   constructor(options) {
     this.sidecarText = options.sidecarText;
+    this.transcriptQuality = options.transcriptQuality || null;
     this.liveFrames = [];
     this.sidecarFrames = [];
     this.liveCanceled = 0;
@@ -225,7 +280,11 @@ class FakeHybridProvider {
   }
 
   async finalizeStreamingSttSession(turn) {
-    return turn.sttStream.finalize();
+    const result = await turn.sttStream.finalize();
+    if (this.transcriptQuality) {
+      return { text: "", transcript_quality: this.transcriptQuality };
+    }
+    return result;
   }
 }
 

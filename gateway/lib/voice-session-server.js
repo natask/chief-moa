@@ -12,6 +12,7 @@ const {
   generatePcm16Tone: generateProviderTone,
 } = require("./voice-providers");
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
+const { selectFinalTranscript } = require("./transcript-quality");
 const { canonicalVoice } = require("./profile-options");
 const {
   hasPartialEndpointPlayback, normalizeAssistantAudioSegment: normalizeSegmentRaw,
@@ -950,11 +951,13 @@ class VoiceSessionConnection {
       record: (type, payload) => this.recordProviderEvent(turn, providerEvents, type, payload),
       cleanError: (error) => cleanErrorSummary(cleanError(error)),
     });
-    const rawResultTranscript = String(providerResult?.transcript || "").trim();
-    const resultTranscript = rawResultTranscript === "Voice captured." ? "" : rawResultTranscript;
-    const streamedTranscript = String(providerEvents.transcript || "").trim();
-    const transcript = resultTranscript || streamedTranscript;
-    const assistantText = String(providerResult?.assistant_text || providerEvents.assistantText || "").trim();
+    // Merge streaming partials into the final transcript: if the provider result
+    // is missing a transcript (or, from an older provider, carries the legacy
+    // "Voice captured." placeholder) but a real transcript_partial /
+    // transcript_final arrived over the stream, prefer that so the stored turn
+    // holds what was actually heard, never a fabricated fallback.
+    const selected = selectFinalTranscript(providerResult, providerEvents);
+    const { transcript, assistantText, rejected: transcriptQualityRejected } = selected;
     const assistantAudioFormat = providerResult?.audio_format || ASSISTANT_AUDIO_FORMAT;
 
     const hasAssistantOutput = Boolean(assistantText)
@@ -962,14 +965,16 @@ class VoiceSessionConnection {
       || turn.assistantAudioBytes > 0;
     if (!transcript && !hasAssistantOutput) {
       await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
-        reason: "stt_empty",
+        reason: transcriptQualityRejected ? "transcript_quality_rejected" : "stt_empty",
         audio_bytes: turn.audioBytes,
         transcript_language_rejected: providerResult?.transcript_language_rejected === true,
+        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
       });
       writeTurnMetadata(turn, {
         status: "no_speech",
         completed_at: nowIso(),
         transcript_language_rejected: providerResult?.transcript_language_rejected === true,
+        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
       });
       turn.status = "no_speech";
       this.stopTurnProgress();
@@ -979,9 +984,10 @@ class VoiceSessionConnection {
         branch_id: turn.branchId,
         turn_id: turn.turnId,
         status: "no_speech",
-        reason: "stt_empty",
+        reason: transcriptQualityRejected ? "transcript_quality_rejected" : "stt_empty",
         reply_language: turnReplyLanguage(turn, providerResult, null),
         input_languages: turnInputLanguages(turn),
+        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
       });
       if (this.turn === turn) {
         this.turn = null;

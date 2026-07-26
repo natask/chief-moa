@@ -38,6 +38,10 @@ alignment.
 - [x] 0B.5 Keep a one-click Copy control on the completed dictation card so the
   exact final transcript can be copied again after the automatic clipboard
   attempt, with a visible clipboard-replaced or retryable-failure receipt.
+- [x] 0B.6 Reject a dominant unexpected-script final hypothesis at one common
+  streaming/batch boundary, retry once from retained PCM using the configured
+  input-language evidence, and fail visibly without reasoning, final hooks,
+  fallback resurrection, or canonical history when the retry is still invalid.
 - Acceptance: double-tap Command starts capture, a second double-tap commits it,
   the final English/Amharic transcript is paste-ready, and the gateway performs
   zero reasoning and TTS calls for the turn. The completed card keeps a Copy

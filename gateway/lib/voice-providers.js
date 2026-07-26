@@ -11,6 +11,7 @@ const { createSttStage, createReasonerStage, createTtsStage } = require("./voice
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
 const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
+const { finalizeStreamingOrBatchTranscript } = require("./transcript-quality");
 const { phoneActionGeminiDeclaration } = require("./surface-skills");
 const {
   adcAccessToken,
@@ -852,6 +853,7 @@ class CascadedVoiceProvider {
         audio_format: CLIENT_AUDIO_FORMAT,
         transcription_only: true,
         transcript_language_rejected: transcription.languageRejected === true,
+        transcript_quality: transcription.transcript_quality || null,
       };
     }
 
@@ -1178,6 +1180,7 @@ class CascadedVoiceProvider {
         ? { tts_failed_segment_index: options.ttsFailedSegmentIndex }
         : {}),
       transcript_language_rejected: transcription.languageRejected === true,
+      transcript_quality: transcription.transcript_quality || null,
       classification: reasoning.classification || "chat",
       // Additive streaming metadata (absent on non-streaming turns; old code
       // reading new records ignores it, new code reading old records treats
@@ -1896,33 +1899,24 @@ class CascadedVoiceProvider {
   // windowed batch path over the stored file — a broken stream never fails the
   // turn.
   async runSttStage(turn) {
-    const stream = turn?.sttStream;
-    if (stream && typeof stream.finalize === "function") {
-      try {
-        const result = await stream.finalize();
-        if (result && result.ok && result.text) {
-          return {
-            text: result.text,
-            languageRejected: false,
-            streaming: true,
-            rotations: result.rotations || 0,
-          };
-        }
-        if (result && !result.ok && result.error) {
-          reportVoiceStreamingFault(`stt_stream_result: ${result.error}`);
-        }
-      } catch (error) {
-        reportVoiceStreamingFault(`stt_stream_finalize: ${cleanError(error)}`);
-      }
-    }
-    return this.transcribePcmWindowed(turn, this.sttPromptLanguageCodes(turn));
+    const promptLanguageCodes = this.sttPromptLanguageCodes(turn);
+    return finalizeStreamingOrBatchTranscript({
+      stream: turn?.sttStream,
+      batch: () => this.transcribePcmWindowed(turn, promptLanguageCodes),
+      reportStreamingFault: reportVoiceStreamingFault,
+      languageCodes: promptLanguageCodes,
+      basePrompt: this.sttCustomPrompt(turn, promptLanguageCodes),
+      retryFromAudio: (customPrompt) => this.transcribePcmWindowed(turn, promptLanguageCodes, {
+        customPrompt,
+      }),
+    });
   }
 
   // Batch path with no length limit: batch :recognize caps inline audio (~60s),
   // so audio longer than a 55s window is split on frame boundaries, each window
   // transcribed independently and the transcripts concatenated. Short audio
   // takes the single-request path unchanged.
-  async transcribePcmWindowed(turn, promptLanguageCodes = this.sttPromptLanguageCodes(turn)) {
+  async transcribePcmWindowed(turn, promptLanguageCodes = this.sttPromptLanguageCodes(turn), options = {}) {
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
     const audio = fs.readFileSync(turn.pcmPath);
@@ -1932,14 +1926,14 @@ class CascadedVoiceProvider {
     let windowBytes = Math.max(frameBytes, Math.floor(55 * bytesPerSecond));
     windowBytes -= windowBytes % frameBytes; // align to a whole sample frame
     if (audio.length <= windowBytes) {
-      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
+      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile, options);
     }
     const texts = [];
     let anyRejected = false;
     for (let offset = 0; offset < audio.length; offset += windowBytes) {
       const window = audio.subarray(offset, Math.min(offset + windowBytes, audio.length));
       if (window.length < frameBytes) break;
-      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
+      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile, options);
       if (part.text) texts.push(part.text);
       if (part.languageRejected) anyRejected = true;
     }
@@ -1954,10 +1948,11 @@ class CascadedVoiceProvider {
     return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
   }
 
-  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes(), effectiveProfile = null) {
+  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes(), effectiveProfile = null, options = {}) {
     const token = await this.accessToken();
     const sttLanguageCodes = this.sttLanguageCodes();
-    const customPrompt = this.sttCustomPrompt(effectiveProfile, promptLanguageCodes);
+    const customPrompt = String(options.customPrompt || "").trim()
+      || this.sttCustomPrompt(effectiveProfile, promptLanguageCodes);
     const sttHeaders = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",

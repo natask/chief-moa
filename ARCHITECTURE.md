@@ -455,6 +455,14 @@ mathematical language without requiring a user-maintained term dictionary and
 without allowing Chirp to invent unsupported words.
 Provider-detected language is diagnostic evidence only; it neither mutates the
 profile nor limits recognition.
+After streaming or batch recognition finalizes, one gateway quality boundary
+checks whether an unexpected script dominates the hypothesis under the explicit
+input-language profile. Small mixed-script fragments remain valid. A rejected
+hypothesis gets one batch retry from the retained PCM with a profile-derived
+verbatim prompt. If that retry also fails, no earlier streaming or provider
+fallback can restore the rejected text: the client receives a structured
+quality-failure receipt and the candidate does not enter reasoning, finalized
+transcript hooks, capture projection, or canonical conversation history.
 
 Browser voice capture prefers a native 16 kHz Web Audio graph. When Chrome uses
 another device rate, the extension applies stateful area downsampling so

@@ -60,6 +60,22 @@ async function mergeTranscriptSidecar({ turn, providerResult, provider, finalize
     turn.sttStream = null;
     const transcript = String(result?.text || "").trim();
     if (!transcript) {
+      if (result?.transcript_quality?.accepted === false) {
+        await record("transcript_sidecar_rejected", {
+          provider,
+          reason: result.transcript_quality.reason || "transcript_quality",
+          transcript_quality: result.transcript_quality,
+        });
+        return {
+          ...(providerResult || {}),
+          transcript: "",
+          assistant_text: "",
+          transcript_source: "stt_sidecar",
+          transcript_provider: provider,
+          transcript_language_rejected: true,
+          transcript_quality: result.transcript_quality,
+        };
+      }
       await record("transcript_sidecar_fallback", { provider, reason: "empty_transcript" });
       return providerResult;
     }
@@ -75,6 +91,7 @@ async function mergeTranscriptSidecar({ turn, providerResult, provider, finalize
       transcript_source: "stt_sidecar",
       transcript_provider: provider,
       native_input_transcript: nativeTranscript,
+      ...(result?.transcript_quality ? { transcript_quality: result.transcript_quality } : {}),
     };
   } catch (error) {
     turn.sttStream = null;
