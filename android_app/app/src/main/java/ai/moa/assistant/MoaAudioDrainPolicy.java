@@ -21,9 +21,10 @@ final class MoaAudioDrainPolicy {
         if (written == 0L || playedFrames >= written) {
             return Decision.DRAINED;
         }
-        long played = Math.max(0L, playedFrames);
-        long remaining = Math.max(0L, written - Math.min(written, played));
-        return Math.max(0L, elapsedMs) >= timeoutMs(remaining)
+        // The deadline is fixed from the initial queued frame count. Recomputing
+        // it from a shrinking remainder makes healthy advancing playback cross
+        // an ever-shorter deadline and time out just before it drains.
+        return Math.max(0L, elapsedMs) >= timeoutMs(written)
                 ? Decision.TIMED_OUT
                 : Decision.WAIT;
     }

@@ -166,6 +166,7 @@ public final class OverlayService extends Service {
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
     private boolean currentStreamingTurnAudioReceived;
+    private final MoaTtsRecoveryQueue ttsRecoveryQueue = new MoaTtsRecoveryQueue();
     private boolean deviceClientLoopRunning;
     private boolean deviceClientPollInFlight;
 
@@ -3534,6 +3535,11 @@ public final class OverlayService extends Service {
                     return;
                 }
                 streamingAssistantAudioPlaying = false;
+                MoaTtsRecoveryQueue.Request recovery = ttsRecoveryQueue.onPlaybackDrained(turnId);
+                if (recovery != null) {
+                    startQueuedTtsRecovery(recovery, generation);
+                    return;
+                }
                 setVoiceRuntimeState(VoiceRuntimeState.READY);
                 if (pendingContinuousVoiceRestartAfterAudio) {
                     pendingContinuousVoiceRestartAfterAudio = false;
@@ -3573,17 +3579,19 @@ public final class OverlayService extends Service {
                     MoaTtsRecoveryPlan recovery = MoaTtsRecoveryPlan.fromTurnDone(
                             terminalEvent, voiceAssistantTranscript);
                     if (MoaPrefs.spokenRepliesEnabled(OverlayService.this) && recovery.shouldRetry()) {
-                        streamingAssistantAudioPlaying = false;
                         pendingContinuousVoiceRestartAfterAudio = false;
                         setVoiceRuntimeState(VoiceRuntimeState.RECOVERING);
                         String retryId = UUID.randomUUID().toString();
-                        if (streamingVoiceController != null
-                                && streamingVoiceController.retryTts(turnId, retryId, recovery.fromTextChar)) {
-                            resetStreamingTurnWatchdog();
-                            updateMicState();
-                            return;
+                        MoaTtsRecoveryQueue.Request ready = ttsRecoveryQueue.onTerminal(
+                                turnId, retryId, recovery.fromTextChar);
+                        updateMicState();
+                        if (ready != null) {
+                            startQueuedTtsRecovery(ready, generation);
                         }
-                        Log.w(TAG, "hosted TTS recovery could not be queued delivery=" + recovery.delivery);
+                        // If prefix playback is still buffered, retry remains
+                        // queued until onAssistantAudioDone is delivered after
+                        // the AudioTrack playback head reaches its written head.
+                        return;
                     }
                     // Local TTS is disabled by policy (hosted audio only), so this
                     // returns false. Kept as the single seam for the on-device
@@ -3827,7 +3835,32 @@ public final class OverlayService extends Service {
         voiceUserTranscriptFinal = false;
         animateNextAssistantRow = false;
         currentStreamingAssistantRecorded = false;
+        ttsRecoveryQueue.clear();
         renderVoiceTranscriptRows();
+    }
+
+    private void startQueuedTtsRecovery(MoaTtsRecoveryQueue.Request recovery, int generation) {
+        if (!isCurrentStreamingGeneration(generation) || recovery == null) {
+            return;
+        }
+        if (streamingVoiceController != null
+                && streamingVoiceController.retryTts(
+                        recovery.turnId, recovery.retryId, recovery.fromTextChar)) {
+            resetStreamingTurnWatchdog();
+            updateMicState();
+            return;
+        }
+        ttsRecoveryQueue.clear();
+        streamingAssistantAudioPlaying = false;
+        markCurrentReplyNotSpoken();
+        setVoiceRuntimeState(VoiceRuntimeState.ERROR);
+        updateMicState();
+        Log.w(TAG, "hosted TTS recovery could not be queued retryId=" + recovery.retryId);
+        mainHandler.postDelayed(() -> {
+            if (isCurrentStreamingGeneration(generation)) {
+                showReadyForNextVoiceTurn(generation);
+            }
+        }, VOICE_NOT_SPOKEN_HOLD_MS);
     }
 
     private void recordCurrentStreamingAssistant() {
