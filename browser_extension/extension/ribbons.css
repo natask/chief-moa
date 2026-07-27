@@ -39,7 +39,7 @@
   --agee-ribbon-plate: rgba(14, 15, 18, 0.72);
   --agee-ribbon-plate-drag: rgba(14, 15, 18, 0.5);
   --agee-ribbon-hairline: rgba(255, 255, 255, 0.14);
-  --agee-ribbon-scrim: rgba(9, 10, 12, 0.42);
+  --agee-ribbon-scrim: rgba(18, 19, 23, 0.92);
   --agee-ribbon-halo: 0 1px 2px rgba(0, 0, 0, 0.72), 0 0 8px rgba(0, 0, 0, 0.45);
   --agee-ribbon-shadow: 0 8px 28px rgba(0, 0, 0, 0.46), 0 1px 2px rgba(0, 0, 0, 0.34);
   --agee-ribbon-menu-bg: rgba(18, 19, 23, 0.86);
@@ -71,7 +71,7 @@
   --agee-ribbon-plate: rgba(252, 252, 253, 0.76);
   --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.54);
   --agee-ribbon-hairline: rgba(0, 0, 0, 0.1);
-  --agee-ribbon-scrim: rgba(255, 255, 255, 0.52);
+  --agee-ribbon-scrim: rgba(18, 19, 23, 0.92);
   --agee-ribbon-halo: 0 1px 2px rgba(255, 255, 255, 0.88), 0 0 8px rgba(255, 255, 255, 0.62);
   --agee-ribbon-shadow: 0 8px 28px rgba(16, 18, 24, 0.14), 0 1px 2px rgba(16, 18, 24, 0.1);
   --agee-ribbon-menu-bg: rgba(252, 252, 253, 0.88);
@@ -171,6 +171,22 @@
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
   mask-image: linear-gradient(to right, transparent 0, #000 16px);
 }
+.agee-ribbon-clipped .agee-ribbon-viewport::after {
+  content: "\2026";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--agee-ribbon-scrim);
+  color: #f7f7f8;
+  font-size: 12px;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
 .agee-ribbon-line {
   white-space: pre;
   will-change: transform;
@@ -189,9 +205,12 @@
    bubble to .agee-ribbon, which owns the gesture listeners. */
 .agee-ribbon-text {
   pointer-events: auto;
+  position: relative;
   background: var(--agee-ribbon-scrim);
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #f7f7f8;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   transition: background-color var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out);
@@ -204,6 +223,7 @@
 #agee-root[data-agee-unit="engaged"] .agee-ribbon-text,
 #agee-root[data-agee-unit="dragging"] .agee-ribbon-text {
   background: transparent;
+  box-shadow: none;
 }
 .agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
 .agee-ribbon-mute .agee-ribbon-line { color: var(--agee-ribbon-muted); }
@@ -416,7 +436,10 @@
 .agee-ribbon-expanded .agee-ribbon-text {
   background: transparent;
   padding: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
+.agee-ribbon-expanded .agee-ribbon-viewport::after { display: none; }
 .agee-ribbon-expanded .agee-ribbon-dot {
   top: 14px;
 }

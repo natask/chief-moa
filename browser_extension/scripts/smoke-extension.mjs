@@ -21,6 +21,9 @@ const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(root, ".gstack", "background-qa", `smoke-${runId}`);
 const profilePath = join(runDir, "chrome-profile");
 const artifactsDir = join(runDir, "artifacts");
+const visualEvidenceDir = process.env.AGEE_VISUAL_EVIDENCE_DIR
+  ? resolve(process.env.AGEE_VISUAL_EVIDENCE_DIR)
+  : "";
 const CDP_CALL_TIMEOUT_MS = 15000;
 let latestChromeStderr = "";
 
@@ -48,6 +51,16 @@ function serve() {
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+async function captureVisualEvidence(pageCdp, name) {
+  if (!visualEvidenceDir) return "";
+  mkdirSync(visualEvidenceDir, { recursive: true });
+  const screenshot = await pageCdp.send("Page.captureScreenshot", { format: "png" });
+  if (!screenshot?.data) throw new Error(`visual evidence capture failed for ${name}`);
+  const path = join(visualEvidenceDir, `${name}.png`);
+  writeFileSync(path, Buffer.from(screenshot.data, "base64"));
+  return path;
 }
 
 async function waitForFile(path, timeoutMs = 15000) {
@@ -772,7 +785,15 @@ async function main() {
           "if I leave from JFK and come back before the twenty second ".repeat(6);
         const replyText = "Around 780 dollars round trip if you leave on the fourth " +
           "and come back on the nineteenth and take the one-stop through Frankfurt ".repeat(8);
-        await chrome.tabs.sendMessage(tabId, { cmd: "open" }).catch(() => {});
+        // Earlier smoke cases exercise the full composer. Close it before the
+        // visual checkpoints so these images show the ambient companion unit,
+        // not an unrelated command-panel state.
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.querySelector("#agee-input")?.dispatchEvent(new KeyboardEvent("keydown", {
+            key: "Escape", bubbles: true, cancelable: true,
+          })),
+        });
         await chrome.tabs.sendMessage(tabId, {
           cmd: "browserAgentOwnerChanged",
           owner: { tab_id: tabId, cue_id: "ribbon-smoke-cue", status: "responding" },
@@ -825,7 +846,10 @@ async function main() {
               unitState: root.dataset.ageeUnit || "",
               launcherOpacity: getComputedStyle(document.querySelector("#agee-launcher")).opacity,
               launcherTop: Math.round(document.querySelector("#agee-launcher").getBoundingClientRect().top),
+              launcherBottom: Math.round(document.querySelector("#agee-launcher").getBoundingClientRect().bottom),
               replyTop: Math.round(reply.getBoundingClientRect().top),
+              replyBottom: Math.round(reply.getBoundingClientRect().bottom),
+              stackedAbove: root.classList.contains("agee-ribbons-stacked-above"),
               you: read(you),
               reply: read(reply),
               expectedUserLength: expectedUser.length,
@@ -918,10 +942,31 @@ async function main() {
       ribbonBefore.you.pointerEvents !== "none" ||
       ribbonBefore.glyphHittable !== "auto" ||
       Number(ribbonBefore.launcherOpacity) !== 0.92 ||
-      Number(ribbonBefore.you.copyOpacity) !== 0
+      Number(ribbonBefore.you.copyOpacity) !== 0 ||
+      !ribbonBefore.stackedAbove ||
+      ribbonBefore.replyBottom + 7 > ribbonBefore.launcherTop
     ) {
       throw new Error(`ambient overlay must paint no plate and take no page clicks: ${JSON.stringify(ribbonBefore)}`);
     }
+    // The measurement transaction ends after exercising the tap, so return the
+    // real unit to its collapsed state for the first visual checkpoint.
+    await evaluate(workerCdp, `(async () => {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId: ${ping.tabId} },
+        func: () => {
+          const ribbon = document.querySelector("#agee-ribbon-you");
+          const rect = ribbon.getBoundingClientRect();
+          const init = { bubbles: true, pointerId: 77, pointerType: "mouse", button: 0,
+            clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+          ribbon.querySelector(".agee-ribbon-text").dispatchEvent(new PointerEvent("pointerdown", init));
+          ribbon.dispatchEvent(new PointerEvent("pointerup", init));
+          return true;
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 340));
+      return result?.result !== false;
+    })()`);
+    const collapsedVisualPath = await captureVisualEvidence(pageCdp, "browser-ribbon-collapsed-streaming");
     // A tap solidifies the ribbon and reveals the copy affordance. The ribbon
     // itself expands (that is the point of the gesture), but its width is fixed
     // and the page must not reflow. The geometry of the expand — which edge it
@@ -937,6 +982,23 @@ async function main() {
     ) {
       throw new Error(`tap must solidify the ribbon and reveal copy without reflowing the page: ${JSON.stringify({ ribbonBefore, ribbonAfter })}`);
     }
+    await evaluate(workerCdp, `(async () => {
+      await chrome.scripting.executeScript({
+        target: { tabId: ${ping.tabId} },
+        func: () => {
+          const ribbon = document.querySelector("#agee-ribbon-you");
+          const rect = ribbon.getBoundingClientRect();
+          const init = { bubbles: true, pointerId: 78, pointerType: "mouse", button: 0,
+            clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+          ribbon.querySelector(".agee-ribbon-text").dispatchEvent(new PointerEvent("pointerdown", init));
+          ribbon.dispatchEvent(new PointerEvent("pointerup", init));
+          return true;
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 340));
+      return true;
+    })()`);
+    const expandedVisualPath = await captureVisualEvidence(pageCdp, "browser-ribbon-expanded-transcript");
 
     // The tap that revealed the rail also expanded the bounded bar: the full
     // text is now rendered, wrapped, and the bar grew AWAY from the companion.
@@ -1025,6 +1087,7 @@ async function main() {
     ) {
       throw new Error(`copy rail must rank three variants and default to the highest available: ${JSON.stringify(copyMenu)}`);
     }
+    const copyVisualPath = await captureVisualEvidence(pageCdp, "browser-ribbon-copy-variants");
 
     const dictationCopy = await evaluate(workerCdp, `
       (async () => {
@@ -1650,6 +1713,9 @@ async function main() {
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,
     );
     console.log(`screenshot: ${screenshotPath}`);
+    if (collapsedVisualPath && expandedVisualPath && copyVisualPath) {
+      console.log(`visual evidence: ${collapsedVisualPath}, ${expandedVisualPath}, ${copyVisualPath}`);
+    }
   } finally {
     pageCdp?.close();
     page2Cdp?.close();
