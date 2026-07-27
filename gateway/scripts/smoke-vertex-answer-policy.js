@@ -37,9 +37,9 @@ async function main() {
     assert.equal(turn.status, 200, `voice turn must succeed: ${JSON.stringify(turn.json)}`);
     assert.equal(turn.json.classification, "chat", "ordinary tax advice must route as chat");
     assert.match(turn.json.display, /deduct/i, "gateway must return the fake Vertex answer");
-    assert.equal(vertex.requests.length, 1, "gateway must call Vertex once");
+    assert.equal(vertex.requests.length, 2, "gateway must select context before asking Vertex for the answer");
 
-    const request = vertex.requests[0];
+    const request = vertex.requests[1];
     assert.equal(request.headers.authorization, "Bearer test-vertex-token", "gateway must send Vertex bearer token");
     assert.ok(request.path.includes("/models/gemini-3.5-flash:generateContent"), `unexpected Vertex path: ${request.path}`);
     assert.deepEqual(
@@ -131,6 +131,17 @@ async function startFakeVertex() {
       headers: request.headers,
       body: json,
     });
+    const functionDeclarations = json.tools?.[0]?.functionDeclarations || [];
+    if (functionDeclarations.some((tool) => tool.name === "context_management")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        candidates: [{
+          finishReason: "STOP",
+          content: { parts: [{ functionCall: { name: "context_management", args: { action: "continue" } } }] },
+        }],
+      }));
+      return;
+    }
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
       candidates: [{

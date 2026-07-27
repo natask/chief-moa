@@ -124,10 +124,10 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     checks: [
-      "deterministic prior: plain=continue, phrasing=new/fork, warrant=incognito, client action wins",
+    "deterministic prior: free-form text defaults to continue and typed client action wins",
       "the model tool call overrides the prior (continue -> new)",
       "a model-selected fork answer includes parent lineage only through the captured cutoff",
-      "the model may only choose incognito with an explicit warrant; else it is denied",
+    "the model context tool owns incognito selection without a phrase gate",
       "an explicit client context_action beats the model tool call",
       "malformed, absent, unknown, duplicate, and thrown preflights use the prior without leaking prose",
       "a short plain-continue turn skips the preflight round-trip (fast path)",
@@ -319,10 +319,10 @@ function goldenTable() {
   // Pure prior.
   const priors = [
     { text: "can you help me reconcile the invoice", expect: "continue" },
-    { text: "let's start a new topic about taxes", expect: "new" },
-    { text: "fork this into a separate thread", expect: "fork" },
-    { text: "keep this off the record", expect: "incognito" },
-    { text: "don't save this conversation", expect: "incognito" },
+    { text: "let's start a new topic about taxes", expect: "continue" },
+    { text: "fork this into a separate thread", expect: "continue" },
+    { text: "keep this off the record", expect: "continue" },
+    { text: "don't save this conversation", expect: "continue" },
   ];
   for (const row of priors) {
     const result = deterministicPrior({ text: row.text });
@@ -344,10 +344,11 @@ function goldenTable() {
   assert.equal(override.model_override, true, "an override must be flagged");
   assert.equal(override.retrieval_query, "taxes", "the retrieval query must be captured");
 
-  // Resolver: incognito denied without a warrant.
+  // Resolver: the model owns incognito selection; the handler validates only
+  // the typed action.
   const denied = resolveContextDecision({ text: "hello there", toolCall: { action: "incognito", retrieval_query: "x" } });
-  assert.equal(denied.action, "continue", "incognito must be denied without a warrant");
-  assert.equal(denied.model_override, false, "a denied incognito is not an override");
+  assert.equal(denied.action, "incognito", "the model tool must select incognito without a phrase gate");
+  assert.equal(denied.model_override, true, "the tool-selected action is an override");
 
   // Resolver: incognito allowed with a warrant.
   const allowed = resolveContextDecision({ text: "keep this off the record", toolCall: { action: "incognito", retrieval_query: "x" } });
@@ -400,7 +401,7 @@ async function modelOverridesPrior() {
 }
 
 async function incognitoWarrantGate() {
-  // Model asks for incognito but the transcript has no warrant: denied.
+  // The model tool owns the semantic choice; no phrase gate reparses the text.
   pendingContextCall = { action: "incognito", retrieval_query: "x" };
   try {
     const chat = await requestJson("POST", "/v1/chat", {
@@ -408,8 +409,8 @@ async function incognitoWarrantGate() {
       source: "console",
       messages: [{ role: "user", content: "what is the capital of France" }],
     });
-    assert.notEqual(chat.json.context.action, "incognito", "incognito must be denied without a warrant");
-    assert.equal(chat.json.context.persisted, true, "a denied-incognito turn must persist");
+    assert.equal(chat.json.context.action, "incognito", "the model tool must select incognito");
+    assert.equal(chat.json.context.persisted, false, "a tool-selected incognito turn must not persist");
   } finally {
     pendingContextCall = null;
   }

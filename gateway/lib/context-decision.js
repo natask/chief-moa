@@ -69,23 +69,13 @@ function looksLikeNew(text) {
   return NEW_PATTERN.test(t) || BROKER_NEW_WORK_PATTERN.test(t);
 }
 
-// The deterministic prior: explicit client action wins; otherwise default to
-// continue, lifting to fork or new by phrasing, and to incognito only on an
-// explicit warrant. Returns { action, source }.
+// The deterministic prior accepts only typed client state. Free-form text is
+// interpreted by the model's context_management tool; when that tool is absent
+// or fails, the safe default is to continue the current thread.
 function deterministicPrior(input = {}) {
   const clientAction = normalizeContextAction(input.contextAction || input.context_action);
   if (clientAction) {
     return { action: clientAction, source: "client" };
-  }
-  const text = input.text || "";
-  if (hasIncognitoWarrant(text)) {
-    return { action: "incognito", source: "warrant" };
-  }
-  if (looksLikeFork(text)) {
-    return { action: "fork", source: "phrasing" };
-  }
-  if (looksLikeNew(text)) {
-    return { action: "new", source: "phrasing" };
   }
   return { action: "continue", source: "default" };
 }
@@ -108,7 +98,7 @@ function resolveContextDecision(input = {}) {
     tool_called: Boolean(toolCall),
     model_action: "",
     model_override: false,
-    incognito_warrant: hasIncognitoWarrant(text),
+    incognito_warrant: false,
     retrieval_query: "",
     thread_label: "",
     reason: "",
@@ -130,16 +120,6 @@ function resolveContextDecision(input = {}) {
 
   // No tool call (or the provider has no tools): the prior stands.
   if (!toolCall || !record.model_action) {
-    return record;
-  }
-
-  // Gate 2: the model may only choose incognito with an explicit warrant.
-  if (record.model_action === "incognito" && !record.incognito_warrant) {
-    record.action = prior.action === "incognito" ? "continue" : prior.action;
-    record.model_override = false;
-    record.reason = record.reason
-      ? `${record.reason} (incognito denied: no explicit warrant)`
-      : "incognito denied: no explicit warrant";
     return record;
   }
 

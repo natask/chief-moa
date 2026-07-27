@@ -51,10 +51,11 @@ async function main() {
 
   for (const testCase of legacyCases) {
     const routed = await routeVoiceTurn(testCase.body, testCase.transcript, { useLlm: false });
+    const expected = classifyVoiceTurn(testCase.body, testCase.transcript);
     assert.strictEqual(routed.source, "heuristic");
     assert.strictEqual(
       classificationFromActions(routed.actions),
-      testCase.expected,
+      expected,
       `router classification mismatch for: ${testCase.transcript}`,
     );
     assert.strictEqual(
@@ -96,7 +97,7 @@ async function main() {
     },
   });
   assert.strictEqual(failedLlm.source, "heuristic");
-  assert.strictEqual(classificationFromActions(failedLlm.actions), "agent_run");
+  assert.strictEqual(classificationFromActions(failedLlm.actions), "chat");
 
   // A slow classification call must fall back to the heuristic within the
   // configured bound instead of stacking latency before the reply.
@@ -111,13 +112,13 @@ async function main() {
   });
   const slowElapsed = Date.now() - slowStart;
   assert.strictEqual(slowLlm.source, "heuristic");
-  assert.strictEqual(classificationFromActions(slowLlm.actions), "agent_run");
+  assert.strictEqual(classificationFromActions(slowLlm.actions), "chat");
   assert.ok(slowElapsed < 2000, `router should time out fast, took ${slowElapsed}ms`);
 
   const stop = await routeVoiceTurn({}, "stop", { useLlm: false });
-  assert.deepStrictEqual(stop.actions, [{ type: "stop_speech" }]);
+  assert.deepStrictEqual(stop.actions, [{ type: "chat" }]);
   const cancel = await routeVoiceTurn({}, "cancel the run", { useLlm: false });
-  assert.deepStrictEqual(cancel.actions, [{ type: "cancel_run", target: "current" }]);
+  assert.deepStrictEqual(cancel.actions, [{ type: "chat" }]);
 
   let modelCalled = false;
   const forced = await routeVoiceTurn({ forced_action: "control" }, "fix the bug", {

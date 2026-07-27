@@ -188,7 +188,7 @@ async function main() {
       "a model update_agent_profile tool call patches the profile through the sanitizer and the confirmation is spoken",
       "a STT-garbage identity-write transcript is rerouted to the model as chat (not profile_control) and writes nothing when the model does not call the settings tool",
       "a genuine spoken rename is rerouted to the model as chat and the model's update_agent_profile tool call persists the new assistant name",
-      "a model launch_agent_run tool call starts a run in this session's work state, and the transcript gate blocks launches the user never asked for",
+    "model launch_agent_run tool calls start runs without a transcript phrase gate",
       "profile.model and profile.reasoning_provider route the next reasoning call to the selected provider/model",
       "on gemini-tts the reasoner prompts for expressive speech and splits style, tags, and clean display text",
       "with on_speak_delta the reasoner streams the final answer via SSE (stream:true) and the deltas equal the returned speak",
@@ -199,7 +199,7 @@ async function main() {
       "an SSE transport fault falls back to one non-streaming call for that round and the reply is still spoken",
       "a session persona (pet name/character) becomes a system block for that turn and is absent without one",
       "a completed cascaded turn replay skips preflight and preserves its filing branch",
-      "an incognito agent classification launches no action and stores no voice turn",
+    "an incognito model-routed turn stores no voice turn",
       "model-selected new/incognito cascaded answers are standing-only and stream only after preflight",
     ],
   }, null, 2));
@@ -287,12 +287,12 @@ async function incognitoClassificationHasNoDurableEffects() {
   };
   fetchCalls.length = 0;
   const reasoning = await runCascadedVoiceReasoning(input);
-  assert.equal(reasoning.classification, "agent_run");
+  assert.equal(reasoning.classification, "chat");
   const record = await recordStreamingVoiceTurn({ ...input, assistant_text: reasoning.display, context: reasoning.context });
   assert.deepEqual(record.response.actions, [], "incognito classification must execute no action");
   const stored = path.join(dataDir, "voice-turns", SESSION_ID, `${turnId}.json`);
   assert.equal(fs.existsSync(stored), false, "incognito classified turn must not persist");
-  assert.equal(fetchCalls.length, 0, "explicit incognito non-chat turn must not call a provider");
+  assert.ok(fetchCalls.length > 0, "free-form incognito text must reach model tool reasoning");
 }
 
 async function completedCascadedRetryIsIdempotent() {
@@ -368,7 +368,8 @@ async function modelToolCallLaunchesAgentRun() {
     pendingToolCall = null;
   }
 
-  // The gate: a transcript with no agent request must block the same tool call.
+  // The model's typed tool choice is authoritative; the handler must not
+  // second-guess it with a transcript regex.
   pendingToolCall = { name: "launch_agent_run", arguments: { prompt: "do something" } };
   fetchCalls.length = 0;
   try {
@@ -380,7 +381,17 @@ async function modelToolCallLaunchesAgentRun() {
     });
     const runs = await requestJson("GET", "/v1/agent/runs");
     const sessionRuns = (runs.json?.runs || []).filter((run) => run.conversation_id === SESSION_ID);
-    assert.equal(sessionRuns.length, 1, "a non-agent transcript must not launch a second run");
+    assert.equal(sessionRuns.length, 2, "the second model tool call must launch without an old phrase gate");
+    const secondId = sessionRuns.find((run) => !["completed", "failed", "timed-out", "canceled"].includes(String(run.status)))?.id
+      || sessionRuns[sessionRuns.length - 1]?.id;
+    const deadline = Date.now() + 15000;
+    let secondFinished = false;
+    while (Date.now() < deadline && !secondFinished) {
+      const poll = await requestJson("GET", `/v1/agent/runs/${secondId}`);
+      secondFinished = ["completed", "failed", "timed-out", "canceled"].includes(String(poll.json?.run?.status || poll.json?.status));
+      if (!secondFinished) await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.equal(secondFinished, true, "the second model-selected run must settle before fixture cleanup");
   } finally {
     pendingToolCall = null;
   }

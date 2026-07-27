@@ -56,6 +56,17 @@ global.fetch = async (url, options = {}) => {
   if (u.includes("/chat/completions")) {
     const body = JSON.parse(String(options.body || "{}"));
     fetchCalls.push({ url: u, body });
+    if (body.tool_choice?.function?.name === "context_management") {
+      const rendered = String((body.messages || []).findLast((message) => message?.role === "user")?.content || "");
+      const action = /off the record|incognito/i.test(rendered)
+        ? "incognito"
+        : (/new topic|unrelated plan/i.test(rendered) ? "new" : "continue");
+      return jsonResponse({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{
+        id: "context-routing-tool",
+        type: "function",
+        function: { name: "context_management", arguments: JSON.stringify({ action, retrieval_query: "fixture" }) },
+      }] } }] });
+    }
     return jsonResponse({ choices: [{ message: { role: "assistant", content: "Understood, master." } }] });
   }
   throw new Error(`unexpected fetch to ${u}`);
@@ -82,11 +93,11 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     checks: [
-      "a control voice turn persists a turn file, ledger line, product event, and (for a memory statement) a gbrain fact",
+      "a normal voice turn persists turn evidence but free-form text does not trigger an automatic memory write",
       "an incognito HTTP voice turn adds zero turn files, ledger lines, product events, and gbrain facts",
       "the incognito response reports action=incognito, persisted:false, on an inc- branch, and is still answered",
       "standing facts are still read on an incognito turn (the model messages carry the known user fact)",
-      "HTTP voice explicit new and warranted incognito are standing-only while phrasing-only new remains continue",
+      "HTTP voice explicit and model-tool selected new/incognito turns are standing-only",
       "an incognito streaming turn deletes its buffered PCM archive and persists nothing",
     ],
   }, null, 2));
@@ -113,7 +124,7 @@ async function httpVoiceColdScopeMatrix() {
   });
   assert.equal(fresh.status, 200);
   assert.equal(fresh.json.context.action, "new");
-  const freshCall = fetchCalls.find((call) => Array.isArray(call.body.messages));
+  const freshCall = fetchCalls.at(-1);
   assert.match(JSON.stringify(freshCall.body.messages), /Master Zed/);
   assert.doesNotMatch(JSON.stringify(freshCall.body.messages), new RegExp(callerSentinel));
 
@@ -127,7 +138,7 @@ async function httpVoiceColdScopeMatrix() {
   });
   assert.equal(warranted.json.context.action, "incognito");
   assert.equal(warranted.json.context.persisted, false);
-  const warrantedCall = fetchCalls.find((call) => Array.isArray(call.body.messages));
+  const warrantedCall = fetchCalls.at(-1);
   assert.match(JSON.stringify(warrantedCall.body.messages), /Master Zed/);
   assert.doesNotMatch(JSON.stringify(warrantedCall.body.messages), new RegExp(callerSentinel));
 
@@ -138,8 +149,8 @@ async function httpVoiceColdScopeMatrix() {
     source: "android-overlay",
     transcript: "let us start a new topic about travel",
   });
-  assert.equal(phrasing.json.context.action, "continue", "phrasing-only HTTP voice new remains deterministic continue");
-  assert.equal(phrasing.json.context.branch_id, "default");
+  assert.equal(phrasing.json.context.action, "new", "the context tool must own free-form new-thread routing");
+  assert.match(phrasing.json.context.branch_id, /^thr-/);
 }
 
 function seedStandingFact() {
@@ -167,7 +178,7 @@ async function controlTurnPersists() {
   assert.ok(after.voiceFiles > before.voiceFiles, "a control turn must write a voice turn file");
   assert.ok(after.ledgerLines > before.ledgerLines, "a control turn must append a voice-turns ledger line");
   assert.ok(after.productEvents > before.productEvents, "a control turn must mirror at least one product event");
-  assert.ok(after.brainFacts > before.brainFacts, "a control turn with a memory statement must write a gbrain fact");
+  assert.equal(after.brainFacts, before.brainFacts, "free-form text must not trigger the removed memory matcher");
   assert.ok((turn.json.context && turn.json.context.persisted) !== false, "a control turn must report persisted");
 }
 

@@ -1811,8 +1811,9 @@ function shouldDelegateToBrowserTurn(body) {
 }
 
 function shouldDelegateVoiceToBrowserTurn(body, transcript) {
+  void transcript;
   return isBrowserClient(body)
-    && (browserIntentHintSaysPageQuestion(body) || looksLikeBrowserPageQuestion(transcript));
+    && browserIntentHintSaysPageQuestion(body);
 }
 
 function isBrowserClient(body) {
@@ -3496,11 +3497,17 @@ async function handleVoiceTurn(request, response) {
   }
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
-  const voiceDecision = resolveContextDecision({ text: transcript, contextAction: body.context_action, toolCall: null });
-  let voiceEffectiveAction = voiceDecision.action;
-  if (voiceEffectiveAction !== "incognito" && voiceDecision.prior_source !== "client") {
-    voiceEffectiveAction = "continue";
-  }
+  const profileVersion = agentProfile.currentVersion(profileOptions);
+  const profile = voiceModes.applyToProfile(
+    agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions), voiceMode,
+  );
+  const preparedVoiceDecision = await prepareContextDecision({
+    text: transcript,
+    contextAction: body.context_action,
+    profile,
+  });
+  const voiceDecision = preparedVoiceDecision.decision;
+  const voiceEffectiveAction = voiceDecision.action;
   const voiceThread = resolveTurnFilingThread({
     sessionId,
     callerBranchId: branchId,
@@ -3511,10 +3518,6 @@ async function handleVoiceTurn(request, response) {
   const filingBranchId = voiceThread.branch_id;
   const incognitoTurn = voiceThread.persisted === false;
   const screen = summarizeScreen(body.screen || body.context?.screen);
-  const profileVersion = agentProfile.currentVersion(profileOptions);
-  const profile = voiceModes.applyToProfile(
-    agentProfile.effectiveWithOverrides(body.profile_overrides, profileOptions), voiceMode,
-  );
   let routedActions = null;
   let classification;
   if (videoNote) {
@@ -3531,9 +3534,16 @@ async function handleVoiceTurn(request, response) {
     classification = classificationFromActions(routedActions);
   } else {
     classification = classifyVoiceTurn(body, transcript);
-  }
-  if (!incognitoTurn && !videoNote) {
-    captureMemoryFromTurn(transcript, source);
+    // This endpoint can run without a reasoning provider. In that case retain
+    // the deterministic, fail-closed profile-control handler: it requires a
+    // separate confirmation judge before any mutation and therefore writes
+    // nothing when the model is unavailable.
+    if (classification === "chat" && !providerConfiguredFor(resolveReasoningProvider(profile))) {
+      const fallbackProfileIntent = parseProfileControlIntent(transcript);
+      if (fallbackProfileIntent) {
+        classification = "profile_control";
+      }
+    }
   }
   const startedAt = new Date().toISOString();
   const baseRecord = {
@@ -3761,6 +3771,8 @@ async function handleVoiceTurn(request, response) {
     // narration, so this is the cascaded pipeline with a video front leg.
     let text;
     let pageTweakAction = null;
+    let modelToolActions = [];
+    let modelRequestedSilence = false;
     let requestMessages = modelMessages;
     if (videoNote) {
       if (resolveReasoningProvider(profile) !== "vertex") {
@@ -3781,7 +3793,29 @@ async function handleVoiceTurn(request, response) {
         maxOutputTokens: Number(process.env.VIDEO_TURN_MAX_OUTPUT_TOKENS || 1024),
       });
     } else if (isBrowserSourcedCall({ source })) {
-      ({ text, action: pageTweakAction } = await chatTurnWithPageTweakTool(modelMessages, profile, source));
+      const browserToolInput = {
+        session_id: sessionId,
+        conversation_id: conversationId,
+        branch_id: filingBranchId,
+        turn_id: turnId,
+        device_id: deviceId,
+        profile_version: profileVersion,
+        source,
+        transcript,
+        incognito: incognitoTurn,
+      };
+      const browserTools = cascadedVoiceProfileTools(browserToolInput).concat([{
+        name: PAGE_TWEAK_TOOL_SCHEMA.function.name,
+        description: PAGE_TWEAK_TOOL_SCHEMA.function.description,
+        parameters: PAGE_TWEAK_TOOL_SCHEMA.function.parameters,
+        handler: (args) => liveToolProposePageTweak({ source }, args),
+      }]);
+      const toolTurn = await callModelToolLoop(modelMessages, profile, browserTools);
+      text = String(toolTurn.text || "");
+      modelToolActions = collectCascadedToolActions(toolTurn.tool_results);
+      modelRequestedSilence = Array.isArray(toolTurn.tool_results)
+        && toolTurn.tool_results.some((entry) => entry?.result?.action?.type === "stay_silent");
+      if (modelRequestedSilence) text = "";
     } else {
       const voiceToolCallInput = {
         session_id: sessionId,
@@ -3792,6 +3826,7 @@ async function handleVoiceTurn(request, response) {
         profile_version: profileVersion,
         source,
         transcript,
+        incognito: incognitoTurn,
       };
       // source/device_id are caller JSON. They are context, never a private
       // device principal, so this path cannot pin a local action to that id.
@@ -3800,9 +3835,15 @@ async function handleVoiceTurn(request, response) {
       if (phoneTool) voiceToolDefs.push(phoneTool);
       const toolTurn = await callModelToolLoop(modelMessages, profile, voiceToolDefs);
       text = String(toolTurn.text || "");
+      modelToolActions = collectCascadedToolActions(toolTurn.tool_results);
+      modelRequestedSilence = Array.isArray(toolTurn.tool_results)
+        && toolTurn.tool_results.some((entry) => entry?.result?.action?.type === "stay_silent");
+      if (modelRequestedSilence) text = "";
     }
     const speak = capSpeakText(text, profile.voice_max_chars);
-    const turnActions = pageTweakAction ? [pageTweakAction] : [];
+    const turnActions = modelRequestedSilence
+      ? [{ type: "control", name: "stop" }]
+      : (pageTweakAction ? [pageTweakAction] : modelToolActions);
     const savedMessages = messages.concat([{ role: "assistant", content: text }]);
     const now = new Date().toISOString();
     // Incognito turns are answered but never persisted: skip the conversation
@@ -6683,6 +6724,10 @@ function liveToolBlocked(name, reason) {
   };
 }
 
+function liveToolIsIncognito(call) {
+  return call?.incognito === true || isIncognitoBranch(String(call?.branch_id || ""));
+}
+
 function liveToolAllowsAgentRun(call) {
   const transcript = liveToolTranscript(call);
   if (!transcript) {
@@ -6723,23 +6768,6 @@ function liveToolReadAgentSettings(call, args) {
   return readAgentSettings(args || {}, { deviceId: normalizeDeviceId(call?.device_id || "") });
 }
 
-// Language control is model-owned: the model reasons about which languages are
-// understood (the STT constrained set) and replied in, and changes them by tool
-// call — there is no deterministic transcript matcher for language anymore. So
-// these fields pass the Live safety gate on the model's word (still validated by
-// the sanitizer). Every OTHER field (voice, name, persona, providers, modality)
-// still requires the deterministic parser to confirm the user asked, so the
-// native-audio model cannot silently persist an unrequested change.
-const MODEL_OWNED_LANGUAGE_FIELDS = new Set([
-  "language",
-  "language_primary",
-  "language_output",
-  "language_auto_switch",
-  "language_mode",
-  "input_languages",
-  "input_language_primary",
-]);
-
 function liveToolAllowsProfileUpdate(call, patch) {
   const requestedFields = Object.keys(patch || {});
   if (requestedFields.length === 0) {
@@ -6753,6 +6781,20 @@ function liveToolAllowsProfileUpdate(call, patch) {
   return requestedFields.every((field) => MODEL_OWNED_LANGUAGE_FIELDS.has(field) || parserFields.has(field));
 }
 
+// Language intent cannot be confirmed by an English transcript matcher: a
+// garbled transcript may be the result of speaking a newly requested language.
+// All other durable profile fields still require independent transcript
+// confirmation before a native-live model tool may mutate them.
+const MODEL_OWNED_LANGUAGE_FIELDS = new Set([
+  "language",
+  "language_primary",
+  "language_output",
+  "language_auto_switch",
+  "language_mode",
+  "input_languages",
+  "input_language_primary",
+]);
+
 function liveToolMemoryMatch(call) {
   return matchMemoryStatement(liveToolTranscript(call));
 }
@@ -6760,6 +6802,15 @@ function liveToolMemoryMatch(call) {
 async function handleLiveVoiceToolCall(call) {
   const name = String(call?.name || "").trim();
   const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args) ? call.args : {};
+  if (liveToolIsIncognito(call) && new Set([
+    "launch_agent_run",
+    "launch_browser_agent",
+    "update_agent_profile",
+    "revert_agent_profile",
+    "remember_user_fact",
+  ]).has(name)) {
+    return liveToolBlocked(name, "incognito turns cannot mutate durable state");
+  }
   if (name === "phone_action") {
     // Legacy Live fields originate in the client event. Do not promote a
     // source string or device_id into gateway-owned affinity.
@@ -6777,6 +6828,9 @@ async function handleLiveVoiceToolCall(call) {
   }
   if (name === "list_agent_runs") {
     return liveToolListAgentRuns(call, args);
+  }
+  if (name === "stay_silent") {
+    return { ok: true, action: { type: "stay_silent" } };
   }
   if (name === "launch_browser_agent") {
     if (!liveToolAllowsAgentRun(call)) {
@@ -6825,15 +6879,12 @@ async function handleLiveVoiceToolCall(call) {
 }
 
 function liveToolLaunchAgentRun(call, args) {
+  if (liveToolIsIncognito(call)) {
+    return liveToolBlocked("launch_agent_run", "incognito turns cannot mutate durable state");
+  }
   const prompt = truncate(String(args.prompt || args.instruction || args.task || "").trim(), 20000);
   if (!prompt) {
     return { ok: false, error: "prompt is required" };
-  }
-  if (!liveToolAllowsAgentRun(call)) {
-    return liveToolBlocked(
-      "launch_agent_run",
-      "blocked live tool launch because the current transcript did not independently route as an agent request",
-    );
   }
   const sessionId = call.conversation_id || call.session_id || "";
   const run = startAgentRun({
@@ -7057,6 +7108,9 @@ function liveToolLaunchBrowserAgent(call, args) {
 }
 
 function liveToolUpdateAgentProfile(call, args) {
+  if (liveToolIsIncognito(call)) {
+    return liveToolBlocked("update_agent_profile", "incognito turns cannot mutate durable state");
+  }
   const patch = liveToolProfilePatch(args);
   if (Object.keys(patch).length === 0) {
     return {
@@ -7065,12 +7119,6 @@ function liveToolUpdateAgentProfile(call, args) {
       supported_fields: agentProfile.fields(),
     };
   }
-  // The Live path gates the write on the deterministic transcript parser so the
-  // native-audio model cannot silently persist a change the user did not ask
-  // for. The cascaded reasoner instead reasons about the change and reaches
-  // applyAgentProfilePatch directly (see cascadedProfileTools), because the
-  // user's requirement is that language/voice/modality switching is reasoned
-  // about, not keyword-matched.
   if (!liveToolAllowsProfileUpdate(call, patch)) {
     return liveToolBlocked("update_agent_profile", "transcript did not request this profile update");
   }
@@ -7151,6 +7199,9 @@ function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool", o
 // the gateway defaults. Both append a new version so the app never lands in a
 // broken state, and both honor global/device scope like other profile changes.
 function liveToolRevertAgentProfile(call, args) {
+  if (liveToolIsIncognito(call)) {
+    return liveToolBlocked("revert_agent_profile", "incognito turns cannot mutate durable state");
+  }
   const mode = String(args.mode || args.target || "previous").trim().toLowerCase() === "reset"
     ? "reset"
     : "previous";
@@ -8575,6 +8626,7 @@ async function runCascadedVoiceReasoningInner(input) {
     profile_version: agentProfile.currentVersion(profileOptions),
     source: input?.source || "voice-cascaded",
     transcript,
+    incognito: contextDecision.action === "incognito",
   };
   const toolDefs = cascadedVoiceProfileTools(toolCallInput)
     .concat(cascadedAgentRunTools(toolCallInput))
@@ -8724,10 +8776,8 @@ function collectCascadedToolActions(toolResults) {
 // ("change your voice to charon") keep the profile-control path unchanged.
 function classifyVoiceTurnWithPersona(persona, body, transcript) {
   const classification = classifyVoiceTurn(body, transcript);
-  // "shut up"/"stop" is a REQUEST the model itself must understand (user
-  // decision 2026-07-14): on this model path it flows to the reasoner as chat,
-  // and the model calls stay_silent — no deterministic interpreter layer. The
-  // model-less HTTP path keeps its deterministic silent stop as the fail-safe.
+  // Model-backed turns must let the model select the mutation tool. The
+  // deterministic parser remains only as a fail-closed authorization guard.
   if (classification === "control") {
     return "chat";
   }
@@ -8735,19 +8785,9 @@ function classifyVoiceTurnWithPersona(persona, body, transcript) {
     return classification;
   }
   const intent = parseProfileControlIntent(transcript);
-  // Profile MUTATIONS on the cascaded/live path are model-routed: a matchtext
-  // parse may no longer apply an identity/persona/voice/language/companion/revert
-  // change on its own. Re-route the turn as chat so the reasoning model actually
-  // reasons about it and calls update_agent_profile / revert_agent_profile
-  // (source "voice-cascaded-tool") when — and only when — the user really asked.
-  // STT garbage that happened to match the deterministic mutation parser now
-  // flows to the model as an ordinary utterance and produces no write. Read-only
-  // queries and the response_modality fast path stay deterministic.
   if (profileControlIntentMutates(intent)) {
     return "chat";
   }
-  // A session persona (website pet) keeps identity SUMMARIES conversational so
-  // the pet answers in character rather than reading the durable profile back.
   if (persona && typeof persona === "object" && intent && intent.action === "summary") {
     return "chat";
   }
@@ -9054,6 +9094,9 @@ function cascadedVoiceProfileTools(call) {
         required: ["profile"],
       },
       handler: (args) => {
+        if (liveToolIsIncognito(call)) {
+          return liveToolBlocked("update_agent_profile", "incognito turns cannot mutate durable state");
+        }
         const patch = liveToolProfilePatch(args || {});
         if (Object.keys(patch).length === 0) {
           return { ok: false, error: "no supported profile fields provided", supported_fields: agentProfile.fields() };
@@ -9217,13 +9260,8 @@ async function recordStreamingVoiceTurn(turn) {
   // conversation/event persistence.
   const assistantText = transcriptionOnly ? "" : String(turn.assistant_text || "").trim();
   const deviceId = normalizeDeviceId(turn.device_id || turn.deviceId || "");
-  // Capture memory-worthy statements ("my name is X", "remember that …") from
-  // live voice transcripts the same way the HTTP voice-turn handler does, so
-  // identity and preference facts are stored regardless of the voice path used.
-  // Incognito turns write no memory.
-  if (!incognito && !transcriptionOnly) {
-    captureMemoryFromTurn(transcript, turn.source || "voice-live");
-  }
+  // Memory writes are model-tool owned. Never infer a durable fact directly
+  // from free-form STT, and never write anything for an incognito turn.
   const profileVersion = sanitizeOptionalId(turn.profile_version || agentProfile.currentVersion(), agentProfile.currentVersion());
   const now = turn.completed_at || new Date().toISOString();
   // An interrupted/canceled/closed live turn is still durable conversation
@@ -9233,9 +9271,12 @@ async function recordStreamingVoiceTurn(turn) {
   const incomplete = turn.incomplete === true;
   const turnStatus = String(turn.status || (incomplete ? "interrupted" : "completed"));
   const hasRealTranscript = Boolean(transcript && transcriptSource !== "synthetic");
-  const liveClassification = !transcriptionOnly && !incomplete && hasRealTranscript
+  const modelSelectedRuns = liveToolAgentRunSummaries(turn.provider_events);
+  const liveClassification = !transcriptionOnly && !incomplete && modelSelectedRuns.length > 0
+    ? "agent_run"
+    : (!transcriptionOnly && !incomplete && hasRealTranscript
     ? classifyVoiceTurnWithPersona(turn.persona, { source: turn.source || "voice-live" }, transcript)
-    : "";
+    : "");
   const classification = incomplete ? "interrupted" : (liveClassification || "chat");
   const baseRecord = {
     id: turnId,
@@ -9408,7 +9449,7 @@ async function recordStreamingVoiceTurn(turn) {
   }
 
   if (!incomplete && (classification === "agent_run" || classification === "multi_agent")) {
-    let runs = liveToolAgentRunSummaries(voiceSessionReferences.voice_session.provider_events);
+    let runs = modelSelectedRuns;
     if (runs.length === 0) {
       const dispatches = liveVoiceAgentDispatches(transcript, classification);
       runs = dispatches.map((dispatch) => {
