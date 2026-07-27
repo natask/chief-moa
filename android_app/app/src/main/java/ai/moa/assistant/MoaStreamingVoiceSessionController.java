@@ -133,6 +133,7 @@ final class MoaStreamingVoiceSessionController {
     private String pendingLifecycleCompletionStatus = "";
     private boolean pendingLifecycleTtsExpected;
     private boolean pendingLifecycleAudioReceived;
+    private String pendingDeviceAudioDoneTurnId = "";
 
     MoaStreamingVoiceSessionController(Callback callback) {
         this(MoaVoiceGatewaySocket.DEFAULT_URL, "", true, "", "default", false, callback, null);
@@ -241,6 +242,7 @@ final class MoaStreamingVoiceSessionController {
             pendingLifecycleCompletionStatus = "";
             pendingLifecycleTtsExpected = false;
             pendingLifecycleAudioReceived = false;
+            pendingDeviceAudioDoneTurnId = "";
             playbackDrainGate.reset();
             gatewaySocket = new MoaVoiceGatewaySocket(gatewayUrl, gatewayToken, new SocketCallback());
             gatewaySocket.connect();
@@ -857,8 +859,13 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onPlaybackStopped(boolean drained) {
+            String drainedTurnId = "";
             synchronized (lock) {
-                playbackDrainGate.onPlaybackStopped();
+                boolean deliverDeviceCompletion = playbackDrainGate.onPlaybackStopped(drained);
+                if (deliverDeviceCompletion) {
+                    drainedTurnId = pendingDeviceAudioDoneTurnId;
+                }
+                pendingDeviceAudioDoneTurnId = "";
                 assistantAudioStarted = false;
                 lifecyclePlaybackStopped = true;
                 lifecyclePlaybackDrainConfirmed = drained;
@@ -879,6 +886,9 @@ final class MoaStreamingVoiceSessionController {
                         pendingLifecycleCompletionStatus = "";
                     }
                 }
+            }
+            if (!drainedTurnId.isEmpty()) {
+                finishDeviceAudioDone(drainedTurnId, playbackController);
             }
         }
 
@@ -1074,27 +1084,24 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onAssistantAudioDone(String audioTurnId) {
             MoaAudioPlaybackController playbackToDrain;
+            boolean deliverImmediately;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
                 }
                 playbackToDrain = playbackController;
                 assistantOutputState.suppressSpeech();
-                playbackDrainGate.onAudioDone(playbackEnabled);
+                deliverImmediately = playbackDrainGate.onProviderAudioDone(playbackEnabled);
+                pendingDeviceAudioDoneTurnId = deliverImmediately ? "" : audioTurnId;
             }
-            Log.i(TAG, "assistantAudioDone");
+            Log.i(TAG, "providerAssistantAudioDone awaitingDeviceDrain=" + !deliverImmediately);
             mainHandler.post(() -> {
-                MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
-                synchronized (lock) {
-                    finalProgress = assistantAudioProgress.snapshot(
-                            playbackToDrain != null ? playbackToDrain.playedPcmFrames() : 0L);
-                }
-                maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
-                if (playbackToDrain != null && playbackEnabled) {
+                if (deliverImmediately) {
+                    finishDeviceAudioDone(audioTurnId, playbackToDrain);
+                } else {
                     playbackToDrain.drainAndStop(60000L);
                 }
             });
-            post(() -> callback.onAssistantAudioDone(audioTurnId));
         }
 
         @Override
@@ -1121,35 +1128,7 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
-    private void drainPlayback(String audioTurnId, MoaAudioPlaybackController playback,
-            long drainGeneration, long startedAtMs) {
-        synchronized (lock) {
-            if (drainGeneration != playbackDrainGeneration) {
-                return;
-            }
-        }
-        if (playback == null || !playbackEnabled) {
-            finishDrainedPlayback(audioTurnId, playback);
-            return;
-        }
-        long writtenFrames = playback.writtenPcmFrames();
-        long playedFrames = playback.playedPcmFrames();
-        MoaAudioDrainPolicy.Decision decision = MoaAudioDrainPolicy.decide(
-                writtenFrames, playedFrames, SystemClock.elapsedRealtime() - startedAtMs);
-        if (decision == MoaAudioDrainPolicy.Decision.WAIT) {
-            mainHandler.postDelayed(
-                    () -> drainPlayback(audioTurnId, playback, drainGeneration, startedAtMs),
-                    MoaAudioDrainPolicy.POLL_INTERVAL_MS);
-            return;
-        }
-        if (decision == MoaAudioDrainPolicy.Decision.TIMED_OUT) {
-            Log.w(TAG, "assistant playback drain timed out writtenFrames="
-                    + writtenFrames + " playedFrames=" + playedFrames);
-        }
-        finishDrainedPlayback(audioTurnId, playback);
-    }
-
-    private void finishDrainedPlayback(String audioTurnId, MoaAudioPlaybackController playback) {
+    private void finishDeviceAudioDone(String audioTurnId, MoaAudioPlaybackController playback) {
         MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
         synchronized (lock) {
             finalProgress = assistantAudioProgress.snapshot(
@@ -1159,9 +1138,7 @@ final class MoaStreamingVoiceSessionController {
             }
         }
         maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
-        if (playback != null && playbackEnabled) {
-            playback.stop();
-        }
+        Log.i(TAG, "deviceAssistantAudioDone");
         post(() -> callback.onAssistantAudioDone(audioTurnId));
     }
 

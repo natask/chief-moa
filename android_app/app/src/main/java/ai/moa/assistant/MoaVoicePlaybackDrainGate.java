@@ -4,18 +4,22 @@ package ai.moa.assistant;
 final class MoaVoicePlaybackDrainGate {
     private boolean playbackStarted;
     private boolean drainInFlight;
+    private boolean deviceCompletionPending;
 
     void reset() {
         playbackStarted = false;
         drainInFlight = false;
+        deviceCompletionPending = false;
     }
 
     void onPlaybackStarted() {
         playbackStarted = true;
     }
 
-    void onAudioDone(boolean playbackEnabled) {
+    boolean onProviderAudioDone(boolean playbackEnabled) {
         drainInFlight = playbackEnabled && playbackStarted;
+        deviceCompletionPending = drainInFlight;
+        return !drainInFlight;
     }
 
     boolean shouldStopOnTurnDone(String status) {
@@ -27,8 +31,11 @@ final class MoaVoicePlaybackDrainGate {
         return drainInFlight;
     }
 
-    void onPlaybackStopped() {
+    boolean onPlaybackStopped(boolean drained) {
+        boolean deliverDeviceCompletion = deviceCompletionPending && drained;
         drainInFlight = false;
         playbackStarted = false;
+        deviceCompletionPending = false;
+        return deliverDeviceCompletion;
     }
 }
