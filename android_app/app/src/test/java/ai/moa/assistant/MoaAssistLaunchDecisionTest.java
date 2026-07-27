@@ -30,6 +30,22 @@ public final class MoaAssistLaunchDecisionTest {
     }
 
     @Test
+    public void everyPermissionStateAvoidsOpeningSettingsFromAssist() {
+        for (boolean overlayGranted : new boolean[]{false, true}) {
+            for (boolean microphoneGranted : new boolean[]{false, true}) {
+                MoaAssistLaunchDecision.Action action =
+                        MoaAssistLaunchDecision.decide(overlayGranted, microphoneGranted);
+                assertEquals(
+                        overlayGranted && microphoneGranted
+                                ? MoaAssistLaunchDecision.Action.START_VOICE_SERVICE
+                                : MoaAssistLaunchDecision.Action.SHOW_PERMISSION_HINT,
+                        action
+                );
+            }
+        }
+    }
+
+    @Test
     public void permissionHintsNameTheMissingPermission() {
         assertEquals(
                 "Open A.G. once to grant overlay and microphone permissions.",
