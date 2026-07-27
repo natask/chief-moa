@@ -225,6 +225,10 @@ final class MoaActionBroker {
             return listLauncherAppsForTool(args);
         }
 
+        if ("app.settings.open".equals(name)) {
+            return openAppSettings();
+        }
+
         if ("email.compose".equals(name)) {
             return composeEmailDraft(args);
         }
@@ -383,6 +387,22 @@ final class MoaActionBroker {
 
     private LocalActionResult listLauncherAppsForCommand() {
         return LocalActionResult.handled(listLauncherAppsForTool(new JSONObject()).reply);
+    }
+
+    private ToolExecutionResult openAppSettings() {
+        Capability capability = CAPABILITIES.get("app.settings.open");
+        Intent intent = new Intent(context, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            JSONObject receipt = recordReceipt(
+                    capability, context.getPackageName(), true, "Opened A.G. settings.");
+            return ToolExecutionResult.done(true, "Opened A.G. settings.", receipt);
+        } catch (RuntimeException error) {
+            JSONObject receipt = recordReceipt(
+                    capability, context.getPackageName(), false, "A.G. settings could not be opened.");
+            return ToolExecutionResult.done(false, "A.G. settings could not be opened.", receipt);
+        }
     }
 
     private ToolExecutionResult openMediaForTool(
@@ -1835,6 +1855,7 @@ final class MoaActionBroker {
         capabilities.put("system.home", new Capability("system.home", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.launch", new Capability("app.launch", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.list", new Capability("app.list", RISK_READ_ONLY, "none"));
+        capabilities.put("app.settings.open", new Capability("app.settings.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("email.compose", new Capability("email.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("sms.compose", new Capability("sms.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("url.open", new Capability("url.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
