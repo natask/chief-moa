@@ -1660,6 +1660,21 @@ contact up through ContactsContract and opens its card, requires
 `READ_CONTACTS`, and returns a clear "needs contacts permission" result
 instead of crashing when that permission is missing.
 
+Android's on-device Accessibility reach is intentionally narrow and does not
+match the browser's CDP surface. `MoaAccessibilityService` exposes only a
+generic click/back/home primitive plus one named adapter,
+`MoaYoutubeAccessibilityExecutor`, bound to an allowed package/signature and
+version range for playlist membership/create/rename/delete operations. There
+is no general-purpose "find and tap/type any on-screen element" tool
+registered anywhere in the cross-device hub or the code-mode capability table:
+every model-facing Android action is one of the fixed Phone Action /
+Device-Local Media entries above (app launch, URL open, dial, contact open,
+media transport/bookmark/playlist), not open-ended UI automation. Extending
+Android to browser-parity element-level interaction (arbitrary tap/type/scroll
+by locator, outside the YouTube-scoped adapter) is unbuilt and would need its
+own capability name, risk tier, approval flow, and accessibility dispatch
+before it could be proposed as a tool.
+
 ### Account Connection And Credential Health
 
 ```text
@@ -1945,7 +1960,9 @@ queues.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
   local routing for screen context and local action commands.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
-  accessibility-backed screen context and visible UI operations.
+  generic click/back/home plus the YouTube-scoped
+  `MoaYoutubeAccessibilityExecutor` driver (playlist operations only); not a
+  general element-level UI-automation tool — see Cross-Device Tool Hub.
 - `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, agent-run execution, device-client registry, and
   cross-device tool-request queue.
