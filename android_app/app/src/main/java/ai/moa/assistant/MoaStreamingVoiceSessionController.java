@@ -70,7 +70,10 @@ final class MoaStreamingVoiceSessionController {
         // Keepalive during a long reasoning / TTS leg. Re-arms the watchdog.
         void onTurnProgress(String turnId);
 
-        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
+        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke,
+                String replyLanguage, JSONObject terminalEvent);
+
+        void onTtsRetryDone(String turnId, String retryId, String status, int fromTextChar, String error);
 
         void onSessionClosed();
 
@@ -110,6 +113,7 @@ final class MoaStreamingVoiceSessionController {
     // still in flight during the stop keep counting and buffering.
     private boolean commitRequested;
     private boolean assistantAudioStarted;
+    private long playbackDrainGeneration;
     private boolean loggedVoiceActivity;
     private boolean sessionReady;
     private boolean pendingCommitAfterSessionReady;
@@ -129,6 +133,7 @@ final class MoaStreamingVoiceSessionController {
     private String pendingLifecycleCompletionStatus = "";
     private boolean pendingLifecycleTtsExpected;
     private boolean pendingLifecycleAudioReceived;
+    private String pendingDeviceAudioDoneTurnId = "";
 
     MoaStreamingVoiceSessionController(Callback callback) {
         this(MoaVoiceGatewaySocket.DEFAULT_URL, "", true, "", "default", false, callback, null);
@@ -237,6 +242,7 @@ final class MoaStreamingVoiceSessionController {
             pendingLifecycleCompletionStatus = "";
             pendingLifecycleTtsExpected = false;
             pendingLifecycleAudioReceived = false;
+            pendingDeviceAudioDoneTurnId = "";
             playbackDrainGate.reset();
             gatewaySocket = new MoaVoiceGatewaySocket(gatewayUrl, gatewayToken, new SocketCallback());
             gatewaySocket.connect();
@@ -530,7 +536,7 @@ final class MoaStreamingVoiceSessionController {
             // and returns to ready immediately.
             Log.i(TAG, "commit with zero captured audio; cancelling and reporting no_speech");
             socket.sendCancelTurn(currentTurnId);
-            handleTurnDone(currentTurnId, "no_speech", false, false, "");
+            handleTurnDone(currentTurnId, "no_speech", false, false, "", new JSONObject());
             return;
         }
         if (!socket.sendCommitTurn(currentTurnId)) {
@@ -586,7 +592,8 @@ final class MoaStreamingVoiceSessionController {
         reportError("Voice gateway did not become ready in time.", null);
     }
 
-    private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+    private void handleTurnDone(String completedTurnId, String status, boolean transcriptionOnly,
+            boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
         mainHandler.removeCallbacks(pendingCommitTimeout);
         MoaAudioCaptureController capture;
         MoaAudioPlaybackController playback;
@@ -632,7 +639,25 @@ final class MoaStreamingVoiceSessionController {
         if (playback != null && shouldStopPlayback) {
             playback.stop();
         }
-        post(() -> callback.onTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage));
+        post(() -> callback.onTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke,
+                replyLanguage, terminalEvent));
+    }
+
+    boolean retryTts(String completedTurnId, String retryId, int fromTextChar) {
+        synchronized (lock) {
+            if (gatewaySocket == null || safe(completedTurnId).isEmpty() || safe(retryId).isEmpty()) {
+                return false;
+            }
+            if (playbackController != null) {
+                playbackController.stop();
+            }
+            playbackDrainGeneration++;
+            turnId = completedTurnId;
+            assistantOutputState.begin(completedTurnId);
+            assistantAudioStarted = false;
+            assistantAudioProgress.reset();
+            return gatewaySocket.sendTtsRetry(completedTurnId, retryId, fromTextChar);
+        }
     }
 
     private void reportError(String message, Throwable error) {
@@ -834,8 +859,13 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onPlaybackStopped(boolean drained) {
+            String drainedTurnId = "";
             synchronized (lock) {
-                playbackDrainGate.onPlaybackStopped();
+                boolean deliverDeviceCompletion = playbackDrainGate.onPlaybackStopped(drained);
+                if (deliverDeviceCompletion) {
+                    drainedTurnId = pendingDeviceAudioDoneTurnId;
+                }
+                pendingDeviceAudioDoneTurnId = "";
                 assistantAudioStarted = false;
                 lifecyclePlaybackStopped = true;
                 lifecyclePlaybackDrainConfirmed = drained;
@@ -856,6 +886,9 @@ final class MoaStreamingVoiceSessionController {
                         pendingLifecycleCompletionStatus = "";
                     }
                 }
+            }
+            if (!drainedTurnId.isEmpty()) {
+                finishDeviceAudioDone(drainedTurnId, playbackController);
             }
         }
 
@@ -1051,27 +1084,24 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onAssistantAudioDone(String audioTurnId) {
             MoaAudioPlaybackController playbackToDrain;
+            boolean deliverImmediately;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
                 }
                 playbackToDrain = playbackController;
                 assistantOutputState.suppressSpeech();
-                playbackDrainGate.onAudioDone(playbackEnabled);
+                deliverImmediately = playbackDrainGate.onProviderAudioDone(playbackEnabled);
+                pendingDeviceAudioDoneTurnId = deliverImmediately ? "" : audioTurnId;
             }
-            Log.i(TAG, "assistantAudioDone");
+            Log.i(TAG, "providerAssistantAudioDone awaitingDeviceDrain=" + !deliverImmediately);
             mainHandler.post(() -> {
-                MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
-                synchronized (lock) {
-                    finalProgress = assistantAudioProgress.snapshot(
-                            playbackToDrain != null ? playbackToDrain.playedPcmFrames() : 0L);
-                }
-                maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
-                if (playbackToDrain != null && playbackEnabled) {
+                if (deliverImmediately) {
+                    finishDeviceAudioDone(audioTurnId, playbackToDrain);
+                } else {
                     playbackToDrain.drainAndStop(60000L);
                 }
             });
-            post(() -> callback.onAssistantAudioDone(audioTurnId));
         }
 
         @Override
@@ -1080,15 +1110,36 @@ final class MoaStreamingVoiceSessionController {
         }
 
         @Override
-        public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+        public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly,
+                boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
             Log.i(TAG, "turnDone status=" + status + " transcriptionOnly=" + transcriptionOnly + " ttsSpoke=" + ttsSpoke);
-            handleTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage);
+            handleTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage, terminalEvent);
+        }
+
+        @Override
+        public void onTtsRetryDone(String completedTurnId, String retryId, String status,
+                int fromTextChar, String error) {
+            post(() -> callback.onTtsRetryDone(completedTurnId, retryId, status, fromTextChar, error));
         }
 
         @Override
         public void onGatewayError(String message) {
             reportError(message, null);
         }
+    }
+
+    private void finishDeviceAudioDone(String audioTurnId, MoaAudioPlaybackController playback) {
+        MoaAssistantAudioProgressTracker.PlaybackProgress finalProgress;
+        synchronized (lock) {
+            finalProgress = assistantAudioProgress.snapshot(
+                    playback != null ? playback.playedPcmFrames() : 0L);
+            if (playbackController == playback) {
+                assistantAudioStarted = false;
+            }
+        }
+        maybeSendFinalPlaybackProgress(gatewaySocket, audioTurnId, finalProgress, "playback_done");
+        Log.i(TAG, "deviceAssistantAudioDone");
+        post(() -> callback.onAssistantAudioDone(audioTurnId));
     }
 
 }

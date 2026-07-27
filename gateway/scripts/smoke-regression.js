@@ -487,9 +487,10 @@ async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
   assert.equal(otherDeviceProfile.profile.voice, "Charon", "other devices should inherit global voice");
   assert.equal(otherDeviceProfile.profile.input_languages, "en-US", "other devices should inherit global input language");
 
-  // A spoken, deterministic profile-control change (voice) applies device-scoped.
-  // Language is model-owned now and no longer routes through the spoken parser, so
-  // this uses a voice change to exercise device-scoped spoken updates.
+  // The model-less HTTP path may classify a clear spoken device-scoped change,
+  // but it must fail closed instead of letting deterministic transcript matching
+  // mutate the profile. Real voice pipelines offer the model a settings tool;
+  // this regression gateway intentionally has no configured model provider.
   const spokenDeviceUpdate = await postJson(`${baseUrl}/v1/voice/turns`, {
     session_id: "profile_scope_session",
     branch_id: "default",
@@ -500,12 +501,19 @@ async function assertAgentProfileDeviceScope(baseUrl, dataDir) {
   });
   assert.equal(spokenDeviceUpdate.status, 200);
   assert.equal(spokenDeviceUpdate.json.classification, "profile_control");
-  assert.equal(spokenDeviceUpdate.json.profile.scope, "device");
-  assert.equal(spokenDeviceUpdate.json.profile.device_id, deviceA);
-  assert.equal(spokenDeviceUpdate.json.profile.voice, "Aoede");
+  assert.equal(spokenDeviceUpdate.json.scope, "device");
+  assert.equal(spokenDeviceUpdate.json.device_id, deviceA);
+  assert.ok(
+    spokenDeviceUpdate.json.actions?.some(
+      (action) => action.type === "profile_update_blocked"
+        && action.reason === "unconfirmed_voice_mutation",
+    ),
+    "model-less spoken profile mutation must be blocked",
+  );
+  assert.equal(spokenDeviceUpdate.json.profile.voice, "Kore");
 
   const afterSpokenDevice = await getJson(`${baseUrl}/v1/agent/profile?scope=device&device_id=${deviceA}`);
-  assert.equal(afterSpokenDevice.profile.voice, "Aoede", "spoken profile control must update only this device");
+  assert.equal(afterSpokenDevice.profile.voice, "Kore", "blocked spoken profile control must preserve the device override");
   const afterSpokenGlobal = await getJson(`${baseUrl}/v1/agent/profile`);
   assert.equal(afterSpokenGlobal.profile.voice, "Charon", "spoken device update must not mutate global voice");
 
@@ -819,6 +827,8 @@ async function assertDirectAsyncAgentRun(baseUrl, dataDir) {
   const response = await postJson(`${baseUrl}/v1/agent/runs`, {
     source: "smoke-regression",
     conversation_id: "smoke_session",
+    branch_id: "smoke_branch",
+    intent_id: "smoke_intent",
     harness: "gemini",
     wait: false,
     prompt: "run a fake smoke command",
@@ -838,6 +848,8 @@ async function assertDirectAsyncAgentRun(baseUrl, dataDir) {
     status: "completed",
     harness: "gemini",
     conversation_id: "smoke_session",
+    branch_id: "smoke_branch",
+    intent_id: "smoke_intent",
   });
   return response.json.run.id;
 }
@@ -895,9 +907,13 @@ async function assertCanceledAgentRun(baseUrl, dataDir) {
 
 async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   assert.ok(parentRunId, "parent run id required");
+  const parentDetail = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
   const response = await postJson(`${baseUrl}/v1/agent/runs/${parentRunId}/followups`, {
     source: "smoke-regression",
-    conversation_id: "smoke_session",
+    conversation_id: parentDetail.run.conversation_id,
+    session_id: parentDetail.run.conversation_id,
+    branch_id: parentDetail.run.branch_id,
+    intent_id: parentDetail.run.intent_id,
     prompt: "use this follow-up context",
   });
 
@@ -906,19 +922,36 @@ async function assertAgentRunFollowUp(baseUrl, dataDir, parentRunId) {
   const childRunId = response.json.run.id;
   assert.ok(childRunId.startsWith("run_"));
 
-  const parentDetail = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
-  assert.ok(parentDetail.events.some((event) => event.type === "follow_up"));
+  const parentAfterFollowUp = await getJson(`${baseUrl}/v1/agent/runs/${parentRunId}`);
+  assert.ok(parentAfterFollowUp.events.some((event) => event.type === "follow_up"));
 
   const childDetail = await waitForRunTerminal(baseUrl, childRunId);
   assert.equal(childDetail.run.status, "completed");
   assert.equal(childDetail.run.parent_run_id, parentRunId);
+  assert.equal(childDetail.run.branch_id, parentDetail.run.branch_id);
+  assert.equal(childDetail.run.intent_id, parentDetail.run.intent_id);
   assertPersistedRun(dataDir, childRunId, {
     status: "completed",
     harness: parentDetail.run.harness,
-    conversation_id: "smoke_session",
+    conversation_id: parentDetail.run.conversation_id,
     parent_run_id: parentRunId,
+    branch_id: parentDetail.run.branch_id,
+    intent_id: parentDetail.run.intent_id,
   });
-  return childRunId;
+  const repeated = await postJson(`${baseUrl}/v1/agent/runs/${childRunId}/followups`, {
+    source: "smoke-regression",
+    conversation_id: childDetail.run.conversation_id,
+    session_id: childDetail.run.conversation_id,
+    branch_id: childDetail.run.branch_id,
+    intent_id: childDetail.run.intent_id,
+    prompt: "continue the same intent again",
+  });
+  assert.equal(repeated.status, 202);
+  const repeatedDetail = await waitForRunTerminal(baseUrl, repeated.json.run.id);
+  assert.equal(repeatedDetail.run.parent_run_id, childRunId);
+  assert.equal(repeatedDetail.run.branch_id, childDetail.run.branch_id);
+  assert.equal(repeatedDetail.run.intent_id, childDetail.run.intent_id);
+  return repeated.json.run.id;
 }
 
 async function assertFailedAgentRun(baseUrl, dataDir) {

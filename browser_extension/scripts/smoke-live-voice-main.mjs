@@ -242,6 +242,13 @@ function eventSummaryExpr() {
 }
 
 function generateVoiceSmokePcm16() {
+  // Pre-rendered PCM16 (16 kHz mono) injection: lets a caller supply speech in
+  // languages macOS `say` cannot render (e.g. Amharic synthesized by the
+  // gateway's own hosted TTS) while keeping the exact same browser upload path.
+  const pcmFile = process.env.AGEE_LIVE_VOICE_PCM_FILE || "";
+  if (pcmFile) {
+    return { source: `pcm-file:${pcmFile}`, audio: readFile(pcmFile) };
+  }
   const phrase = process.env.AGEE_LIVE_VOICE_PHRASE || "Can you hear me clearly? This is an Aggie browser extension smoke test.";
   const tempDir = mkdtempSync(join(tmpdir(), "agee-live-voice-"));
   const aiffPath = join(tempDir, "speech.aiff");
@@ -401,6 +408,7 @@ async function main() {
 
     console.log(
       `browser live-voice proxy smoke passed: id=${extensionId}, source=${speech.source}, ` +
+        `turn=${turnId}, cue=${cueId}, ` +
         `events=${summary.types.join(",")}, assistant_audio_bytes=${summary.audioBytes}, ` +
         `transcript="${summary.transcript.slice(0, 120)}", assistant="${summary.assistantText.slice(0, 120)}"`,
     );

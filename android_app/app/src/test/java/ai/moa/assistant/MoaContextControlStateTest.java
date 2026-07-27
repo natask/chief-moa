@@ -53,6 +53,17 @@ public final class MoaContextControlStateTest {
     }
 
     @Test
+    public void consumedHttpBoundaryForbidsFallbackOntoTheOldThread() throws Exception {
+        MoaContextControlState state = new MoaContextControlState();
+        state.armNewThread();
+        JSONObject attempted = new JSONObject();
+        assertTrue(state.applyTo(attempted));
+        assertTrue(MoaContextControlState.requiresExactBoundary(attempted));
+        assertFalse(MoaContextControlState.requiresExactBoundary(new JSONObject()));
+        assertFalse(MoaContextControlState.requiresExactBoundary(null));
+    }
+
+    @Test
     public void httpIncognitoWinsWithoutConsumingArmedNewThread() throws Exception {
         MoaContextControlState state = new MoaContextControlState();
         state.armNewThread();

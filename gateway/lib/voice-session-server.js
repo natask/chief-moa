@@ -12,6 +12,7 @@ const {
   generatePcm16Tone: generateProviderTone,
 } = require("./voice-providers");
 const { mergeTranscriptSidecar } = require("./voice-provider-composition");
+const { selectFinalTranscript } = require("./transcript-quality");
 const { canonicalVoice } = require("./profile-options");
 const {
   hasPartialEndpointPlayback, normalizeAssistantAudioSegment: normalizeSegmentRaw,
@@ -20,6 +21,8 @@ const {
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
 const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
+const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
+const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -121,6 +124,7 @@ class VoiceSessionConnection {
     this.earlyAudioBytes = 0;
     this.turnProgressTimer = null;
     this.turnProgressStage = "";
+    this.ttsRetryReceipts = new Map();
     this.turnProgressIntervalMs = normalizeTurnProgressIntervalMs(options.turnProgressIntervalMs);
   }
 
@@ -225,6 +229,13 @@ class VoiceSessionConnection {
     }
     if (type === "playback_progress") {
       await this.handlePlaybackProgress(event);
+      return;
+    }
+    if (type === "retry_tts") {
+      await handleTtsRetry(this, event, {
+        sanitizeId, randomId, sendWs, turnReplyLanguage, cleanErrorSummary,
+        assistantAudioFormat: ASSISTANT_AUDIO_FORMAT, webSocketOpen: WebSocket.OPEN,
+      });
       return;
     }
     this.sendError(`unsupported voice event type: ${type || "missing"}`);
@@ -606,28 +617,14 @@ class VoiceSessionConnection {
   }
 
   providerHooks(turn, providerEvents) {
-    // Interruption guard, part 1: a barge-in (handleSessionStart ->
-    // closeCurrentTurn) can replace this.turn while a streaming pipeline still
-    // holds these hooks. Audio hooks check turn identity at entry AND re-check
-    // synchronously right before every socket write (writeAssistantAudio can
-    // await a stream drain, opening a TOCTOU window), throwing
-    // TurnSupersededError so the pipeline aborts silently.
     const assertTurnActive = () => {
       if (this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
         throw new TurnSupersededError(`turn ${turn.turnId} was superseded`);
       }
     };
-    // Text/transcript hooks drop silently after supersession (no throw: live
-    // providers fire them from fire-and-forget chains where a rejection would
-    // become an unhandled rejection); audio hooks throw so the pipeline aborts.
     const turnSuperseded = () => this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status);
     return {
-      // Additive: lets the streaming pipeline poll cheaply between chunks.
       isTurnActive: () => !turnSuperseded(),
-      // Additive keepalive control: the cascaded provider calls this when it
-      // begins the reasoner ("reasoning") and the TTS leg ("tts"). The session
-      // server owns the interval + socket write; the provider only reports which
-      // stage is running.
       onTurnProgress: async (stage) => {
         this.startTurnProgress(turn, stage);
       },
@@ -748,24 +745,13 @@ class VoiceSessionConnection {
         assertTurnActive();
         providerEvents.assistantAudioStarted = true;
         const streaming = options?.streaming === true;
-        // The per-turn factor the client resamples this turn's PCM by. 1.0 (or
-        // absent) means the audio is already at the intended speed; > 1 asks the
-        // client to speed it up (Gemini-TTS client-rate mode). Only emitted when
-        // it differs from 1.0 so old records/clients are unaffected.
         const rawRate = Number(options?.playbackRate);
         const playbackRate = Number.isFinite(rawRate) && rawRate > 0 && rawRate !== 1
           ? Math.min(2, Math.max(0.5, rawRate))
           : 0;
         if (streaming) {
-          // Pipelined multi-frame stream: KEEP the keepalive running. The
-          // interval skips ticks while turn.lastAssistantAudioAt is fresh, so
-          // a healthy stream sends no redundant ticks, but an inter-chunk gap
-          // (a slow later sentence, a mid-reply tool round) still keeps the
-          // client watchdog fed. It stops at turn completion as today.
           turn.streamingAudio = true;
         } else {
-          // Single-blob path: real assistant audio now streams, so the
-          // keepalive is no longer needed. Unchanged pre-streaming behavior.
           this.stopTurnProgress();
         }
         await this.recordProviderEvent(turn, providerEvents, "assistant_audio_start", {
@@ -797,23 +783,13 @@ class VoiceSessionConnection {
             audio_bytes: toBuffer(chunk).length,
           });
         }
-        // Re-check synchronously right before the socket write: the disk write
-        // above may have awaited a drain while a barge-in replaced the turn,
-        // and a stale frame (or a stale assistant_audio_done) on the shared
-        // socket corrupts the NEXT turn's audio window on current clients.
         assertTurnActive();
         await sendWs(this.ws, chunk, { binary: true });
-        // Frame->text ledger: the provider tags each frame with the reply-text
-        // segment it carries. Recorded only after the socket write succeeds, so
-        // the ledger holds exactly what reached the client. On interruption
-        // this is the only mapping from "audio played" back to "words spoken".
         const segmentText = typeof meta?.segmentText === "string" ? meta.segmentText : "";
         if (segmentText) {
           if (!Array.isArray(turn.assistantSegments)) {
             turn.assistantSegments = [];
           }
-          // pcm16 mono at the client rate: bytes -> audio milliseconds, so an
-          // Android played_ms report can be mapped back to a segment boundary.
           const bytesPerMs = (ASSISTANT_AUDIO_FORMAT.sample_rate * 2) / 1000;
           turn.assistantSegments.push({
             text: segmentText,
@@ -834,16 +810,30 @@ class VoiceSessionConnection {
         }
       },
       onToolCall: async (call) => this.handleToolCall(turn, providerEvents, call),
-      onAssistantAudioDone: async () => {
+      onAssistantAudioDone: async (details = {}) => {
         assertTurnActive();
         providerEvents.assistantAudioDone = true;
-        await this.recordProviderEvent(turn, providerEvents, "assistant_audio_done", {});
+        const delivery = sanitizeTtsDelivery(details.tts_delivery);
+        const terminalDetails = {
+          ...(typeof details.complete === "boolean" ? { complete: details.complete } : {}),
+          ...(delivery ? { tts_delivery: delivery } : {}),
+          ...(Number.isFinite(details.tts_segments) ? { tts_segments: Math.max(0, Math.round(details.tts_segments)) } : {}),
+          ...(Number.isInteger(details.tts_failed_segment_index) && details.tts_failed_segment_index >= 0
+            ? { tts_failed_segment_index: details.tts_failed_segment_index }
+            : {}),
+          ...(Number.isFinite(details.tts_spoken_text_end)
+            ? { tts_spoken_text_end: Math.max(0, Math.round(details.tts_spoken_text_end)) }
+            : {}),
+          ...(details.tts_error ? { tts_error: cleanErrorSummary(details.tts_error) } : {}),
+        };
+        await this.recordProviderEvent(turn, providerEvents, "assistant_audio_done", terminalDetails);
         assertTurnActive();
         await this.sendEvent({
           type: "assistant_audio_done",
           session_id: turn.sessionId,
           branch_id: turn.branchId,
           turn_id: turn.turnId,
+          ...terminalDetails,
         });
       },
     };
@@ -967,42 +957,38 @@ class VoiceSessionConnection {
     // "Voice captured." placeholder) but a real transcript_partial /
     // transcript_final arrived over the stream, prefer that so the stored turn
     // holds what was actually heard, never a fabricated fallback.
-    const rawResultTranscript = String(providerResult?.transcript || "").trim();
-    const resultTranscript = rawResultTranscript === "Voice captured." ? "" : rawResultTranscript;
-    const streamedTranscript = String(providerEvents.transcript || "").trim();
-    const transcript = resultTranscript || streamedTranscript;
-    const assistantText = String(providerResult?.assistant_text || providerEvents.assistantText || "").trim();
+    const selected = selectFinalTranscript(providerResult, providerEvents);
+    const { transcript, assistantText, rejected: transcriptQualityRejected } = selected;
     const assistantAudioFormat = providerResult?.audio_format || ASSISTANT_AUDIO_FORMAT;
 
-    // A turn with no transcript AND no assistant output is a failed capture,
-    // not a conversation turn. Tell the client explicitly instead of
-    // completing a fake turn, and store nothing in canonical history so the
-    // placeholder never reaches a future model prompt.
     const hasAssistantOutput = Boolean(assistantText)
       || providerEvents.assistantAudioStarted
       || turn.assistantAudioBytes > 0;
     if (!transcript && !hasAssistantOutput) {
       await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
-        reason: "stt_empty",
+        reason: transcriptQualityRejected ? "transcript_quality_rejected" : "stt_empty",
         audio_bytes: turn.audioBytes,
         transcript_language_rejected: providerResult?.transcript_language_rejected === true,
+        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
       });
       writeTurnMetadata(turn, {
         status: "no_speech",
         completed_at: nowIso(),
         transcript_language_rejected: providerResult?.transcript_language_rejected === true,
+        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
       });
       turn.status = "no_speech";
       this.stopTurnProgress();
-      await this.sendEvent({
+      await this.sendTurnDone({
         type: "turn_done",
         session_id: turn.sessionId,
         branch_id: turn.branchId,
         turn_id: turn.turnId,
         status: "no_speech",
-        reason: "stt_empty",
+        reason: transcriptQualityRejected ? "transcript_quality_rejected" : "stt_empty",
         reply_language: turnReplyLanguage(turn, providerResult, null),
         input_languages: turnInputLanguages(turn),
+        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
       });
       if (this.turn === turn) {
         this.turn = null;
@@ -1034,10 +1020,6 @@ class VoiceSessionConnection {
     if (!transcriptSource || (transcriptSource === "synthetic" && transcript)) {
       transcriptSource = transcript ? "stt" : "synthetic";
     }
-    // The cascaded/text commit paths reach here without closing the assistant
-    // PCM stream; flush it before the canonical record claims stored bytes,
-    // or the record can reference a not-yet-flushed (0-byte) file. Idempotent
-    // for the live path, which already closed via completeLiveTurn.
     await closeAssistantAudioStream(turn);
     const canonicalRecord = await this.recordCompletedTurn(turn, providerResult, {
       transcript,
@@ -1046,7 +1028,6 @@ class VoiceSessionConnection {
       assistantAudioFormat,
     });
     const profileControlText = profileControlAssistantText(canonicalRecord);
-    // A voice assistant must speak its confirmations. A profile-control turn is
     // classified non-chat, so the provider returned no spoken reply; the gateway
     // produced the confirmation text while applying the change. Send it as text
     // and, when the provider can synthesize (cascaded pipeline) and the modality
@@ -1088,10 +1069,13 @@ class VoiceSessionConnection {
       providerEvents.stageTimings.first_audio_ms = firstAudioMs;
     }
     const doneModality = providerResult?.modality || confirmationTts?.modality || "";
-    const doneTtsError = providerResult?.tts_error || confirmationTts?.tts_error || "";
-    const doneTtsSpoke = confirmationTts && confirmationTts.spoke === true
-      ? true
-      : (typeof providerResult?.tts_spoke === "boolean" ? providerResult.tts_spoke : undefined);
+    const ttsTerminal = summarizeTtsTerminal(
+      providerResult, providerEvents, turn, assistantText, confirmationTts);
+    const {
+      complete: doneTtsComplete, delivery: doneTtsDelivery, error: doneTtsError,
+      replyTextChars: doneTtsReplyTextChars, segments: doneTtsSegments,
+      spokenTextEnd: doneTtsSpokenTextEnd, spoke: doneTtsSpoke,
+    } = ttsTerminal;
     await this.recordProviderEvent(turn, providerEvents, "turn_completed", {
       transcript,
       assistant_text: assistantText,
@@ -1104,21 +1088,33 @@ class VoiceSessionConnection {
       ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
       ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: providerResult.reasoner_first_delta_ms } : {}),
       ...(doneTtsError ? { tts_error: doneTtsError } : {}),
+      tts_delivery: doneTtsDelivery,
+      tts_complete: doneTtsComplete,
+      tts_segments: doneTtsSegments,
+      tts_spoken_text_end: doneTtsSpokenTextEnd,
+      tts_reply_text_chars: doneTtsReplyTextChars,
+      ...(Number.isInteger(providerResult?.tts_failed_segment_index)
+        ? { tts_failed_segment_index: providerResult.tts_failed_segment_index }
+        : {}),
     });
-    // Cascaded path: the reasoner's tools may have proposed client-forwardable
-    // actions (e.g. companion_motion) on providerResult.actions. Forward each as
-    // its own client event before turn_done, the same way the Live tool path
-    // forwards a page_tweak, so the client runtime can apply it.
     if (Array.isArray(providerResult?.actions)) {
       for (const action of providerResult.actions) {
         await this.emitClientAction(turn, action, "");
       }
     }
-    // Terminal path: clear the keepalive before turn_done so no progress tick can
-    // fire after the turn is done. Cleared synchronously (clearInterval) before
-    // the awaited send, so the interval cannot slip a tick in on the yield.
     this.stopTurnProgress();
-    await this.sendEvent({
+
+    const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
+    turn.status = hasPlaybackTail ? "playback" : "completed";
+    turn.ttsRecovery = ["partial", "failed"].includes(doneTtsDelivery)
+      && Number.isSafeInteger(doneTtsSpokenTextEnd)
+      && doneTtsSpokenTextEnd >= 0
+      && doneTtsSpokenTextEnd < doneTtsReplyTextChars
+      ? { delivery: doneTtsDelivery, spokenTextEnd: doneTtsSpokenTextEnd,
+        replyTextChars: doneTtsReplyTextChars, assistantText }
+      : null;
+    writeTurnMetadata(turn, { status: "completed", completed_at: nowIso() });
+    await this.sendTurnDone({
       type: "turn_done",
       session_id: turn.sessionId,
       branch_id: turn.branchId,
@@ -1126,33 +1122,26 @@ class VoiceSessionConnection {
       status: "completed",
       transcription_only: providerResult?.transcription_only === true,
       ...(typeof doneTtsSpoke === "boolean" ? { tts_spoke: doneTtsSpoke } : {}),
-      // Language visibility: ALWAYS report the reply (spoken) language and the
-      // configured input-prompt languages so a client overlay can render a live
-      // "hears X / speaks Y" indicator. reply_language falls back to the turn's
-      // effective profile when the provider result omits it.
       reply_language: turnReplyLanguage(turn, providerResult, canonicalRecord),
       input_languages: turnInputLanguages(turn),
-      // Honest delivery signals: how the reply was delivered ("text" = not
-      // spoken) and, when hosted TTS failed, the short reason.
       ...(doneModality ? { modality: doneModality } : {}),
       ...(doneTtsError ? { tts_error: doneTtsError } : {}),
-      // Additive streaming fields; old clients ignore them.
+      tts_delivery: doneTtsDelivery,
+      tts_complete: doneTtsComplete,
+      tts_segments: doneTtsSegments,
+      tts_spoken_text_end: doneTtsSpokenTextEnd,
+      tts_reply_text_chars: doneTtsReplyTextChars,
+      ...(Number.isInteger(providerResult?.tts_failed_segment_index)
+        ? { tts_failed_segment_index: providerResult.tts_failed_segment_index }
+        : {}),
       ...(providerResult?.streaming ? { streaming: true } : {}),
       ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
-      ...(Number.isFinite(providerResult?.tts_segments) ? { tts_segments: providerResult.tts_segments } : {}),
     });
 
-    // Generation is complete, but endpoint playback may still have a queued
-    // tail. Keep audio turns addressable until the client closes or replaces
     // the session so a barge-in during that tail can report its checkpoint.
     // Text-only turns still close immediately for old-client compatibility.
-    const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
-    turn.status = hasPlaybackTail ? "playback" : "completed";
-    writeTurnMetadata(turn, {
-      status: "completed",
-      completed_at: nowIso(),
-    });
-    if (!hasPlaybackTail && this.turn === turn) {
+    if (turn.ttsRecovery) retainTtsRecoveryTurn(this, turn);
+    if (!hasPlaybackTail && !turn.ttsRecovery && this.turn === turn) {
       this.turn = null;
     }
   }
@@ -1324,7 +1313,6 @@ class VoiceSessionConnection {
         // history distinguishes a text-only turn from a synthesis fault.
         modality: providerResult?.modality || "",
         tts_error: providerResult?.tts_error || "",
-        // Additive streaming metadata on the canonical record. Old code
         // reading new records ignores these; new code reading old records
         // treats absence as the non-streaming default.
         ...(providerResult?.streaming ? { streaming: true } : {}),
@@ -1358,7 +1346,7 @@ class VoiceSessionConnection {
   }
 
   async failCommittedTurn(turn, providerEvents, error) {
-    if (!turn) {
+    if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
     }
     if (isTurnSupersededError(error)) {
@@ -1551,6 +1539,7 @@ class VoiceSessionConnection {
     }
 
     const turn = this.turn;
+    if (turn.ttsRecovery && turn.status === "completed") return releaseTtsRecoveryTurn(this, turn);
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     if (turn.status !== "recording" && hasPartialEndpointPlayback(turn)) turn.recordedCanonical = false;
     turn.status = status;

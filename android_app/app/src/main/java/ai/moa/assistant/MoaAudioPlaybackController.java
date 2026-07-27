@@ -256,6 +256,12 @@ final class MoaAudioPlaybackController {
         }
     }
 
+    long writtenPcmFrames() {
+        synchronized (lock) {
+            return totalPcmFramesWritten;
+        }
+    }
+
     void stop() {
         stop(false);
     }

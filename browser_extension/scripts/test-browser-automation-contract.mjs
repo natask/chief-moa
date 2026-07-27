@@ -11,12 +11,14 @@ import {
 
 test("first-party browser automation manifest exposes coherent page and search tools", () => {
   const manifest = browserAutomationToolManifest();
-  assert.equal(manifest.length, 10);
+  assert.equal(manifest.length, 12);
   assert.ok(manifest.some((entry) => entry.tool === "browser.search.open" && entry.risk === "navigation"));
   assert.ok(manifest.some((entry) => entry.tool === "browser.page.click" && entry.approval === "target_app_confirmation"));
   assert.ok(manifest.some((entry) => entry.tool === "browser.page.snapshot" && entry.risk === "read_only"));
-  assert.equal(browserLocalToolManifest().length, 18);
+  assert.equal(browserLocalToolManifest().length, 22);
   assert.ok(browserLocalToolManifest().some((entry) => entry.tool === "browser.tab.close"));
+  assert.ok(browserLocalToolManifest().some((entry) => entry.tool === "browser.permissions.status"));
+  assert.ok(browserLocalToolManifest().some((entry) => entry.tool === "browser.page.network"));
 });
 
 test("search requests compile descriptions into bounded Google and Amazon URLs", () => {

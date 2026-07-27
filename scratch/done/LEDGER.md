@@ -1,3 +1,7 @@
+- Retained zero-audio failed speech turns for a bounded retry window — agent: Codex/GPT-5 — e803b553
+- Bound partial-speech retries to exact recorded suffixes and preserved ordered audio under concurrent failure — agent: Codex/GPT-5 — c0de8598
+- Made partial hosted speech explicit and retryable without rerunning reasoning — agent: Codex/GPT-5 — 0647bb2a
+- Proved English and Amharic browser voice turns through production, including canonical storage and TTS playback — Codex / GPT-5 — bd9bcaae
 - Routed explicit typed and finalized browser-voice URL/search commands through A.G.'s first-party local facade — agent: Codex/GPT-5 — integrate/browser-command-routing-20260716
 - Added A.G.-owned browser automation/search facade after Tweeks MCP black-box study — agent: Codex/GPT-5 — integrate/browser-userscripts-20260716
 - Exposed validated immutable gateway build identity in health and wired it into VPS image builds — agent: Codex/GPT-5 — fdb3c329df0046c1e92ce64755cc01ff8366f8c9

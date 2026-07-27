@@ -36,12 +36,18 @@ public actor GrantStore {
 
 public enum DestinationPolicy {
     public static func endpoint(origin: URL) throws -> URL {
+        try GatewayOrigin.endpoint(origin: origin, path: ["v1", "proactive", "macos"])
+    }
+}
+
+public enum GatewayOrigin {
+    public static func endpoint(origin: URL, path: [String]) throws -> URL {
         guard origin.user == nil, origin.password == nil, origin.query == nil, origin.fragment == nil,
               origin.path.isEmpty || origin.path == "/" else { throw MoaMacError.invalidDestination }
         let host = origin.host?.lowercased() ?? ""
         let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
         guard (origin.scheme == "https" || (origin.scheme == "http" && loopback)), !host.isEmpty else { throw MoaMacError.invalidDestination }
-        return origin.appendingPathComponent("v1/proactive/macos")
+        return path.reduce(origin) { result, component in result.appendingPathComponent(component) }
     }
 }
 

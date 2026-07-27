@@ -128,6 +128,10 @@ final class MoaActionBroker {
             return LocalActionResult.handled(success ? "Pressed home." : "I could not press home from here.");
         }
 
+        if (MoaControlCenterCommand.isExplicitRequest(trimmed)) {
+            return openControlCenter();
+        }
+
         if (isAppListCommand(trimmed)) {
             return listLauncherAppsForCommand();
         }
@@ -138,6 +142,20 @@ final class MoaActionBroker {
         }
 
         return LocalActionResult.notHandled();
+    }
+
+    private LocalActionResult openControlCenter() {
+        Capability capability = CAPABILITIES.get("ui.control_center");
+        Intent intent = new Intent(context, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            recordReceipt(capability, "control_center", true, "Opened A.G. control center.");
+            return LocalActionResult.handled("Opened the A.G. control center.");
+        } catch (RuntimeException error) {
+            recordReceipt(capability, "control_center", false, "Control center launch failed.");
+            return LocalActionResult.handled("I could not open the A.G. control center.");
+        }
     }
 
     ToolExecutionResult executeToolRequest(String tool, JSONObject input) {
@@ -1835,6 +1853,7 @@ final class MoaActionBroker {
         capabilities.put("system.home", new Capability("system.home", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.launch", new Capability("app.launch", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.list", new Capability("app.list", RISK_READ_ONLY, "none"));
+        capabilities.put("ui.control_center", new Capability("ui.control_center", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("email.compose", new Capability("email.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("sms.compose", new Capability("sms.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("url.open", new Capability("url.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));

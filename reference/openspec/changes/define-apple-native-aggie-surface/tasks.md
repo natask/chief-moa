@@ -15,5 +15,6 @@
 ## 3. Deferred platform work
 
 - [ ] 3.1 Capture actual rendered macOS/iOS accessibility and interaction evidence.
-- [ ] 3.2 Add authenticated transport and Keychain storage after policy review.
+- [ ] 3.2 Add authenticated transport with session-only in-memory credentials;
+      persistent Apple credential storage is prohibited.
 - [ ] 3.3 Add OS action executors, signing, distribution and physical-device QA.

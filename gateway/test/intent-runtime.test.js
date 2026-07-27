@@ -12,6 +12,7 @@ const {
   EventStreamVersionConflictError,
 } = require("../lib/event-substrate");
 const { createIntentRuntime } = require("../lib/intent-runtime");
+const { validateIntentContextPacket } = require("../lib/intent-context-packet");
 
 function makeRuntime(tempDir, nowValues = ["2026-07-11T01:00:00.000Z"], eventsOverride) {
   let nowIndex = 0;
@@ -81,6 +82,7 @@ function makeGlobalIdempotencyFakeSubstrate() {
       if (filter.idempotency_key) rows = rows.filter((event) => event.idempotency_key === filter.idempotency_key);
       if (filter.event_type_prefix) rows = rows.filter((event) => String(event.event_type || "").startsWith(filter.event_type_prefix));
       rows.sort((a, b) => Number(a.stream_version || 0) - Number(b.stream_version || 0));
+      if (filter.order === "desc") rows.reverse();
       const offset = Number(filter.offset || 0);
       const limit = Math.max(1, Math.min(Number(filter.limit || 100), 500));
       return rows.slice(offset, offset + limit).map((row) => structuredClone(row));
@@ -193,6 +195,92 @@ test("capture and restart-safe rehydration preserve bounded canonical fields", a
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("ordinary message ingestion preserves chronology, routes visibly, and supports durable continuation", async () => {
+  const substrate = makeGlobalIdempotencyFakeSubstrate();
+  const runtime = makeRuntime("/unused", [
+    "2026-07-25T20:00:00.000Z",
+    "2026-07-25T20:00:01.000Z",
+    "2026-07-25T20:00:02.000Z",
+    "2026-07-25T20:00:03.000Z",
+    "2026-07-25T20:00:04.000Z",
+    "2026-07-25T20:00:05.000Z",
+  ], substrate);
+  const rawThought = `Build a hosted intent authority. ${"retain context ".repeat(400)}`;
+  const receipt = await runtime.ingestMessage({
+    message: rawThought,
+    idempotency_key: "turn-global-authority-1",
+    workspace_id: "personal",
+    project_id: "chief_moa",
+    artifact_context: { artifact_id: "intent-contract", version: "7", ref: "git://chief-moa/contract.md" },
+    routing: { action: "new_intent", reason: "A durable multi-step outcome was requested.", confidence: 0.94 },
+    constraints: [{ summary: "Never perform irreversible external actions without explicit authority." }],
+    completion_criteria: ["A fresh agent can continue from a cited compact packet."],
+  });
+  const launched = {
+    intent_id: receipt.intent_id,
+    status: (await runtime.get(receipt.intent_id)).lifecycle_state,
+    context_packet: receipt.context_packet,
+  };
+  assert.equal(receipt.route, "new_intent");
+  assert.equal(receipt.reversible, true);
+  const messageEvents = substrate.events.filter((event) => event.stream_id === "messages:personal");
+  assert.deepEqual(messageEvents.map((event) => event.event_type), ["message.ingested", "message.routed"]);
+  assert.equal(messageEvents[0].payload.artifact_context.version, "7");
+  assert.equal(messageEvents[1].payload.ingested_event_id, messageEvents[0].event_id);
+  assert.equal(launched.status, "active");
+  assert.ok(launched.context_packet.continuation_text.length < rawThought.length);
+  validateIntentContextPacket(launched.context_packet, {
+    expectedIntentId: launched.intent_id,
+    expectedIntentVersion: launched.context_packet.intent_version,
+  });
+  assert.match(launched.context_packet.continuation_text, /Never perform irreversible/);
+
+  const source = substrate.events.find((event) => event.event_type === "intent.source_recorded");
+  assert.equal(source.payload.raw_text, rawThought);
+  const restarted = makeRuntime("/unused", ["2026-07-25T20:01:00.000Z"], substrate);
+  const restoredPacket = await restarted.contextPacket(launched.intent_id);
+  assert.equal(restoredPacket.packet_digest, launched.context_packet.packet_digest);
+
+  const claimed = await restarted.claim(launched.intent_id, {
+    agent_id: "agent_worker_1",
+    run_id: "run_worker_1",
+    idempotency_key: "claim-1",
+    expected_intent_version: restoredPacket.intent_version,
+  });
+  assert.equal(claimed.owner_agent_id, "agent_worker_1");
+  const expectedVersion = claimed.version;
+  const first = await restarted.recordProgress(launched.intent_id, {
+    agent_id: "agent_worker_1",
+    run_id: "run_worker_1",
+    idempotency_key: "progress-1",
+    expected_intent_version: expectedVersion,
+    progress: "Implemented the first bounded slice.",
+    next_step: "Run independent verification.",
+    evidence_refs: ["test://intent-launch"],
+    artifact_refs: ["git:chief-moa@abc123:gateway/lib/intent-runtime.js"],
+  });
+  assert.equal(first.latest_progress, "Implemented the first bounded slice.");
+  await assert.rejects(() => restarted.recordProgress(launched.intent_id, {
+    agent_id: "agent_worker_1",
+    run_id: "run_worker_1",
+    idempotency_key: "progress-stale",
+    expected_intent_version: expectedVersion,
+    progress: "Conflicting stale write.",
+  }), /intent version conflict/);
+
+  const freshPacket = await restarted.contextPacket(launched.intent_id);
+  assert.throws(() => validateIntentContextPacket(launched.context_packet, {
+    expectedIntentId: launched.intent_id,
+    expectedIntentVersion: freshPacket.intent_version,
+  }), /stale context packet/);
+  const tampered = structuredClone(freshPacket);
+  tampered.constraints = [];
+  assert.throws(() => validateIntentContextPacket(tampered), /digest mismatch/);
+  assert.throws(() => validateIntentContextPacket(freshPacket, {
+    expectedIntentId: "intent_wrong_route",
+  }), /wrong intent/);
 });
 
 test("mutation validation ignores caller limits and terminal intents cannot restart", async () => {
