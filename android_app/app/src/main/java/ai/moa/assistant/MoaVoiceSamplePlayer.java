@@ -258,8 +258,14 @@ final class MoaVoiceSamplePlayer {
         }
 
         @Override
-        public void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+        public void onTurnDone(String turnId, String status, boolean transcriptionOnly,
+                boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
             finishCurrent();
+        }
+
+        @Override
+        public void onTtsRetryDone(String turnId, String retryId, String status,
+                int fromTextChar, String error) {
         }
 
         @Override

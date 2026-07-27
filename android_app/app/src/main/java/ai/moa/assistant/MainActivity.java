@@ -52,11 +52,6 @@ public final class MainActivity extends Activity {
     // overlay stays alive behind it and never becomes a scrollback itself.
     static final String EXTRA_SHOW_HISTORY = "ai.moa.assistant.extra.SHOW_HISTORY";
 
-    // Overlay contract: the overlay agent handles this action to re-read the
-    // stored orb scale. Kept as a literal so the main app builds even before the
-    // overlay side lands its OverlayService.ACTION_REFRESH_ORB_SCALE constant.
-    private static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
-
     private static final int REQUEST_AUDIO = 4101;
     private static final int REQUEST_CONTACTS = 4102;
 
@@ -481,7 +476,7 @@ public final class MainActivity extends Activity {
                 }
                 try {
                     startService(new Intent(MainActivity.this, OverlayService.class)
-                            .setAction(ACTION_REFRESH_ORB_SCALE));
+                            .setAction(OverlayService.ACTION_REFRESH_ORB_SCALE));
                 } catch (Exception ignored) {
                 }
             }

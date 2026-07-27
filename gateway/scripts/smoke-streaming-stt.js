@@ -119,6 +119,114 @@ async function testRotationAndPartials() {
   console.log("  A rotation+partials: ok");
 }
 
+async function testProviderRetryAndOverlapReconciliation() {
+  const opened = [];
+  const partials = [];
+  const session = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    onPartial: (text) => { partials.push(text); },
+    rotateAfterMs: 60000,
+  });
+
+  const first = "Alpha plan has three safe steps";
+  opened[0].emitData([{ transcript: first, isFinal: false }]);
+  opened[0].emitData([{ transcript: first, isFinal: true, segmentId: "6:0" }]);
+  // The gRPC/provider retry redelivers the same final event.
+  opened[0].emitData([{ transcript: first, isFinal: true, segmentId: "6:0" }]);
+  // A later final overlaps the prior segment, as can happen at a long-pause
+  // boundary or provider replacement.
+  opened[0].emitData([{
+    transcript: "three safe steps and one final check",
+    isFinal: true,
+    segmentId: "10:0",
+  }]);
+  await tick();
+  const result = await session.finalize();
+  assert.equal(result.text, "Alpha plan has three safe steps and one final check");
+  assert.ok(!partials.some((text) => text.includes(`${first} ${first}`)),
+    "retry must never leak a repeated block into a partial");
+
+  const amharic = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const amStream = opened.at(-1);
+  amStream.emitData([{ transcript: "የመጀመሪያ ክፍል እዚህ ነው", isFinal: true, segmentId: "4:0" }]);
+  amStream.emitData([{ transcript: "ክፍል እዚህ ነው ከዚያ ይቀጥላል", isFinal: true, segmentId: "8:0" }]);
+  const amResult = await amharic.finalize();
+  assert.equal(amResult.text, "የመጀመሪያ ክፍል እዚህ ነው ከዚያ ይቀጥላል");
+
+  // Short deliberate repetition stays intact without a shared provider id.
+  const repeated = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const repeatStream = opened.at(-1);
+  repeatStream.emitData([{ transcript: "yes", isFinal: true }]);
+  repeatStream.emitData([{ transcript: "yes", isFinal: true }]);
+  assert.equal((await repeated.finalize()).text, "yes yes");
+
+  const shortPhraseRepeat = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const shortPhraseStream = opened.at(-1);
+  for (const transcript of ["go", "go", "very good", "very good"]) {
+    shortPhraseStream.emitData([{ transcript, isFinal: true }]);
+  }
+  assert.equal((await shortPhraseRepeat.finalize()).text, "go go very good very good",
+    "legitimate one- and two-word final segments remain repeated");
+  console.log("  A2 provider retry + multilingual overlap reconciliation: ok");
+}
+
+async function testCumulativeFinalStaircaseReplacement() {
+  const opened = [];
+  const session = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+  });
+  const stream = opened[0];
+  const prefix = "Draft the release note";
+  const middle = `${prefix} እሺ then verify the package`;
+  const complete = `${middle} before publishing the result`;
+  stream.emitData([{ transcript: prefix, isFinal: true, segmentId: "4:0" }]);
+  stream.emitData([{ transcript: middle, isFinal: true, segmentId: "8:0" }]);
+  stream.emitData([{ transcript: complete, isFinal: true, segmentId: "12:0" }]);
+  assert.equal((await session.finalize()).text, complete,
+    "cumulative A; A+B; A+B+C finals replace the prefix and retain an isolated language token once");
+  console.log("  A3 cumulative-final staircase replacement: ok");
+}
+
 function chirpProviderEnv(extra = {}) {
   return {
     VOICE_PROVIDER: "chirp",
@@ -410,6 +518,8 @@ function sentEvents(ws) {
 
 async function main() {
   await testRotationAndPartials();
+  await testProviderRetryAndOverlapReconciliation();
+  await testCumulativeFinalStaircaseReplacement();
   await testV2BidiMethodSelection();
   await testBatchFallbackOnStreamingError();
   await testWindowedBatchSplit();

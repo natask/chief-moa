@@ -59,7 +59,7 @@ log "waiting for checks on PR #${pr_number} (branch-side CI: the same workflows 
 expects_checks=false
 if ! git diff --quiet origin/master HEAD -- \
   gateway docker-compose.yml docker-compose.vps.yml scripts/vps \
-  browser_extension android_app .github/workflows; then
+  browser_extension android_app apple_surfaces .github/workflows; then
   expects_checks=true
 fi
 

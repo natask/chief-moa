@@ -1,5 +1,17 @@
 ## ADDED Requirements
 
+### Requirement: Explicit Control-Center Entry
+The full Android app SHALL remain available for setup and deep inspection
+without being the default launcher surface.
+
+#### Scenario: User explicitly requests the app UI
+- **WHEN** the user opens the overlay notification, uses the launcher Settings
+  shortcut or Quick Settings entry, or says an explicit command such as "show
+  me the app UI"
+- **THEN** Android opens the full control center
+- **AND** collapses large overlay surfaces while keeping the single overlay
+  service available
+
 ### Requirement: Setup And Health
 The full Android app SHALL expose setup state for overlay permission, microphone permission, screen access, gateway health, and harness availability.
 

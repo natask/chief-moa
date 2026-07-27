@@ -62,7 +62,10 @@ final class MoaVoiceGatewaySocket {
         // the client can re-arm its inactivity watchdog during a long answer.
         void onTurnProgress(String turnId);
 
-        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage);
+        void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke,
+                String replyLanguage, JSONObject terminalEvent);
+
+        void onTtsRetryDone(String turnId, String retryId, String status, int fromTextChar, String error);
 
         void onGatewayError(String message);
     }
@@ -221,6 +224,23 @@ final class MoaVoiceGatewaySocket {
         return sendJson(buildPlaybackProgressEvent(turnId, progress, reason));
     }
 
+    boolean sendTtsRetry(String turnId, String retryId, int fromTextChar) {
+        return sendJson(buildTtsRetryEvent(turnId, retryId, fromTextChar));
+    }
+
+    static JSONObject buildTtsRetryEvent(String turnId, String retryId, int fromTextChar) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("type", "retry_tts");
+            body.put("turn_id", safe(turnId));
+            body.put("retry_id", safe(retryId));
+            body.put("from_text_char", Math.max(0, fromTextChar));
+        } catch (JSONException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+        return body;
+    }
+
     void close() {
         WebSocket socket;
         synchronized (lock) {
@@ -349,7 +369,19 @@ final class MoaVoiceGatewaySocket {
                             // gateway spoke, so older gateways only trigger the
                             // local fallback when no assistant audio arrived.
                             event.optBoolean("tts_spoke", true),
-                            event.optString("reply_language", "")
+                            event.optString("reply_language", ""),
+                            event
+                    );
+                }
+                break;
+            case "tts_retry_done":
+                if (callback != null) {
+                    callback.onTtsRetryDone(
+                            event.optString("turn_id", ""),
+                            event.optString("retry_id", ""),
+                            event.optString("status", ""),
+                            event.optInt("from_text_char", -1),
+                            event.optString("tts_error", "")
                     );
                 }
                 break;

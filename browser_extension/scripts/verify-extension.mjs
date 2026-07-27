@@ -7,6 +7,8 @@ const requiredFiles = [
   "extension/background.js",
   "extension/browser-automation-contract.js",
   "extension/browser-automation-runtime.js",
+  "extension/browser-diagnostics-contract.js",
+  "extension/browser-file-access-runtime.js",
   "extension/browser-command-runtime.js",
   "extension/browser-command-transcript-runtime.js",
   "extension/browser-agent-loop-policy.js",

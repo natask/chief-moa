@@ -87,6 +87,52 @@ test("capture, get, and unknown-intent lookup are wired", async () => {
   assert.equal(missing.status, 404);
 });
 
+test("ordinary messages route into durable intents with packet, claim, and progress APIs", async () => {
+  const ingested = await call("POST", "/v1/intent-runtime/messages", {
+    body: {
+      message: "Build the hosted intent authority from the existing runtime.",
+      idempotency_key: "route-message-1",
+      workspace_id: "personal",
+      project_id: "proj_routes",
+      artifact_context: { artifact_id: "contract", version: "3" },
+      routing: { action: "new_intent", confidence: 0.9, reason: "Durable outcome" },
+      constraints: [{ summary: "Do not deploy without explicit authority." }],
+      completion_criteria: ["Independent verification passes."],
+    },
+  });
+  assert.equal(ingested.status, 201, JSON.stringify(ingested.json));
+  assert.equal(ingested.json.route, "new_intent");
+  const intentId = ingested.json.intent_id;
+
+  const packet = await call("GET", `/v1/intent-runtime/intents/${intentId}/context-packet`);
+  assert.equal(packet.status, 200, JSON.stringify(packet.json));
+  assert.match(packet.json.context_packet.continuation_text, /Do not deploy/);
+
+  const claimed = await call("POST", `/v1/intent-runtime/intents/${intentId}/claim`, {
+    body: {
+      agent_id: "agent_route_worker",
+      run_id: "run_route_worker",
+      idempotency_key: "route-claim-1",
+      expected_intent_version: packet.json.context_packet.intent_version,
+    },
+  });
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.json));
+
+  const progressed = await call("POST", `/v1/intent-runtime/intents/${intentId}/progress`, {
+    body: {
+      agent_id: "agent_route_worker",
+      run_id: "run_route_worker",
+      idempotency_key: "route-progress-1",
+      expected_intent_version: claimed.json.intent.version,
+      progress: "Created the operational contract.",
+      next_step: "Run independent verification.",
+      evidence_refs: ["test://route"],
+    },
+  });
+  assert.equal(progressed.status, 200, JSON.stringify(progressed.json));
+  assert.equal(progressed.json.intent.latest_progress, "Created the operational contract.");
+});
+
 test("transition advances lifecycle and rejects illegal jumps", async () => {
   await call("POST", "/v1/intent-runtime/intents", {
     body: { intent_id: "intent_route_transition", statement: "advance me", normalized_objective: "advance", project_id: "proj_routes" },

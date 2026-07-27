@@ -58,6 +58,20 @@ function createAgentRunLaunchHandlers({
       sendJson(response, 400, { error: "follow-up text is required" });
       return;
     }
+    const parentBranchId = String(parent.branch_id || "default");
+    const requestedBranchId = String(body.branch_id || parentBranchId);
+    const parentIntentId = String(parent.intent_id || "");
+    const requestedIntentId = String(body.intent_id || parentIntentId);
+    const parentSessionId = String(parent.conversation_id || parent.session_id || "");
+    const suppliedConversationId = body.conversation_id === undefined ? parentSessionId : String(body.conversation_id);
+    const suppliedSessionId = body.session_id === undefined ? parentSessionId : String(body.session_id);
+    if (requestedBranchId !== parentBranchId
+      || (parentIntentId && requestedIntentId !== parentIntentId)
+      || suppliedConversationId !== parentSessionId
+      || suppliedSessionId !== parentSessionId) {
+      sendJson(response, 409, { error: "follow-up scope does not match parent run" });
+      return;
+    }
     appendAgentEvent(parent.id, "follow_up", {
       text: truncate(text, 4000),
       source: String(body.source || "android-overlay").slice(0, 80),
@@ -69,18 +83,20 @@ function createAgentRunLaunchHandlers({
       "New user follow-up:", text,
     ].join("\n");
     const prompt = agentPromptWithSessionContext(continuationPrompt, {
-      sessionId: body.session_id || body.conversation_id || parent.conversation_id,
-      branchId: body.branch_id || "default",
+      sessionId: parentSessionId,
+      branchId: parentBranchId,
       allBranches: body.all_branches_context === true,
     });
     let run;
     try {
       run = createAgentRun({
-        conversation_id: body.conversation_id || parent.conversation_id,
+        conversation_id: parentSessionId,
         source: body.source || "android-follow-up",
         harness: body.harness || parent.harness,
         working_dir: body.working_dir || parent.working_dir,
         prompt, screen: body.screen, parent_run_id: parent.id,
+        branch_id: parentBranchId,
+        intent_id: requestedIntentId,
         profile_version: body.profile_version || parent.profile_version,
       });
     } catch (error) {
