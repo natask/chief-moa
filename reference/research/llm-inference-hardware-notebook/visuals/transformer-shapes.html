@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transformer tensor-shape explorer</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { max-width: 980px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+    h1, h2 { font-family: system-ui, sans-serif; }
+    .controls, .card { border: 1px solid #8888; border-radius: 12px; padding: 1rem; margin: 1rem 0; }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .8rem; }
+    label { display: grid; gap: .25rem; }
+    input { font: inherit; padding: .4rem; width: 8rem; }
+    .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .7rem; }
+    .box { border: 2px solid #4f8cff; border-radius: 8px; padding: .7rem; min-height: 5rem; }
+    .shape { color: #4f8cff; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { border-bottom: 1px solid #8886; padding: .45rem; text-align: left; }
+    .note { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Transformer tensor-shape explorer</h1>
+  <p>Change the model or request shape. The page computes logical tensor shapes and BF16 KV size. It makes no performance claim.</p>
+
+  <div class="controls">
+    <label>Batch B <input id="b" type="number" min="1" value="1"></label>
+    <label>Current positions S <input id="s" type="number" min="1" value="1"></label>
+    <label>Cached positions T <input id="t" type="number" min="0" value="8192"></label>
+    <label>Width D <input id="d" type="number" min="1" value="4096"></label>
+    <label>Query heads Hq <input id="hq" type="number" min="1" value="32"></label>
+    <label>KV heads Hkv <input id="hkv" type="number" min="1" value="8"></label>
+    <label>Head width Dh <input id="dh" type="number" min="1" value="128"></label>
+    <label>Layers L <input id="l" type="number" min="1" value="32"></label>
+    <label>MLP width F <input id="f" type="number" min="1" value="14336"></label>
+    <label>KV bytes/element <input id="bytes" type="number" min="0.125" step="0.125" value="2"></label>
+  </div>
+
+  <h2>One layer</h2>
+  <div class="flow">
+    <div class="box">Residual<br><span class="shape" id="residual"></span></div>
+    <div class="box">Q after reshape<br><span class="shape" id="q"></span></div>
+    <div class="box">new K and V<br><span class="shape" id="kv"></span></div>
+    <div class="box">attention scores<br><span class="shape" id="scores"></span></div>
+    <div class="box">joined heads<br><span class="shape" id="joined"></span></div>
+    <div class="box">SwiGLU gate/up<br><span class="shape" id="mlp"></span></div>
+  </div>
+
+  <div class="card">
+    <h2>Persistent KV state</h2>
+    <table>
+      <tr><th>Item</th><th>Value</th></tr>
+      <tr><td>K cache shape</td><td id="kcache"></td></tr>
+      <tr><td>V cache shape</td><td id="vcache"></td></tr>
+      <tr><td>KV bytes per cached token per sequence</td><td id="perToken"></td></tr>
+      <tr><td>Prior KV bytes for active batch</td><td id="total"></td></tr>
+      <tr><td>KV bytes after appending current positions</td><td id="after"></td></tr>
+    </table>
+  </div>
+
+  <p class="note">The score shape is conceptual. Tiled attention kernels need not store this whole tensor. During prefill, set T to 0 and S to prompt length. During decode, set S to 1 and T to prior context.</p>
+
+  <script>
+    const ids = ["b","s","t","d","hq","hkv","dh","l","f","bytes"];
+    const $ = id => document.getElementById(id);
+    const shape = values => "[" + values.join(", ") + "]";
+    const fmt = n => {
+      const units = ["B","KiB","MiB","GiB","TiB"];
+      let i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+      return n.toLocaleString(undefined, {maximumFractionDigits: 2}) + " " + units[i];
+    };
+    function update() {
+      const v = Object.fromEntries(ids.map(id => [id, Number($(id).value)]));
+      $("residual").textContent = shape([v.b, v.s, v.d]);
+      $("q").textContent = shape([v.b, v.s, v.hq, v.dh]);
+      $("kv").textContent = shape([v.b, v.s, v.hkv, v.dh]) + " each";
+      $("scores").textContent = shape([v.b, v.hq, v.s, v.t + v.s]);
+      $("joined").textContent = shape([v.b, v.s, v.hq * v.dh]);
+      $("mlp").textContent = shape([v.b, v.s, v.f]) + " each";
+      $("kcache").textContent = shape([v.l, v.b, v.t, v.hkv, v.dh]);
+      $("vcache").textContent = shape([v.l, v.b, v.t, v.hkv, v.dh]);
+      const per = 2 * v.l * v.hkv * v.dh * v.bytes;
+      $("perToken").textContent = fmt(per);
+      $("total").textContent = fmt(per * v.b * v.t);
+      $("after").textContent = fmt(per * v.b * (v.t + v.s));
+    }
+    ids.forEach(id => $(id).addEventListener("input", update));
+    update();
+  </script>
+</body>
+</html>
