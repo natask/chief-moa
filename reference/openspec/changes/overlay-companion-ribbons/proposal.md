@@ -2,12 +2,14 @@
 
 ## Status
 
-Android lane implemented. Browser lane not started.
+Android and browser ribbon presentation lanes implemented. Cross-surface visual
+acceptance remains incomplete until the full deterministic state matrix and
+real-phone Android QA are captured.
 
-The Android overlay now renders the companion-and-ribbons unit defined in
-`reference/design/overlay-2026-07/spec.md`. The browser extension still renders
-the cue-card stack it always has; the two surfaces are out of parity until the
-browser lane lands.
+The Android overlay and browser extension now render the companion-and-ribbons
+unit defined in `reference/design/overlay-2026-07/spec.md`. Retained partial
+visual evidence shows the intended compact streaming, bounded expansion, and
+copy states, but it does not prove the complete parity matrix.
 
 ## Why
 
@@ -107,7 +109,10 @@ this lane's and may need reconciling with the browser lane.
 
 ### Not done
 
-- The browser lane (`content.js`, `overlay.css`).
+- Full nine-state cross-surface visual capture and semantic parity acceptance.
+- Android real-device/emulator screenshots and manual phone interaction QA.
+- A rendered browser History-surface screenshot; only the handoff is
+  source-verified today.
 - Per-pixel touch pass-through inside a ribbon's own rectangle. See
   `design.md` for why and what ships instead.
 - `Replay` of a turn's assistant audio: the menu row exists and is disabled,

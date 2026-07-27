@@ -56,14 +56,20 @@
 - [ ] Manual phone QA: streaming legibility over light and dark apps, the
       ribbons' hit region against a real app underneath, drag feel across all
       three windows, and the undo chip.
-- [ ] Browser lane: `content.js` + `overlay.css` to the same contract, removing
-      `.agee-cue`, `#agee-log`, `#agee-voice-state`, `#agee-page-context`.
+- [x] Browser ribbon presentation lane implements the compact fixed streaming
+      window, bounded expansion, copy variants, companion-relative placement,
+      and separate History handoff. The broader legacy cue-card removal named
+      below remains open.
+- [ ] Remove the remaining legacy `.agee-cue`, `#agee-log`,
+      `#agee-voice-state`, and `#agee-page-context` surfaces after proving no
+      voice, status, or context regression.
 - [ ] Decide whether the Voice/Text delivery toggle needs a home in the full app
       now that the overlay no longer carries it.
 - [ ] Produce the corrected and polished transcript variants. Nothing emits them
       today, so the UI degrades to literal-only. Section 3 of
       `voice-capture-notebook-ime` is the contract.
-- [ ] Confirm the expand gesture matches whatever the browser lane settles on.
+- [x] Confirm Android and browser both use tap for bounded current-turn
+      expansion while History remains a separate surface.
 - [ ] Confirm the two capture bounds against how the user actually works. They
       are deliberately generous and may want tightening or loosening.
 - [ ] `recording-visibility-and-control` owns the persistent recording indicator
