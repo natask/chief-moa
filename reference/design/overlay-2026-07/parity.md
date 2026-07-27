@@ -20,7 +20,8 @@ difference here is a bug.
 | Thresholds | `HOLD_MS = 340`, `MULTITAP_MS = 260`, latch `6000ms`, linger `4500 / 9000ms`. |
 | Drag | Every element is a handle. The anchor is the companion. The unit moves as one. Never snaps to an edge. |
 | Colour and type tokens | Same values, expressed as CSS custom properties and as `MoaRibbonTokens` constants. |
-| Copy | Copies the full buffer, never the visible window. |
+| Expand | Tap expands the bounded bar to the full text and reveals the copy rail in the same gesture. Height-capped, grows away from the companion, collapses on a second tap / outside press / Escape / latch expiry. |
+| Copy | Three variants — `skill` (polished), `edited` (corrected), `literal` — with the highest-ranked *available* one as the default. Copies the full buffer of the chosen variant, never the visible window. Unavailable variants are disabled rows with a reason, never silently substituted. |
 | History | Double-tap opens a **separate** surface. The overlay never becomes a scrollback on either platform. |
 | No settings entry point | Neither surface exposes settings from the overlay. Settings change only through the agent's `update_agent_profile` tool. |
 
@@ -114,7 +115,7 @@ light app — mitigated by the halo, which is bidirectional enough to stay legib
 | Copy | `navigator.clipboard.writeText`, requires a user gesture — satisfied by the tap/menu row. Falls back to the existing `copyTextToClipboard` helper in `content.js`. | `ClipboardManager`, no permission. Android 13+ shows its own copy confirmation; do not add a second one. |
 | Blur | `backdrop-filter`, universally available in the target Chrome | `RenderEffect` API 31+ only; below 31 raise plate alpha (spec §9.3) |
 | Audio replay | plays through the existing offscreen document | plays through `MoaVoiceController`; **never** local `TextToSpeech` (existing hard rule) |
-| History handoff | `chrome.sidePanel.open` — requires a user gesture, satisfied by the double-tap | `startActivity` with `FLAG_ACTIVITY_NEW_TASK`; overlay stays alive behind |
+| History handoff | `chrome.sidePanel.open` on its History view — requires a user gesture, satisfied by the double-tap | `startActivity` with `FLAG_ACTIVITY_NEW_TASK`; overlay stays alive behind |
 | Occlusion | CSS `pointer-events` | `FLAG_NOT_TOUCHABLE` + glyph-bounds hit test (§2) |
 | Existence | the extension is injected per page; a navigation rebuilds the unit and must restore position, scale, and any in-flight ribbon buffer from extension state | the overlay is a foreground service and survives app switches; buffers live in `OverlayService` |
 
@@ -144,6 +145,28 @@ and its terminal state attaches the copy rail automatically (this replaces
 Android additionally has record mode, which drives neither ribbon: it opens no
 voice session, so the ribbons stay `dormant` and the existing record affordance
 is unchanged.
+
+# Provisional: the history destination
+
+Double-tap currently opens each platform's **existing** history surface — the
+browser side panel's History view, the Android history screen. Both already read
+the canonical session projection, so neither is new work.
+
+That destination is expected to move. The product direction is now an explicit
+split: a small always-visible companion (this overlay) versus one separate,
+larger work surface for planning, design, and development. The browser side
+chat panel is slated for removal in favour of that work surface. When it exists,
+double-tap targets it on both platforms and the browser stops calling
+`chrome.sidePanel.open`.
+
+Two rules hold in the meantime, on both surfaces:
+
+- **Do not build a second chat panel.** Not in the overlay, not beside it.
+- **Do not expand the overlay to fill the gap.** The expanded ribbon (§7.3 of
+  the spec) is a height-capped view of the *current turn only*. It is not a
+  history view and must never accumulate previous turns.
+
+The work surface itself is out of scope for this design.
 
 # Implementation seams
 

@@ -52,12 +52,17 @@ horizontally centred on the companion:
 | `ribbon-you` | `#moa-ribbon-you` | `ribbonYouView` | live user transcript (partial + final) |
 | `companion` | `#agee-launcher` (unchanged) | `orbView` (unchanged) | voice gestures, avatar_behavior motion, drag origin |
 | `ribbon-reply` | `#moa-ribbon-reply` | `ribbonReplyView` | streamed assistant text, status glyph |
-| `rail` | `.moa-rail` | inline row inside a ribbon | copy button, revealed on tap |
+| `rail` | `.moa-rail` | inline row inside a ribbon | three-way copy (§7.4), revealed with the expand |
 | `menu` | `#moa-menu` | popup window | hold menu, ≤ 4 rows |
 
 Nothing else exists in the overlay. No settings entry point, no mode selector,
 no history list, no approval UI, no page-identity strip, no log. Those live in
-the full Android app and the browser side panel.
+the full app and the work surface.
+
+The overlay is deliberately the *small* half of the product: an always-visible
+companion with a voice and visible motion. Planning, design, and development
+belong to a separate larger work surface. This design must not grow toward
+being that surface, and must not add a second chat panel beside it.
 
 The text composer (`#agee-input` / `panelView`) is unchanged and is **not** part
 of the unit. It opens on the existing gesture (voice-first triple-click / Android
@@ -139,9 +144,12 @@ Ribbons are laid out relative to the companion and then clamped:
 - A streaming delta must not change any element's width, height, or position.
   The only property that may animate during streaming is the line's
   `transform: translateX()`.
-- Ribbon height is constant across all states, including `engaged`. Solidifying
-  adds a background and a border **inside** the existing box (the border is
-  drawn with `box-shadow: inset 0 0 0 1px`, not `border`, so it costs no layout).
+- Ribbon height is constant across every state the user is not actively touching,
+  including `engaged`. Solidifying adds a background and a border **inside** the
+  existing box (the border is drawn with `box-shadow: inset 0 0 0 1px`, not
+  `border`, so it costs no layout). The one exception is the explicit `expanded`
+  state (§7.3), which is opened by a tap, is height-capped, grows away from the
+  companion, and collapses as soon as the user stops touching the unit.
 - The unit never becomes taller than `edgeMargin*2` less than the viewport.
   If the companion is scaled up enough to break that, the ribbons clamp the
   companion's rendered scale, not the other way round.
@@ -267,9 +275,9 @@ MULTITAP_MS     = 260   (gap between taps to count as a sequence)
 
 | Gesture | Companion | Ribbon (either) |
 |---|---|---|
-| **tap** (down/up < HOLD_MS, < slop) | Existing voice-first contract: toggle current-thread capture. Flag off: open composer. **Unchanged.** | Solidify + latch `engaged`, reveal the copy rail. A second tap on the rail's copy button copies; a second tap elsewhere on the ribbon releases the latch. |
+| **tap** (down/up < HOLD_MS, < slop) | Existing voice-first contract: toggle current-thread capture. Flag off: open composer. **Unchanged.** | **Expand** (§7.3): the bounded bar opens to show the full text and the copy rail (§7.4) appears with it. A second tap collapses. |
 | **hold** (down ≥ HOLD_MS, < slop) | Existing: push-to-talk. Release commits. **Unchanged.** | Open the ribbon menu (§7.1). Ribbon enters `engaged` at HOLD_MS with a 4px lift and a haptic tick on Android. |
-| **double-tap** | Existing: fresh-thread capture toggle. **Unchanged.** | Open **History** (§7.2). The ribbon flashes `--moa-accent` at 12% for 180ms as the acknowledgement. |
+| **double-tap** | Existing: fresh-thread capture toggle. **Unchanged.** | Open **History** (§7.5). The ribbon flashes `--moa-accent` at 12% for 180ms as the acknowledgement. |
 | **triple-tap** | Existing: cancel capture, open composer. **Unchanged.** | — (a third tap is absorbed; no action) |
 | **drag** (past slop) | Move the unit. | Move the unit. |
 | **scroll / wheel** | Existing: resize the companion. **Unchanged.** | Ignored; the page scrolls normally. |
@@ -290,7 +298,7 @@ by any outside press, Escape, or 5s of no pointer.
 |---|---|
 | Copy | Full buffer to clipboard. |
 | Copy as note | Full buffer to clipboard, prefixed with the turn timestamp. |
-| Open history | Same as double-tap (§7.2). |
+| Open history | Same as double-tap (§7.5). |
 | Hide overlay | Existing hide path (Android `stopSelf`, browser `dismissOverlayUi`). |
 
 **Bottom ribbon (reply):**
@@ -300,12 +308,78 @@ by any outside press, Escape, or 5s of no pointer.
 | Copy | Full buffer to clipboard. |
 | Replay | Replay this turn's assistant audio, if retained. Disabled and dimmed when it is not. |
 | Stop speaking | Halt playback. Shown only while speaking; replaces Replay. |
-| Open history | Same as double-tap (§7.2). |
+| Open history | Same as double-tap (§7.5). |
 
 Menu rows are inert proposals in the UI sense: none of them takes a model
 action, launches a run, or changes a setting. Settings remain agent-opened only.
 
-## 7.2 History is a different surface
+## 7.3 Expand: the bounded bar opens
+
+The sliding window (§4) is what keeps the bar bounded. Expand is how the user
+reads past it. **Tap expands and reveals the copy rail in the same gesture** —
+one tap does the obvious thing, and the copy affordance sits where the text you
+would copy is actually visible.
+
+This is deliberately the same tap that used to only solidify. Solidify is no
+longer a destination of its own: touching a ribbon at all solidifies it (§5),
+so a tap that stopped there would have been a gesture with no effect.
+
+| | Collapsed (default) | Expanded |
+|---|---|---|
+| Height | `--moa-ribbon-h` (28px), fixed | `auto`, capped at `--moa-expand-max` |
+| Text | tail window, `nowrap`, `translateX` slide | **full buffer**, `pre-wrap`, `translateX: 0` |
+| Overflow | hidden + left fade | `overflow-y: auto`, no fade |
+| Copy rail | hidden | visible (§7.4) |
+| Plate | none (ambient) / full (engaged) | full |
+
+Rules:
+
+- `--moa-expand-max` = `min(5 × 18px line-height + padding, 30vh)`. Past that the
+  expanded body scrolls. It is a bar that opens, never a panel that grows without
+  limit, and never a scrollback — it holds this turn's text and nothing else.
+- **The expanded ribbon grows away from the companion.** The upper ribbon is
+  bottom-anchored so it grows upward; the lower ribbon is top-anchored so it
+  grows downward. The companion does not move, the other ribbon does not move,
+  and the page does not reflow — the ribbon is absolutely positioned.
+- Only one ribbon is expanded at a time. Expanding one collapses the other.
+- Collapse on: a second tap, a press outside the unit, `Escape`, or latch expiry
+  (`--moa-dur-latch`). A drag started from an expanded ribbon collapses it first.
+- Expanding pauses that ribbon's linger timer. A turn that ends while expanded
+  does not retire under the user's eyes.
+- A ribbon still receiving deltas expands live: new text appends to the bottom of
+  the expanded body. The body does not auto-scroll if the user has scrolled up.
+- Expanded is an occluding state, and that is correct: the user is touching it.
+  It collapses the moment they are not.
+
+## 7.4 The copy rail is a three-way choice
+
+Copy is not one button. The rail is a primary action plus a variant chooser,
+matching `reference/openspec/changes/voice-capture-notebook-ime` §3.3
+("selection between literal, user-edited, and named skill candidates"):
+
+| Variant | Key | What it is | Default rank |
+|---|---|---|---|
+| Polished | `skill` | The turn rewritten by a named writing-skill profile, in the user's own style | 1 (preferred default) |
+| Corrected | `edited` | The transcript with recognition and grammar errors corrected, wording otherwise preserved | 2 |
+| Literal | `literal` | The exact transcript, byte-for-byte | 3 (always present) |
+
+- **The default is the highest-ranked variant that actually exists.** Polished is
+  the intended default. When the gateway has produced no polished revision, the
+  rail falls back to corrected, then to literal. The rail never invents a variant
+  and never presents literal text as polished.
+- The primary button copies the default. The chevron opens the chooser; picking
+  a variant copies it and makes it the default for the rest of this turn only.
+  It does not write a preference — a variant preference is profile state and the
+  agent owns that.
+- Unavailable variants render as disabled rows with a one-line reason
+  ("not generated for this turn"), so the capability is discoverable before the
+  data exists rather than appearing later with no explanation.
+- **The literal transcript is never mutated.** Per §3.2 of that change, every
+  variant is a derived revision with a parent; the rail only ever reads. Copying
+  polished text does not replace the stored transcript.
+- Chooser rows carry the skill name when one is known ("Polished — plain style").
+
+## 7.5 History is a different surface
 
 Double-tap does **not** turn the ribbon into a scrollback. It hands off:
 
@@ -318,6 +392,12 @@ Double-tap does **not** turn the ribbon into a scrollback. It hands off:
 
 This keeps the "the overlay is not a chat" principle intact while giving the
 user the fast path they asked for. **Judgment call — see §10.**
+
+**Destination is provisional.** The user has since said the side chat panel
+should be removed in favour of one larger work surface. Double-tap therefore
+targets *the existing history surface* on each platform today, and moves to the
+work surface when that exists. No new panel is built for it, and the destination
+is the only part of this gesture that is expected to change.
 
 # 8. Motion and timing
 
