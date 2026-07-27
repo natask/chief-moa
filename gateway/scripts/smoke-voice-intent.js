@@ -71,10 +71,10 @@ assert.strictEqual(explicitAgentPromptFrom("moa run the tests"), "the tests");
 assert.strictEqual(explicitAgentPromptFrom("just chatting"), "");
 
 // classifyVoiceTurn: the routing table.
-assert.strictEqual(classifyVoiceTurn({}, "stop"), "control");
-assert.strictEqual(classifyVoiceTurn({}, "run gemini and claude"), "multi_agent");
-assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "agent_run");
-assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "agent_run");
+assert.strictEqual(classifyVoiceTurn({}, "stop"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "run gemini and claude"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "/agent ship it"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "fix the bug"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on with the operational systems"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what's going on in this world"), "chat");
@@ -82,26 +82,30 @@ assert.strictEqual(classifyVoiceTurn({}, "what is going on here, what does closi
 assert.strictEqual(classifyVoiceTurn({}, "what is going on?"), "chat");
 // Explicit language configuration is profile_control. It writes through the
 // gateway profile sanitizer and catalog, not through client-side state.
-assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "respond only in English"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "speak Amharic and English"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "only process English and Amharic"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "change your language to Amharic"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "right now I want to speak Amharic"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "your name is Moa"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "you are Aggie"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "call yourself The Steward"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "I want you to be a research scout"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "act as my calm writing coach"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "what voice are you using"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "what language settings are active"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "what languages can you speak"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "what voices can you use"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "use the Kore voice on this device"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "change your voice"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "go through all the voices and say something in every voice"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "sample the voices for me one after the other"), "profile_control");
-assert.strictEqual(classifyVoiceTurn({}, "change my voice"), "profile_control");
+for (const modelRouted of [
+  "only speak English and Amharic; don't switch up",
+  "respond only in English",
+  "speak Amharic and English",
+  "only process English and Amharic",
+  "change your language to Amharic",
+  "right now I want to speak Amharic",
+  "your name is Moa",
+  "you are Aggie",
+  "call yourself The Steward",
+  "I want you to be a research scout",
+  "act as my calm writing coach",
+  "what voice are you using",
+  "what language settings are active",
+  "what languages can you speak",
+  "what voices can you use",
+  "use the Kore voice on this device",
+  "change your voice",
+  "go through all the voices and say something in every voice",
+  "sample the voices for me one after the other",
+  "change my voice",
+]) {
+  assert.strictEqual(classifyVoiceTurn({}, modelRouted), "chat", `old matcher fired for ${modelRouted}`);
+}
 assert.strictEqual(classifyVoiceTurn({}, "what time is it"), "chat");
 
 const optionsPayload = profileOptionsPayload();
@@ -302,7 +306,7 @@ for (const phrase of [
 ]) {
   const echo = parseProfileControlIntent(phrase);
   assert.equal(echo?.action, "echo_transcript", `'${phrase}' must be an echo_transcript intent`);
-  assert.equal(classifyVoiceTurn({}, phrase), "profile_control", `'${phrase}' must route as profile_control`);
+  assert.equal(classifyVoiceTurn({}, phrase), "chat", `'${phrase}' must route through the model`);
 }
 // A plain question must not be an echo.
 assert.notEqual(parseProfileControlIntent("what time is it")?.action, "echo_transcript");
@@ -324,7 +328,7 @@ for (const phrase of [
   const revert = parseProfileControlIntent(phrase);
   assert.equal(revert?.action, "revert", `'${phrase}' must be a revert intent`);
   assert.equal(revert?.mode, "previous", `'${phrase}' must revert to previous`);
-  assert.equal(classifyVoiceTurn({}, phrase), "profile_control", `'${phrase}' must route as profile_control`);
+  assert.equal(classifyVoiceTurn({}, phrase), "chat", `'${phrase}' must route through the model`);
 }
 for (const phrase of [
   "reset your settings",
@@ -436,7 +440,7 @@ for (const [transcript, name] of GARBAGE_IDENTITY_WRITES) {
 // non-mutating control action, so it is untouched by the model-routing change.
 for (const stop of ["stop", "shut up", "be quiet", "never mind", "silence"]) {
   assert.ok(isStopLike(stop), `'${stop}' must stay stop-like`);
-  assert.strictEqual(classifyVoiceTurn({}, stop), "control", `'${stop}' must classify as control`);
+  assert.strictEqual(classifyVoiceTurn({}, stop), "chat", `'${stop}' must route through the model`);
 }
 assert.ok(!isStopLike("stop the build"), "a real request must not be swept into stop");
 

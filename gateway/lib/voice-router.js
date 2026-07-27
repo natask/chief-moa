@@ -110,33 +110,10 @@ function classificationFromActions(actions) {
 }
 
 function heuristicActions(transcript) {
-  const cancelTarget = cancelRunTargetFrom(transcript);
-  if (cancelTarget) {
-    return [{ type: ACTION_TYPES.CANCEL_RUN, target: cancelTarget }];
-  }
-  if (isStopLike(transcript)) {
-    return [{ type: ACTION_TYPES.STOP_SPEECH }];
-  }
-  const profileIntent = parseProfileControlIntent(transcript);
-  if (profileIntent) {
-    return [actionFromProfileIntent(profileIntent)];
-  }
-  if (wantsMultipleAgents(transcript)) {
-    return dispatchAgentActions(transcript, 2);
-  }
-  // A language-control request is model-owned: keep it conversational so the
-  // model changes languages by tool call instead of launching a harness.
-  if (looksLikeLanguageControl(transcript)) {
-    return [{ type: ACTION_TYPES.CHAT }];
-  }
-  const explicitPrompt = explicitAgentPromptFrom(transcript);
-  if (explicitPrompt || shouldRunAgentFromVoice(transcript)) {
-    return [{
-      type: ACTION_TYPES.DISPATCH_AGENT,
-      prompt: explicitPrompt || String(transcript || "").trim(),
-      harness: null,
-    }];
-  }
+  // Failure to obtain a model routing decision must be safe and inert. The
+  // normal chat reasoner still sees the original transcript and may invoke its
+  // registered tools; this router never guesses an intent from words.
+  void transcript;
   return [{ type: ACTION_TYPES.CHAT }];
 }
 

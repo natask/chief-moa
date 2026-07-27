@@ -7,13 +7,12 @@
 //   fork      = branch off the current thread, keeping its history
 //   incognito = answer the turn without saving anything
 //
-// This is a HYBRID decision. A deterministic prior runs first; the model's
-// context_management tool call may refine it, with two hard gates:
-//   1. An explicit client `context_action` in the request body ALWAYS wins. The
-//      model cannot override an explicit client choice (a future UI button).
-//   2. The model may only choose "incognito" when the transcript carries an
-//      explicit linguistic warrant (incognito / off the record / don't save /
-//      private). This mirrors the liveToolAllowsProfileUpdate double gate.
+// This is a HYBRID decision. A deterministic prior runs first and the model's
+// context_management tool call may refine it. Incognito is deliberately
+// asymmetric: an explicit privacy phrase, a typed client incognito action, or a
+// model-selected incognito action is sufficient. No other source may downgrade
+// that choice. For non-incognito actions, an explicit client `context_action`
+// wins and the model otherwise refines the prior.
 //
 // Everything here is pure and deterministic (no model, no IO) so it is directly
 // unit-testable and can never fail a turn.
@@ -69,23 +68,17 @@ function looksLikeNew(text) {
   return NEW_PATTERN.test(t) || BROKER_NEW_WORK_PATTERN.test(t);
 }
 
-// The deterministic prior: explicit client action wins; otherwise default to
-// continue, lifting to fork or new by phrasing, and to incognito only on an
-// explicit warrant. Returns { action, source }.
+// The deterministic prior accepts typed client state plus a narrow privacy
+// safety floor. Other free-form routing is interpreted by the model; when that
+// tool is absent or fails, it safely continues the current thread.
 function deterministicPrior(input = {}) {
-  const clientAction = normalizeContextAction(input.contextAction || input.context_action);
-  if (clientAction) {
-    return { action: clientAction, source: "client" };
-  }
   const text = input.text || "";
   if (hasIncognitoWarrant(text)) {
     return { action: "incognito", source: "warrant" };
   }
-  if (looksLikeFork(text)) {
-    return { action: "fork", source: "phrasing" };
-  }
-  if (looksLikeNew(text)) {
-    return { action: "new", source: "phrasing" };
+  const clientAction = normalizeContextAction(input.contextAction || input.context_action);
+  if (clientAction) {
+    return { action: clientAction, source: "client" };
   }
   return { action: "continue", source: "default" };
 }
@@ -121,8 +114,17 @@ function resolveContextDecision(input = {}) {
     record.reason = String(toolCall.reason || "").slice(0, 400);
   }
 
-  // Gate 1: an explicit client choice always wins; the model cannot move the
-  // action, though its retrieval_query/label still enrich the record.
+  // Incognito is a union, not an override: prior, client, and model privacy
+  // choices are all one-way. This safety floor never blocks model-selected
+  // incognito in another language.
+  if (prior.action === "incognito" || clientAction === "incognito" || record.model_action === "incognito") {
+    record.action = "incognito";
+    record.model_override = record.model_action === "incognito" && prior.action !== "incognito";
+    return record;
+  }
+
+  // For non-incognito actions, an explicit client choice wins; the model cannot
+  // move the action, though its retrieval_query/label still enriches the record.
   if (clientAction) {
     record.action = clientAction;
     return record;
@@ -130,16 +132,6 @@ function resolveContextDecision(input = {}) {
 
   // No tool call (or the provider has no tools): the prior stands.
   if (!toolCall || !record.model_action) {
-    return record;
-  }
-
-  // Gate 2: the model may only choose incognito with an explicit warrant.
-  if (record.model_action === "incognito" && !record.incognito_warrant) {
-    record.action = prior.action === "incognito" ? "continue" : prior.action;
-    record.model_override = false;
-    record.reason = record.reason
-      ? `${record.reason} (incognito denied: no explicit warrant)`
-      : "incognito denied: no explicit warrant";
     return record;
   }
 

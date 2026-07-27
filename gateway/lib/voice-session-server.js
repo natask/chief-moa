@@ -873,7 +873,7 @@ class VoiceSessionConnection {
         transcript: providerEvents.transcript || turn.syntheticText || "",
         profile_version: turn.profileVersion || "",
         device_id: turn.deviceId || "",
-        source: turn.source,
+        source: turn.source, incognito: String(turn.contextAction || "").toLowerCase() === "incognito" || String(turn.branchId || "").startsWith("inc-"),
       });
       await this.recordProviderEvent(turn, providerEvents, "tool_result", {
         tool_name: name,

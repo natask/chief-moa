@@ -218,7 +218,7 @@ async function assertVoiceDelegates(baseUrl, sessionId) {
     },
   });
   assert.equal(profileControl.status, 200);
-  assert.equal(profileControl.json.classification, "profile_control");
+  assert.equal(profileControl.json.classification, "chat");
   assert.notEqual(profileControl.json.classification, "browser_page_question");
   assert.notEqual(profileControl.json.status, "needs_evidence");
 
@@ -247,6 +247,7 @@ async function assertVoiceDelegates(baseUrl, sessionId) {
     branch_id: "voice",
     turn_id: "browser_voice_screen",
     client: { platform: "browser", id: "smoke-extension" },
+    intent_hint: "browser_page_question",
     transcript: "Describe the current page.",
     page_ref: {
       title: "Voice Screen Page",

@@ -836,31 +836,25 @@ function looksLikeLanguageControl(transcript) {
   return /\blanguages?\b/.test(lower) || mentionsSupportedLanguage(transcript);
 }
 
-// Route a voice turn. `body` may carry forced_action / intent_hint to override.
-function classifyVoiceTurn(body, transcript) {
+// Route a voice turn. Free-form user text is always handed to the reasoning
+// model, which selects a registered tool when work or a setting change is
+// needed. Only a typed client hint may bypass that model turn.
+function classifyVoiceTurn(body, _transcript) {
   const b = body || {};
   const forced = String(b.forced_action || b.client?.intent_hint || b.intent_hint || "").toLowerCase();
-  if (forced === "control" || isStopLike(transcript)) {
+  if (forced === "control") {
     return "control";
   }
-  if (forced === "profile_control" || parseProfileControlIntent(transcript)) {
+  if (forced === "profile_control") {
     return "profile_control";
   }
-  if (forced === "multi_agent" || wantsMultipleAgents(transcript)) {
+  if (forced === "multi_agent") {
     return "multi_agent";
   }
   if (forced === "agent_run") {
     return "agent_run";
   }
-  // A language-control request stays conversational (model owns the change),
-  // never a harness launch.
-  if (!forced && looksLikeLanguageControl(transcript)) {
-    return "chat";
-  }
-  if (explicitAgentPromptFrom(transcript)) {
-    return "agent_run";
-  }
-  return shouldRunAgentFromVoice(transcript) ? "agent_run" : "chat";
+  return "chat";
 }
 
 module.exports = {

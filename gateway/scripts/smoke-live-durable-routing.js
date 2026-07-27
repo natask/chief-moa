@@ -156,6 +156,20 @@ async function startFakeLive() {
             inputTranscription: { text: transcript },
           },
         }));
+        if (marker === 1) {
+          ws.send(JSON.stringify({
+            toolCall: {
+              functionCalls: [{
+                id: "tool_launch_agent",
+                name: "launch_agent_run",
+                args: {
+                  prompt: transcript,
+                },
+              }],
+            },
+          }));
+          return;
+        }
         if (marker === 4) {
           // A non-language field: language fields are model-owned now (no
           // transcript parser to confirm them), so only a patch like voice —

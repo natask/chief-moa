@@ -35,12 +35,23 @@ test("forced actions honor body precedence and safe fallbacks", async () => {
   assert.deepEqual(routed.actions, [{ type: "chat" }]);
 });
 
-test("heuristic cancellation distinguishes all, current, stop speech, and chat", async () => {
-  assert.deepEqual((await routeVoiceTurn({}, "kill every agent", { useLlm: false })).actions, [{ type: "cancel_run", target: "all" }]);
-  assert.deepEqual((await routeVoiceTurn({}, "stop the task", { useLlm: false })).actions, [{ type: "cancel_run", target: "current" }]);
-  assert.deepEqual((await routeVoiceTurn({}, "be quiet", { useLlm: false })).actions, [{ type: "stop_speech" }]);
-  assert.deepEqual((await routeVoiceTurn({}, "", { useLlm: false })).actions, [{ type: "chat" }]);
-  assert.deepEqual((await routeVoiceTurn({}, "please switch languages when useful", { useLlm: false })).actions, [{ type: "clarify_voice", scope: "global" }]);
+test("model failure never falls back to transcript matching", async () => {
+  for (const transcript of [
+    "kill every agent",
+    "stop the task",
+    "be quiet",
+    "speak Amharic",
+    "use a warmer voice",
+    "respond in text",
+    "run multiple agents",
+    "",
+  ]) {
+    assert.deepEqual(
+      (await routeVoiceTurn({}, transcript, { useLlm: false })).actions,
+      [{ type: "chat" }],
+      `old matcher fired for ${JSON.stringify(transcript)}`,
+    );
+  }
 });
 
 test("LLM routing normalizes every allowed action and drops unsafe entries", async () => {
