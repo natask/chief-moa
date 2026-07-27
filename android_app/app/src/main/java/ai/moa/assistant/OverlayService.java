@@ -92,22 +92,10 @@ public final class OverlayService extends Service {
     private ScrollView messageScroll;
     private EditText composer;
     private TextView runStatusView;
-    // The overlay unit: companion between two ribbons. Each ribbon is its own
-    // WindowManager window, positioned every frame from the companion's anchor by
-    // MoaRibbonUnitLayout so the three windows move as one object.
-    private MoaRibbonView ribbonYouView;
-    private MoaRibbonView ribbonReplyView;
-    private WindowManager.LayoutParams ribbonYouParams;
-    private WindowManager.LayoutParams ribbonReplyParams;
-    private MoaRibbonTouchListener ribbonYouTouch;
-    private MoaRibbonTouchListener ribbonReplyTouch;
-    private final MoaRibbonBuffer youBuffer = new MoaRibbonBuffer();
-    private final MoaRibbonBuffer replyBuffer = new MoaRibbonBuffer();
-    private final MoaRibbonPresence youPresence = new MoaRibbonPresence();
-    private final MoaRibbonPresence replyPresence = new MoaRibbonPresence();
-    private View ribbonMenuView;
-    private Runnable pendingRibbonPresenceTick;
-    private Runnable pendingMenuIdleDismiss;
+    // The overlay unit: companion between two ribbons, owned by its own
+    // controller. Three WindowManager windows positioned from one anchor.
+    private final MoaOverlayUnitController overlayUnit =
+            new MoaOverlayUnitController(overlayUnitHost());
     private TextView voiceCancelControl;
     private TextView voiceSendControl;
     private WindowManager.LayoutParams voiceCancelControlParams;
@@ -323,7 +311,7 @@ public final class OverlayService extends Service {
         discardWarmMic();
         cancelStreamingTurnWatchdog();
         voiceLog.clear();
-        detachRibbonsNow();
+        overlayUnit.detachNow();
         removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
@@ -356,9 +344,7 @@ public final class OverlayService extends Service {
         super.onConfigurationChanged(newConfig);
         // Rotation and resize are the only moments the flip test may re-run
         // outside a drag; it must never re-run mid-stream.
-        closeRibbonMenu();
-        positionRibbons();
-        applyRibbonPresence();
+        overlayUnit.onConfigurationChanged();
     }
 
     @Override
@@ -629,7 +615,7 @@ public final class OverlayService extends Service {
     private void showOrbRemoveTarget() {
         orbDragStartX = orbParams == null ? 0 : orbParams.x;
         orbDragStartY = orbParams == null ? 0 : orbParams.y;
-        setRibbonDragging(true);
+        overlayUnit.setDragging(true);
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
@@ -654,7 +640,7 @@ public final class OverlayService extends Service {
         }
         prepareVoiceDraftControlPositions();
         MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
-        positionRibbons();
+        overlayUnit.position();
         updatePreparedVoiceDraftControlLayouts();
         updateOrbRemoveTargetState();
     }
@@ -695,7 +681,7 @@ public final class OverlayService extends Service {
         }
         boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
         removeOrbRemoveTarget();
-        setRibbonDragging(false);
+        overlayUnit.setDragging(false);
         if (remove) {
             beginReversibleOrbRemoval();
         }
@@ -769,7 +755,7 @@ public final class OverlayService extends Service {
         contextControlsRow = null;
         MoaOverlayWindowLayout.detach(windowManager, panel);
         cancelAutoDismiss();
-        detachRibbonsNow();
+        overlayUnit.detachNow();
         removeVoiceDraftControls();
         removeOrbRemoveTarget();
         removeOrb();
@@ -881,13 +867,12 @@ public final class OverlayService extends Service {
         }
     }
 
-    // The overlay unit. The old voice card was a filled, bordered, scrolling
-    // rectangle anchored above the orb: it had a background so it occluded, it
-    // wrapped so it reflowed, and it stacked so it grew until it ate the screen
-    // and buried the persistent transcript line. The unit that replaces it is
-    // two fixed 28dp ribbons and the companion between them. Nothing here paints
-    // a filled plate until the user is physically touching it, and no stream
-    // delta can change any element's width, height, or position.
+    // The overlay unit — the companion between two ribbons — is owned by
+    // MoaOverlayUnitController. The service keeps the voice session, the
+    // composer, and the companion's own gestures, and drives the unit with the
+    // current turn's text; it asks the unit nothing about how that text is
+    // painted. showTranscriptOverlay/removeTranscriptOverlay keep their names
+    // because the voice paths call them from about forty places.
     private void showTranscriptOverlay(String value) {
         if (!Settings.canDrawOverlays(this)) {
             return;
@@ -898,134 +883,50 @@ public final class OverlayService extends Service {
             voiceUserTranscript = initialText;
             voiceUserTranscriptFinal = false;
         }
-        showRibbons();
+        if (!overlayUnit.isShowing()) {
+            cancelAutoDismiss();
+            removePanel();
+            overlayUnit.show();
+        }
         renderVoiceTranscriptRows();
     }
 
-    private void showRibbons() {
-        if (ribbonYouView != null || orbView == null || orbParams == null) {
-            return;
-        }
-        cancelAutoDismiss();
-        removePanel();
-
-        ribbonYouView = new MoaRibbonView(this, false);
-        ribbonReplyView = new MoaRibbonView(this, true);
-        MoaRibbonTokens.Palette palette = ribbonPalette();
-        boolean highContrast = highTextContrastEnabled();
-        for (MoaRibbonView ribbon : new MoaRibbonView[]{ribbonYouView, ribbonReplyView}) {
-            ribbon.setPalette(palette);
-            ribbon.setHighContrast(highContrast);
-        }
-
-        int width = ribbonWidthPx();
-        ribbonYouParams = ribbonWindowParams(width, ribbonYouView.ribbonHeightPx());
-        ribbonReplyParams = ribbonWindowParams(width, ribbonReplyView.ribbonHeightPx());
-
-        ribbonYouTouch = attachRibbonGestures(ribbonYouView, youPresence, youBuffer, false);
-        ribbonReplyTouch = attachRibbonGestures(ribbonReplyView, replyPresence, replyBuffer, true);
-
-        windowManager.addView(ribbonYouView, ribbonYouParams);
-        windowManager.addView(ribbonReplyView, ribbonReplyParams);
-        positionRibbons();
-        applyRibbonPresence();
-    }
-
-    private WindowManager.LayoutParams ribbonWindowParams(int width, int height) {
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                width,
-                height,
-                overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                        // Ribbons are never editable, so the IME must not move
-                        // them. Only the composer reacts to the keyboard.
-                        | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        params.gravity = Gravity.TOP | Gravity.START;
-        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-        return params;
-    }
-
-    private int ribbonWidthPx() {
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        return Math.min(
-                screenWidth - dp(MoaRibbonTokens.EDGE_MARGIN_DP) * 2,
-                dp(MoaRibbonTokens.RIBBON_MAX_W_DP));
-    }
-
-    private MoaRibbonTokens.Palette ribbonPalette() {
-        int mode = getResources().getConfiguration().uiMode
-                & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
-        // Android cannot see the app underneath and must not try to; sampling the
-        // screen for a cosmetic decision would be a screen capture.
-        return MoaRibbonTokens.palette(mode == android.content.res.Configuration.UI_MODE_NIGHT_NO);
-    }
-
-    private boolean highTextContrastEnabled() {
-        android.view.accessibility.AccessibilityManager manager =
-                (android.view.accessibility.AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
-        if (manager == null) {
-            return false;
-        }
-        try {
-            return manager.isEnabled() && (boolean) android.view.accessibility.AccessibilityManager.class
-                    .getMethod("isHighTextContrastEnabled").invoke(manager);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    // Every element of the unit is a drag handle, and the anchor is always the
-    // companion: a ribbon drag writes the orb's x/y and all three windows follow
-    // in the same coalesced frame.
-    private MoaRibbonTouchListener attachRibbonGestures(
-            final MoaRibbonView ribbon,
-            final MoaRibbonPresence presence,
-            final MoaRibbonBuffer buffer,
-            final boolean reply) {
-        MoaRibbonTouchListener listener = new MoaRibbonTouchListener(
-                this, ribbon, new MoaRibbonTouchListener.Callbacks() {
+    private MoaOverlayUnitController.Host overlayUnitHost() {
+        return new MoaOverlayUnitController.Host() {
             @Override
-            public void onPressChanged(boolean down) {
-                presence.setPointerDown(down);
-                applyRibbonPresence();
+            public android.content.Context context() {
+                return OverlayService.this;
             }
 
             @Override
-            public void onTap() {
-                if (presence.latched(SystemClock.uptimeMillis())) {
-                    presence.releaseLatch();
-                } else {
-                    presence.latch(SystemClock.uptimeMillis());
-                }
-                applyRibbonPresence();
+            public WindowManager windowManager() {
+                return windowManager;
             }
 
             @Override
-            public void onCopy() {
-                copyRibbonBuffer(buffer);
-                presence.latch(SystemClock.uptimeMillis());
-                applyRibbonPresence();
+            public int overlayType() {
+                return OverlayService.this.overlayType();
             }
 
             @Override
-            public void onHold() {
-                openRibbonMenu(ribbon, presence, buffer, reply);
+            public View companion() {
+                return orbView;
             }
 
             @Override
-            public void onDoubleTap() {
-                ribbon.flash();
-                openHistorySurface();
+            public WindowManager.LayoutParams companionParams() {
+                return orbParams;
+            }
+
+            @Override
+            public int companionSizePx() {
+                return orbParams != null && orbParams.width > 0
+                        ? orbParams.width : dp(ORB_WINDOW_DP);
             }
 
             @Override
             public void onDragStart() {
                 showOrbRemoveTarget();
-                setRibbonDragging(true);
             }
 
             @Override
@@ -1035,22 +936,44 @@ public final class OverlayService extends Service {
 
             @Override
             public void onDragEnd(boolean committed) {
-                presence.setPointerDown(false);
                 finishOrbDrag(committed);
             }
-        });
-        ribbon.setOnTouchListener(listener);
-        return listener;
-    }
 
-    private void setRibbonDragging(boolean dragging) {
-        youPresence.setDragging(dragging);
-        replyPresence.setDragging(dragging);
-        if (!dragging) {
-            youPresence.setPointerDown(false);
-            replyPresence.setPointerDown(false);
-        }
-        applyRibbonPresence();
+            @Override
+            public void openHistory() {
+                openHistorySurface();
+            }
+
+            @Override
+            public void hideOverlay() {
+                stopSelf();
+            }
+
+            @Override
+            public boolean assistantSpeaking() {
+                return streamingAssistantAudioPlaying;
+            }
+
+            @Override
+            public boolean retryAvailable() {
+                return voiceFailureRetry.isAvailable(streamingVoiceGeneration);
+            }
+
+            @Override
+            public void stopSpeaking() {
+                stopAssistantAudioForBargeIn();
+            }
+
+            @Override
+            public void retryCapture() {
+                retryFailedVoiceCapture();
+            }
+
+            @Override
+            public void onWentDormant() {
+                removeTranscriptOverlay();
+            }
+        };
     }
 
     private void dragUnitBy(int dx, int dy) {
@@ -1066,165 +989,9 @@ public final class OverlayService extends Service {
         updateOrbDragSurfaces();
     }
 
-    private void positionRibbons() {
-        if (ribbonYouView == null || ribbonReplyView == null || orbParams == null) {
-            return;
-        }
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int size = orbParams.width > 0 ? orbParams.width : dp(ORB_WINDOW_DP);
-        MoaRibbonUnitLayout.Placement placement = MoaRibbonUnitLayout.place(
-                screenWidth,
-                screenHeight,
-                dp(MoaRibbonTokens.EDGE_MARGIN_DP),
-                dp(MoaRibbonTokens.GAP_DP),
-                systemInsetTop(),
-                systemInsetBottom(),
-                orbParams.x,
-                orbParams.y,
-                size,
-                ribbonYouParams.width,
-                ribbonYouView.ribbonHeightPx());
-        ribbonYouParams.x = placement.ribbonX;
-        ribbonYouParams.y = placement.youY;
-        ribbonReplyParams.x = placement.ribbonX;
-        ribbonReplyParams.y = placement.replyY;
-        MoaOverlayWindowLayout.update(windowManager, ribbonYouView, ribbonYouParams);
-        MoaOverlayWindowLayout.update(windowManager, ribbonReplyView, ribbonReplyParams);
-    }
-
-    private int systemInsetTop() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || orbView == null) {
-            return 0;
-        }
-        android.view.WindowInsets insets = orbView.getRootWindowInsets();
-        if (insets == null) {
-            return 0;
-        }
-        return insets.getInsets(android.view.WindowInsets.Type.statusBars()
-                | android.view.WindowInsets.Type.displayCutout()).top;
-    }
-
-    private int systemInsetBottom() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || orbView == null) {
-            return 0;
-        }
-        android.view.WindowInsets insets = orbView.getRootWindowInsets();
-        if (insets == null) {
-            return 0;
-        }
-        return insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom;
-    }
-
-    // One choke point for "how solid is the unit right now". Everything that can
-    // change the answer — a press, a latch, a linger expiring, a stream starting —
-    // ends here, and here is the only place that writes opacity.
-    private void applyRibbonPresence() {
-        long now = SystemClock.uptimeMillis();
-        MoaRibbonPresence.State you = youPresence.state(now);
-        MoaRibbonPresence.State reply = replyPresence.state(now);
-        if (ribbonYouView != null) {
-            ribbonYouView.setPresenceState(you);
-            ribbonYouView.setPalette(ribbonPalette());
-        }
-        if (ribbonReplyView != null) {
-            ribbonReplyView.setPresenceState(reply);
-            ribbonReplyView.setPalette(ribbonPalette());
-        }
-        applyRibbonTouchability();
-        if (orbView != null) {
-            MoaRibbonPresence.State unit = you.ordinal() > reply.ordinal() ? you : reply;
-            // The touch listener also fades the companion for press feedback; the
-            // presence machine is the authority, so cancel that animation first.
-            orbView.animate().cancel();
-            orbView.setAlpha(MoaRibbonPresence.companionAlpha(unit));
-            float scale = unit == MoaRibbonPresence.State.DRAGGING
-                    ? MoaRibbonTokens.COMPANION_DRAG_SCALE : 1f;
-            orbView.setScaleX(scale);
-            orbView.setScaleY(scale);
-        }
-        scheduleRibbonPresenceTick(now);
-    }
-
-    // A ribbon with no text takes no touch AT ALL: the window is flagged
-    // NOT_TOUCHABLE so a tap lands in the app underneath. With text, the window
-    // is touchable and MoaRibbonView rejects anything off the painted glyph run.
-    private void applyRibbonTouchability() {
-        long now = SystemClock.uptimeMillis();
-        applyRibbonTouchability(ribbonYouView, ribbonYouParams,
-                MoaRibbonPresence.acceptsTouch(youPresence.state(now), !youBuffer.isEmpty()));
-        applyRibbonTouchability(ribbonReplyView, ribbonReplyParams,
-                MoaRibbonPresence.acceptsTouch(replyPresence.state(now), !replyBuffer.isEmpty()));
-    }
-
-    private void applyRibbonTouchability(
-            MoaRibbonView ribbon, WindowManager.LayoutParams params, boolean touchable) {
-        if (ribbon == null || params == null) {
-            return;
-        }
-        int flags = touchable
-                ? params.flags & ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                : params.flags | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        if (flags == params.flags) {
-            return;
-        }
-        params.flags = flags;
-        MoaOverlayWindowLayout.update(windowManager, ribbon, params);
-    }
-
-    // Latch and linger are deadlines, not events, so the unit re-evaluates itself
-    // once when the nearest deadline falls due instead of polling.
-    private void scheduleRibbonPresenceTick(long now) {
-        if (pendingRibbonPresenceTick != null) {
-            mainHandler.removeCallbacks(pendingRibbonPresenceTick);
-            pendingRibbonPresenceTick = null;
-        }
-        long next = Long.MAX_VALUE;
-        next = Math.min(next, nextRibbonDeadline(youPresence, now));
-        next = Math.min(next, nextRibbonDeadline(replyPresence, now));
-        if (next == Long.MAX_VALUE) {
-            return;
-        }
-        pendingRibbonPresenceTick = () -> {
-            pendingRibbonPresenceTick = null;
-            applyRibbonPresence();
-            long tickNow = SystemClock.uptimeMillis();
-            if (youPresence.state(tickNow) == MoaRibbonPresence.State.DORMANT
-                    && replyPresence.state(tickNow) == MoaRibbonPresence.State.DORMANT) {
-                removeTranscriptOverlay();
-            }
-        };
-        mainHandler.postDelayed(pendingRibbonPresenceTick, Math.max(16, next - now));
-    }
-
-    private long nextRibbonDeadline(MoaRibbonPresence presence, long now) {
-        long deadline = Long.MAX_VALUE;
-        if (presence.latched(now)) {
-            deadline = Math.min(deadline, now + MoaRibbonTokens.DUR_LATCH_MS);
-        }
-        if (presence.lingerDeadlineMs() > now) {
-            deadline = Math.min(deadline, presence.lingerDeadlineMs());
-        }
-        return deadline;
-    }
-
-    private void copyRibbonBuffer(MoaRibbonBuffer buffer) {
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (clipboard == null || buffer.isEmpty()) {
-            return;
-        }
-        // Copy is always the FULL retained buffer, never the visible window.
-        clipboard.setPrimaryClip(ClipData.newPlainText("A.G. voice transcript", buffer.text()));
-        // Android 13+ shows its own copy confirmation; a second toast would be
-        // noise. The announcement exists so a truncated copy is still honest.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && ribbonYouView != null) {
-            ribbonYouView.announceForAccessibility(buffer.copyAnnouncement());
-        }
-    }
-
+    // History is a DIFFERENT surface. The overlay shows the current turn only and
+    // never becomes a scrollback; the full app owns the session history.
     private void openHistorySurface() {
-        // History is a DIFFERENT surface. The overlay shows the current turn only
-        // and never becomes a scrollback; the full app owns the session history.
         Intent intent = new Intent(this, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .putExtra(MainActivity.EXTRA_SHOW_HISTORY, true);
@@ -1232,82 +999,6 @@ public final class OverlayService extends Service {
             startActivity(intent);
         } catch (Exception error) {
             Log.w(TAG, "history open failed: " + cleanError(error));
-        }
-    }
-
-    private void openRibbonMenu(
-            MoaRibbonView ribbon,
-            MoaRibbonPresence presence,
-            MoaRibbonBuffer buffer,
-            boolean reply) {
-        closeRibbonMenu();
-        if (!Settings.canDrawOverlays(this) || buffer.isEmpty()) {
-            return;
-        }
-        WindowManager.LayoutParams params = reply ? ribbonReplyParams : ribbonYouParams;
-        if (params == null) {
-            return;
-        }
-        List<MoaRibbonMenu.Row> rows = reply
-                ? replyMenuRows(buffer)
-                : youMenuRows(buffer);
-        presence.setMenuOpen(true);
-        applyRibbonPresence();
-        ribbonMenuView = MoaRibbonMenu.show(
-                this, windowManager, overlayType(), ribbonPalette(), rows,
-                params.x, params.y, ribbon.ribbonHeightPx(), this::closeRibbonMenu);
-        pendingMenuIdleDismiss = this::closeRibbonMenu;
-        mainHandler.postDelayed(pendingMenuIdleDismiss, MoaRibbonTokens.MENU_IDLE_DISMISS_MS);
-    }
-
-    private List<MoaRibbonMenu.Row> youMenuRows(MoaRibbonBuffer buffer) {
-        List<MoaRibbonMenu.Row> rows = new ArrayList<>();
-        rows.add(MoaRibbonMenu.Row.of("Copy", () -> copyRibbonBuffer(buffer)));
-        rows.add(MoaRibbonMenu.Row.of("Copy as note", () -> copyRibbonBufferAsNote(buffer)));
-        rows.add(MoaRibbonMenu.Row.of("Open history", this::openHistorySurface));
-        rows.add(MoaRibbonMenu.Row.of("Hide overlay", this::stopSelf));
-        return rows;
-    }
-
-    private List<MoaRibbonMenu.Row> replyMenuRows(MoaRibbonBuffer buffer) {
-        List<MoaRibbonMenu.Row> rows = new ArrayList<>();
-        rows.add(MoaRibbonMenu.Row.of("Copy", () -> copyRibbonBuffer(buffer)));
-        if (streamingAssistantAudioPlaying) {
-            rows.add(MoaRibbonMenu.Row.of("Stop speaking", this::stopAssistantAudioForBargeIn));
-        } else if (voiceFailureRetry.isAvailable(streamingVoiceGeneration)) {
-            // The card's "Record again" affordance; the reply has no audio to
-            // replay when the turn failed, so the retry takes that row.
-            rows.add(MoaRibbonMenu.Row.of("Record again", this::retryFailedVoiceCapture));
-        } else {
-            rows.add(MoaRibbonMenu.Row.disabled("Replay"));
-        }
-        rows.add(MoaRibbonMenu.Row.of("Open history", this::openHistorySurface));
-        return rows;
-    }
-
-    private void copyRibbonBufferAsNote(MoaRibbonBuffer buffer) {
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (clipboard == null || buffer.isEmpty()) {
-            return;
-        }
-        String stamp = java.text.DateFormat.getDateTimeInstance(
-                java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(new java.util.Date());
-        clipboard.setPrimaryClip(ClipData.newPlainText(
-                "A.G. voice note", stamp + "\n" + buffer.text()));
-    }
-
-    private void closeRibbonMenu() {
-        if (pendingMenuIdleDismiss != null) {
-            mainHandler.removeCallbacks(pendingMenuIdleDismiss);
-            pendingMenuIdleDismiss = null;
-        }
-        View menu = ribbonMenuView;
-        ribbonMenuView = null;
-        youPresence.setMenuOpen(false);
-        replyPresence.setMenuOpen(false);
-        if (menu != null) {
-            MoaOverlayWindowLayout.detach(windowManager, menu);
-            applyRibbonPresence();
         }
     }
 
@@ -1463,7 +1154,7 @@ public final class OverlayService extends Service {
         voiceLog.setUser(value, isFinal);
         voiceUserTranscript = value;
         voiceUserTranscriptFinal = isFinal;
-        if (ribbonYouView == null) {
+        if (!overlayUnit.isShowing()) {
             showTranscriptOverlay(value);
             return;
         }
@@ -1477,7 +1168,7 @@ public final class OverlayService extends Service {
         }
         voiceLog.setAssistant(value);
         voiceAssistantTranscript = value;
-        if (ribbonReplyView == null) {
+        if (!overlayUnit.isShowing()) {
             showTranscriptOverlay("");
         }
         setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
@@ -1489,9 +1180,6 @@ public final class OverlayService extends Service {
     // never stacks: the stacking card is exactly what buried the transcript line
     // the user asked twice to keep visible.
     private void renderVoiceTranscriptRows() {
-        if (ribbonYouView == null || ribbonReplyView == null) {
-            return;
-        }
         String reply = voiceLog.currentAssistantText();
         if (!voiceLog.isEmpty()) {
             MoaVoiceTranscriptLog.Entry newest = voiceLog.get(voiceLog.size() - 1);
@@ -1499,58 +1187,21 @@ public final class OverlayService extends Service {
                 reply = reply + " · interrupted";
             }
         }
-        pushRibbon(ribbonYouView, youBuffer, youPresence, voiceLog.currentUserText());
-        pushRibbon(ribbonReplyView, replyBuffer, replyPresence, reply);
-
-        boolean listening = voiceRuntimeState == VoiceRuntimeState.LISTENING;
-        boolean answering = voiceRuntimeState == VoiceRuntimeState.THINKING
-                || voiceRuntimeState == VoiceRuntimeState.SPEAKING;
-        ribbonYouView.setListening(listening);
-        ribbonYouView.setCaretVisible(listening && !youBuffer.isEmpty());
-        ribbonReplyView.setCaretVisible(answering && !replyBuffer.isEmpty());
-        youPresence.setStreaming(listening || voiceRuntimeState == VoiceRuntimeState.SENDING);
-        replyPresence.setStreaming(answering);
-        ribbonReplyView.setTone(replyToneColor());
-        applyRibbonPresence();
+        overlayUnit.render(
+                voiceLog.currentUserText(),
+                reply,
+                voiceRuntimeState == VoiceRuntimeState.LISTENING,
+                voiceRuntimeState == VoiceRuntimeState.THINKING
+                        || voiceRuntimeState == VoiceRuntimeState.SPEAKING,
+                replyToneColor());
     }
 
     private int replyToneColor() {
-        MoaRibbonTokens.Palette palette = ribbonPalette();
-        if (voiceRuntimeState == VoiceRuntimeState.ERROR) {
-            return palette.warn;
-        }
-        if (replyBuffer.text().contains("(not spoken)")) {
-            return palette.warn;
+        if (voiceRuntimeState == VoiceRuntimeState.ERROR
+                || safe(voiceAssistantTranscript).contains("(not spoken)")) {
+            return MoaColors.EMBER;
         }
         return 0;
-    }
-
-    // A delta must never reflow the unit. The buffer takes the text, the rendered
-    // window is a grapheme-safe TAIL of the buffer, and the only thing that moves
-    // is the line's translation inside a fixed viewport.
-    private void pushRibbon(
-            MoaRibbonView ribbon,
-            MoaRibbonBuffer buffer,
-            MoaRibbonPresence presence,
-            String text) {
-        String value = flattenToOneLine(text);
-        if (value.isEmpty()) {
-            buffer.clear();
-        } else {
-            buffer.replace(value);
-        }
-        ribbon.setWindowText(buffer.window());
-        presence.setHasText(!buffer.isEmpty());
-    }
-
-    // A ribbon is one line by contract, so newlines become separators rather than
-    // wrapping the box or rendering as tofu.
-    private String flattenToOneLine(String text) {
-        String value = safe(text);
-        if (value.isEmpty()) {
-            return "";
-        }
-        return value.replaceAll("\\s*\\n+\\s*", " · ").replaceAll("\\s{2,}", " ").trim();
     }
 
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
@@ -1579,14 +1230,8 @@ public final class OverlayService extends Service {
         if (!wasLive || !ended) {
             return;
         }
-        long now = SystemClock.uptimeMillis();
-        boolean mustBeRead = to == VoiceRuntimeState.ERROR
-                || replyBuffer.text().contains("(not spoken)");
-        youPresence.setStreaming(false);
-        replyPresence.setStreaming(false);
-        youPresence.startLinger(now, MoaRibbonPresence.lingerFor(false, false));
-        replyPresence.startLinger(now, MoaRibbonPresence.lingerFor(true, mustBeRead));
-        applyRibbonPresence();
+        overlayUnit.startLinger(to == VoiceRuntimeState.ERROR
+                || safe(voiceAssistantTranscript).contains("(not spoken)"));
     }
 
     private OrbView.ResponseState orbResponseStateFor(VoiceRuntimeState state) {
@@ -1609,9 +1254,7 @@ public final class OverlayService extends Service {
     // Runtime state now shows through the companion's own animation and the
     // ribbons' caret and tone.
     private void updateVoiceHeaderState() {
-        if (ribbonReplyView != null) {
-            ribbonReplyView.setTone(replyToneColor());
-        }
+        renderVoiceTranscriptRows();
     }
 
     private String visibleVoiceContent(String text) {
@@ -1639,80 +1282,7 @@ public final class OverlayService extends Service {
 
     private void removeTranscriptOverlay() {
         cancelAutoDismiss();
-        closeRibbonMenu();
-        if (ribbonYouView == null && ribbonReplyView == null) {
-            return;
-        }
-        youBuffer.clear();
-        replyBuffer.clear();
-        youPresence.setHasText(false);
-        replyPresence.setHasText(false);
-        youPresence.setStreaming(false);
-        replyPresence.setStreaming(false);
-        youPresence.releaseLatch();
-        replyPresence.releaseLatch();
-        final MoaRibbonView you = ribbonYouView;
-        final MoaRibbonView reply = ribbonReplyView;
-        detachRibbonState();
-        fadeOutRibbon(you);
-        fadeOutRibbon(reply);
-    }
-
-    private void fadeOutRibbon(final MoaRibbonView ribbon) {
-        if (ribbon == null) {
-            return;
-        }
-        ribbon.setCaretVisible(false);
-        ribbon.setListening(false);
-        ribbon.animate()
-                .alpha(0f)
-                .setDuration(MoaRibbonTokens.DUR_SLOW_MS)
-                .withEndAction(() -> {
-                    ribbon.release();
-                    MoaOverlayWindowLayout.detach(windowManager, ribbon);
-                })
-                .start();
-    }
-
-    // Immediate teardown with no exit animation, used when the whole unit has to
-    // vanish in one frame (drag-to-remove, service destroy).
-    private void detachRibbonsNow() {
-        closeRibbonMenu();
-        MoaRibbonView you = ribbonYouView;
-        MoaRibbonView reply = ribbonReplyView;
-        detachRibbonState();
-        if (you != null) {
-            you.release();
-            MoaOverlayWindowLayout.detach(windowManager, you);
-        }
-        if (reply != null) {
-            reply.release();
-            MoaOverlayWindowLayout.detach(windowManager, reply);
-        }
-    }
-
-    private void detachRibbonState() {
-        if (pendingRibbonPresenceTick != null) {
-            mainHandler.removeCallbacks(pendingRibbonPresenceTick);
-            pendingRibbonPresenceTick = null;
-        }
-        if (ribbonYouTouch != null) {
-            ribbonYouTouch.release();
-            ribbonYouTouch = null;
-        }
-        if (ribbonReplyTouch != null) {
-            ribbonReplyTouch.release();
-            ribbonReplyTouch = null;
-        }
-        ribbonYouView = null;
-        ribbonReplyView = null;
-        ribbonYouParams = null;
-        ribbonReplyParams = null;
-        if (orbView != null) {
-            orbView.setAlpha(MoaRibbonTokens.COMPANION_DORMANT_ALPHA);
-            orbView.setScaleX(1f);
-            orbView.setScaleY(1f);
-        }
+        overlayUnit.hide();
     }
 
     private void cancelAutoDismiss() {

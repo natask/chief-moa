@@ -28,6 +28,7 @@ final class MoaRibbonPresence {
     private boolean pointerDown;
     private boolean dragging;
     private boolean menuOpen;
+    private boolean expanded;
     private long latchUntilMs;
     private long lingerUntilMs;
 
@@ -35,6 +36,7 @@ final class MoaRibbonPresence {
         hasText = value;
         if (!value) {
             lingerUntilMs = 0;
+            expanded = false;
         }
     }
 
@@ -55,6 +57,20 @@ final class MoaRibbonPresence {
 
     void setMenuOpen(boolean value) {
         menuOpen = value;
+    }
+
+    /**
+     * Click-to-expand. A tap opens the ribbon to reveal the full text of the
+     * turn and its copy affordance; a second tap closes it. Expansion is the ONE
+     * thing allowed to change the unit's height, because the user asked for it
+     * explicitly. A stream delta still may not.
+     */
+    void setExpanded(boolean value) {
+        expanded = value;
+    }
+
+    boolean expanded() {
+        return expanded;
     }
 
     boolean menuOpen() {
@@ -106,7 +122,7 @@ final class MoaRibbonPresence {
         if (dragging) {
             return State.DRAGGING;
         }
-        if (pointerDown || menuOpen || nowMs < latchUntilMs) {
+        if (pointerDown || menuOpen || expanded || nowMs < latchUntilMs) {
             return State.ENGAGED;
         }
         if (hasText && (streaming || nowMs < lingerUntilMs)) {

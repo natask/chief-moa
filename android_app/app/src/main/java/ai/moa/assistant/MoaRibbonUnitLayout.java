@@ -73,6 +73,28 @@ final class MoaRibbonUnitLayout {
             int ribbonWidth,
             int ribbonHeight
     ) {
+        return place(screenWidth, screenHeight, margin, gap, safeTop, safeBottom,
+                companionX, companionY, companionSize, ribbonWidth, ribbonHeight, ribbonHeight);
+    }
+
+    /**
+     * Placement when the two ribbons have different heights, which happens only
+     * while one of them is expanded by a tap.
+     */
+    static Placement place(
+            int screenWidth,
+            int screenHeight,
+            int margin,
+            int gap,
+            int safeTop,
+            int safeBottom,
+            int companionX,
+            int companionY,
+            int companionSize,
+            int ribbonWidth,
+            int youHeight,
+            int replyHeight
+    ) {
         int companionCenterX = companionX + companionSize / 2;
         int minX = ribbonWidth + margin * 2 <= screenWidth ? margin : 0;
         int maxX = Math.max(minX, screenWidth - ribbonWidth - minX);
@@ -81,7 +103,7 @@ final class MoaRibbonUnitLayout {
         int top = margin + Math.max(0, safeTop);
         int bottom = screenHeight - margin - Math.max(0, safeBottom);
 
-        int youY = companionY - gap - ribbonHeight;
+        int youY = companionY - gap - youHeight;
         int replyY = companionY + companionSize + gap;
 
         boolean flippedDown = false;
@@ -90,19 +112,19 @@ final class MoaRibbonUnitLayout {
             // No room above: stack both below, you first so reading order holds.
             flippedDown = true;
             youY = companionY + companionSize + gap;
-            replyY = youY + gap + ribbonHeight;
-        } else if (replyY + ribbonHeight > bottom) {
+            replyY = youY + gap + youHeight;
+        } else if (replyY + replyHeight > bottom) {
             // No room below: stack both above, reply nearest the companion so the
             // pair still reads you-then-reply top to bottom.
             flippedUp = true;
-            replyY = companionY - gap - ribbonHeight;
-            youY = replyY - gap - ribbonHeight;
+            replyY = companionY - gap - replyHeight;
+            youY = replyY - gap - youHeight;
         }
 
         // A flip can still overrun on a very short screen; clamp rather than let a
         // ribbon paint off-screen or under the status bar.
-        youY = clamp(youY, top, Math.max(top, bottom - ribbonHeight));
-        replyY = clamp(replyY, top, Math.max(top, bottom - ribbonHeight));
+        youY = clamp(youY, top, Math.max(top, bottom - youHeight));
+        replyY = clamp(replyY, top, Math.max(top, bottom - replyHeight));
 
         return new Placement(companionX, companionY, ribbonX, youY, replyY, flippedDown, flippedUp);
     }
@@ -122,6 +144,15 @@ final class MoaRibbonUnitLayout {
     /** Total resting footprint of the unit. The overlay must never exceed this. */
     static int unitHeight(int companionSize, int gap, int ribbonHeight) {
         return ribbonHeight + gap + companionSize + gap + ribbonHeight;
+    }
+
+    /**
+     * How tall an expanded ribbon may become: enough to read the turn, bounded so
+     * the unit can never become a full-screen panel. Growth is only ever the
+     * result of a deliberate tap.
+     */
+    static int expandedHeight(int contentHeight, int collapsedHeight, int maxHeight) {
+        return clamp(contentHeight, collapsedHeight, Math.max(collapsedHeight, maxHeight));
     }
 
     private static int clamp(int value, int min, int max) {

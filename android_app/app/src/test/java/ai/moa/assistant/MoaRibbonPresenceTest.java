@@ -141,6 +141,32 @@ public final class MoaRibbonPresenceTest {
     }
 
     @Test
+    public void tapExpandingHoldsEngagedUntilItIsClosed() {
+        MoaRibbonPresence presence = new MoaRibbonPresence();
+        presence.setHasText(true);
+        presence.setExpanded(true);
+
+        // Click-to-expand outlives the latch: an open ribbon stays solid while
+        // the user is reading it, however long that takes.
+        assertTrue(presence.expanded());
+        assertSame(MoaRibbonPresence.State.ENGAGED, presence.state(9_999_999));
+
+        presence.setExpanded(false);
+        assertSame(MoaRibbonPresence.State.DORMANT, presence.state(9_999_999));
+    }
+
+    @Test
+    public void losingTheTextAlsoCollapsesTheExpandedRibbon() {
+        MoaRibbonPresence presence = new MoaRibbonPresence();
+        presence.setHasText(true);
+        presence.setExpanded(true);
+        presence.setHasText(false);
+
+        assertFalse(presence.expanded());
+        assertSame(MoaRibbonPresence.State.DORMANT, presence.state(1000));
+    }
+
+    @Test
     public void clearingTextClearsTheLingerWithIt() {
         MoaRibbonPresence presence = new MoaRibbonPresence();
         presence.setHasText(true);

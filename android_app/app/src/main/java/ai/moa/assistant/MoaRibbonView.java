@@ -10,6 +10,9 @@ import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.view.View;
 import android.view.accessibility.AccessibilityNodeInfo;
 
@@ -47,6 +50,9 @@ final class MoaRibbonView extends View {
     private MoaRibbonPresence.State state = MoaRibbonPresence.State.DORMANT;
     private boolean highContrast;
     private String line = "";
+    private String fullText = "";
+    private boolean expanded;
+    private StaticLayout expandedLayout;
     private int toneColor;
     private float plateFraction;
     private float translateX;
@@ -73,6 +79,8 @@ final class MoaRibbonView extends View {
     private final int hitInflatePx;
     private final int caretWidthPx;
     private final int caretHeightPx;
+    private final int expandedMaxHeightPx;
+    private final int expandedPadYPx;
 
     MoaRibbonView(Context context, boolean reply) {
         super(context);
@@ -93,6 +101,8 @@ final class MoaRibbonView extends View {
         hitInflatePx = dp(MoaRibbonTokens.HIT_INFLATE_DP);
         caretWidthPx = Math.max(1, dp(MoaRibbonTokens.CARET_W_DP));
         caretHeightPx = dp(MoaRibbonTokens.CARET_H_DP);
+        expandedMaxHeightPx = dp(MoaRibbonTokens.EXPANDED_MAX_H_DP);
+        expandedPadYPx = dp(MoaRibbonTokens.EXPANDED_PAD_Y_DP);
 
         textPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         textPaint.setTextSize(MoaRibbonTokens.TEXT_SP
@@ -146,6 +156,67 @@ final class MoaRibbonView extends View {
 
     String windowText() {
         return line;
+    }
+
+    /**
+     * The whole turn, used only by the expanded state. Kept separate from the
+     * rendered window so the collapsed ribbon still cannot be widened by content.
+     */
+    void setFullText(String value) {
+        fullText = value == null ? "" : value;
+        expandedLayout = null;
+        if (expanded) {
+            requestLayout();
+            invalidate();
+        }
+    }
+
+    /**
+     * Click-to-expand. The collapsed ribbon is a fixed one-line window on the
+     * newest text; expanding is how the user reads the rest of it without the
+     * overlay ever becoming a chat. Height changes here and only here — a stream
+     * delta still may not resize anything.
+     */
+    void setExpanded(boolean value) {
+        if (expanded == value) {
+            return;
+        }
+        expanded = value;
+        expandedLayout = null;
+        requestLayout();
+        invalidate();
+    }
+
+    boolean expanded() {
+        return expanded;
+    }
+
+    /** The window height this ribbon wants right now. Bounded in both states. */
+    int desiredHeightPx() {
+        if (!expanded) {
+            return ribbonHeightPx;
+        }
+        StaticLayout layout = expandedLayout();
+        int content = (layout == null ? 0 : layout.getHeight()) + expandedPadYPx * 2;
+        return MoaRibbonUnitLayout.expandedHeight(content, ribbonHeightPx, expandedMaxHeightPx);
+    }
+
+    private StaticLayout expandedLayout() {
+        int width = Math.round(viewportRight() - viewportLeft());
+        if (width <= 0 || fullText.isEmpty()) {
+            return null;
+        }
+        if (expandedLayout == null || expandedLayout.getWidth() != width) {
+            TextPaint paint = new TextPaint(textPaint);
+            paint.setColor(toneColor != 0 ? toneColor : palette.ink);
+            paint.clearShadowLayer();
+            expandedLayout = StaticLayout.Builder
+                    .obtain(fullText, 0, fullText.length(), paint, width)
+                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                    .setIncludePad(false)
+                    .build();
+        }
+        return expandedLayout;
     }
 
     void setPresenceState(MoaRibbonPresence.State next) {
@@ -242,6 +313,9 @@ final class MoaRibbonView extends View {
      * declared intent.
      */
     boolean hitsInteractive(float x, float y) {
+        if (expanded) {
+            return x >= gutterPx - hitInflatePx && x <= getWidth() && y >= 0 && y <= getHeight();
+        }
         if (state == MoaRibbonPresence.State.ENGAGED || state == MoaRibbonPresence.State.DRAGGING) {
             return x >= gutterPx - hitInflatePx && x <= getWidth() && y >= 0 && y <= getHeight();
         }
@@ -255,10 +329,11 @@ final class MoaRibbonView extends View {
 
     /** The copy rail, revealed only in engaged. Hit box is padded, paint is not. */
     boolean hitsRail(float x, float y) {
-        if (!MoaRibbonPresence.railVisible(state)) {
+        if (!expanded && !MoaRibbonPresence.railVisible(state)) {
             return false;
         }
-        return x >= getWidth() - railHitWidthPx && x <= getWidth() && y >= 0 && y <= getHeight();
+        float bottom = expanded ? ribbonHeightPx : getHeight();
+        return x >= getWidth() - railHitWidthPx && x <= getWidth() && y >= 0 && y <= bottom;
     }
 
     private float viewportLeft() {
@@ -330,7 +405,7 @@ final class MoaRibbonView extends View {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), ribbonHeightPx);
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), desiredHeightPx());
     }
 
     @Override
@@ -348,6 +423,10 @@ final class MoaRibbonView extends View {
             scratch.set(gutterPx, 0, getWidth(), getHeight());
             canvas.drawRoundRect(scratch, radiusPx, radiusPx, fillPaint);
         }
+        if (expanded) {
+            drawExpanded(canvas);
+            return;
+        }
         if (line.isEmpty()) {
             return;
         }
@@ -361,10 +440,32 @@ final class MoaRibbonView extends View {
         }
     }
 
+    // The expanded read: the full turn, wrapped, on a plate, scrolled to nothing
+    // and bounded by EXPANDED_MAX_H_DP. The copy rail stays reachable, because
+    // expanding is exactly when the user wants to take the text.
+    private void drawExpanded(Canvas canvas) {
+        StaticLayout layout = expandedLayout();
+        if (layout == null) {
+            return;
+        }
+        canvas.save();
+        canvas.clipRect(viewportLeft(), expandedPadYPx, viewportRight(), getHeight() - expandedPadYPx);
+        canvas.translate(viewportLeft(), expandedPadYPx);
+        // Longer than the bound: show the TAIL, same rule as the collapsed line.
+        int overflow = layout.getHeight() - (getHeight() - expandedPadYPx * 2);
+        if (overflow > 0) {
+            canvas.translate(0, -overflow);
+        }
+        layout.draw(canvas);
+        canvas.restore();
+        drawRail(canvas);
+    }
+
     private void drawDot(Canvas canvas) {
         fillPaint.setShader(null);
         fillPaint.setColor(reply ? palette.agent : palette.you);
-        canvas.drawCircle(dotSizePx, getHeight() / 2f, dotSizePx / 2f * dotScale, fillPaint);
+        float cy = expanded ? ribbonHeightPx / 2f : getHeight() / 2f;
+        canvas.drawCircle(dotSizePx, cy, dotSizePx / 2f * dotScale, fillPaint);
     }
 
     private void drawPlate(Canvas canvas) {
@@ -436,7 +537,7 @@ final class MoaRibbonView extends View {
     private void drawRail(Canvas canvas) {
         float size = dp(9);
         float cx = getWidth() - padXPx - size;
-        float cy = getHeight() / 2f;
+        float cy = expanded ? ribbonHeightPx / 2f : getHeight() / 2f;
         strokePaint.setColor(palette.muted);
         scratch.set(cx - size / 2f - dp(1.5f), cy - size / 2f - dp(1.5f),
                 cx + size / 2f - dp(1.5f), cy + size / 2f - dp(1.5f));

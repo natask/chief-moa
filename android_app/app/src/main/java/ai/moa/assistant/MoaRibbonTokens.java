@@ -49,6 +49,9 @@ final class MoaRibbonTokens {
     static final int RIBBON_H_LARGE_DP = 32;
     static final float FONT_SCALE_CLAMP = 1.3f;
     static final int RIBBON_MAX_W_DP = 340;
+    /** Bounded ceiling for a tap-expanded ribbon. It reads; it is not a panel. */
+    static final int EXPANDED_MAX_H_DP = 168;
+    static final int EXPANDED_PAD_Y_DP = 9;
     static final int RIBBON_PAD_X_DP = 10;
     static final int GAP_DP = 8;
     static final int DOT_SIZE_DP = 5;

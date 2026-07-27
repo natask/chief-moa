@@ -129,6 +129,41 @@ public final class MoaRibbonUnitLayoutTest {
     }
 
     @Test
+    public void anExpandedRibbonGrowsOnlyDownwardFromItsOwnEdge() {
+        int expanded = RIBBON_H * 4;
+        MoaRibbonUnitLayout.Placement placement = MoaRibbonUnitLayout.place(
+                SCREEN_W, SCREEN_H, MARGIN, GAP, 0, 0,
+                400, 1000, COMPANION, RIBBON_W, expanded, RIBBON_H);
+
+        // The you-ribbon sits above the companion, so a taller one has to start
+        // higher; the companion itself still does not move.
+        assertEquals(1000, placement.companionY);
+        assertEquals(1000 - GAP - expanded, placement.youY);
+        assertEquals(1000 + COMPANION + GAP, placement.replyY);
+    }
+
+    @Test
+    public void expansionIsBoundedAtBothEnds() {
+        // Never shorter than the collapsed ribbon...
+        assertEquals(RIBBON_H, MoaRibbonUnitLayout.expandedHeight(10, RIBBON_H, 500));
+        // ...never taller than the ceiling, however long the turn was.
+        assertEquals(500, MoaRibbonUnitLayout.expandedHeight(9999, RIBBON_H, 500));
+        assertEquals(300, MoaRibbonUnitLayout.expandedHeight(300, RIBBON_H, 500));
+    }
+
+    @Test
+    public void anExpandedRibbonStillCannotLeaveTheScreen() {
+        int expanded = RIBBON_H * 6;
+        MoaRibbonUnitLayout.Placement placement = MoaRibbonUnitLayout.place(
+                SCREEN_W, SCREEN_H, MARGIN, GAP, 0, 0,
+                400, MARGIN, COMPANION, RIBBON_W, expanded, RIBBON_H);
+
+        assertTrue(placement.youY >= MARGIN);
+        assertTrue(placement.youY + expanded <= SCREEN_H - MARGIN);
+        assertTrue(placement.flippedDown);
+    }
+
+    @Test
     public void theUnitsRestingFootprintIsFixed() {
         // No stream delta, no reply length, nothing may change this number.
         assertEquals(RIBBON_H + GAP + COMPANION + GAP + RIBBON_H,
