@@ -103,8 +103,12 @@ alignment.
 - [ ] 2.2 Add a compact overlay capture tray for consecutive independent blocks.
 - [ ] 2.3 Add notebook list/detail UI with replay, literal transcript, edit,
   copy/share, retry, retention/delete, and revision provenance.
-- [ ] 2.4 Add a reversible bottom-center drag-to-hide target for the orb.
+- [x] 2.4 Add a reversible bottom-center drag-to-hide target for the orb.
+      (Done in `overlay-companion-ribbons`: the armed zone is now the painted
+      200x72dp target plus 12dp, and a drop is undoable for 5s.)
 - [ ] 2.5 Add unit coverage for capture state and drag-to-hide decisions.
+      (Drag-to-hide half done: `MoaOrbRemovalUndoTest` and the bounded-target
+      cases in `MoaOrbOverlayGeometryTest`. Capture state still open.)
 - Acceptance: three hold/release gestures create three separately copyable
   blocks and dragging to Hide removes only the orb surface.
 - Verification: Android unit tests, `assembleDebug`, and physical-phone QA.
