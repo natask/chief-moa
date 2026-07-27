@@ -2,6 +2,11 @@
 
 ## Android lane
 
+- [x] Add deterministic production-View captures for collapsed and expanded
+      states, recording the absence of device/emulator capture honestly.
+- [x] Run two read-only Opus critique/refinement rounds against the Android PNGs
+      and retain returned model metadata with the evidence.
+
 - [x] Add `MoaRibbonTokens` with the spec's geometry, motion and colour tokens
       and both palettes.
 - [x] Add `MoaRibbonBuffer`: tail window, 140-cluster render cap, 8,000-cluster

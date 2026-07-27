@@ -546,6 +546,12 @@ final class MoaOverlayUnitController {
             }
 
             @Override
+            public void onHistory() {
+                ribbon.flash();
+                host.openHistory();
+            }
+
+            @Override
             public void onHold() {
                 openMenu(ribbon, presence, variants, buffer, reply);
             }

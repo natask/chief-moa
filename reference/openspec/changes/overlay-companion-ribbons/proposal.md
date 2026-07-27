@@ -46,13 +46,19 @@ and `MoaFrameCoalescer` are all reused unchanged.
   the companion (`orbView`) in the middle, `ribbonReplyView` below. Every
   element's position derives from the companion's stored `orbParams.x/y`, so
   existing persistence needs no migration.
-- **The ribbons.** Each ribbon is a fixed 28dp-tall, ≤340dp-wide viewport holding
+- **The ribbons.** Each ribbon is a fixed 36dp-tall, ≤280dp-wide viewport holding
   ONE line. It never wraps, never grows, never reflows. When the line outgrows
   the viewport it slides left so the newest glyph stays pinned at the right inner
   edge. This is the cap the user asked for twice.
-- **Transparency.** Nothing paints a filled plate until the user is touching it.
-  Ambient legibility is a halo plus a scrim that hugs the glyph run, so an empty
-  ribbon paints nothing at all and takes no touch at all.
+- **Visual QA refinement.** The Android viewport is now a 36dp translucent
+  bubble with a 14dp radius and a 6dp gap to the production-default 67dp
+  companion. It keeps the one-line tail window and bounded tap expansion. This
+  supersedes the earlier ambient no-plate treatment after the user explicitly
+  asked for the streaming text to read as a bubble.
+  Tap expansion is bounded at 240dp so a normal current turn remains wholly
+  readable; the explicit clock affordance hands longer history to the full app.
+- **Transparency.** A ribbon with current text paints one compact translucent
+  bubble. An empty ribbon still paints nothing and takes no touch at all.
 - **Drag as one.** Companion and both ribbons are drag handles. A drag writes the
   companion anchor; all three windows follow in one coalesced frame. The
   companion never moves to make room for a ribbon — the ribbons flip instead.

@@ -44,25 +44,27 @@ final class MoaRibbonTokens {
     static final long MENU_IDLE_DISMISS_MS = 5000;
 
     // --- Geometry (dp) ----------------------------------------------------
-    static final int RIBBON_H_DP = 28;
+    static final int RIBBON_H_DP = 36;
     /** The single step the ribbon may grow by at very large system font scales. */
-    static final int RIBBON_H_LARGE_DP = 32;
+    static final int RIBBON_H_LARGE_DP = 40;
     static final float FONT_SCALE_CLAMP = 1.3f;
-    static final int RIBBON_MAX_W_DP = 340;
+    /** Compact fixed viewport: stable while streaming, never a screen-wide banner. */
+    static final int RIBBON_MAX_W_DP = 280;
     /** Bounded ceiling for a tap-expanded ribbon. It reads; it is not a panel. */
-    static final int EXPANDED_MAX_H_DP = 168;
+    static final int EXPANDED_MAX_H_DP = 240;
     static final int EXPANDED_PAD_Y_DP = 9;
-    static final int RIBBON_PAD_X_DP = 10;
-    static final int GAP_DP = 8;
-    static final int DOT_SIZE_DP = 5;
+    static final int RIBBON_PAD_X_DP = 12;
+    static final int GAP_DP = 6;
+    static final int DOT_SIZE_DP = 6;
     static final int DOT_OFFSET_DP = 10;
     static final int EDGE_MARGIN_DP = 16;
     static final int FADE_W_DP = 16;
     static final int RAIL_GLYPH_DP = 20;
     static final int RAIL_HIT_W_DP = 32;
+    static final int HISTORY_RAIL_W_DP = 64;
     static final int MENU_W_DP = 176;
     static final int MENU_ROW_H_DP = 36;
-    static final int RADIUS_RIBBON_DP = 9;
+    static final int RADIUS_RIBBON_DP = 14;
     static final int RADIUS_SCRIM_DP = 4;
     static final int RADIUS_MENU_DP = 12;
     static final int HAIRLINE_DP = 1;
@@ -70,7 +72,7 @@ final class MoaRibbonTokens {
     static final int CARET_H_DP = 14;
     /** Inflation applied to the painted glyph run when hit-testing a ribbon. */
     static final int HIT_INFLATE_DP = 8;
-    static final int TEXT_SP = 13;
+    static final int TEXT_SP = 14;
     static final int MENU_TEXT_SP = 13;
 
     // --- Companion opacity ------------------------------------------------
@@ -123,13 +125,13 @@ final class MoaRibbonTokens {
     }
 
     static final Palette DARK = new Palette(
-            0xFFF4F4F6, 0xE0F4F4F6, 0xFF9B9BA4, 0xFFFFD76A, 0xFF7C5CFF, 0xFFF5A623,
-            0xFF35C759, 0xFFFF8A3D, 0xB80E0F12, 0x800E0F12, 0x24FFFFFF, 0x6B090A0C,
+            0xFFF4F4F6, 0xE0F4F4F6, 0xFF9B9BA4, 0xFFFFD76A, 0xFF7C8CFF, 0xFFF5A623,
+            0xFF35C759, 0xFFFF8A3D, 0xE8232733, 0xB0232733, 0x24FFFFFF, 0x6B090A0C,
             0xB8000000, 0xDB121317, 0x14FFFFFF);
 
     static final Palette LIGHT = new Palette(
-            0xFF141519, 0xE6141519, 0xFF6B6C76, 0xFFB87400, 0xFF5B3FE0, 0xFFC06B00,
-            0xFF1F8F3D, 0xFFC24A00, 0xC2FCFCFD, 0x8AFCFCFD, 0x1A000000, 0x85FFFFFF,
+            0xFF141519, 0xE6141519, 0xFF6B6C76, 0xFFB87400, 0xFF6474E8, 0xFFC06B00,
+            0xFF1F8F3D, 0xFFC24A00, 0xE8FCFCFD, 0xB8FCFCFD, 0x1A000000, 0x85FFFFFF,
             0xE0FFFFFF, 0xE1FCFCFD, 0x0D000000);
 
     static Palette palette(boolean light) {
