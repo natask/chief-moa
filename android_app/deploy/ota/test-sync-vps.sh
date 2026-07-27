@@ -225,6 +225,50 @@ file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
 }
 
+first_line_number_containing() {
+  local content="$1"
+  local needle="$2"
+  local line
+  local line_number=0
+  while IFS= read -r line; do
+    line_number=$((line_number + 1))
+    case "$line" in
+      *"$needle"*)
+        printf '%s\n' "$line_number"
+        return 0
+        ;;
+    esac
+  done <<< "$content"
+  return 1
+}
+
+contains_literal() {
+  local content="$1"
+  local needle="$2"
+  case "$content" in
+    *"$needle"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+first_snapshot_dir() {
+  local snapshots_root="$1"
+  local name_pattern="${2:-*}"
+  local candidate
+  local name
+  for candidate in "$snapshots_root"/*; do
+    [ -d "$candidate" ] || continue
+    name="${candidate##*/}"
+    case "$name" in
+      $name_pattern)
+        printf '%s\n' "$candidate"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 if grep -Eq 'rsync.*--delete' "$SYNC_SCRIPT"; then
   echo "sync-vps.sh must never mirror-delete the remote OTA store" >&2
   exit 1
@@ -236,13 +280,13 @@ fi
 publish_step="$(sed -n \
   '/- name: Publish through the existing VPS sync path/,/- name: Fetch and verify the published OTA/p' \
   "$WORKFLOW")"
-checksum_line="$(printf '%s\n' "$publish_step" | grep -n -m1 'sha256sum --check --status' | cut -d: -f1)"
-sync_line="$(printf '%s\n' "$publish_step" | grep -n -m1 'bash android_app/deploy/ota/sync-vps.sh' | cut -d: -f1)"
+checksum_line="$(first_line_number_containing "$publish_step" 'sha256sum --check --status' || true)"
+sync_line="$(first_line_number_containing "$publish_step" 'bash android_app/deploy/ota/sync-vps.sh' || true)"
 [ -n "$checksum_line" ] && [ -n "$sync_line" ] && [ "$checksum_line" -lt "$sync_line" ] || {
   echo "Android OTA workflow must verify the saved APK digest before VPS sync" >&2
   exit 1
 }
-printf '%s\n' "$publish_step" | grep -Fq 'MOA_OTA_SKIP_BUILD=1' || {
+contains_literal "$publish_step" 'MOA_OTA_SKIP_BUILD=1' || {
   echo "Android OTA workflow must disable rebuilding after stable-signer verification" >&2
   exit 1
 }
@@ -308,7 +352,7 @@ cmp -s "$local_dir/moa-assistant.apk" "$remote_dir/moa-assistant.apk"
 [ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10/moa-assistant.apk")" = 644 ]
 [ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10/release.json")" = 644 ]
 [ "$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 6 ]
-snapshot="$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d -name '*ai.moa.assistant-10*' | head -n 1)"
+snapshot="$(first_snapshot_dir "$remote_dir/.publish-snapshots" '*ai.moa.assistant-10*')"
 [ -n "$snapshot" ]
 [ "$(cat "$snapshot/current.target")" = releases/ai.moa.assistant-9 ]
 (cd "$snapshot" && "$FAKE_BIN/sha256sum" -c checksums.sha256 >/dev/null)
@@ -418,7 +462,7 @@ publish_release "$local_dir" 15 '2026-07-03T00:00:00Z' initial-15
 run_sync "$local_dir" "$remote_dir" "$case_dir/output"
 [ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-15 ]
 [ -f "$remote_dir/releases/ai.moa.assistant-15/moa-assistant.apk" ]
-snapshot="$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+snapshot="$(first_snapshot_dir "$remote_dir/.publish-snapshots")"
 [ "$(cat "$snapshot/state")" = empty ]
 [ -f "$snapshot/published.release" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"
