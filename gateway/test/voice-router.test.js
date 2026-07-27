@@ -35,6 +35,56 @@ test("forced actions honor body precedence and safe fallbacks", async () => {
   assert.deepEqual(routed.actions, [{ type: "chat" }]);
 });
 
+test("forced profile controls preserve parsed update, query, sample, and clarification behavior", async () => {
+  const cases = [
+    {
+      transcript: "on this device your name is Moa",
+      expected: {
+        type: "set_profile",
+        patch: { assistant_name: "Moa" },
+        scope: "device",
+        summary: "assistant name",
+      },
+    },
+    {
+      transcript: "what language is active on this device",
+      expected: {
+        type: "query_profile",
+        subject: "language",
+        scope: "device",
+      },
+    },
+    {
+      transcript: "sample the voices and say hello everywhere",
+      expected: {
+        type: "sample_voices",
+        sample_text: "",
+        scope: "global",
+      },
+    },
+    {
+      // Transcript echo is a read-only profile-control intent, but this legacy
+      // router has no echo action. It must ask for clarification instead of
+      // inventing a profile mutation.
+      transcript: "what did I say",
+      expected: {
+        type: "clarify_voice",
+        scope: "global",
+      },
+    },
+  ];
+
+  for (const { transcript, expected } of cases) {
+    const routed = await routeVoiceTurn(
+      { forced_action: "profile_control" },
+      transcript,
+      { useLlm: false },
+    );
+    assert.equal(routed.source, "heuristic");
+    assert.deepEqual(routed.actions, [expected]);
+  }
+});
+
 test("model failure never falls back to transcript matching", async () => {
   for (const transcript of [
     "kill every agent",
