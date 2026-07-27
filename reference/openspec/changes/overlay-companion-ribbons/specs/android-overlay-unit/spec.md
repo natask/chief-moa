@@ -64,6 +64,48 @@ and dragging paint a plate, and both require a finger on the unit.
 - **THEN** ambient uses the engaged plate at 0.86 instead of the halo, and this
   is the only sanctioned occluding ambient
 
+### Requirement: A tap expands the bounded ribbon to reveal the whole turn
+A ribbon SHALL open on tap to show the full text of the current turn, bounded in
+height, with its copy affordance reachable in that state. A second tap closes it.
+Expansion is the only thing that may change the unit's height.
+
+#### Scenario: Reading past the sliding window
+- **WHEN** the user taps a ribbon whose text has scrolled past its viewport
+- **THEN** the ribbon expands in place, wraps the full retained text, and shows
+  the copy affordance
+
+#### Scenario: The expansion is bounded
+- **WHEN** the turn is far longer than the expanded ceiling
+- **THEN** the ribbon stops growing at that ceiling and shows the tail, and the
+  unit does not become a panel
+
+#### Scenario: Streaming may still not resize anything
+- **WHEN** a delta arrives while the ribbon is collapsed
+- **THEN** no element's width, height, or position changes
+
+#### Scenario: Closing
+- **WHEN** the user taps the expanded ribbon again, or the turn's text is cleared
+- **THEN** the ribbon collapses back to its one-line footprint
+
+### Requirement: Copy offers the literal, corrected, and polished forms
+Copy SHALL expose three variants of the user's own transcript. The polished form
+SHALL be the default copy when it exists, and the literal transcript SHALL never
+be overwritten by a derived one.
+
+#### Scenario: Only the literal transcript exists
+- **WHEN** no corrected or polished form has been produced
+- **THEN** copy takes the literal transcript, and the absent forms are shown
+  disabled rather than fabricated
+
+#### Scenario: A polished form exists
+- **WHEN** a writing skill has produced a polished form
+- **THEN** a plain copy takes the polished form and the literal transcript is
+  still offered and still byte-for-byte unchanged
+
+#### Scenario: Choosing a variant
+- **WHEN** the user picks a named variant from the hold menu
+- **THEN** exactly that form reaches the clipboard
+
 ### Requirement: The unit moves as one object from any element
 Every element of the unit SHALL be a drag handle, and every drag SHALL translate
 the companion anchor with both ribbons following in the same frame.

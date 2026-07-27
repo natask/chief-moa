@@ -9,6 +9,7 @@ New, pure Java, unit tested:
 
 | File | Owns |
 |---|---|
+| `MoaTranscriptVariants.java` | literal / corrected / polished, and which is the default copy |
 | `MoaRibbonTokens.java` | every geometry, motion and colour token; two palettes |
 | `MoaRibbonBuffer.java` | the sliding-window rule: tail window, retention bound, grapheme-safe truncation |
 | `MoaRibbonPresence.java` | the four-state opacity machine, latch and linger deadlines |
@@ -22,6 +23,13 @@ New, Android:
 | `MoaRibbonView.java` | the fixed viewport, the slide, halo/scrim/plate painting, glyph-bounds hit test |
 | `MoaRibbonTouchListener.java` | tap / rail-tap / hold / double-tap / drag |
 | `MoaRibbonMenu.java` | the ≤4-row hold menu |
+| `MoaOverlayUnitController.java` | the three windows, their placement, presence, gestures, copy and menu |
+
+`OverlayService` keeps the voice session, the composer, and the companion's own
+gestures, and drives the unit with the current turn's text. It asks the unit
+nothing about how that text is painted. That extraction is also what brings the
+file back under the source-size ceiling (4222 → 3792 against a 3959 limit); the
+ceiling was not raised.
 
 Changed: `MoaOrbOverlayGeometry` (bounded remove target),
 `MoaOrbRemoveTarget` (larger painted target, undo chip), `OverlayService`,
@@ -94,6 +102,33 @@ cluster; the plain JVM the unit tests run on splits them into components. The ca
 is 140 clusters and the visible window is geometric, so the difference cannot
 change what the user sees. Recorded rather than worked around.
 
+### 7. Tap means expand, and expand is the one thing that may resize
+
+The design contract gives tap "solidify + latch + reveal the copy rail". The
+user then asked for click-to-expand on the same element. Rather than split them
+across two gestures, tap does all of it: the ribbon expands to the full turn,
+solidifies, and shows copy. A second tap collapses.
+
+That means the unit's height changes on tap. The no-reflow invariant survives
+intact because it is about STREAMING: a delta may never resize anything. A
+deliberate tap may, and the growth is bounded at `EXPANDED_MAX_H_DP` (168dp) with
+the same tail rule as the collapsed line, so the overlay still cannot become a
+panel.
+
+### 8. Copy variants exist in the UI before they exist in the data
+
+`MoaTranscriptVariants` accepts three forms and defaults to the most polished
+present. Today only LITERAL is ever populated — no gateway endpoint produces the
+corrected or rewritten forms, and section 3 of `voice-capture-notebook-ime` is
+entirely unchecked. The menu therefore shows `Copy polished` and `Copy corrected`
+disabled. They are absent, not fabricated.
+
+Variants apply to the you-ribbon only. The reply is already model text, so
+"literal versus polished" has no meaning there; its menu keeps a single Copy.
+`Copy as note` was dropped from the you-ribbon menu to keep it at four rows, and
+`Hide overlay` moved to the reply-ribbon menu — the notification's Hide action
+and drag-to-remove are both still available.
+
 ## What the tests pin
 
 - `MoaRibbonBufferTest` — tail-not-head windowing, the 140-cluster cap, the
@@ -107,6 +142,10 @@ change what the user sees. Recorded rather than worked around.
   ribbons by the same delta (drag-as-one), that ribbons flip instead of pushing
   the companion, that reading order survives a flip, and that the unit's resting
   footprint is a constant.
+- `MoaTranscriptVariantsTest` — polished-by-default, graceful degradation to
+  literal, and that a derived variant never overwrites the literal transcript.
+- `MoaRibbonPresenceTest` / `MoaRibbonUnitLayoutTest` — expansion holds engaged,
+  losing the text collapses it, and expansion is bounded at both ends.
 - `MoaOrbOverlayGeometryTest` / `MoaOrbRemovalUndoTest` — the armed zone is the
   painted rectangle plus one tolerance, drags that merely pass near the bottom no
   longer arm removal, and undo restores the drag-start position exactly once

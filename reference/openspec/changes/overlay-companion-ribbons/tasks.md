@@ -28,6 +28,13 @@
 - [x] Unit tests for the sliding-window rule, the opacity state machine, the
       drag-as-one grouping, and the bounded remove target.
 - [x] `assembleDebug` and `testDebugUnitTest` green; coverage ratchet still met.
+- [x] N3: tap expands the bounded ribbon to the full turn with the copy
+      affordance reachable; a second tap collapses it. Expansion is the only
+      thing allowed to change the unit's height.
+- [x] N4: `MoaTranscriptVariants` — literal / corrected / polished, polished as
+      the default copy, absent forms shown disabled rather than fabricated.
+- [x] Extract the unit into `MoaOverlayUnitController` so `OverlayService` drops
+      back under the source-size ceiling.
 
 ## Open
 
@@ -38,5 +45,9 @@
       `.agee-cue`, `#agee-log`, `#agee-voice-state`, `#agee-page-context`.
 - [ ] Decide whether the Voice/Text delivery toggle needs a home in the full app
       now that the overlay no longer carries it.
+- [ ] Produce the corrected and polished transcript variants. Nothing emits them
+      today, so the UI degrades to literal-only. Section 3 of
+      `voice-capture-notebook-ime` is the contract.
+- [ ] Confirm the expand gesture matches whatever the browser lane settles on.
 - [ ] Retain per-turn assistant audio so the reply menu's `Replay` row can be
       enabled.

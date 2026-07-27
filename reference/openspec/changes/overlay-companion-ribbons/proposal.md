@@ -56,9 +56,13 @@ and `MoaFrameCoalescer` are all reused unchanged.
 - **Drag as one.** Companion and both ribbons are drag handles. A drag writes the
   companion anchor; all three windows follow in one coalesced frame. The
   companion never moves to make room for a ribbon — the ribbons flip instead.
-- **Gestures.** Ribbon tap solidifies and latches, revealing a copy rail. Hold
-  opens a ≤4-row menu. Double-tap opens History as a separate surface. The
-  companion's gesture map is untouched.
+- **Gestures.** Ribbon tap expands the bounded ribbon to the full turn and
+  surfaces its copy affordance; a second tap collapses it. Hold opens a ≤4-row
+  menu. Double-tap opens History as a separate surface. The companion's gesture
+  map is untouched.
+- **Copy is three variants.** Literal, corrected, and polished, with polished as
+  the default. Nothing produces the derived forms yet, so this degrades to
+  literal-only and says so rather than fabricating them.
 - **Removal.** The hit zone is now the painted 200x72dp target plus 12dp of
   tolerance, and a dropped removal is reversible for 5s through an undo chip that
   restores the companion where the drag started.
@@ -76,6 +80,25 @@ outright. Delivery mode remains changeable by voice (`response_modality`,
 "be quiet"), but it no longer has a tap affordance anywhere. Flagged for the
 user's call.
 
+## Later instructions folded in
+
+Two refinements the user gave on 2026-07-27, after the design contract was
+written:
+
+- **Bounded bar with click-to-expand.** The fixed single-line sliding window
+  stays; a tap now opens it. This competes with the contract's tap-to-solidify,
+  so the two are merged: tap expands AND solidifies AND reveals copy. Expansion
+  is the one thing permitted to change the unit's height, because the user asked
+  for it explicitly; a stream delta still may not.
+- **Three copy variants, polished by default.** Built to the derived-revision
+  contract in section 3 of `voice-capture-notebook-ime` rather than as a parallel
+  concept: the literal transcript is preserved untouched and the derived forms
+  sit beside it.
+
+The design lane was updating `reference/design/overlay-2026-07/spec.md` while
+this landed; that update was not in this worktree, so the resolutions above are
+this lane's and may need reconciling with the browser lane.
+
 ### Not done
 
 - The browser lane (`content.js`, `overlay.css`).
@@ -83,3 +106,5 @@ user's call.
   `design.md` for why and what ships instead.
 - `Replay` of a turn's assistant audio: the menu row exists and is disabled,
   because no per-turn audio is retained on the device today.
+- The corrected and polished transcript variants themselves. No gateway endpoint
+  emits them, so `MoaTranscriptVariants` accepts three and reports two absent.
