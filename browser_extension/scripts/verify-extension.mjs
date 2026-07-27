@@ -1481,6 +1481,48 @@ if (
   throw new Error("dragging any ribbon must move the whole unit through the companion anchor");
 }
 
+// Tap expands the bounded bar to the full text AND reveals the copy rail in
+// the same gesture. Expanded is height-capped, wraps instead of sliding, and
+// is released by latch expiry so the overlay is never left occluding.
+if (
+  !/function expandRibbon\(/.test(contentSource) ||
+  !/function collapseRibbon\(/.test(contentSource) ||
+  !/engageRibbonUnit\(true\);\s*\n\s*toggleRibbonExpanded\(ribbon\);/.test(contentSource) ||
+  !/ribbonLatchTimer = setTimeout\(\(\) => unlatchRibbonUnit\(\), RIBBON_LATCH_MS\);/.test(contentSource) ||
+  !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*max-height:/.test(overlayCssSource) ||
+  !/\.agee-ribbon-expanded \.agee-ribbon-line\s*\{[^}]*white-space:\s*pre-wrap;/.test(overlayCssSource)
+) {
+  throw new Error("a ribbon tap must expand the bounded bar to the full text and reveal the copy rail");
+}
+// The expanded bar grows AWAY from the companion, so the companion never moves
+// and the page never reflows: the upper ribbon is bottom-anchored.
+if (!/ribbonYou\.el\.style\.bottom = `\$\{Math\.max\(RIBBON_EDGE, window\.innerHeight - clampTop\(youTop\) - RIBBON_HEIGHT\)\}px`;/.test(contentSource)) {
+  throw new Error("the upper ribbon must be bottom-anchored so expanding grows away from the companion");
+}
+
+// Copy is a three-way choice with a default, not one button: literal,
+// corrected, and a named writing-skill rewrite (voice-capture-notebook-ime
+// 3.3). The rail falls back to the highest-ranked variant that exists and
+// never substitutes one for another silently.
+if (
+  !/const RIBBON_VARIANT_RANK = \["skill", "edited", "literal"\];/.test(contentSource) ||
+  !/function ribbonDefaultVariant\(/.test(contentSource) ||
+  !/function openCopyMenu\(/.test(contentSource) ||
+  !/not generated for this turn/.test(contentSource) ||
+  !/if \(key\) ribbon\.chosenVariant = key;/.test(contentSource) ||
+  !/user_variants: Object\.hasOwn\(patch, "user_variants"\)/.test(backgroundSource)
+) {
+  throw new Error("the copy rail must offer literal/corrected/polished with an available-variant default");
+}
+// The literal transcript is a derived-revision parent and is never mutated:
+// copy only ever reads, and `literal` tracks the live buffer.
+if (
+  !/ribbon\.variants\.literal = ribbon\.buffer;/.test(contentSource) ||
+  /ribbon\.buffer = ribbonVariantText\(/.test(contentSource)
+) {
+  throw new Error("copying a derived variant must never overwrite the literal transcript");
+}
+
 // Interaction layer: tap reveals copy, hold opens a bounded menu, double tap
 // hands off to the history surface instead of growing a scrollback.
 if (

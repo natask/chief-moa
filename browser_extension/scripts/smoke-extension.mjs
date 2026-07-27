@@ -731,6 +731,10 @@ async function main() {
             user_text: userText,
             response_text: replyText,
             status: "responding",
+            // Only the corrected revision is supplied, so the rail must default
+            // to it (polished outranks it but does not exist) and must show
+            // polished as an explicitly unavailable row rather than faking it.
+            user_variants: { edited: "corrected revision of what you said" },
           },
         }).catch(() => {});
         await sleep(160);
@@ -750,6 +754,7 @@ async function main() {
               const rect = ribbon.getBoundingClientRect();
               return {
                 live: ribbon.classList.contains("agee-ribbon-live"),
+                bottom: Math.round(rect.bottom),
                 clipped: ribbon.classList.contains("agee-ribbon-clipped"),
                 rendered: (text.textContent || "").length,
                 height: Math.round(rect.height),
@@ -768,6 +773,8 @@ async function main() {
               ok: true,
               unitState: root.dataset.ageeUnit || "",
               launcherOpacity: getComputedStyle(document.querySelector("#agee-launcher")).opacity,
+              launcherTop: Math.round(document.querySelector("#agee-launcher").getBoundingClientRect().top),
+              replyTop: Math.round(reply.getBoundingClientRect().top),
               you: read(you),
               reply: read(reply),
               expectedUserLength: expectedUser.length,
@@ -864,19 +871,108 @@ async function main() {
     ) {
       throw new Error(`ambient overlay must paint no plate and take no page clicks: ${JSON.stringify(ribbonBefore)}`);
     }
-    // A tap solidifies the ribbon and reveals the copy affordance — without
-    // changing the unit's geometry or reflowing the page.
+    // A tap solidifies the ribbon and reveals the copy affordance. The ribbon
+    // itself expands (that is the point of the gesture), but its width is fixed
+    // and the page must not reflow. The geometry of the expand — which edge it
+    // grows from, and what stays still — is asserted in the next block.
     if (
       ribbons.tapped !== true ||
       ribbonAfter.unitState !== "engaged" ||
       Number(ribbonAfter.copyOpacity) !== 1 ||
       ribbonAfter.copyPointerEvents !== "auto" ||
       ribbonAfter.background === "rgba(0, 0, 0, 0)" ||
-      ribbonAfter.height !== ribbonBefore.you.height ||
       ribbonAfter.width !== ribbonBefore.you.width ||
       ribbonAfter.docScrollHeight !== ribbonBefore.docScrollHeight
     ) {
-      throw new Error(`tap must solidify the ribbon and reveal copy without resizing: ${JSON.stringify({ ribbonBefore, ribbonAfter })}`);
+      throw new Error(`tap must solidify the ribbon and reveal copy without reflowing the page: ${JSON.stringify({ ribbonBefore, ribbonAfter })}`);
+    }
+
+    // The tap that revealed the rail also expanded the bounded bar: the full
+    // text is now rendered, wrapped, and the bar grew AWAY from the companion.
+    const expand = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const read = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const you = document.querySelector("#agee-ribbon-you");
+            const launcher = document.querySelector("#agee-launcher");
+            const rect = you.getBoundingClientRect();
+            const line = you.querySelector(".agee-ribbon-line");
+            return {
+              expanded: you.classList.contains("agee-ribbon-expanded"),
+              rendered: (you.querySelector(".agee-ribbon-text").textContent || "").length,
+              height: Math.round(rect.height),
+              bottom: Math.round(rect.bottom),
+              whiteSpace: getComputedStyle(line).whiteSpace,
+              maxHeight: getComputedStyle(you).maxHeight,
+              launcherTop: Math.round(launcher.getBoundingClientRect().top),
+              replyTop: Math.round(document.querySelector("#agee-ribbon-reply").getBoundingClientRect().top),
+              docScrollHeight: document.documentElement.scrollHeight,
+            };
+          },
+        });
+        // Open the copy chooser from the rail's chevron.
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.querySelector("#agee-ribbon-you .agee-ribbon-chevron")?.click(),
+        });
+        await sleep(140);
+        const menu = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const rows = [...document.querySelectorAll("#agee-copy-menu button")];
+            return {
+              open: document.querySelector("#agee-copy-menu").classList.contains("agee-ribbon-menu-open"),
+              rows: rows.map((row) => ({
+                label: row.querySelector(".agee-copy-row-head").textContent.trim(),
+                why: row.querySelector(".agee-copy-why").textContent,
+                disabled: row.disabled === true,
+                isDefault: row.classList.contains("agee-copy-default"),
+              })),
+            };
+          },
+        });
+        return { expanded: read?.[0]?.result || {}, menu: menu?.[0]?.result || {} };
+      })()
+    `);
+    const expanded = expand?.expanded || {};
+    const copyMenu = expand?.menu || {};
+    if (
+      expanded.expanded !== true ||
+      expanded.rendered <= 140 ||
+      expanded.whiteSpace !== "pre-wrap" ||
+      expanded.height <= ribbonBefore.you.height ||
+      expanded.maxHeight === "none"
+    ) {
+      throw new Error(`tap must expand the bar to the full text within a height cap: ${JSON.stringify(expanded)}`);
+    }
+    // Grew away from the companion: the bottom edge, the companion, the other
+    // ribbon, and the page are all exactly where they were.
+    if (
+      expanded.bottom !== ribbonBefore.you.bottom ||
+      expanded.launcherTop !== ribbonBefore.launcherTop ||
+      expanded.replyTop !== ribbonBefore.replyTop ||
+      expanded.docScrollHeight !== ribbonBefore.docScrollHeight
+    ) {
+      throw new Error(`expanding must not move the companion, the other ribbon, or the page: ${JSON.stringify({ ribbonBefore, expanded })}`);
+    }
+    // Three variants, ranked, with the highest AVAILABLE one defaulted and the
+    // missing one shown as unavailable rather than silently substituted.
+    if (
+      copyMenu.open !== true ||
+      copyMenu.rows?.length !== 3 ||
+      !copyMenu.rows[0].label.startsWith("Polished") ||
+      copyMenu.rows[0].disabled !== true ||
+      copyMenu.rows[0].why !== "not generated for this turn" ||
+      copyMenu.rows[1].label !== "Corrected" ||
+      copyMenu.rows[1].disabled !== false ||
+      copyMenu.rows[1].isDefault !== true ||
+      copyMenu.rows[2].label !== "Literal transcript" ||
+      copyMenu.rows[2].disabled !== false
+    ) {
+      throw new Error(`copy rail must rank three variants and default to the highest available: ${JSON.stringify(copyMenu)}`);
     }
 
     const dictationCopy = await evaluate(workerCdp, `
@@ -1495,7 +1591,9 @@ async function main() {
         `(you ${ribbonBefore.you.rendered}/${ribbonBefore.expectedUserLength} chars, ` +
         `reply ${ribbonBefore.reply.rendered}/${ribbonBefore.expectedReplyLength} chars, ` +
         `${ribbonBefore.you.height}px tall, ambient background ${ribbonBefore.you.background}, ` +
-        `tap -> ${ribbonAfter.unitState} with copy rail visible), ` +
+        `tap -> ${ribbonAfter.unitState}, expanded to ${expanded.rendered} chars in ${expanded.height}px ` +
+        `without moving the companion, copy rail offers ` +
+        `${copyMenu.rows.map((r) => r.label.split(" ")[0] + (r.disabled ? "(unavailable)" : r.isDefault ? "(default)" : "")).join("/")}), ` +
         `typed Amazon command opened results and rendered "${typedSearchSummary}", ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,

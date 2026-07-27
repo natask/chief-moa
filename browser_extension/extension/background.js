@@ -1966,6 +1966,15 @@ async function updateBrowserAgentPresentation(patch = {}) {
       Object.hasOwn(patch, "response_text") ? patch.response_text : sameCue ? activeBrowserAgentPresentation?.response_text : "",
     ),
     status: String(patch.status || (sameCue ? activeBrowserAgentPresentation?.status : "running") || "running"),
+    // Derived revisions (corrected / writing-skill rewrites) travel with the
+    // turn when a producer supplies them. No gateway route emits them yet, so
+    // these stay undefined and the overlay's copy rail falls back to literal.
+    user_variants: Object.hasOwn(patch, "user_variants")
+      ? patch.user_variants
+      : sameCue ? activeBrowserAgentPresentation?.user_variants : undefined,
+    response_variants: Object.hasOwn(patch, "response_variants")
+      ? patch.response_variants
+      : sameCue ? activeBrowserAgentPresentation?.response_variants : undefined,
     updated_at: new Date().toISOString(),
   };
   const owner = await getActiveBrowserAgentOwner().catch(() => null);

@@ -348,6 +348,9 @@
           <svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
           <svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
         </button>
+        <button class="agee-ribbon-copy agee-ribbon-chevron" type="button" tabindex="-1" aria-label="Choose which version to copy" aria-haspopup="menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"/></svg>
+        </button>
         <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
       </div>
       <div class="agee-ribbon" id="agee-ribbon-reply" data-agee-ribbon="reply" role="button" tabindex="0"
@@ -358,9 +361,13 @@
           <svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
           <svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
         </button>
+        <button class="agee-ribbon-copy agee-ribbon-chevron" type="button" tabindex="-1" aria-label="Choose which version to copy" aria-haspopup="menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"/></svg>
+        </button>
         <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
       </div>
       <div id="agee-ribbon-menu" role="menu" aria-label="Ribbon options"></div>
+      <div id="agee-copy-menu" role="menu" aria-label="Choose which version to copy"></div>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-page-context">
           <span id="agee-page-identity" aria-live="polite"></span>
@@ -400,6 +407,7 @@
     transcriptEl = root.querySelector("#agee-transcript");
     tipEl = root.querySelector("#agee-tip");
     ribbonMenu = root.querySelector("#agee-ribbon-menu");
+    copyMenu = root.querySelector("#agee-copy-menu");
     ribbonYou = createRibbon(root.querySelector("#agee-ribbon-you"), {
       lingerMs: RIBBON_LINGER_YOU,
       label: "you",
@@ -1081,6 +1089,7 @@
   let ribbonYou = null;
   let ribbonReply = null;
   let ribbonMenu = null;
+  let copyMenu = null;
   let ribbonMenuOwner = null;
   let ribbonLatched = false;
   let ribbonLatchTimer = null;
@@ -1114,11 +1123,20 @@
       textEl: el.querySelector(".agee-ribbon-text"),
       viewportEl: el.querySelector(".agee-ribbon-viewport"),
       copyEl: el.querySelector(".agee-ribbon-copy"),
+      chevronEl: el.querySelector(".agee-ribbon-chevron"),
       buffer: "",
       truncated: false,
       lingerTimer: null,
       copyTimer: null,
       renderPending: false,
+      expanded: false,
+      // Three derived revisions per voice-capture-notebook-ime 3.3: the literal
+      // transcript, a corrected revision, and a named writing-skill rewrite.
+      // `literal` tracks the live buffer; the other two only exist when the
+      // gateway has produced them. Nothing here ever mutates the literal text.
+      variants: { literal: "", edited: "", skill: "" },
+      skillName: "",
+      chosenVariant: "",
     };
     ribbon.copyEl?.addEventListener("pointerdown", (event) => event.stopPropagation());
     ribbon.copyEl?.addEventListener("click", (event) => {
@@ -1126,7 +1144,53 @@
       event.stopPropagation();
       copyRibbon(ribbon);
     });
+    ribbon.chevronEl?.addEventListener("pointerdown", (event) => event.stopPropagation());
+    ribbon.chevronEl?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openCopyMenu(ribbon);
+    });
     return ribbon;
+  }
+
+  // Rank order is fixed; availability is not. The rail never substitutes one
+  // variant for another silently, and never presents literal text as polished.
+  const RIBBON_VARIANT_RANK = ["skill", "edited", "literal"];
+  const RIBBON_VARIANT_LABELS = {
+    skill: "Polished",
+    edited: "Corrected",
+    literal: "Literal transcript",
+  };
+  const RIBBON_VARIANT_NOTES = {
+    skill: "rewritten in your own style",
+    edited: "recognition and grammar fixed, wording kept",
+    literal: "exactly what was transcribed",
+  };
+
+  function ribbonVariantText(ribbon, key) {
+    if (!ribbon) return "";
+    if (key === "literal") return ribbon.variants.literal || ribbon.buffer;
+    return ribbon.variants[key] || "";
+  }
+
+  function ribbonDefaultVariant(ribbon) {
+    if (ribbon?.chosenVariant && ribbonVariantText(ribbon, ribbon.chosenVariant)) {
+      return ribbon.chosenVariant;
+    }
+    for (const key of RIBBON_VARIANT_RANK) {
+      if (ribbonVariantText(ribbon, key)) return key;
+    }
+    return "literal";
+  }
+
+  // Derived revisions arrive alongside the turn text when the gateway has them.
+  // Absent fields simply leave that variant unavailable.
+  function setRibbonVariants(ribbon, variants) {
+    if (!ribbon || !variants || typeof variants !== "object") return;
+    for (const key of ["edited", "skill"]) {
+      if (typeof variants[key] === "string") ribbon.variants[key] = variants[key];
+    }
+    if (typeof variants.skill_name === "string") ribbon.skillName = variants.skill_name;
   }
 
   function ribbonIsLive(ribbon) {
@@ -1144,6 +1208,10 @@
 
   function clearRibbon(ribbon) {
     if (!ribbon) return;
+    collapseRibbon(ribbon);
+    ribbon.variants = { literal: "", edited: "", skill: "" };
+    ribbon.skillName = "";
+    ribbon.chosenVariant = "";
     ribbon.buffer = "";
     ribbon.truncated = false;
     ribbon.textEl.textContent = "";
@@ -1173,6 +1241,15 @@
     ribbon.renderPending = true;
     const paint = () => {
       ribbon.renderPending = false;
+      ribbon.variants.literal = ribbon.buffer;
+      if (ribbon.expanded) {
+        // Expanded shows the whole buffer, wrapped inside the height cap. The
+        // sliding window is a collapsed-state rule only.
+        ribbon.textEl.textContent = ribbon.buffer;
+        ribbon.lineEl.style.transform = "translateX(0px)";
+        ribbon.el.classList.remove("agee-ribbon-clipped");
+        return;
+      }
       ribbon.textEl.textContent = ribbonGraphemeTail(ribbon.buffer, RIBBON_WINDOW_CHARS);
       const inner = ribbon.viewportEl.clientWidth;
       const lineWidth = ribbon.lineEl.scrollWidth;
@@ -1237,9 +1314,43 @@
     }
   }
 
-  async function copyRibbon(ribbon) {
-    if (!ribbon?.buffer) return false;
-    const copied = await copyTextToClipboard(ribbon.buffer);
+  // Expand: the bounded bar opens to the full text. Only one ribbon expands at
+  // a time. The companion does not move and the page does not reflow, because
+  // the ribbon is absolutely positioned and anchored on the edge furthest from
+  // the companion (see positionRibbons).
+  function expandRibbon(ribbon) {
+    if (!ribbon || !ribbonIsLive(ribbon) || ribbon.expanded) return;
+    for (const other of [ribbonYou, ribbonReply]) {
+      if (other && other !== ribbon) collapseRibbon(other);
+    }
+    ribbon.expanded = true;
+    ribbon.el.classList.add("agee-ribbon-expanded");
+    holdRibbonsOpen();
+    renderRibbon(ribbon);
+  }
+
+  function collapseRibbon(ribbon) {
+    if (!ribbon?.expanded) return;
+    ribbon.expanded = false;
+    ribbon.el.classList.remove("agee-ribbon-expanded");
+    closeCopyMenu();
+    renderRibbon(ribbon);
+  }
+
+  function toggleRibbonExpanded(ribbon) {
+    if (ribbon?.expanded) collapseRibbon(ribbon);
+    else expandRibbon(ribbon);
+  }
+
+  async function copyRibbon(ribbon, key) {
+    if (!ribbon) return false;
+    const variant = key || ribbonDefaultVariant(ribbon);
+    // Choosing a variant is sticky for this turn only. A durable preference is
+    // profile state and the agent owns that, not the overlay.
+    if (key) ribbon.chosenVariant = key;
+    const text = ribbonVariantText(ribbon, variant);
+    if (!text) return false;
+    const copied = await copyTextToClipboard(text);
     if (!copied) return false;
     ribbon.el.classList.add("agee-ribbon-copied");
     clearTimeout(ribbon.copyTimer);
@@ -1267,10 +1378,10 @@
     holdRibbonsOpen();
     if (!latch) return;
     ribbonLatched = true;
-    ribbonLatchTimer = setTimeout(() => {
-      ribbonLatched = false;
-      releaseRibbonUnit();
-    }, RIBBON_LATCH_MS);
+    // Latch expiry is a full release: it collapses an expanded ribbon and
+    // closes any open menu, so the overlay cannot be left occluding the page
+    // after the user has stopped touching it.
+    ribbonLatchTimer = setTimeout(() => unlatchRibbonUnit(), RIBBON_LATCH_MS);
   }
 
   function releaseRibbonUnit() {
@@ -1284,6 +1395,9 @@
     ribbonLatched = false;
     clearTimeout(ribbonLatchTimer);
     closeRibbonMenu();
+    closeCopyMenu();
+    collapseRibbon(ribbonYou);
+    collapseRibbon(ribbonReply);
     releaseRibbonUnit();
   }
 
@@ -1309,10 +1423,23 @@
     const clampTop = (value) =>
       Math.max(RIBBON_EDGE, Math.min(value, window.innerHeight - RIBBON_HEIGHT - RIBBON_EDGE));
 
+    // Each ribbon is anchored on the edge FURTHEST from the companion, so an
+    // expanded ribbon grows away from it: the upper ribbon is bottom-anchored
+    // and grows upward, the lower one is top-anchored and grows downward. The
+    // companion never moves to make room and the page never reflows.
     ribbonYou.el.style.left = `${left}px`;
-    ribbonYou.el.style.top = `${clampTop(youTop)}px`;
     ribbonReply.el.style.left = `${left}px`;
+    if (flip) {
+      // Flipped, the you-ribbon sits directly under the companion, so growing
+      // downward is still growing away from it.
+      ribbonYou.el.style.top = `${clampTop(youTop)}px`;
+      ribbonYou.el.style.bottom = "auto";
+    } else {
+      ribbonYou.el.style.top = "auto";
+      ribbonYou.el.style.bottom = `${Math.max(RIBBON_EDGE, window.innerHeight - clampTop(youTop) - RIBBON_HEIGHT)}px`;
+    }
     ribbonReply.el.style.top = `${clampTop(replyTop)}px`;
+    ribbonReply.el.style.bottom = "auto";
     root?.classList.toggle("agee-ribbons-flipped", flip);
   }
 
@@ -1448,6 +1575,7 @@
         dragging = true;
         clearTimeout(holdTimer);
         closeRibbonMenu();
+        collapseRibbon(ribbon);
         held = false;
         ribbon.el.classList.remove("agee-ribbon-held");
         setRibbonUnitState("dragging");
@@ -1483,9 +1611,13 @@
         const taps = tapCount;
         tapCount = 0;
         if (taps === 1) {
-          // Tap solidifies and reveals the copy rail; a second tap releases.
-          if (ribbonLatched) unlatchRibbonUnit();
-          else engageRibbonUnit(true);
+          // One gesture, one obvious result: the bounded bar opens to the full
+          // text AND the copy rail appears with it, so the copy affordance sits
+          // where the text you would copy is actually visible. Solidify is not a
+          // destination of its own -- touching a ribbon already solidifies it.
+          engageRibbonUnit(true);
+          toggleRibbonExpanded(ribbon);
+          if (!ribbon.expanded) unlatchRibbonUnit();
           return;
         }
         // Double tap hands off to the history surface. The overlay never
@@ -1503,8 +1635,9 @@
     ribbon.el.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        if (ribbonLatched) unlatchRibbonUnit();
-        else engageRibbonUnit(true);
+        engageRibbonUnit(true);
+        toggleRibbonExpanded(ribbon);
+        if (!ribbon.expanded) unlatchRibbonUnit();
       } else if (event.key === " ") {
         event.preventDefault();
         engageRibbonUnit(true);
@@ -1568,6 +1701,60 @@
     ribbonMenu?.classList.remove("agee-ribbon-menu-open");
   }
 
+  // The copy rail is a three-way choice with a default, not one button.
+  // Unavailable variants render as disabled rows with a reason, so the
+  // capability is discoverable before the data exists.
+  function openCopyMenu(ribbon) {
+    if (!copyMenu || !ribbon) return;
+    copyMenu.textContent = "";
+    const active = ribbonDefaultVariant(ribbon);
+    for (const key of RIBBON_VARIANT_RANK) {
+      const text = ribbonVariantText(ribbon, key);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      const head = document.createElement("span");
+      head.className = "agee-copy-row-head";
+      const tick = document.createElement("i");
+      tick.className = "agee-copy-tick";
+      head.appendChild(tick);
+      head.appendChild(document.createTextNode(
+        key === "skill" && ribbon.skillName
+          ? `${RIBBON_VARIANT_LABELS.skill} — ${ribbon.skillName}`
+          : RIBBON_VARIANT_LABELS[key]
+      ));
+      const why = document.createElement("span");
+      why.className = "agee-copy-why";
+      why.textContent = text ? RIBBON_VARIANT_NOTES[key] : "not generated for this turn";
+      button.appendChild(head);
+      button.appendChild(why);
+      if (!text) button.disabled = true;
+      if (key === active) button.classList.add("agee-copy-default");
+      button.addEventListener("pointerdown", (event) => event.stopPropagation());
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        copyRibbon(ribbon, key).catch(() => {});
+        closeCopyMenu();
+      });
+      copyMenu.appendChild(button);
+    }
+    copyMenu.classList.add("agee-ribbon-menu-open");
+    const rect = (ribbon.chevronEl || ribbon.el).getBoundingClientRect();
+    const width = copyMenu.offsetWidth || 214;
+    const height = copyMenu.offsetHeight || 150;
+    const left = Math.max(RIBBON_EDGE, Math.min(rect.right - width, window.innerWidth - width - RIBBON_EDGE));
+    let top = rect.bottom + 6;
+    if (top + height > window.innerHeight - RIBBON_EDGE) top = rect.top - height - 6;
+    copyMenu.style.left = `${left}px`;
+    copyMenu.style.top = `${Math.max(RIBBON_EDGE, top)}px`;
+    engageRibbonUnit(true);
+  }
+
+  function closeCopyMenu() {
+    copyMenu?.classList.remove("agee-ribbon-menu-open");
+  }
+
   // History is a separate surface, not overlay content. The side panel already
   // hydrates from the canonical gateway session projection.
   function openRibbonHistory() {
@@ -1606,6 +1793,10 @@
       }
     }
     const status = String(presentation.status || "");
+    // Derived revisions, when the gateway has produced them. Absent fields
+    // leave that variant unavailable and the rail falls back down the rank.
+    setRibbonVariants(ribbonYou, presentation.user_variants);
+    setRibbonVariants(ribbonReply, presentation.response_variants);
     adoptRibbonText(ribbonYou, presentation.user_text, { isOwner });
     adoptRibbonText(ribbonReply, presentation.response_text, {
       isOwner,

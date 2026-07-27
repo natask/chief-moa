@@ -1883,3 +1883,129 @@ button.agee-ui-list-row:hover {
   }
   .agee-ribbon-text { background: transparent; }
 }
+
+/* ---- Expanded: the bounded bar opens ------------------------------------
+   The sliding window keeps the bar small; expand is how the user reads past
+   it. A tap opens the full text, wrapped and scrollable inside a height cap,
+   and brings the copy rail with it. The bar grows AWAY from the companion
+   (the upper ribbon is bottom-anchored, the lower one top-anchored), so the
+   companion never moves, the other ribbon never moves, and the page never
+   reflows. Expanded is an occluding state and that is correct: the user is
+   touching it, and it collapses the moment they are not. */
+.agee-ribbon.agee-ribbon-expanded {
+  height: auto;
+  max-height: min(112px, 30vh);
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  z-index: 2;
+}
+.agee-ribbon-expanded .agee-ribbon-viewport {
+  height: auto;
+  max-height: min(102px, 28vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  align-items: flex-start;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.agee-ribbon-expanded .agee-ribbon-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transform: none !important;
+  width: 100%;
+}
+.agee-ribbon-expanded .agee-ribbon-text {
+  background: transparent;
+  padding: 0;
+}
+.agee-ribbon-expanded .agee-ribbon-dot {
+  top: 14px;
+}
+.agee-ribbon-expanded .agee-ribbon-copy {
+  position: sticky;
+  top: 0;
+}
+
+/* ---- Copy rail: a three-way choice with a default -----------------------
+   Literal / corrected / polished, per voice-capture-notebook-ime 3.3. The
+   primary button copies the default; the chevron opens the chooser. */
+.agee-ribbon-chevron {
+  width: 18px;
+  margin-left: 0;
+}
+.agee-ribbon-chevron svg {
+  width: 13px;
+  height: 13px;
+}
+#agee-copy-menu {
+  position: absolute;
+  width: 214px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--agee-ribbon-menu-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
+  opacity: 0;
+  transform: scale(0.94) translateY(4px);
+  transform-origin: top right;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    opacity var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    transform var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    visibility 0s linear var(--agee-ribbon-dur-menu);
+}
+#agee-copy-menu.agee-ribbon-menu-open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    opacity var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    transform var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    visibility 0s;
+}
+#agee-copy-menu button {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--agee-ribbon-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+#agee-copy-menu button:hover:not(:disabled) { background: var(--agee-ribbon-menu-hover); }
+#agee-copy-menu button:disabled { cursor: default; opacity: 0.55; }
+#agee-copy-menu button:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: -2px; }
+#agee-copy-menu .agee-copy-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+#agee-copy-menu .agee-copy-tick {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--agee-ribbon-accent);
+  flex: 0 0 auto;
+  visibility: hidden;
+}
+#agee-copy-menu button.agee-copy-default .agee-copy-tick { visibility: visible; }
+#agee-copy-menu .agee-copy-why {
+  display: block;
+  margin-top: 1px;
+  padding-left: 13px;
+  font-size: 10.5px;
+  line-height: 14px;
+  font-weight: 450;
+  color: var(--agee-ribbon-muted);
+}
