@@ -93,6 +93,8 @@ final class MoaOverlayUnitController {
     private Runnable pendingPresenceTick;
     private Runnable pendingMenuIdleDismiss;
     private int toneColor;
+    private final MoaWindowLayoutState youLayoutState = new MoaWindowLayoutState();
+    private final MoaWindowLayoutState replyLayoutState = new MoaWindowLayoutState();
 
     MoaOverlayUnitController(Host host) {
         this.host = host;
@@ -126,6 +128,8 @@ final class MoaOverlayUnitController {
 
         host.windowManager().addView(youView, youParams);
         host.windowManager().addView(replyView, replyParams);
+        youLayoutState.reset();
+        replyLayoutState.reset();
         position();
         applyPresence();
     }
@@ -308,8 +312,8 @@ final class MoaOverlayUnitController {
         youParams.y = placement.youY;
         replyParams.x = placement.ribbonX;
         replyParams.y = placement.replyY;
-        MoaOverlayWindowLayout.update(host.windowManager(), youView, youParams);
-        MoaOverlayWindowLayout.update(host.windowManager(), replyView, replyParams);
+        updateLayoutIfChanged(youView, youParams, youLayoutState);
+        updateLayoutIfChanged(replyView, replyParams, replyLayoutState);
     }
 
     void onConfigurationChanged() {
@@ -462,7 +466,17 @@ final class MoaOverlayUnitController {
             return;
         }
         params.flags = flags;
-        MoaOverlayWindowLayout.update(host.windowManager(), ribbon, params);
+        // position() owns the single layout submission after geometry or flags
+        // change. Paint-only stream deltas never cross into WindowManager.
+    }
+
+    private void updateLayoutIfChanged(
+            MoaRibbonView ribbon,
+            WindowManager.LayoutParams params,
+            MoaWindowLayoutState state) {
+        if (ribbon != null && params != null && state.changed(params)) {
+            MoaOverlayWindowLayout.update(host.windowManager(), ribbon, params);
+        }
     }
 
     // Latch and linger are deadlines, not events, so the unit re-evaluates itself

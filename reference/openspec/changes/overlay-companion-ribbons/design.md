@@ -150,3 +150,23 @@ and drag-to-remove are both still available.
   painted rectangle plus one tolerance, drags that merely pass near the bottom no
   longer arm removal, and undo restores the drag-start position exactly once
   inside a 5s window.
+- `MoaWindowLayoutStateTest` — an unchanged collapsed ribbon layout is submitted
+  once, while expansion height, position, touchability flags, and a newly shown
+  window each require a fresh submission.
+- `MoaOverlayGroupDragListenerTest` — eight panel-header move events before one
+  display frame request exactly one frame, perform no early orb submission, and
+  apply the latest anchor once on that frame.
+
+## Fluidity repair evidence
+
+The 2026-07-27 P0 repair separates ribbon paint/presence work from window
+geometry. Streaming text may still invalidate and repaint the `MoaRibbonView`,
+but `MoaOverlayUnitController` submits a `WindowManager` layout only when x, y,
+width, height, or flags differ from the last submitted state. Show resets the
+guard; expansion, configuration changes that alter placement, and drag therefore
+still reposition normally.
+
+Panel-header drag now matches orb and ribbon drag: each raw `ACTION_MOVE` stores
+only the newest clamped companion anchor and requests the shared
+`MoaFrameCoalescer`. The frame callback remains the sole submitter for the orb,
+panel, ribbons, draft controls, and remove-target state.

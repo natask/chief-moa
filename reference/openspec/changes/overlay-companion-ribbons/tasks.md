@@ -45,6 +45,13 @@
       both exits, and leaves the user able to re-arm with the normal gesture.
 - [x] Route every `continuousVoiceLoop` assignment through one setter so the
       bound cannot be left armed behind an existing exit path.
+- [x] P0 fluidity: suppress `WindowManager.updateViewLayout` for collapsed
+      streaming deltas when ribbon geometry and flags are unchanged; preserve
+      submissions for show, expansion, changed configuration, and drag.
+- [x] P0 fluidity: route panel/header `ACTION_MOVE` through the same
+      `MoaFrameCoalescer` as orb and ribbon drag. Eight queued moves are pinned
+      by test to one requested frame, zero early orb submissions, and one latest
+      anchor submission on the frame.
 
 ## Open
 

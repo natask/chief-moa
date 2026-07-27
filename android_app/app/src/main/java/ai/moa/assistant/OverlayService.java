@@ -599,8 +599,8 @@ public final class OverlayService extends Service {
     private void attachSurfaceHeaderDrag(View header) {
         if (header == null || orbView == null || orbParams == null) return;
         header.setOnTouchListener(new MoaOverlayGroupDragListener(
-                this, windowManager, orbView, orbParams, scaledOrbSizePx(),
-                dp(ORB_EDGE_MARGIN_DP), this::hideKeyboard, this::updateAnchoredSurfacePositions));
+                this, orbParams, scaledOrbSizePx(), dp(ORB_EDGE_MARGIN_DP),
+                this::hideKeyboard, this::updateOrbDragSurfaces));
     }
 
     private void showOrbRemoveTarget() {
