@@ -327,9 +327,15 @@
         you.el.style.top = "auto";
         you.el.style.bottom = `${place.youBottom}px`;
       }
-      reply.el.style.top = `${place.replyTop}px`;
-      reply.el.style.bottom = "auto";
+      if (place.replyAnchor === "bottom") {
+        reply.el.style.top = "auto";
+        reply.el.style.bottom = `${place.replyBottom}px`;
+      } else {
+        reply.el.style.top = `${place.replyTop}px`;
+        reply.el.style.bottom = "auto";
+      }
       root.classList.toggle("agee-ribbons-flipped", place.flip);
+      root.classList.toggle("agee-ribbons-stacked-above", place.stackAbove);
     }
 
     // The ambient glyphs sit directly on page content, so sample what is

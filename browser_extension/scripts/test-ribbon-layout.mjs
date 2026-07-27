@@ -46,6 +46,18 @@ test("the upper ribbon is bottom-anchored so expanding grows upward", () => {
 test("the lower ribbon is top-anchored so expanding grows downward", () => {
   const result = place(launcher(400));
   assert.equal(result.replyTop, 462 + 8, "companion bottom + gap");
+  assert.equal(result.replyAnchor, "top");
+});
+
+test("both ribbons stack above a bottom-edge companion without colliding", () => {
+  const rect = launcher(720);
+  const result = place(rect);
+  assert.equal(result.stackAbove, true);
+  assert.equal(result.replyAnchor, "bottom");
+  assert.equal(result.replyTop, rect.top - L.GAP - L.HEIGHT);
+  assert.equal(result.youTop, rect.top - L.GAP * 2 - L.HEIGHT * 2);
+  assert.equal(result.replyTop + L.HEIGHT + L.GAP, rect.top);
+  assert.ok(result.youTop + L.HEIGHT < result.replyTop);
 });
 
 test("both ribbons flip together at the top edge and the companion stays put", () => {

@@ -41,19 +41,30 @@
     const aboveTop = rect.top - gap - height;
     const belowSecondBottom = rect.bottom + gap * 2 + height * 2;
     const flip = aboveTop < edge && belowSecondBottom <= viewportHeight - edge;
+    // Near the bottom edge, a below-companion reply would be clamped into the
+    // mascot. Stack both streams above it instead, with the reply closest to
+    // the companion. This keeps the companion visually anchoring the unit.
+    const stackAbove = !flip && rect.bottom + gap + height > viewportHeight - edge;
 
     const clampTop = (value) => clamp(value, edge, Math.max(edge, viewportHeight - height - edge));
-    const youTop = clampTop(flip ? rect.bottom + gap : aboveTop);
-    const replyTop = clampTop(flip ? rect.bottom + gap * 2 + height : rect.bottom + gap);
+    const youTop = clampTop(flip
+      ? rect.bottom + gap
+      : stackAbove ? rect.top - gap * 2 - height * 2 : aboveTop);
+    const replyTop = clampTop(flip
+      ? rect.bottom + gap * 2 + height
+      : stackAbove ? aboveTop : rect.bottom + gap);
 
     return {
       flip,
+      stackAbove,
       left,
       youTop,
       replyTop,
       // Applied instead of youTop when not flipped, so the upper ribbon grows up.
       youBottom: Math.max(edge, viewportHeight - youTop - height),
       youAnchor: flip ? "top" : "bottom",
+      replyBottom: Math.max(edge, viewportHeight - replyTop - height),
+      replyAnchor: stackAbove ? "bottom" : "top",
     };
   }
 

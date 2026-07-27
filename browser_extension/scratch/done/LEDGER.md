@@ -1,3 +1,4 @@
+- Refined and visually accepted the real browser ribbon overlay with durable Chrome screenshots and Opus review evidence — agent: codex/gpt-5 — feat/browser-visual-qa-20260727
 - Added Chief MOA-owned file-URL consent detection, tab focus, bounded console/network diagnostics, and gateway-receipted browser control release 0.1.91 — agent: Codex/GPT-5 — 10057037
 - Kept an explicit retryable Copy control on completed dictation cards, bound to the exact final transcript without launching agent work — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Kept one browser mascot root while shrinking fresh desktop and phone-width defaults with real-extension size, ownership, and gesture coverage — agent: codex/gpt-5 — 376252e5

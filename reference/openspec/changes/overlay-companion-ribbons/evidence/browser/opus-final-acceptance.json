@@ -1,0 +1,29 @@
+{
+  "invocation": {
+    "mode": "noninteractive",
+    "requested_alias": "opus",
+    "effort": "high",
+    "claude_code_version": "2.1.212"
+  },
+  "returned": {
+    "model": "claude-opus-4-8",
+    "session_id": "d0931e37-fb13-47f9-a369-96d7093b620c",
+    "cost_usd": 0.4321575,
+    "result": "ACCEPT"
+  },
+  "prompt": "Perform final acceptance on the three actual final screenshots. Accept a small companion, fixed 28px collapsed user and assistant streams, readable newest-text continuation, no collision, bounded tap expansion without page reflow, and clear copy chooser. History is a separate handoff and is intentionally absent from screenshots. Reject only a visible contract failure; do not edit files.",
+  "screenshots": {
+    "final/browser-ribbon-collapsed-streaming.png": "83fce9483fa93740140a1c936940d40137351462e986313163e881af0586bf95",
+    "final/browser-ribbon-expanded-transcript.png": "c495abb6c28c40b49f1602c149af87e953514d5563c77ba3a2cd7f5731b81663",
+    "final/browser-ribbon-copy-variants.png": "9780a264f120ca84c12f304d5baa735b299a4ed596b65549836ed67dd254e42c"
+  },
+  "observations": [
+    "Both collapsed streams are readable, distinct, explicit continuations with no mascot collision.",
+    "The expanded transcript stays bounded and does not reflow the page.",
+    "The copy chooser is legible and history is correctly absent from the overlay frames."
+  ],
+  "disposition": [
+    "Accepted as the browser visual parity target.",
+    "History screenshot remains an explicit gap; source verification proves the separate side-panel handoff, not its rendered appearance."
+  ]
+}

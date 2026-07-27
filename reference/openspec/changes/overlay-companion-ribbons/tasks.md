@@ -43,6 +43,11 @@
 
 ## Open
 
+- [x] Browser visual-QA loop: capture the real extension's collapsed,
+      expanded, and copy states in Chrome for Testing; run two Opus critique
+      and refinement rounds; preserve model metadata, screenshot hashes, and
+      dispositions; receive final visual acceptance. The separate History
+      handoff is source-verified but still lacks a rendered screenshot.
 - [ ] Manual phone QA: streaming legibility over light and dark apps, the
       ribbons' hit region against a real app underneath, drag feel across all
       three windows, and the undo chip.
