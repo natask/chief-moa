@@ -123,6 +123,10 @@ public final class MoaActionBrokerTest {
         assertTrue(MoaActionBroker.isKnownTool("media.playlist"));
         assertEquals("local_confirmation", MoaActionBroker.capabilityApproval("media.bookmark"));
         assertEquals("local_confirmation", MoaActionBroker.capabilityApproval("media.playlist"));
+
+        assertTrue(MoaActionBroker.isKnownTool("app.settings.open"));
+        assertEquals("navigation", MoaActionBroker.capabilityRisk("app.settings.open"));
+        assertEquals("implicit_user_command", MoaActionBroker.capabilityApproval("app.settings.open"));
     }
 
     @Test

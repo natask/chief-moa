@@ -23,19 +23,9 @@ final class MoaActionReceiptStore {
     static JSONObject record(Context context, String tool, String risk, String approval, String target, boolean success, String result) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String previousHash = prefs.getString(KEY_LAST_HASH, "");
-        JSONObject receipt = new JSONObject();
-        try {
-            receipt.put("tool", safe(tool));
-            receipt.put("risk", safe(risk));
-            receipt.put("approval", safe(approval));
-            receipt.put("target", safe(target));
-            receipt.put("success", success);
-            receipt.put("result", safe(result));
-            receipt.put("timestamp_ms", System.currentTimeMillis());
-            receipt.put("previous_hash", previousHash);
-            receipt.put("hash", hash(receipt.toString()));
-        } catch (JSONException ignored) {
-        }
+        JSONObject receipt = createReceipt(
+                tool, risk, approval, target, success, result,
+                System.currentTimeMillis(), previousHash);
 
         JSONArray receipts = receipts(context);
         receipts.put(receipt);
@@ -46,6 +36,32 @@ final class MoaActionReceiptStore {
                 .putString(KEY_RECEIPTS, receipts.toString())
                 .putString(KEY_LAST_HASH, receipt.optString("hash", previousHash))
                 .apply();
+        return receipt;
+    }
+
+    static JSONObject createReceipt(
+            String tool,
+            String risk,
+            String approval,
+            String target,
+            boolean success,
+            String result,
+            long timestampMs,
+            String previousHash
+    ) {
+        JSONObject receipt = new JSONObject();
+        try {
+            receipt.put("tool", safe(tool));
+            receipt.put("risk", safe(risk));
+            receipt.put("approval", safe(approval));
+            receipt.put("target", safe(target));
+            receipt.put("success", success);
+            receipt.put("result", safe(result));
+            receipt.put("timestamp_ms", timestampMs);
+            receipt.put("previous_hash", safe(previousHash));
+            receipt.put("hash", hash(receipt.toString()));
+        } catch (JSONException ignored) {
+        }
         return receipt;
     }
 
