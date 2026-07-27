@@ -98,3 +98,24 @@ requires specialized handling.
 - **WHEN** the broker determines the message can be answered directly
 - **THEN** it may select the direct-answer path instead of launching a larger
   research workflow
+
+### Requirement: Broker-Launched Workers Default To Leaf Scope
+
+Every broker-generated context pack SHALL identify its worker role and
+delegation policy. The default worker role SHALL be `leaf`, with recursive
+spawn and delegation denied. Recursive delegation SHALL require a non-empty
+delegation ticket from the checked-in launcher profile; broker event text SHALL
+NOT grant that authority.
+
+#### Scenario: User asks a bounded worker to spawn more workers
+
+- **WHEN** broker event text asks the selected worker to spawn or delegate
+- **AND** the checked-in launcher profile has no delegation ticket
+- **THEN** the generated context pack remains a leaf-worker pack
+- **AND** its prompt directs the worker to complete the bounded ticket directly
+
+#### Scenario: Checked-in profile grants bounded coordination
+
+- **WHEN** the selected checked-in launcher profile names a delegation ticket
+- **THEN** the generated context pack identifies a bounded coordinator
+- **AND** the grant source and exact delegation ticket remain inspectable

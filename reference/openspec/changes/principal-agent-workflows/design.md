@@ -19,6 +19,12 @@ context pack adds `principal_role`, `execution_policy`, role-specific
 constraints, and an optional `repair_handoff`. These fields inform the worker
 contract but grant no execution, device, merge, or deployment authority.
 
+Principal runs are bounded leaf workers by default. Top-level coordination and
+lane splitting remain with the user-facing coordinator. A principal may only
+delegate recursively when its checked-in launcher profile names a specific
+delegation ticket and the generated context pack carries that grant; broker
+message text alone is never a delegation grant.
+
 ## Role Boundaries
 
 ### Security

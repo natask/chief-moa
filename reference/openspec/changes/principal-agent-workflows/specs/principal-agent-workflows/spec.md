@@ -67,3 +67,17 @@ automatic repairs.
 
 - **WHEN** security or fuzzing produces a repair handoff
 - **THEN** the first-slice broker launches no repair run automatically
+
+### Requirement: Principal Runs Default To Leaf Scope
+
+Every principal context pack SHALL deny recursive spawning and delegation by
+default. Only an explicit delegation ticket in the checked-in launcher profile
+MAY grant bounded coordinator scope; principal request text SHALL NOT grant it.
+
+#### Scenario: Principal pack has no delegation ticket
+
+- **WHEN** the broker materializes a principal context pack from a profile with
+  no delegation ticket
+- **THEN** the pack identifies the principal as a leaf worker
+- **AND** the principal returns follow-up work to the user-facing coordinator
+  instead of launching it

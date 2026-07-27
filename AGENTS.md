@@ -35,11 +35,11 @@ For Android-first product work, the active change is usually
   OpenSpec.
 - Use narrow tickets. One implementation task should have one observable
   acceptance check.
-- For cross-surface voice, action, browser, Android, gateway, workflow, or
-  deployment work, use the Natstack `chief-moa-orchestration` lane split when
-  available. Split work into browser voice, browser action/CDP, Android
-  action/accessibility, gateway, workflow/docs, and verification/deploy lanes
-  before implementation.
+- A top-level, user-facing coordinator may use the Natstack
+  `chief-moa-orchestration` lane split for cross-surface work. A worker launched
+  with a bounded ticket is a leaf by default: complete that ticket directly and
+  do not recursively spawn or delegate work unless its launcher context names
+  an explicit delegation ticket.
 - Do not use chat as the only record of decisions. Save plans, tickets, or
   notes under OpenSpec or `scratch/agent-loop`.
 - Do not stop after only capturing a note or spec when the user gives product or

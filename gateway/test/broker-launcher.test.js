@@ -178,6 +178,7 @@ test("profile normalization bounds arrays and supplies scalar defaults", () => w
       verification: Array.from({ length: 15 }, (_, index) => index),
       principal_role: "security",
       execution_policy: "audit_only",
+      delegation_ticket: "ticket: coordinator-42",
       repair_handoff: "separate repair",
     },
   };
@@ -192,8 +193,39 @@ test("profile normalization bounds arrays and supplies scalar defaults", () => w
   assert.equal(normalized.constraints.length, 12);
   assert.equal(normalized.principal_role, "security");
   assert.equal(normalized.execution_policy, "audit_only");
+  assert.equal(normalized.delegation_ticket, "ticket: coordinator-42");
   assert.equal(normalized.repair_handoff, "separate repair");
   assert.equal(normalized.verification.length, 12);
+}));
+
+test("broker context packs are leaf workers unless a checked-in profile grants delegation", () => withFixture(({ launcher }) => {
+  const userRequestedDelegation = launcher.buildContextPack(
+    event({ text: "spawn subagents for every part of this task" }),
+    decision({ action: "create_new_fork" }),
+    profile("coding"),
+  );
+  assert.equal(userRequestedDelegation.worker_role, "leaf");
+  assert.deepEqual(userRequestedDelegation.delegation_policy, {
+    worker_role: "leaf",
+    recursive_delegation_allowed: false,
+    delegation_ticket: "",
+    grant_source: "none",
+  });
+  assert.ok(userRequestedDelegation.constraints.some((item) => /leaf worker/.test(item)));
+  assert.match(userRequestedDelegation.launcher.prompt, /Worker role: leaf/);
+  assert.match(userRequestedDelegation.launcher.prompt, /Recursive delegation allowed: no/);
+  assert.match(userRequestedDelegation.launcher.prompt, /do not spawn subagents/);
+
+  const granted = launcher.buildContextPack(
+    event({ text: "complete the bounded coordinator ticket" }),
+    decision({ action: "create_new_fork" }),
+    profile("coding", { delegation_ticket: "ticket: split browser and Android verification lanes" }),
+  );
+  assert.equal(granted.worker_role, "bounded_coordinator");
+  assert.equal(granted.delegation_policy.recursive_delegation_allowed, true);
+  assert.equal(granted.delegation_policy.grant_source, "checked_in_launcher_profile");
+  assert.match(granted.launcher.prompt, /Delegation ticket: ticket: split browser and Android verification lanes/);
+  assert.doesNotMatch(granted.launcher.prompt, /You are a leaf worker/);
 }));
 
 test("principal context packs carry role policy, constraints, and repair handoff", () => withFixture(({ launcher }) => {

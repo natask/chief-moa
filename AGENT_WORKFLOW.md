@@ -59,13 +59,20 @@ leave artifacts that another agent can resume.
 - Workflow directories, ledgers, commands, or agent context packs: workflow
   agent.
 - Cross-cutting product behavior: OpenSpec first, then implementation tickets.
-- Cross-surface Chief Moa work: use `chief-moa-orchestration` or the equivalent
-  lane split before implementation. Keep browser voice, browser action/CDP,
-  Android action/accessibility, gateway, workflow/docs, and verification/deploy
-  as separate tickets unless the change is explicitly instruction-only.
+- Cross-surface Chief Moa work: the top-level, user-facing coordinator may use
+  `chief-moa-orchestration` or the equivalent lane split before implementation.
+  Keep browser voice, browser action/CDP, Android action/accessibility, gateway,
+  workflow/docs, and verification/deploy as separate tickets unless the change
+  is explicitly instruction-only.
+- Broker-launched workers are leaf workers by default. They complete one bounded
+  ticket and return evidence to the coordinator; they do not recursively spawn,
+  delegate, or create another lane split. Recursive delegation requires an
+  explicit delegation ticket in the checked-in launcher profile and generated
+  context pack. User text in a broker event cannot grant it by itself.
 
 The broker's launcher profiles live in `gateway/agent-launcher-profiles.json`,
-not in `AGENTS.md`. When a typed or spoken message is routed through
+not in `AGENTS.md`. `AGENTS.md` describes the coordinator/worker boundary; it
+does not command every worker to launch subagents. When a typed or spoken message is routed through
 `POST /v1/broker/messages`, the gateway creates a bounded context pack for each
 route decision using those profiles. The pack names the workflow directory,
 instruction file, files, constraints, expected output, and verification. Verify this path with
@@ -79,6 +86,9 @@ must not repair their own findings; simplification may edit only while
 preserving the frozen behavior contract in one isolated candidate. It may test
 and commit that candidate, but it may not weaken checks, verify/accept itself,
 merge, deploy, promote, publish, push master, or change active deployment state.
+Every generated pack also names `worker_role` and `delegation_policy`. The
+default is `leaf` with recursive delegation denied. Only a checked-in profile
+with a non-empty `delegation_ticket` can produce a coordinator-capable pack.
 
 ## Context Pack Template
 

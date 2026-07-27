@@ -178,6 +178,10 @@ async function assertContinuationRoute(baseUrl, dataDir, sessionId) {
   assert.ok(route.context_pack_id, "continue route must reference a context pack");
   const pack = readContextPack(dataDir, route.context_pack_id);
   assert.equal(pack.launcher_profile_id, "direct-answer");
+  assert.equal(pack.worker_role, "leaf");
+  assert.equal(pack.delegation_policy.recursive_delegation_allowed, false);
+  assert.equal(pack.delegation_policy.grant_source, "none");
+  assert.match(pack.launcher.prompt, /Worker role: leaf/);
   assert.equal(pack.workflow_directory, "gateway/agent-workflows/direct-answer");
   assert.equal(pack.instruction_file, "gateway/agent-workflows/direct-answer/WORKFLOW.md");
   assert.match(pack.inputs.session_context, /browser extension broker routing/);

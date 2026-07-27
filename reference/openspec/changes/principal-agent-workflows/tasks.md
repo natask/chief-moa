@@ -14,6 +14,9 @@
   behavior-preserving worktree candidate but may not weaken checks, self-accept,
   merge, deploy, promote, publish, push master, or mutate active deployment
   state; require a separate independent-verification handoff.
+- [x] 1.7 Make every broker principal a leaf worker by default; encode any
+  recursive-delegation exception as an explicit checked-in delegation ticket in
+  its generated context pack.
 
 Acceptance: each role is selectable from a typed or transcribed broker event;
 its context pack carries the checked-in contract; no selection auto-launches;

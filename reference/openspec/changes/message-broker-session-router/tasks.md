@@ -29,6 +29,9 @@
 
 - [x] 4.1 Add workflow target metadata for research, coding, QA, design, writing, and direct-answer paths. Implemented in `gateway/agent-launcher-profiles.json`.
 - [x] 4.2 Build focused workflow context packs from broker event + selected session/project context. Implemented as broker context packs stored under `DATA_DIR/broker-context-packs` and referenced by route decisions.
+- [x] 4.2a Mark broker-launched workers as leaf workers by default and deny
+  recursive delegation unless a checked-in launcher profile names an explicit
+  delegation ticket.
 - [x] 4.3 Add a research workflow path that can fan out search/model passes, refine, and return a report when the broker selects it.
       Implemented as `gateway/lib/research-workflow.js` (pure, deterministic by
       default: derive focused sub-queries -> one pass each -> one refine pass ->

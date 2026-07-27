@@ -79,6 +79,20 @@ Alternative considered: auto-launch every workflow-looking message. Rejected
 because direct answers and evidence-only follow-ups also flow through the
 broker, and launching hidden work would violate the user-control boundary.
 
+### Decision: Broker Workers Are Leaves By Default
+
+The user-facing coordinator may split a broad request into bounded lanes.
+Workers launched from broker context packs complete one selected lane and return
+evidence without recursively spawning or delegating. Each generated pack names
+the worker role and delegation policy. Recursive delegation is allowed only
+when the checked-in launcher profile names a non-empty delegation ticket; text
+inside the broker event cannot grant that authority.
+
+Alternative considered: put a general instruction to launch subagents in
+`AGENTS.md` or every worker workflow. Rejected because it turns bounded workers
+into unbounded coordinators and makes ownership, budgets, and result joining
+implicit.
+
 ## First Slice
 
 1. Add OpenSpec capability and task map.
