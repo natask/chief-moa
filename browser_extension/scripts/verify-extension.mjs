@@ -485,9 +485,13 @@ if (
   !/case "commitDictation":/.test(contentSource) ||
   !/transcriptionOnly: state\.dictation/.test(contentSource) ||
   !/transcription_only: true/.test(backgroundSource) ||
-  !/copyTextToClipboard\(transcript\)/.test(contentSource)
+  !/copyTextToClipboard\(transcript\)/.test(contentSource) ||
+  !/function attachDictationCopyAction\(/.test(contentSource) ||
+  !/attachDictationCopyAction\(state, transcript, \{ copied \}\)/.test(contentSource) ||
+  !/Copied — clipboard replaced\./.test(contentSource) ||
+  !/\.agee-dictation-copy\s*\{/.test(overlayCssSource)
 ) {
-  throw new Error("global macOS summon must start or commit the worker-owned transcription-only dictation and copy the literal transcript");
+  throw new Error("global macOS summon must start or commit worker-owned dictation, auto-copy the literal transcript, and retain an explicit copy control");
 }
 
 // The side panel is the extension-owned agent surface: it renders on every

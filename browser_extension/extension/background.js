@@ -93,6 +93,10 @@ const VIDEO_NOTE_MAX_MS = 120_000;
 const VIDEO_NOTE_MAX_BYTES = 20 * 1024 * 1024;
 const OFFSCREEN_VOICE_DOCUMENT = "offscreen.html";
 const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
+// The active turn's visible text follows the user across same-browser tabs and
+// page navigations, but remains memory-only. Durable conversation history stays
+// gateway-owned; chrome.storage.local intentionally receives owner metadata only.
+let activeBrowserAgentPresentation = null;
 const PRIVACY_MIGRATION_VERSION = 1;
 const PRIVACY_MIGRATION_KEY = "ageePrivacyMigrationVersion";
 const PRIVACY_NOTICE_KEY = "ageePrivacyNoticePending";
@@ -1939,8 +1943,34 @@ async function notifyBrowserAgentOwner(owner) {
       cmd: "browserAgentOwnerChanged",
       owner,
       isOwner: owner?.tab_id === tab.id && owner?.status !== "cleared",
+      presentation: activeBrowserAgentPresentation,
     }).catch(() => {})
   )));
+}
+
+function boundedPresentationText(value) {
+  return String(value || "").trim().slice(0, 6000);
+}
+
+async function updateBrowserAgentPresentation(patch = {}) {
+  const cueId = String(patch.cue_id || activeBrowserAgentPresentation?.cue_id || "").trim();
+  if (!cueId) return null;
+  const sameCue = activeBrowserAgentPresentation?.cue_id === cueId;
+  activeBrowserAgentPresentation = {
+    ...(sameCue ? activeBrowserAgentPresentation : {}),
+    cue_id: cueId,
+    user_text: boundedPresentationText(
+      Object.hasOwn(patch, "user_text") ? patch.user_text : sameCue ? activeBrowserAgentPresentation?.user_text : "",
+    ),
+    response_text: boundedPresentationText(
+      Object.hasOwn(patch, "response_text") ? patch.response_text : sameCue ? activeBrowserAgentPresentation?.response_text : "",
+    ),
+    status: String(patch.status || (sameCue ? activeBrowserAgentPresentation?.status : "running") || "running"),
+    updated_at: new Date().toISOString(),
+  };
+  const owner = await getActiveBrowserAgentOwner().catch(() => null);
+  await notifyBrowserAgentOwner(owner);
+  return activeBrowserAgentPresentation;
 }
 
 function nextVoiceOwnerTransition(session) {
@@ -2175,6 +2205,13 @@ function cancelVoiceSampler(tabId, reason) {
 }
 
 function send(tabId, msg) {
+  if (msg?.cueId && ["progress", "browserAgentProgress", "done", "error"].includes(msg.cmd)) {
+    updateBrowserAgentPresentation({
+      cue_id: msg.cueId,
+      response_text: msg.summary || msg.text || "",
+      status: msg.cmd === "done" ? "done" : msg.cmd === "error" ? "error" : "running",
+    }).catch(() => {});
+  }
   // Panel-owned sessions are addressed with the PANEL_TAB_ID sentinel: the
   // side panel is an extension page, not a tab, so tabs.sendMessage can never
   // reach it. Route its traffic over the panel port instead.
@@ -2435,6 +2472,14 @@ function claimActiveAgentTab(tabId, reason = "another page became active", patch
   }
   activeAgentTabId = tabId;
   setActiveBrowserAgentOwner(tabId, reason, patch).catch(() => {});
+  if (patch.cue_id || patch.cueId) {
+    updateBrowserAgentPresentation({
+      cue_id: patch.cue_id || patch.cueId,
+      user_text: patch.user_text || patch.userText || "",
+      response_text: "",
+      status: patch.status || "running",
+    }).catch(() => {});
+  }
 }
 
 function revokeOtherTabVoiceSessions(tabId, reason) {
@@ -2952,6 +2997,11 @@ async function forwardVoiceSessionEvent(session, event) {
   }
   if (parsed?.type === "transcript_final") {
     session.mediaIntentText = String(parsed.text || "");
+    updateBrowserAgentPresentation({
+      cue_id: session.cueId,
+      user_text: parsed.text,
+      status: session.committed ? "processing" : "listening",
+    }).catch(() => {});
     updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
       status: session.committed ? "processing" : "listening",
       transition_sequence: nextVoiceOwnerTransition(session),
@@ -2959,6 +3009,11 @@ async function forwardVoiceSessionEvent(session, event) {
   }
   if (parsed?.type === "assistant_text") {
     session.lastAssistantText = String(parsed.text || "");
+    updateBrowserAgentPresentation({
+      cue_id: session.cueId,
+      response_text: parsed.text,
+      status: "responding",
+    }).catch(() => {});
     updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
       status: "responding",
       transition_sequence: nextVoiceOwnerTransition(session),
@@ -2973,6 +3028,10 @@ async function forwardVoiceSessionEvent(session, event) {
       status: status === "completed" ? "completed" : status,
       transition_sequence: nextVoiceOwnerTransition(session),
       reason: session.transcriptionOnly ? "dictation turn finished" : "voice turn finished",
+    }).catch(() => {});
+    updateBrowserAgentPresentation({
+      cue_id: session.cueId,
+      status: status === "completed" ? "done" : status === "error" ? "error" : status,
     }).catch(() => {});
   }
   const voiceMediaAction = mediaActionsFromTurn(parsed)[0];

@@ -707,6 +707,144 @@ async function main() {
 	      throw new Error(`shortcut voice/text smoke failed: ${JSON.stringify(shortcutVoice)}`);
 	    }
 
+    const dictationCopy = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const transcript = "Ship the exact final text — ይህን ጽሑፍ ቅዳ።";
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        await chrome.tabs.sendMessage(tabId, { cmd: "stop" }).catch(() => {});
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const input = document.querySelector("#agee-input");
+            if (input) {
+              input.value = "dictation copy must preserve this draft";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+            window.__ageeDictationCopySmoke = {
+              calls: [],
+              copies: [],
+              originalSendMessage: chrome.runtime.sendMessage.bind(chrome.runtime),
+              clipboardDescriptor: Object.getOwnPropertyDescriptor(navigator, "clipboard"),
+            };
+            Object.defineProperty(navigator, "clipboard", {
+              configurable: true,
+              value: {
+                writeText: async (value) => {
+                  window.__ageeDictationCopySmoke.copies.push(String(value));
+                },
+              },
+            });
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              const clean = JSON.parse(JSON.stringify(message || {}));
+              window.__ageeDictationCopySmoke.calls.push(clean);
+              if (clean.cmd === "voiceSessionStart") {
+                return Promise.resolve({ ok: true, voiceSessionId: "dictation-copy-smoke" });
+              }
+              if (
+                clean.cmd === "voiceSessionAttach" ||
+                clean.cmd === "voiceSessionControl" ||
+                clean.cmd === "voiceSessionClose"
+              ) {
+                return Promise.resolve({ ok: true });
+              }
+              return window.__ageeDictationCopySmoke.originalSendMessage(message, ...rest);
+            };
+          },
+        });
+
+        await chrome.tabs.sendMessage(tabId, {
+          cmd: "startDictation",
+          dictationLeaseId: "dictation-copy-lease",
+        });
+        await sleep(120);
+        await chrome.tabs.sendMessage(tabId, {
+          cmd: "voiceSessionEvent",
+          voiceSessionId: "dictation-copy-smoke",
+          event: { type: "transcript_final", text: transcript },
+        });
+        await chrome.tabs.sendMessage(tabId, {
+          cmd: "voiceSessionEvent",
+          voiceSessionId: "dictation-copy-smoke",
+          event: {
+            type: "turn_done",
+            status: "completed",
+            transcription_only: true,
+            clipboard_copied: false,
+            turn_id: "dictation-copy-turn",
+          },
+        });
+        await sleep(180);
+
+        const beforeClick = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const buttons = [...document.querySelectorAll(".agee-dictation-copy")];
+            return {
+              count: buttons.length,
+              label: buttons[0]?.textContent || "",
+              receipt: buttons[0]?.closest(".agee-cue")?.querySelector(".agee-cue-status")?.textContent || "",
+              draft: document.querySelector("#agee-input")?.value || "",
+              copies: [...(window.__ageeDictationCopySmoke?.copies || [])],
+              runCalls: (window.__ageeDictationCopySmoke?.calls || []).filter((call) =>
+                call.cmd === "run" || call.cmd === "branch" || call.cmd === "branchFanout"
+              ).length,
+            };
+          },
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.querySelector(".agee-dictation-copy")?.click(),
+        });
+        await sleep(80);
+        const afterClick = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const button = document.querySelector(".agee-dictation-copy");
+            const card = button?.closest(".agee-cue-dictation");
+            return {
+              label: button?.textContent || "",
+              receipt: card?.querySelector(".agee-cue-status")?.textContent || "",
+              copies: [...(window.__ageeDictationCopySmoke?.copies || [])],
+              retireTimerHeld: !card?.dataset.retireAfterMs,
+            };
+          },
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const smoke = window.__ageeDictationCopySmoke;
+            if (!smoke) return;
+            chrome.runtime.sendMessage = smoke.originalSendMessage;
+            if (smoke.clipboardDescriptor) {
+              Object.defineProperty(navigator, "clipboard", smoke.clipboardDescriptor);
+            } else {
+              delete navigator.clipboard;
+            }
+          },
+        });
+        return {
+          transcript,
+          beforeClick: beforeClick?.[0]?.result || {},
+          afterClick: afterClick?.[0]?.result || {},
+        };
+      })()
+    `);
+    if (
+      dictationCopy?.beforeClick?.count !== 1 ||
+      dictationCopy?.beforeClick?.draft !== "dictation copy must preserve this draft" ||
+      dictationCopy?.beforeClick?.copies?.length !== 1 ||
+      dictationCopy?.beforeClick?.copies?.[0] !== dictationCopy?.transcript ||
+      dictationCopy?.beforeClick?.runCalls !== 0 ||
+      dictationCopy?.afterClick?.copies?.length !== 2 ||
+      dictationCopy?.afterClick?.copies?.[1] !== dictationCopy?.transcript ||
+      dictationCopy?.afterClick?.label !== "Copied" ||
+      dictationCopy?.afterClick?.receipt !== "Copied — clipboard replaced." ||
+      dictationCopy?.afterClick?.retireTimerHeld !== true
+    ) {
+      throw new Error(`dictation copy control smoke failed: ${JSON.stringify(dictationCopy)}`);
+    }
+
     const earlyVoiceQueue = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};

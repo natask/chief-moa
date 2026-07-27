@@ -31,3 +31,7 @@ browser_extension/build/
 
 # OS files
 .DS_Store
+
+# Local runtime state and recovered user media (never committed)
+data/
+recovery/
