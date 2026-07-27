@@ -18,7 +18,7 @@ const EXCLUDED_PARTS = new Set(["node_modules", "build", "dist", "coverage", "ve
 const LEGACY_DEBT_CEILINGS = Object.freeze({
   "android_app/app/src/main/java/ai/moa/assistant/OverlayService.java": 3959,
   "browser_extension/extension/background.js": 5460,
-  "browser_extension/extension/content.js": 4614,
+  "browser_extension/extension/content.js": 4519,
   "gateway/lib/voice-drafts.js": 5950,
   "gateway/lib/voice-providers.js": 3939,
   "gateway/lib/voice-session-server.js": 2155,
