@@ -7,13 +7,12 @@
 //   fork      = branch off the current thread, keeping its history
 //   incognito = answer the turn without saving anything
 //
-// This is a HYBRID decision. A deterministic prior runs first; the model's
-// context_management tool call may refine it, with two hard gates:
-//   1. An explicit client `context_action` in the request body ALWAYS wins. The
-//      model cannot override an explicit client choice (a future UI button).
-//   2. The model may only choose "incognito" when the transcript carries an
-//      explicit linguistic warrant (incognito / off the record / don't save /
-//      private). This mirrors the liveToolAllowsProfileUpdate double gate.
+// This is a HYBRID decision. A deterministic prior runs first and the model's
+// context_management tool call may refine it. Incognito is deliberately
+// asymmetric: an explicit privacy phrase, a typed client incognito action, or a
+// model-selected incognito action is sufficient. No other source may downgrade
+// that choice. For non-incognito actions, an explicit client `context_action`
+// wins and the model otherwise refines the prior.
 //
 // Everything here is pure and deterministic (no model, no IO) so it is directly
 // unit-testable and can never fail a turn.
@@ -69,10 +68,14 @@ function looksLikeNew(text) {
   return NEW_PATTERN.test(t) || BROKER_NEW_WORK_PATTERN.test(t);
 }
 
-// The deterministic prior accepts only typed client state. Free-form text is
-// interpreted by the model's context_management tool; when that tool is absent
-// or fails, the safe default is to continue the current thread.
+// The deterministic prior accepts typed client state plus a narrow privacy
+// safety floor. Other free-form routing is interpreted by the model; when that
+// tool is absent or fails, it safely continues the current thread.
 function deterministicPrior(input = {}) {
+  const text = input.text || "";
+  if (hasIncognitoWarrant(text)) {
+    return { action: "incognito", source: "warrant" };
+  }
   const clientAction = normalizeContextAction(input.contextAction || input.context_action);
   if (clientAction) {
     return { action: clientAction, source: "client" };
@@ -98,7 +101,7 @@ function resolveContextDecision(input = {}) {
     tool_called: Boolean(toolCall),
     model_action: "",
     model_override: false,
-    incognito_warrant: false,
+    incognito_warrant: hasIncognitoWarrant(text),
     retrieval_query: "",
     thread_label: "",
     reason: "",
@@ -111,8 +114,17 @@ function resolveContextDecision(input = {}) {
     record.reason = String(toolCall.reason || "").slice(0, 400);
   }
 
-  // Gate 1: an explicit client choice always wins; the model cannot move the
-  // action, though its retrieval_query/label still enrich the record.
+  // Incognito is a union, not an override: prior, client, and model privacy
+  // choices are all one-way. This safety floor never blocks model-selected
+  // incognito in another language.
+  if (prior.action === "incognito" || clientAction === "incognito" || record.model_action === "incognito") {
+    record.action = "incognito";
+    record.model_override = record.model_action === "incognito" && prior.action !== "incognito";
+    return record;
+  }
+
+  // For non-incognito actions, an explicit client choice wins; the model cannot
+  // move the action, though its retrieval_query/label still enriches the record.
   if (clientAction) {
     record.action = clientAction;
     return record;

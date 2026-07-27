@@ -2,18 +2,19 @@
 "use strict";
 
 // Smoke for the context_management decision: the pure deterministic prior +
-// double-gate resolver (lib/context-decision), plus the wired chat path
+// asymmetric privacy-floor resolver (lib/context-decision), plus the wired chat path
 // (/v1/chat). Golden table for the pure logic; in-process HTTP with a stubbed
-// model for the tool-call override, the incognito warrant gate, and the
+// model for the tool-call override, the incognito union rule, and the
 // response `context` block + persistence skip.
 //
 // Asserts:
-//   1. Deterministic prior: plain=continue, phrasing lifts to new/fork, warrant
-//      lifts to incognito, explicit client action always wins.
+//   1. Deterministic prior: plain/new/fork phrasing=continue, an explicit
+//      privacy phrase=incognito, and typed client action wins otherwise.
 //   2. The model tool call can override the prior (continue -> new).
-//   3. The model may only choose incognito with an explicit linguistic warrant;
-//      without one it is denied and the prior stands.
-//   4. An explicit client context_action beats the model tool call.
+//   3. Either the privacy prior or the model may select incognito; neither the
+//      client nor model may downgrade it.
+//   4. An explicit non-incognito client context_action beats a non-incognito
+//      model tool call.
 //   5. /v1/chat returns a `context` block and, for incognito, skips persistence
 //      (persisted:false, no chat turn stored) while a new-thread turn is filed on
 //      a fresh thr- branch.
@@ -115,6 +116,7 @@ async function main() {
   await incognitoWarrantGate();
   await clientActionBeatsModel();
   await preflightFailureMatrixFallsBackOnce();
+  await failedPrivacyPreflightDoesNotPersist();
   await shortContinueSkipsPreflight();
   await chatContextBlockAndPersistence();
   await completedChatRetryIsIdempotent();
@@ -124,12 +126,13 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     checks: [
-    "deterministic prior: free-form text defaults to continue and typed client action wins",
+      "deterministic prior: new/fork/plain text defaults to continue, while explicit privacy text selects incognito",
       "the model tool call overrides the prior (continue -> new)",
       "a model-selected fork answer includes parent lineage only through the captured cutoff",
-    "the model context tool owns incognito selection without a phrase gate",
+      "the model context tool owns incognito selection without a phrase gate",
       "an explicit client context_action beats the model tool call",
       "malformed, absent, unknown, duplicate, and thrown preflights use the prior without leaking prose",
+      "an absent privacy preflight retains the incognito prior and persists no chat turn",
       "a short plain-continue turn skips the preflight round-trip (fast path)",
       "/v1/chat returns a context block, skips persistence for incognito, files a new thread on a thr- branch",
       "a completed chat turn replay skips preflight and preserves its exact filing branch",
@@ -287,6 +290,23 @@ async function preflightFailureMatrixFallsBackOnce() {
   }
 }
 
+async function failedPrivacyPreflightDoesNotPersist() {
+  const before = await chatTurnCount(SESSION_ID);
+  modelRequests.length = 0;
+  pendingPreflightFailure = "no_tool";
+  const result = await requestJson("POST", "/v1/chat", {
+    session_id: SESSION_ID,
+    turn_id: "privacy-preflight-absent",
+    source: "console",
+    branch_id: "default",
+    messages: [{ role: "user", content: "don't save this conversation" }],
+  });
+  assert.equal(result.status, 200, "an absent privacy preflight must fail soft");
+  assert.equal(result.json.context.action, "incognito", "the explicit privacy prior must survive an absent tool call");
+  assert.equal(result.json.context.persisted, false, "the degraded privacy turn must report persisted:false");
+  assert.equal(await chatTurnCount(SESSION_ID), before, "the degraded privacy turn must not persist a chat record");
+}
+
 async function completedChatRetryIsIdempotent() {
   const turnId = "context-retry-stable-turn";
   modelRequests.length = 0;
@@ -321,8 +341,8 @@ function goldenTable() {
     { text: "can you help me reconcile the invoice", expect: "continue" },
     { text: "let's start a new topic about taxes", expect: "continue" },
     { text: "fork this into a separate thread", expect: "continue" },
-    { text: "keep this off the record", expect: "continue" },
-    { text: "don't save this conversation", expect: "continue" },
+    { text: "keep this off the record", expect: "incognito" },
+    { text: "don't save this conversation", expect: "incognito" },
   ];
   for (const row of priors) {
     const result = deterministicPrior({ text: row.text });
@@ -353,6 +373,12 @@ function goldenTable() {
   // Resolver: incognito allowed with a warrant.
   const allowed = resolveContextDecision({ text: "keep this off the record", toolCall: { action: "incognito", retrieval_query: "x" } });
   assert.equal(allowed.action, "incognito", "incognito must be allowed with a warrant");
+
+  const privacyPriorWins = resolveContextDecision({ text: "don't save this conversation", contextAction: "continue", toolCall: { action: "new", retrieval_query: "x" } });
+  assert.equal(privacyPriorWins.action, "incognito", "neither client nor model may downgrade an incognito prior");
+
+  const modelPrivacyWins = resolveContextDecision({ text: "hello", contextAction: "continue", toolCall: { action: "incognito", retrieval_query: "x" } });
+  assert.equal(modelPrivacyWins.action, "incognito", "a client action may not downgrade model-selected incognito");
 
   // Resolver: client action beats the model.
   const clientWins = resolveContextDecision({ text: "hello", contextAction: "continue", toolCall: { action: "new", retrieval_query: "x" } });
