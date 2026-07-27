@@ -35,6 +35,11 @@
       the default copy, absent forms shown disabled rather than fabricated.
 - [x] Extract the unit into `MoaOverlayUnitController` so `OverlayService` drops
       back under the source-size ceiling.
+- [x] Bound hands-free capture: `MoaContinuousCaptureLoop` ends the loop after
+      five consecutive silent turns or 45 minutes, releases the microphone on
+      both exits, and leaves the user able to re-arm with the normal gesture.
+- [x] Route every `continuousVoiceLoop` assignment through one setter so the
+      bound cannot be left armed behind an existing exit path.
 
 ## Open
 
@@ -49,5 +54,9 @@
       today, so the UI degrades to literal-only. Section 3 of
       `voice-capture-notebook-ime` is the contract.
 - [ ] Confirm the expand gesture matches whatever the browser lane settles on.
+- [ ] Confirm the two capture bounds against how the user actually works. They
+      are deliberately generous and may want tightening or loosening.
+- [ ] `recording-visibility-and-control` owns the persistent recording indicator
+      and the delete affordance. This change only bounds the loop.
 - [ ] Retain per-turn assistant audio so the reply menu's `Replay` row can be
       enabled.

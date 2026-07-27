@@ -163,3 +163,26 @@ No overlay surface SHALL offer a route to settings, modes, or profile changes.
 - **WHEN** the user holds a ribbon
 - **THEN** at most four rows appear, none of which takes a model action, launches
   a run, or changes a setting
+
+### Requirement: Hands-free capture is bounded
+Continuous capture re-arms the microphone after every turn with no new gesture.
+That loop SHALL end on its own, both when it stops hearing speech and when it
+has simply run long enough, and leaving it SHALL release the microphone.
+
+#### Scenario: The phone is set down
+- **WHEN** consecutive re-armed turns produce no real transcript
+- **THEN** the loop ends, the warm microphone and any live capture session are
+  released, and the overlay says listening stopped
+
+#### Scenario: The session simply runs long
+- **WHEN** the loop has been armed for the maximum session duration
+- **THEN** it ends regardless of how much speech there has been
+
+#### Scenario: The user is still talking
+- **WHEN** turns keep producing real transcripts inside the session cap
+- **THEN** the loop continues, and a single spoken turn resets the silence count
+
+#### Scenario: Leaving is not a lockout
+- **WHEN** the loop has ended on either bound
+- **THEN** the visible state matches reality — nothing looks armed that is not —
+  and the normal gesture re-arms capture immediately with a fresh budget
