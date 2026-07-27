@@ -48,6 +48,9 @@ public final class MainActivity extends Activity {
     static final String EXTRA_GATEWAY_TOKEN = "ai.moa.assistant.extra.GATEWAY_TOKEN";
     static final String EXTRA_START_OVERLAY = "ai.moa.assistant.extra.START_OVERLAY";
     static final String EXTRA_REVIEW_UPDATE = "ai.moa.assistant.extra.REVIEW_UPDATE";
+    // Double-tapping an overlay ribbon opens history here, as a real window. The
+    // overlay stays alive behind it and never becomes a scrollback itself.
+    static final String EXTRA_SHOW_HISTORY = "ai.moa.assistant.extra.SHOW_HISTORY";
 
     // Overlay contract: the overlay agent handles this action to re-read the
     // stored orb scale. Kept as a literal so the main app builds even before the
@@ -66,6 +69,7 @@ public final class MainActivity extends Activity {
     private TextView updateStatus;
     private TextView requirementsSummary;
     private TextView sessionsStatus;
+    private ScrollView contentScroll;
     private TextView sessionHistoryStatus;
     private LinearLayout sessionHistoryColumn;
     private TextView runsStatus;
@@ -112,6 +116,7 @@ public final class MainActivity extends Activity {
         releaseController = createReleaseController();
         setContentView(createContent());
         maybeRequestMicPermission();
+        scrollToHistoryIfRequested(getIntent());
     }
 
     @Override
@@ -127,6 +132,7 @@ public final class MainActivity extends Activity {
         }
         updatePermissionState();
         maybeRequestMicPermission();
+        scrollToHistoryIfRequested(intent);
         if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
             collapseOverlaySurfaces();
         }
@@ -165,8 +171,23 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void scrollToHistoryIfRequested(Intent intent) {
+        if (intent == null || !intent.getBooleanExtra(EXTRA_SHOW_HISTORY, false)) {
+            return;
+        }
+        intent.removeExtra(EXTRA_SHOW_HISTORY);
+        if (contentScroll == null || sessionHistoryStatus == null) {
+            return;
+        }
+        final ScrollView scroll = contentScroll;
+        final View anchor = sessionHistoryStatus;
+        scroll.post(() -> scroll.smoothScrollTo(0, anchor.getTop()));
+        refreshControlCenter();
+    }
+
     private View createContent() {
         ScrollView scrollView = new ScrollView(this);
+        contentScroll = scrollView;
         scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(MoaColors.SURFACE_0);
 

@@ -155,10 +155,10 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
             view.animate().cancel();
-            view.setAlpha(1f);
+            view.setAlpha(MoaRibbonTokens.COMPANION_ENGAGED_ALPHA);
             gestureUsesVoiceFirst = voiceFirstEnabled != null && voiceFirstEnabled.getAsBoolean();
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-            view.animate().alpha(0.10f).setDuration(180).start();
+            view.animate().alpha(MoaRibbonTokens.COMPANION_DORMANT_ALPHA).setDuration(180).start();
         }
         if (gestureUsesVoiceFirst) {
             return onTouchVoiceFirst(view, event);
