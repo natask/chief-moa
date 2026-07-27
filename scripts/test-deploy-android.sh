@@ -8,14 +8,32 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 FAKE_BIN="$TMP_DIR/bin"
+INSTALL_APK="$ROOT_DIR/gateway/data/android-ota/moa-assistant.apk"
+INSTALL_APK_BACKUP="$TMP_DIR/original-moa-assistant.apk"
 mkdir -p "$FAKE_BIN"
-trap 'rm -rf "$TMP_DIR"' EXIT
+
+if [ -f "$INSTALL_APK" ]; then
+  cp "$INSTALL_APK" "$INSTALL_APK_BACKUP"
+fi
+
+cleanup() {
+  if [ -f "$INSTALL_APK_BACKUP" ]; then
+    mkdir -p "$(dirname "$INSTALL_APK")"
+    cp "$INSTALL_APK_BACKUP" "$INSTALL_APK"
+  else
+    rm -f "$INSTALL_APK"
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 
 cat > "$FAKE_BIN/bash" <<'FAKE_BASH'
 #!/bin/bash
 set -euo pipefail
 if [[ "${1:-}" == */android_app/deploy/ota/sync-vps.sh ]]; then
   printf '%s\n' "${MOA_VPS_SSH:-}" > "$FAKE_SYNC_TARGET_RECEIPT"
+  mkdir -p "$(dirname "$FAKE_SYNC_APK")"
+  printf 'fake continuity-signed APK\n' > "$FAKE_SYNC_APK"
   exit "${FAKE_SYNC_STATUS:-0}"
 fi
 exec /bin/bash "$@"
@@ -56,6 +74,7 @@ run_deploy() {
     MOA_DEPLOY_STATE_DIR="$case_dir/state" \
     MOA_DEPLOY_TARGETS_FILE="$case_dir/targets.json" \
     FAKE_SYNC_TARGET_RECEIPT="$case_dir/sync-target" \
+    FAKE_SYNC_APK="$INSTALL_APK" \
     GATEWAY_URL="http://127.0.0.1:1" \
     "$@" \
     /bin/bash "$ROOT_DIR/scripts/deploy.sh" android >"$case_dir/output" 2>&1
