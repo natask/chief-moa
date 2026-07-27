@@ -63,6 +63,10 @@ public final class OverlayService extends Service {
     private static final long VOICE_NOT_SPOKEN_HOLD_MS = 5000;
     private static final String NOT_SPOKEN_SUFFIX = "\n\n(not spoken)";
     private static final long STREAMING_TURN_WATCHDOG_MS = 30000;
+    // Hands-free capture re-arms the microphone this long after a turn ends, with
+    // no new tap or hold. The bounds on how long that may go on for —
+    // MAX_SILENT_TURNS and MAX_SESSION_MS — live next door in
+    // MoaContinuousCaptureLoop, which is where they are tuned and tested.
     private static final long CONTINUOUS_VOICE_RESTART_MS = 420;
     private static final long DEVICE_CLIENT_POLL_MS = 2500;
     private static final String OVERLAY_CHANNEL_ID = "moa_overlay";
@@ -143,6 +147,8 @@ public final class OverlayService extends Service {
     private boolean nextStreamingTurnFollowsActiveRun;
     private int streamingVoiceGeneration;
     private boolean continuousVoiceLoop;
+    private final MoaContinuousCaptureLoop captureLoop =
+            new MoaContinuousCaptureLoop(continuousCaptureSink());
     private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
     private final MoaPushToTalkFinish pushToTalkFinish = new MoaPushToTalkFinish();
@@ -1092,7 +1098,7 @@ public final class OverlayService extends Service {
         forcedReviewableVoiceDraft = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
-        continuousVoiceLoop = false;
+        setContinuousVoiceLoop(false);
         cancelContinuousVoiceRestart();
         invalidatePendingBranchSwitch();
         if (streamingVoiceActive()) {
@@ -1112,7 +1118,7 @@ public final class OverlayService extends Service {
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         forcedReviewableVoiceDraft = false;
         suppressFirstTapTurnEmptyCue = false;
-        continuousVoiceLoop = false;
+        setContinuousVoiceLoop(false);
         cancelContinuousVoiceRestart();
         if (streamingBranchSwitchPending && streamingVoiceController == null) {
             streamingCommitPendingOpen = true;
@@ -1304,7 +1310,13 @@ public final class OverlayService extends Service {
         }
     }
 
+    // The ONE place the microphone re-arms itself hands-free, so it is the one
+    // place the bound has to hold. allowRearm releases the mic and says so when
+    // the loop has run out of silence budget or session time.
     private void scheduleContinuousVoiceRestart(int generation) {
+        if (!captureLoop.allowRearm(heardSpeechThisTurn(), SystemClock.uptimeMillis())) {
+            return;
+        }
         suppressFirstTapTurnEmptyCue = false;
         cancelAutoDismiss();
         cancelContinuousVoiceRestart();
@@ -1317,6 +1329,63 @@ public final class OverlayService extends Service {
             startStreamingVoiceTurn(true, true);
         };
         mainHandler.postDelayed(pendingContinuousVoiceRestart, CONTINUOUS_VOICE_RESTART_MS);
+    }
+
+    // Arming and disarming the bound is bolted to the flag itself, so every one of
+    // the existing exit paths — dismiss, error, barge-in, cancel, discard — keeps
+    // working unchanged and cannot leave the bound armed behind them.
+    private void setContinuousVoiceLoop(boolean value) {
+        continuousVoiceLoop = value;
+        if (value) {
+            captureLoop.arm(SystemClock.uptimeMillis());
+        } else {
+            captureLoop.disarm();
+        }
+    }
+
+    // A turn "heard speech" when it left a real transcript behind. This reuses the
+    // existing judgement: visibleVoiceContent already discards the synthetic
+    // transport strings, and a gateway no_speech turn never sets a transcript.
+    private boolean heardSpeechThisTurn() {
+        return !visibleVoiceContent(currentStreamingTranscript).isEmpty();
+    }
+
+    private MoaContinuousCaptureLoop.Capture continuousCaptureSink() {
+        return new MoaContinuousCaptureLoop.Capture() {
+            @Override
+            public void cancelPendingRestart() {
+                cancelContinuousVoiceRestart();
+            }
+
+            @Override
+            public void releaseWarmMic() {
+                discardWarmMic();
+            }
+
+            @Override
+            public void stopActiveCapture() {
+                if (streamingVoiceActive()) {
+                    cancelStreamingVoice();
+                    return;
+                }
+                voiceController.stopQuietly();
+            }
+
+            @Override
+            public void announceExit(String notice) {
+                updateVoiceAssistantTranscript(notice);
+            }
+
+            @Override
+            public void markReadyToRearm() {
+                // A bound, not a lockout: the normal gesture re-arms immediately.
+                manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+                forcedReviewableVoiceDraft = false;
+                suppressFirstTapTurnEmptyCue = false;
+                setVoiceRuntimeState(VoiceRuntimeState.READY);
+                updateMicState();
+            }
+        };
     }
 
     private void cancelContinuousVoiceRestart() {
@@ -2489,7 +2558,7 @@ public final class OverlayService extends Service {
         pushToTalkVoiceTurn = true;
         pushToTalkFinish.start();
         if (streamingVoiceAvailable()) {
-            continuousVoiceLoop = false;
+            setContinuousVoiceLoop(false);
             cancelContinuousVoiceRestart();
             cancelVoiceSampler();
             if (orbView != null) {
@@ -2665,7 +2734,7 @@ public final class OverlayService extends Service {
         pushToTalkFinish.intentionalCancel();
         pushToTalkVoiceTurn = false;
         forcedReviewableVoiceDraft = false;
-        continuousVoiceLoop = false;
+        setContinuousVoiceLoop(false);
         suppressFirstTapTurnEmptyCue = false;
         nextManualVoiceFollowsActiveRun = false;
         invalidatePendingBranchSwitch();
@@ -2933,7 +3002,7 @@ public final class OverlayService extends Service {
         // The local SpeechRecognizer path does not use our AudioRecord, so a mic
         // warmed by the gesture would leak (indicator stuck on). Drop it here.
         discardWarmMic();
-        continuousVoiceLoop = reviewableDraft;
+        setContinuousVoiceLoop(reviewableDraft);
         cancelContinuousVoiceRestart();
         if (streamingVoiceActive()) {
             cancelStreamingVoice();
@@ -2959,7 +3028,7 @@ public final class OverlayService extends Service {
     // place. Mirrors cancelStreamingVoice minus the card teardown.
     private void stopStreamingVoiceKeepingCard() {
         pushToTalkVoiceTurn = false;
-        continuousVoiceLoop = false;
+        setContinuousVoiceLoop(false);
         suppressFirstTapTurnEmptyCue = false;
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
@@ -2981,7 +3050,7 @@ public final class OverlayService extends Service {
 
     private void cancelStreamingVoice() {
         pushToTalkVoiceTurn = false;
-        continuousVoiceLoop = false;
+        setContinuousVoiceLoop(false);
         suppressFirstTapTurnEmptyCue = false;
         invalidatePendingBranchSwitch();
         cancelContinuousVoiceRestart();
@@ -3148,7 +3217,7 @@ public final class OverlayService extends Service {
         if (streamingVoiceController != null) {
             streamingVoiceController.destroy();
         }
-        continuousVoiceLoop = continuousLoop;
+        setContinuousVoiceLoop(continuousLoop);
         streamingTurnAutoCommit = autoCommitOnSilence;
         streamingTurnContinuous = continuousLoop;
         streamingTurnRetried = false;
@@ -3444,7 +3513,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if (continuousVoiceLoop && currentStreamingTranscript.isEmpty() && voiceAssistantTranscript.isEmpty()) {
-                    continuousVoiceLoop = false;
+                    setContinuousVoiceLoop(false);
                 }
                 mainHandler.postDelayed(() -> {
                     if (isCurrentStreamingGeneration(generation)) {
@@ -3536,7 +3605,7 @@ public final class OverlayService extends Service {
         if (!isCurrentStreamingGeneration(generation)) {
             return;
         }
-        continuousVoiceLoop = false;
+        setContinuousVoiceLoop(false);
         voiceFailureRetry.arm(generation);
         updateVoiceAssistantTranscript(notice);
         speakOverlayNotice(notice);
