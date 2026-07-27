@@ -208,8 +208,21 @@ html[data-theme="light"] #moa-layer {
 #moa-unit.moa-dragging { transition: none; }
 /* Flip: both ribbons move below the companion, reading order preserved. */
 #moa-unit.moa-flipped #moa-companion { order: 0; }
-#moa-unit.moa-flipped #moa-ribbon-you { order: 1; }
-#moa-unit.moa-flipped #moa-ribbon-reply { order: 2; }
+#moa-unit.moa-flipped .slot-you { order: 1; }
+#moa-unit.moa-flipped .slot-reply { order: 2; }
+
+/* Each ribbon lives in a fixed 28px slot. The ribbon itself is absolutely
+   positioned inside it and anchored on the edge FURTHEST from the companion,
+   so expanding grows away from the companion and the flex column never moves. */
+.slot {
+  position: relative;
+  width: 100%;
+  height: var(--moa-ribbon-h);
+  flex: 0 0 auto;
+}
+.slot-you .moa-ribbon { bottom: 0; }
+.slot-reply .moa-ribbon { top: 0; }
+#moa-unit.moa-flipped .slot-you .moa-ribbon { top: 0; bottom: auto; }
 
 /* ---- companion ------------------------------------------------------- */
 #moa-companion {
@@ -269,8 +282,9 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
 
 /* ---- ribbon ---------------------------------------------------------- */
 .moa-ribbon {
-  position: relative;
-  width: 100%;
+  position: absolute;
+  left: 0;
+  right: 0;
   height: var(--moa-ribbon-h);
   border-radius: var(--moa-radius-ribbon);
   display: flex; align-items: center;
@@ -478,6 +492,78 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
 #moa-menu button:disabled { color: var(--moa-muted); cursor: default; }
 #moa-menu button svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: 0.8; }
 
+/* ---- expanded: the bounded bar opens ---------------------------------- */
+/* Tap expands. The full text wraps and scrolls inside a height cap; the bar
+   grows away from the companion and nothing else in the unit moves. */
+.moa-ribbon.moa-expanded {
+  height: auto;
+  max-height: min(112px, 30vh);
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  z-index: 2;
+}
+.moa-ribbon.moa-expanded .viewport {
+  height: auto;
+  max-height: min(102px, 28vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  align-items: flex-start;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.moa-ribbon.moa-expanded .line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transform: none !important;
+  width: 100%;
+}
+.moa-ribbon.moa-expanded .line > span { background: transparent; padding: 0; }
+.moa-ribbon.moa-expanded .dot { top: 14px; }
+.moa-ribbon.moa-expanded .rail { position: sticky; top: 0; }
+
+/* ---- copy rail: a three-way choice with a default --------------------- */
+.moa-ribbon .rail.chev { width: 18px; margin-left: 0; }
+.moa-ribbon .rail.chev svg { width: 13px; height: 13px; }
+#moa-copy-menu {
+  position: absolute;
+  width: 214px;
+  padding: 5px;
+  border-radius: var(--moa-radius-menu);
+  background: var(--moa-menu-bg);
+  backdrop-filter: blur(var(--moa-blur-menu)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--moa-blur-menu)) saturate(1.4);
+  box-shadow: inset 0 0 0 1px var(--moa-hairline), var(--moa-shadow);
+  opacity: 0; transform: scale(0.94) translateY(4px);
+  transform-origin: top right;
+  pointer-events: none;
+  transition: opacity var(--moa-dur-menu) var(--moa-ease-settle),
+              transform var(--moa-dur-menu) var(--moa-ease-settle);
+}
+#moa-copy-menu.open { opacity: 1; transform: none; pointer-events: auto; }
+#moa-copy-menu button {
+  display: block; width: 100%;
+  padding: 7px 9px;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--moa-ink);
+  font-size: 13px; line-height: 17px; font-weight: 500;
+  text-align: left; cursor: pointer;
+}
+#moa-copy-menu button:hover:not(:disabled) { background: var(--moa-menu-row-hover); }
+#moa-copy-menu button:disabled { cursor: default; opacity: 0.55; }
+#moa-copy-menu .row-head { display: flex; align-items: center; gap: 7px; }
+#moa-copy-menu .tick {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--moa-accent); flex: 0 0 auto;
+  visibility: hidden;
+}
+#moa-copy-menu button.is-default .tick { visibility: visible; }
+#moa-copy-menu .why {
+  display: block; margin-top: 1px; padding-left: 13px;
+  font-size: 10.5px; line-height: 14px; font-weight: 450;
+  color: var(--moa-muted);
+}
+
 /* ---- history handoff (a DIFFERENT surface, not the overlay) ---------- */
 #moa-history {
   position: fixed; inset: 0;
@@ -574,10 +660,27 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
   <hr />
 
   <p><strong>Gestures.</strong> Every element is a drag handle — grab the companion, grab either
-  ribbon, the whole unit moves together and stays exactly where you put it. A single tap on a
-  ribbon solidifies it and reveals the copy button. A hold opens a four-row menu. A double-tap
-  hands off to History, which is a separate surface: the browser side panel or the Android history
-  screen. The overlay never becomes a scrollback.</p>
+  ribbon, the whole unit moves together and stays exactly where you put it. A hold opens a
+  four-row menu. A double-tap hands off to History, which is a separate surface. The overlay never
+  becomes a scrollback.</p>
+
+  <p><strong>Tap to expand.</strong> The bounded bar is what keeps the overlay small; expanding is
+  how you read past it. One tap opens the ribbon to the full text — wrapped, scrollable, capped at
+  five lines — and brings the copy rail with it, so the copy button sits where the text you would
+  copy is actually visible. The bar grows <em>away</em> from the companion, so the companion does
+  not move and the page does not reflow. Tap again, press anywhere outside, or hit Escape to
+  collapse.</p>
+
+  <p><strong>Copy is three choices, not one.</strong> The chevron next to the copy button opens
+  <em>Polished</em> (rewritten in your own style), <em>Corrected</em> (recognition and grammar
+  fixed, wording kept), and <em>Literal transcript</em>. Polished is the intended default; the rail
+  falls back to the highest-ranked version that actually exists, and shows the others as disabled
+  rows rather than silently substituting. The literal transcript is never mutated — each variant is
+  a derived revision.</p>
+
+  <p class="dim">In this mock all three variants are drawn in so the rail is reviewable. In the
+  shipping product only the literal transcript has backing data today; Polished and Corrected wait
+  on the writing-skill work in <code>voice-capture-notebook-ime</code> §3.</p>
 
   <div class="swatch">
     <div style="background:#FFD76A;color:#17130a">accent</div>
@@ -603,6 +706,7 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
 <div id="moa-layer">
   <div id="moa-unit" data-state="dormant" data-voice="idle">
 
+    <div class="slot slot-you">
     <div class="moa-ribbon" id="moa-ribbon-you" role="button" tabindex="0"
          aria-label="What you said. Tap to copy, hold for options, double tap for history.">
       <span class="dot" aria-hidden="true"></span>
@@ -611,7 +715,11 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
         <svg class="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
         <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
       </button>
+      <button class="rail chev" tabindex="-1" aria-label="Choose which version to copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+      </button>
       <span class="caption">Copied</span>
+    </div>
     </div>
 
     <button id="moa-companion" aria-label="A.G. companion. Tap to talk, hold to push to talk, drag to move.">
@@ -671,6 +779,7 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
       <span class="ground" aria-hidden="true"></span>
     </button>
 
+    <div class="slot slot-reply">
     <div class="moa-ribbon" id="moa-ribbon-reply" role="button" tabindex="0"
          aria-label="A.G.'s reply. Tap to copy, hold for options, double tap for history.">
       <span class="dot" aria-hidden="true"></span>
@@ -679,12 +788,17 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
         <svg class="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
         <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
       </button>
+      <button class="rail chev" tabindex="-1" aria-label="Choose which version to copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+      </button>
       <span class="caption">Copied</span>
+    </div>
     </div>
 
   </div>
 
   <div id="moa-menu" role="menu"></div>
+  <div id="moa-copy-menu" role="menu" aria-label="Choose which version to copy"></div>
 </div>
 
 <div id="moa-history" aria-hidden="true">
@@ -754,10 +868,35 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
       this.truncated = false;
       this.lingerTimer = null;
       this.rafPending = false;
+      this.chev = this.el.querySelector(".rail.chev");
+      // Three derived variants per the voice-capture-notebook-ime change: the
+      // literal transcript, a corrected revision, and a named writing-skill
+      // rewrite. Polished is the intended default; the rail falls back to the
+      // highest-ranked variant that actually exists.
+      this.variants = { literal: "", edited: "", skill: "" };
+      this.skillName = "";
+      this.chosen = "";
+      this.expanded = false;
       this.rail.addEventListener("pointerdown", (e) => e.stopPropagation());
       this.rail.addEventListener("click", (e) => { e.stopPropagation(); this.copy(); });
+      this.chev.addEventListener("pointerdown", (e) => e.stopPropagation());
+      this.chev.addEventListener("click", (e) => { e.stopPropagation(); openCopyMenu(this); });
+    }
+    // Rank order is fixed; availability is not. Never substitute silently.
+    defaultVariant() {
+      if (this.chosen && this.variants[this.chosen]) return this.chosen;
+      for (const key of ["skill", "edited", "literal"]) {
+        if (this.variants[key]) return key;
+      }
+      return "literal";
+    }
+    variantText(key) {
+      return this.variants[key] || (key === "literal" ? this.buffer : "");
     }
     clear() {
+      this.variants = { literal: "", edited: "", skill: "" };
+      this.chosen = "";
+      this.collapse();
       this.buffer = "";
       this.truncated = false;
       this.span.textContent = "";
@@ -790,6 +929,12 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
       this.rafPending = true;
       requestAnimationFrame(() => {
         this.rafPending = false;
+        this.variants.literal = this.buffer;
+        if (this.expanded) {
+          this.span.textContent = this.buffer;
+          this.line.style.transform = "translateX(0px)";
+          return;
+        }
         this.span.textContent = tailGraphemes(this.buffer, WINDOW_CHARS);
         const inner = this.viewport.clientWidth;
         const lineW = this.line.scrollWidth;
@@ -798,6 +943,25 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
         this.el.classList.toggle("moa-clipped", overflow < 0);
       });
     }
+    // Expand: show the whole buffer, wrapped and scrollable inside a height
+    // cap. Only one ribbon expands at a time and the companion never moves.
+    expand() {
+      if (!this.live) return;
+      for (const other of [you, reply]) if (other !== this) other.collapse();
+      this.expanded = true;
+      this.el.classList.add("moa-expanded");
+      this.el.classList.remove("moa-clipped");
+      this.holdLinger();
+      this.render();
+    }
+    collapse() {
+      if (!this.expanded) return;
+      this.expanded = false;
+      this.el.classList.remove("moa-expanded");
+      closeCopyMenu();
+      this.render();
+    }
+    toggleExpand() { this.expanded ? this.collapse() : this.expand(); }
     streaming(on) { this.el.classList.toggle("moa-streaming", !!on); }
     startLinger(ms) {
       clearTimeout(this.lingerTimer);
@@ -813,8 +977,11 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
       }, wait);
     }
     holdLinger() { clearTimeout(this.lingerTimer); }
-    async copy() {
-      const text = this.buffer;
+    async copy(key) {
+      const variant = key || this.defaultVariant();
+      if (key) this.chosen = key;   // sticky for this turn only, never persisted
+      const text = this.variantText(variant);
+      if (!text) return;
       try { await navigator.clipboard.writeText(text); }
       catch { /* mock: clipboard may be blocked in file:// — the affordance still demos */ }
       this.el.classList.add("moa-copied");
@@ -849,7 +1016,10 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
     you.holdLinger(); reply.holdLinger();
     if (latch) {
       latched = true;
-      latchTimer = setTimeout(() => { latched = false; releaseEngage(); }, LATCH_MS);
+      // Latch expiry is a full release: it collapses an expanded ribbon and
+      // closes any open menu, so the overlay cannot be left occluding after
+      // the user has stopped touching it.
+      latchTimer = setTimeout(() => unlatch(), LATCH_MS);
     }
   }
   function releaseEngage() {
@@ -862,6 +1032,9 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
     latched = false;
     clearTimeout(latchTimer);
     closeMenu();
+    closeCopyMenu();
+    you.collapse();
+    reply.collapse();
     releaseEngage();
   }
 
@@ -963,6 +1136,7 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
         dragging = true;
         clearTimeout(holdTimer);
         closeMenu();
+        if (ribbon) ribbon.collapse();
         if (held && !ribbon) { unit.dataset.voice = "idle"; you.clear(); }  // escape into drag
         held = false;
         if (ribbon) ribbon.el.classList.remove("moa-held");
@@ -1005,7 +1179,11 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
         const n = tapCount; tapCount = 0;
         if (ribbon) {
           if (n === 1) {
-            if (latched) unlatch(); else engage(true);
+            // One gesture, one obvious result: the bounded bar opens to the
+            // full text AND the copy rail appears with it.
+            engage(true);
+            ribbon.toggleExpand();
+            if (!ribbon.expanded && !you.expanded && !reply.expanded) unlatch();
           } else if (n >= 2) {
             ribbon.el.classList.remove("moa-flash");
             void ribbon.el.offsetWidth;
@@ -1036,7 +1214,7 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
   attachGestures(reply.el, "reply", reply);
 
   document.addEventListener("pointerdown", (e) => {
-    if (unit.contains(e.target) || menuEl.contains(e.target)) return;
+    if (unit.contains(e.target) || menuEl.contains(e.target) || copyMenuEl.contains(e.target)) return;
     unlatch();
   });
 
@@ -1089,6 +1267,56 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
   }
   function closeMenu() { menuEl.classList.remove("open"); }
 
+  // The copy rail is a three-way choice with a default, not one button.
+  const copyMenuEl = document.getElementById("moa-copy-menu");
+  const VARIANT_LABELS = {
+    skill: "Polished",
+    edited: "Corrected",
+    literal: "Literal transcript",
+  };
+  const VARIANT_NOTES = {
+    skill: "rewritten in your own style",
+    edited: "recognition and grammar fixed, wording kept",
+    literal: "exactly what was transcribed",
+  };
+
+  function openCopyMenu(ribbon) {
+    copyMenuEl.innerHTML = "";
+    const active = ribbon.defaultVariant();
+    for (const key of ["skill", "edited", "literal"]) {
+      const text = ribbon.variantText(key);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      const label = key === "skill" && ribbon.skillName
+        ? VARIANT_LABELS.skill + " — " + ribbon.skillName
+        : VARIANT_LABELS[key];
+      b.innerHTML =
+        '<span class="row-head"><i class="tick"></i>' + label + "</span>" +
+        '<span class="why">' + (text ? VARIANT_NOTES[key] : "not generated for this turn") + "</span>";
+      if (!text) b.disabled = true;
+      if (key === active) b.classList.add("is-default");
+      b.addEventListener("pointerdown", (e) => e.stopPropagation());
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        ribbon.copy(key);
+        closeCopyMenu();
+      });
+      copyMenuEl.appendChild(b);
+    }
+    copyMenuEl.classList.add("open");
+    const r = ribbon.chev.getBoundingClientRect();
+    const w = 214;
+    const h = copyMenuEl.offsetHeight || 150;
+    let left = Math.min(Math.max(r.right - w, EDGE), window.innerWidth - w - EDGE);
+    let top = r.bottom + 6;
+    if (top + h > window.innerHeight - EDGE) top = r.top - h - 6;
+    copyMenuEl.style.left = left + "px";
+    copyMenuEl.style.top = Math.max(EDGE, top) + "px";
+    engage(true);
+  }
+  function closeCopyMenu() { copyMenuEl.classList.remove("open"); }
+
   function hideOverlay() {
     layer.style.transition = "opacity 240ms ease";
     layer.style.opacity = "0";
@@ -1127,6 +1355,14 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
   const REPLY_LINE = "Around 780 dollars round trip if you leave on the fourth and come back on the nineteenth. Ethiopian is the only nonstop and runs about a hundred and forty more than the one-stop through Frankfurt.";
   const ERROR_REPLY = "I lost the connection to the provider partway through that answer. Say it again and I'll pick it back up.";
 
+  // Scripted derived revisions. In the shipping product only `literal` has
+  // backing data today; `edited` and `skill` are drawn here so the three-way
+  // rail is reviewable before the gateway produces them.
+  const USER_EDITED = "How much is the flight to Addis Ababa in early November if I leave from JFK and come back before the 22nd?";
+  const USER_SKILL = "What does a JFK to Addis Ababa round trip cost in early November, returning before the 22nd?";
+  const REPLY_EDITED = "Around $780 round trip if you leave on the 4th and come back on the 19th. Ethiopian is the only nonstop, and it runs about $140 more than the one-stop through Frankfurt.";
+  const REPLY_SKILL = "About $780 round trip, leaving the 4th and returning the 19th. Ethiopian flies the only nonstop; it costs roughly $140 more than routing through Frankfurt.";
+
   let timers = [];
   function clearScript() { timers.forEach(clearTimeout); timers = []; }
   function at(ms, fn) { timers.push(setTimeout(fn, ms)); }
@@ -1160,6 +1396,9 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
     let t = stream(you, USER_LINE, 320, 62, () => {
       you.streaming(false);
       unit.dataset.voice = "thinking";
+      you.variants.edited = USER_EDITED;
+      you.variants.skill = USER_SKILL;
+      you.skillName = "plain style";
     });
     at(t + 420, () => {
       unit.dataset.voice = "speaking";
@@ -1168,6 +1407,9 @@ html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); 
     });
     let t2 = stream(reply, REPLY_LINE, t + 620, 46, () => {
       reply.streaming(false);
+      reply.variants.edited = REPLY_EDITED;
+      reply.variants.skill = REPLY_SKILL;
+      reply.skillName = "plain style";
       unit.dataset.voice = "idle";
       you.startLinger(LINGER_YOU);
       reply.startLinger(LINGER_REPLY);
