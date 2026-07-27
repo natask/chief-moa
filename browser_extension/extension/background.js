@@ -4476,9 +4476,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         owner,
         isOwner: owner?.tab_id === sender.tab?.id && owner?.status !== "cleared",
+        // A newly built overlay hydrates the active turn's visible text from
+        // the worker, so a navigation does not blank the ribbons mid-turn.
+        presentation: activeBrowserAgentPresentation,
       }))
       .catch((error) => sendResponse({ ok: false, owner: null, error: String(error?.message || error) }));
     return true;
+  }
+  // Double-tapping a ribbon hands off to the history surface. The overlay is
+  // not a scrollback: the side panel renders the canonical gateway session
+  // projection. The open() call must stay synchronous to keep the user gesture.
+  if (msg.cmd === "openHistoryPanel") {
+    const opened = openAgentPanel(sender.tab);
+    sendResponse({ ok: opened });
+    return false;
   }
   if (msg.cmd === "devReloadExtension") {
     devReloadConfig()

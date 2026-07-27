@@ -340,6 +340,27 @@
           </span>
         </span>
       </button>
+      <div class="agee-ribbon" id="agee-ribbon-you" data-agee-ribbon="you" role="button" tabindex="0"
+           aria-label="What you said. Tap to copy, hold for options, double tap for history.">
+        <span class="agee-ribbon-dot" aria-hidden="true"></span>
+        <div class="agee-ribbon-viewport"><div class="agee-ribbon-line" aria-live="polite"><span class="agee-ribbon-text"></span><i class="agee-ribbon-caret" aria-hidden="true"></i></div></div>
+        <button class="agee-ribbon-copy" type="button" tabindex="-1" aria-label="Copy what you said">
+          <svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+          <svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
+        </button>
+        <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
+      </div>
+      <div class="agee-ribbon" id="agee-ribbon-reply" data-agee-ribbon="reply" role="button" tabindex="0"
+           aria-label="A.G.'s reply. Tap to copy, hold for options, double tap for history.">
+        <span class="agee-ribbon-dot" aria-hidden="true"></span>
+        <div class="agee-ribbon-viewport"><div class="agee-ribbon-line" aria-live="polite"><span class="agee-ribbon-text"></span><i class="agee-ribbon-caret" aria-hidden="true"></i></div></div>
+        <button class="agee-ribbon-copy" type="button" tabindex="-1" aria-label="Copy the reply">
+          <svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+          <svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
+        </button>
+        <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
+      </div>
+      <div id="agee-ribbon-menu" role="menu" aria-label="Ribbon options"></div>
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-page-context">
           <span id="agee-page-identity" aria-live="polite"></span>
@@ -378,6 +399,19 @@
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
     tipEl = root.querySelector("#agee-tip");
+    ribbonMenu = root.querySelector("#agee-ribbon-menu");
+    ribbonYou = createRibbon(root.querySelector("#agee-ribbon-you"), {
+      lingerMs: RIBBON_LINGER_YOU,
+      label: "you",
+    });
+    ribbonReply = createRibbon(root.querySelector("#agee-ribbon-reply"), {
+      lingerMs: RIBBON_LINGER_REPLY,
+      label: "reply",
+    });
+    setRibbonUnitState("dormant");
+    setupRibbonInteractions();
+    positionRibbons();
+    scheduleRibbonThemeSample();
 
     setupOverlayTooltips();
     setupCueLogInteractions();
@@ -601,6 +635,7 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
+    positionRibbons(); // the ribbons are anchored to the mark: they move with it
     if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
@@ -1017,6 +1052,574 @@
       if (!was) chime("wake");
       setTimeout(() => input.focus(), 0);
     }
+  }
+
+  // ---- Ribbons: the companion between two single-line streams -------------
+  // Contract: reference/design/overlay-2026-07/spec.md
+  //
+  // A ribbon renders ONE line inside a fixed-size viewport. Streamed text is
+  // appended to a buffer; the rendered node holds only the tail window, and the
+  // line is translated left so the newest character stays pinned at the right
+  // inner edge. Nothing here may change the unit's width, height, or position:
+  // the only property that animates while streaming is translateX. This is the
+  // hard cap the user asked for on 2026-07-16 and 2026-07-23 — overlay text can
+  // no longer grow over the page or push the persistent line out of view.
+  const RIBBON_WINDOW_CHARS = 140;
+  const RIBBON_BUFFER_MAX_CHARS = 8000;
+  const RIBBON_HOLD_MS = 340;
+  const RIBBON_MULTITAP_MS = 260;
+  const RIBBON_TAP_SLOP = 6;
+  const RIBBON_LATCH_MS = 6000;
+  const RIBBON_LINGER_YOU = 4500;
+  const RIBBON_LINGER_REPLY = 9000;
+  const RIBBON_LINGER_ERROR = 14000;
+  const RIBBON_EDGE = 16;
+  const RIBBON_GAP = 8;
+  const RIBBON_HEIGHT = 28;
+  const RIBBON_PROXIMITY = 72;
+
+  let ribbonYou = null;
+  let ribbonReply = null;
+  let ribbonMenu = null;
+  let ribbonMenuOwner = null;
+  let ribbonLatched = false;
+  let ribbonLatchTimer = null;
+  let ribbonPointerNear = false;
+  let ribbonUnitState = "dormant";
+  let ribbonPresentationCue = "";
+  let ribbonThemeTimer = null;
+  let ribbonSegmenter = null;
+
+  function ribbonGraphemeTail(text, limit) {
+    const value = String(text || "");
+    if (value.length <= limit) return value;
+    if (ribbonSegmenter === null) {
+      ribbonSegmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+        ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+        : false;
+    }
+    if (!ribbonSegmenter) return value.slice(-limit);
+    const parts = [];
+    for (const part of ribbonSegmenter.segment(value)) parts.push(part.segment);
+    return parts.length <= limit ? value : parts.slice(-limit).join("");
+  }
+
+  function createRibbon(el, { lingerMs, label }) {
+    if (!el) return null;
+    const ribbon = {
+      el,
+      label,
+      lingerMs,
+      lineEl: el.querySelector(".agee-ribbon-line"),
+      textEl: el.querySelector(".agee-ribbon-text"),
+      viewportEl: el.querySelector(".agee-ribbon-viewport"),
+      copyEl: el.querySelector(".agee-ribbon-copy"),
+      buffer: "",
+      truncated: false,
+      lingerTimer: null,
+      copyTimer: null,
+      renderPending: false,
+    };
+    ribbon.copyEl?.addEventListener("pointerdown", (event) => event.stopPropagation());
+    ribbon.copyEl?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      copyRibbon(ribbon);
+    });
+    return ribbon;
+  }
+
+  function ribbonIsLive(ribbon) {
+    return !!ribbon?.el?.classList.contains("agee-ribbon-live");
+  }
+
+  function openRibbon(ribbon) {
+    if (!ribbon) return;
+    clearTimeout(ribbon.lingerTimer);
+    ribbon.lingerTimer = null;
+    ribbon.el.classList.add("agee-ribbon-live");
+    positionRibbons();
+    syncRibbonUnitState();
+  }
+
+  function clearRibbon(ribbon) {
+    if (!ribbon) return;
+    ribbon.buffer = "";
+    ribbon.truncated = false;
+    ribbon.textEl.textContent = "";
+    ribbon.lineEl.style.transform = "translateX(0px)";
+    ribbon.el.classList.remove(
+      "agee-ribbon-clipped",
+      "agee-ribbon-warn",
+      "agee-ribbon-mute",
+      "agee-ribbon-copied",
+      "agee-ribbon-streaming"
+    );
+  }
+
+  function retireRibbon(ribbon) {
+    if (!ribbon) return;
+    clearTimeout(ribbon.lingerTimer);
+    ribbon.lingerTimer = null;
+    ribbon.el.classList.remove("agee-ribbon-live", "agee-ribbon-streaming");
+    clearRibbon(ribbon);
+    syncRibbonUnitState();
+  }
+
+  // Render the tail window and re-anchor the line. Coalesced to one write per
+  // animation frame so a token-per-event stream cannot thrash layout.
+  function renderRibbon(ribbon) {
+    if (!ribbon || ribbon.renderPending) return;
+    ribbon.renderPending = true;
+    const paint = () => {
+      ribbon.renderPending = false;
+      ribbon.textEl.textContent = ribbonGraphemeTail(ribbon.buffer, RIBBON_WINDOW_CHARS);
+      const inner = ribbon.viewportEl.clientWidth;
+      const lineWidth = ribbon.lineEl.scrollWidth;
+      const overflow = Math.min(0, inner - lineWidth);
+      ribbon.lineEl.style.transform = `translateX(${overflow}px)`;
+      ribbon.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(paint);
+    else paint();
+  }
+
+  function pushRibbon(ribbon, delta) {
+    if (!ribbon || !delta) return;
+    openRibbon(ribbon);
+    ribbon.buffer += String(delta);
+    if (ribbon.buffer.length > RIBBON_BUFFER_MAX_CHARS) {
+      ribbon.buffer = ribbonGraphemeTail(ribbon.buffer, RIBBON_BUFFER_MAX_CHARS);
+      ribbon.truncated = true;
+    }
+    renderRibbon(ribbon);
+  }
+
+  function setRibbonText(ribbon, text, { tone = "" } = {}) {
+    if (!ribbon) return;
+    const value = String(text || "");
+    if (!value) {
+      retireRibbon(ribbon);
+      return;
+    }
+    openRibbon(ribbon);
+    ribbon.buffer = value.length > RIBBON_BUFFER_MAX_CHARS
+      ? ribbonGraphemeTail(value, RIBBON_BUFFER_MAX_CHARS)
+      : value;
+    ribbon.truncated = value.length > RIBBON_BUFFER_MAX_CHARS;
+    ribbon.el.classList.toggle("agee-ribbon-warn", tone === "warn");
+    ribbon.el.classList.toggle("agee-ribbon-mute", tone === "mute");
+    renderRibbon(ribbon);
+  }
+
+  function setRibbonStreaming(ribbon, streaming) {
+    ribbon?.el?.classList.toggle("agee-ribbon-streaming", !!streaming);
+  }
+
+  function startRibbonLinger(ribbon, ms) {
+    if (!ribbon || !ribbonIsLive(ribbon)) return;
+    clearTimeout(ribbon.lingerTimer);
+    ribbon.lingerTimer = setTimeout(() => {
+      // Engaged, latched, or menu-open ribbons never retire under the user.
+      if (ribbonUnitState === "engaged" || ribbonUnitState === "dragging" || ribbonMenuOwner === ribbon) {
+        startRibbonLinger(ribbon, 1200);
+        return;
+      }
+      retireRibbon(ribbon);
+    }, Number.isFinite(ms) ? ms : ribbon.lingerMs);
+  }
+
+  function holdRibbonsOpen() {
+    for (const ribbon of [ribbonYou, ribbonReply]) {
+      if (!ribbon) continue;
+      clearTimeout(ribbon.lingerTimer);
+      ribbon.lingerTimer = null;
+    }
+  }
+
+  async function copyRibbon(ribbon) {
+    if (!ribbon?.buffer) return false;
+    const copied = await copyTextToClipboard(ribbon.buffer);
+    if (!copied) return false;
+    ribbon.el.classList.add("agee-ribbon-copied");
+    clearTimeout(ribbon.copyTimer);
+    ribbon.copyTimer = setTimeout(() => ribbon.el.classList.remove("agee-ribbon-copied"), 1400);
+    engageRibbonUnit(true);
+    return true;
+  }
+
+  // ---- Unit state ---------------------------------------------------------
+  function setRibbonUnitState(next) {
+    ribbonUnitState = next;
+    if (root) root.dataset.ageeUnit = next;
+  }
+
+  function syncRibbonUnitState() {
+    if (ribbonUnitState === "dragging") return;
+    if (ribbonLatched) return setRibbonUnitState("engaged");
+    if (ribbonIsLive(ribbonYou) || ribbonIsLive(ribbonReply)) return setRibbonUnitState("ambient");
+    setRibbonUnitState(ribbonPointerNear ? "near" : "dormant");
+  }
+
+  function engageRibbonUnit(latch) {
+    clearTimeout(ribbonLatchTimer);
+    setRibbonUnitState("engaged");
+    holdRibbonsOpen();
+    if (!latch) return;
+    ribbonLatched = true;
+    ribbonLatchTimer = setTimeout(() => {
+      ribbonLatched = false;
+      releaseRibbonUnit();
+    }, RIBBON_LATCH_MS);
+  }
+
+  function releaseRibbonUnit() {
+    if (ribbonLatched) return;
+    syncRibbonUnitState();
+    startRibbonLinger(ribbonYou, ribbonYou?.lingerMs);
+    startRibbonLinger(ribbonReply, ribbonReply?.lingerMs);
+  }
+
+  function unlatchRibbonUnit() {
+    ribbonLatched = false;
+    clearTimeout(ribbonLatchTimer);
+    closeRibbonMenu();
+    releaseRibbonUnit();
+  }
+
+  // ---- Placement ----------------------------------------------------------
+  // The anchor is the companion. Both ribbons are laid out from the launcher
+  // rect and clamped, so the persisted position key (ageeLauncherPosition) and
+  // every existing drag/scale path stay exactly as they are.
+  function positionRibbons() {
+    if (!launcher || !ribbonYou || !ribbonReply) return;
+    const rect = launcher.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    const width = ribbonYou.el.offsetWidth || Math.min(340, Math.max(232, window.innerWidth * 0.44));
+    const centerX = rect.left + rect.width / 2;
+    const left = Math.max(RIBBON_EDGE, Math.min(centerX - width / 2, window.innerWidth - width - RIBBON_EDGE));
+
+    // Both ribbons flip together so the you-then-reply reading order survives.
+    // The companion never moves to make room; the ribbons do.
+    const aboveTop = rect.top - RIBBON_GAP - RIBBON_HEIGHT;
+    const belowSecondBottom = rect.bottom + RIBBON_GAP + RIBBON_HEIGHT * 2 + RIBBON_GAP;
+    const flip = aboveTop < RIBBON_EDGE && belowSecondBottom <= window.innerHeight - RIBBON_EDGE;
+    const youTop = flip ? rect.bottom + RIBBON_GAP : aboveTop;
+    const replyTop = flip ? rect.bottom + RIBBON_GAP * 2 + RIBBON_HEIGHT : rect.bottom + RIBBON_GAP;
+    const clampTop = (value) =>
+      Math.max(RIBBON_EDGE, Math.min(value, window.innerHeight - RIBBON_HEIGHT - RIBBON_EDGE));
+
+    ribbonYou.el.style.left = `${left}px`;
+    ribbonYou.el.style.top = `${clampTop(youTop)}px`;
+    ribbonReply.el.style.left = `${left}px`;
+    ribbonReply.el.style.top = `${clampTop(replyTop)}px`;
+    root?.classList.toggle("agee-ribbons-flipped", flip);
+  }
+
+  // The ambient state paints no plate, so the glyphs sit directly on page
+  // content. prefers-color-scheme alone is wrong on a light page in a dark OS:
+  // sample what is actually behind the unit. Debounced, and never during a
+  // stream, so this can never cost a frame of the sliding window.
+  function scheduleRibbonThemeSample() {
+    clearTimeout(ribbonThemeTimer);
+    ribbonThemeTimer = setTimeout(sampleRibbonTheme, 250);
+  }
+
+  function sampleRibbonTheme() {
+    if (!root || !launcher) return;
+    let luminance = null;
+    try {
+      const rect = launcher.getBoundingClientRect();
+      const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+      const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+      const under = document.elementsFromPoint(x, y).find((el) => !root.contains(el));
+      for (let el = under; el; el = el.parentElement) {
+        const color = getComputedStyle(el).backgroundColor;
+        const parsed = parseRibbonColor(color);
+        if (parsed) {
+          luminance = parsed;
+          break;
+        }
+      }
+      if (luminance === null) {
+        const body = parseRibbonColor(getComputedStyle(document.body || document.documentElement).backgroundColor);
+        luminance = body === null
+          ? (window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? 1 : 0)
+          : body;
+      }
+    } catch {
+      return;
+    }
+    if (luminance === null) return;
+    root.dataset.ageeRibbonTheme = luminance >= 0.55 ? "light" : "dark";
+  }
+
+  function parseRibbonColor(value) {
+    const match = String(value || "").match(/rgba?\(([^)]+)\)/);
+    if (!match) return null;
+    const parts = match[1].split(",").map((part) => Number.parseFloat(part.trim()));
+    const [r, g, b] = parts;
+    const alpha = parts.length > 3 ? parts[3] : 1;
+    if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b) || !(alpha > 0.2)) return null;
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  }
+
+  // ---- Ribbon interaction layer -------------------------------------------
+  // Every element of the unit is a drag handle and the anchor is always the
+  // companion, so the companion and both ribbons move as one object. Slop,
+  // hold, and multi-tap thresholds are shared across all three so the unit
+  // feels like one thing. The companion's own gesture map is untouched.
+  function setupRibbonInteractions() {
+    for (const ribbon of [ribbonYou, ribbonReply]) attachRibbonGestures(ribbon);
+    // Proximity pre-light is browser-only (Android has no hover). It runs on
+    // every page mousemove, so it must never force layout: sample the pointer
+    // and do the single rect read at most once per animation frame.
+    let proximityPending = false;
+    let proximityX = 0;
+    let proximityY = 0;
+    window.addEventListener("pointermove", (event) => {
+      if (event.pointerType !== "mouse" || !launcher || proximityPending) return;
+      proximityX = event.clientX;
+      proximityY = event.clientY;
+      proximityPending = true;
+      requestAnimationFrame(() => {
+        proximityPending = false;
+        if (!launcher) return;
+        const rect = launcher.getBoundingClientRect();
+        const dx = Math.max(rect.left - proximityX, 0, proximityX - rect.right);
+        const dy = Math.max(rect.top - proximityY, 0, proximityY - rect.bottom);
+        const near = Math.hypot(dx, dy) < RIBBON_PROXIMITY;
+        if (near === ribbonPointerNear) return;
+        ribbonPointerNear = near;
+        syncRibbonUnitState();
+      });
+    }, { passive: true });
+    document.addEventListener("pointerdown", (event) => {
+      if (root?.contains(event.target)) return;
+      unlatchRibbonUnit();
+    }, true);
+    window.addEventListener("resize", () => {
+      positionRibbons();
+      scheduleRibbonThemeSample();
+    });
+  }
+
+  function attachRibbonGestures(ribbon) {
+    if (!ribbon) return;
+    let activeId = null;
+    let downX = 0;
+    let downY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+    let dragging = false;
+    let held = false;
+    let holdTimer = null;
+    let tapCount = 0;
+    let tapTimer = null;
+
+    ribbon.el.addEventListener("pointerdown", (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      if (!ribbonIsLive(ribbon)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      activeId = event.pointerId;
+      try { ribbon.el.setPointerCapture(event.pointerId); } catch {}
+      const rect = launcher?.getBoundingClientRect();
+      downX = event.clientX;
+      downY = event.clientY;
+      startLeft = rect?.left || 0;
+      startTop = rect?.top || 0;
+      dragging = false;
+      held = false;
+      engageRibbonUnit(false);
+      holdTimer = setTimeout(() => {
+        if (dragging) return;
+        held = true;
+        ribbon.el.classList.add("agee-ribbon-held");
+        openRibbonMenu(ribbon);
+      }, RIBBON_HOLD_MS);
+    });
+
+    ribbon.el.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== activeId) return;
+      const dx = event.clientX - downX;
+      const dy = event.clientY - downY;
+      if (!dragging && Math.hypot(dx, dy) > RIBBON_TAP_SLOP) {
+        dragging = true;
+        clearTimeout(holdTimer);
+        closeRibbonMenu();
+        held = false;
+        ribbon.el.classList.remove("agee-ribbon-held");
+        setRibbonUnitState("dragging");
+      }
+      if (!dragging) return;
+      // Dragging a ribbon moves the companion; positionRibbons() then re-lays
+      // both ribbons from the new anchor, so the unit travels as one.
+      placeLauncher(startLeft + dx, startTop + dy, false);
+    });
+
+    const finish = (event) => {
+      if (event.pointerId !== activeId) return;
+      activeId = null;
+      clearTimeout(holdTimer);
+      try { ribbon.el.releasePointerCapture(event.pointerId); } catch {}
+      if (dragging) {
+        dragging = false;
+        const rect = launcher?.getBoundingClientRect();
+        if (rect) placeLauncher(rect.left, rect.top, true);
+        ribbonLatched = false;
+        syncRibbonUnitState();
+        scheduleRibbonThemeSample();
+        return;
+      }
+      if (held) {
+        held = false;
+        ribbon.el.classList.remove("agee-ribbon-held");
+        return; // the menu stays open until an outside press or a row click
+      }
+      tapCount += 1;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(() => {
+        const taps = tapCount;
+        tapCount = 0;
+        if (taps === 1) {
+          // Tap solidifies and reveals the copy rail; a second tap releases.
+          if (ribbonLatched) unlatchRibbonUnit();
+          else engageRibbonUnit(true);
+          return;
+        }
+        // Double tap hands off to the history surface. The overlay never
+        // becomes a scrollback: history is the extension side panel.
+        ribbon.el.classList.remove("agee-ribbon-flash");
+        void ribbon.el.offsetWidth;
+        ribbon.el.classList.add("agee-ribbon-flash");
+        setTimeout(() => ribbon.el.classList.remove("agee-ribbon-flash"), 220);
+        openRibbonHistory();
+      }, RIBBON_MULTITAP_MS);
+    };
+    ribbon.el.addEventListener("pointerup", finish);
+    ribbon.el.addEventListener("pointercancel", finish);
+
+    ribbon.el.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (ribbonLatched) unlatchRibbonUnit();
+        else engageRibbonUnit(true);
+      } else if (event.key === " ") {
+        event.preventDefault();
+        engageRibbonUnit(true);
+        openRibbonMenu(ribbon);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        unlatchRibbonUnit();
+      }
+    });
+  }
+
+  // At most four rows, no submenus, and nothing that takes a model action,
+  // launches a run, or changes a setting. Settings stay agent-opened only.
+  function ribbonMenuRows(ribbon) {
+    const rows = [{ label: "Copy", run: () => copyRibbon(ribbon) }];
+    if (ribbon === ribbonYou) {
+      rows.push({
+        label: "Copy as note",
+        run: () => copyTextToClipboard(`${new Date().toLocaleString()} — ${ribbon.buffer}`),
+      });
+    }
+    rows.push({ label: "Open history", run: openRibbonHistory });
+    rows.push({ label: "Dismiss", run: () => { retireRibbon(ribbonYou); retireRibbon(ribbonReply); } });
+    return rows;
+  }
+
+  function openRibbonMenu(ribbon) {
+    if (!ribbonMenu || !ribbon) return;
+    ribbonMenu.textContent = "";
+    const rows = ribbonMenuRows(ribbon);
+    for (const row of rows) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.textContent = row.label;
+      button.addEventListener("pointerdown", (event) => event.stopPropagation());
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        Promise.resolve(row.run()).catch(() => {});
+        closeRibbonMenu();
+      });
+      ribbonMenu.appendChild(button);
+    }
+    ribbonMenuOwner = ribbon;
+    ribbonMenu.classList.add("agee-ribbon-menu-open");
+    const rect = ribbon.el.getBoundingClientRect();
+    const width = ribbonMenu.offsetWidth || 176;
+    const height = ribbonMenu.offsetHeight || rows.length * 36 + 10;
+    const left = Math.max(RIBBON_EDGE, Math.min(rect.left, window.innerWidth - width - RIBBON_EDGE));
+    let top = rect.bottom + 6;
+    if (top + height > window.innerHeight - RIBBON_EDGE) top = rect.top - height - 6;
+    ribbonMenu.style.left = `${left}px`;
+    ribbonMenu.style.top = `${Math.max(RIBBON_EDGE, top)}px`;
+    engageRibbonUnit(true);
+  }
+
+  function closeRibbonMenu() {
+    ribbonMenuOwner?.el?.classList.remove("agee-ribbon-held");
+    ribbonMenuOwner = null;
+    ribbonMenu?.classList.remove("agee-ribbon-menu-open");
+  }
+
+  // History is a separate surface, not overlay content. The side panel already
+  // hydrates from the canonical gateway session projection.
+  function openRibbonHistory() {
+    unlatchRibbonUnit();
+    return safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false }));
+  }
+
+  // ---- Presentation: the ribbons render the worker-owned active turn -------
+  // background.js keeps `activeBrowserAgentPresentation` (memory-only) for the
+  // browser agent owner and broadcasts it with every browserAgentOwnerChanged.
+  // The ribbons are the renderer for exactly that state, so the visible turn
+  // follows the user across tabs and navigations instead of resetting per page.
+  // Local streaming events still drive the owning tab directly for immediacy;
+  // presentation only wins when it is not a prefix of what is already shown.
+  function adoptRibbonText(ribbon, text, { isOwner, tone } = {}) {
+    if (!ribbon) return;
+    const value = String(text || "");
+    if (!value) return;
+    if (value === ribbon.buffer) return;
+    // The owning tab is ahead of the broadcast while a stream is in flight.
+    if (isOwner && ribbon.buffer && ribbon.buffer.startsWith(value)) return;
+    setRibbonText(ribbon, value, { tone });
+  }
+
+  function applyBrowserAgentPresentation(presentation, isOwner) {
+    if (!ribbonYou || !ribbonReply) return;
+    if (!presentation) return;
+    const cueId = String(presentation.cue_id || "");
+    if (cueId && cueId !== ribbonPresentationCue) {
+      // A different turn owns the unit now: drop the previous turn's text
+      // rather than letting two turns share one pair of ribbons.
+      ribbonPresentationCue = cueId;
+      if (!isOwner) {
+        retireRibbon(ribbonYou);
+        retireRibbon(ribbonReply);
+      }
+    }
+    const status = String(presentation.status || "");
+    adoptRibbonText(ribbonYou, presentation.user_text, { isOwner });
+    adoptRibbonText(ribbonReply, presentation.response_text, {
+      isOwner,
+      tone: status === "error" ? "warn" : "",
+    });
+    setRibbonStreaming(ribbonYou, status === "listening");
+    setRibbonStreaming(ribbonReply, status === "responding" || status === "running");
+    if (status === "done" || status === "error") {
+      setRibbonStreaming(ribbonYou, false);
+      setRibbonStreaming(ribbonReply, false);
+      startRibbonLinger(ribbonYou, RIBBON_LINGER_YOU);
+      startRibbonLinger(ribbonReply, status === "error" ? RIBBON_LINGER_ERROR : RIBBON_LINGER_REPLY);
+    }
+    syncRibbonUnitState();
   }
 
   // Anchor the panel to the floating mark so the input opens right where the
@@ -2509,6 +3112,10 @@
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, displayText, { presentation: "card" });
+    // A typed turn reads in the same two ribbons as a spoken one, so the unit
+    // shows one conversation regardless of how the turn was started.
+    setRibbonText(ribbonYou, displayText);
+    setRibbonStreaming(ribbonReply, true);
     // Keep the composer as a draft buffer. Responses render above it and must
     // not clear or replace whatever the user is typing.
     setSurfacePhase("editing");
@@ -2576,9 +3183,27 @@
   // Keep the legacy transcript node inert; visible voice feedback lives in
   // cue cards above the input so the draft buffer remains untouched.
   function setTranscript(text, interim = false) {
+    // The upper ribbon is the live transcription stream. An empty transcript
+    // only stops the caret: the ribbon retires on its own linger timer so the
+    // user can still read (and copy) what they said after the turn ends.
+    const value = String(text || "");
+    if (value) {
+      setRibbonText(ribbonYou, value);
+      setRibbonStreaming(ribbonYou, !!interim);
+    } else {
+      setRibbonStreaming(ribbonYou, false);
+    }
     if (!transcriptEl) return;
-    transcriptEl.textContent = text || "";
-    transcriptEl.classList.toggle("agee-interim", !!interim && !!text);
+    transcriptEl.textContent = value;
+    transcriptEl.classList.toggle("agee-interim", !!interim && !!value);
+  }
+
+  // The lower ribbon is the assistant response stream.
+  function setReplyRibbon(text, { tone = "", streaming = false } = {}) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    setRibbonText(ribbonReply, value, { tone });
+    setRibbonStreaming(ribbonReply, streaming);
   }
 
   function setAmbientState(next) {
@@ -2715,7 +3340,12 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    if (options.openText !== false) openTextSurface({ fresh: false });
+    // A spoken turn no longer opens the composer. Voice feedback lives in the
+    // two ribbons, which paint no surface and cannot cover the page; the panel
+    // is now a typed-input surface only. This is the cap the user asked for on
+    // 2026-07-16 and again on 2026-07-23 — overlay text and messages must stop
+    // covering the persistent line.
+    if (options.openText === true) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
@@ -2899,6 +3529,10 @@
       // never arrives, so the mark shows "responding" instead of hanging on
       // "thinking". assistant_audio_start re-asserts speaking; the flip is idempotent.
       if (isCurrentTurn) setAgentState("speaking");
+      // The lower ribbon is the response stream. It renders locally for the
+      // owning tab; background.js mirrors the same text into the worker-owned
+      // presentation so other tabs pick it up on the next broadcast.
+      if (isCurrentTurn) setReplyRibbon(displayText, { streaming: true });
       ensureVoiceCueCard(state, state.transcript || "Voice", displayText);
       updateCue(state.cueId, displayText, "running");
       return;
@@ -3209,6 +3843,9 @@
     root.dataset.ageeOwnerStatus = browserAgentOwner?.status || "";
     root.dataset.ageeOwnerCue = browserAgentOwner?.cue_id || "";
     root.removeAttribute("data-agee-owner-result");
+    // The ribbons render the worker-owned active turn, so switching tabs or
+    // navigating carries the visible turn with the user.
+    applyBrowserAgentPresentation(msg.presentation, msg.isOwner === true);
   }
 
   function liveCancelTurnMessage(state, playedSegments, replacement = null) {
@@ -3403,6 +4040,12 @@
       : summary;
     ensureVoiceCueCard(state, state.transcript || "Voice", displaySummary);
     updateCue(state.cueId, displaySummary, "done");
+    // Freeze both ribbons and start their linger timers. A reply the device
+    // never spoke has to be read, so it stays up materially longer.
+    setReplyRibbon(displaySummary, { streaming: false });
+    setRibbonStreaming(ribbonYou, false);
+    startRibbonLinger(ribbonYou, RIBBON_LINGER_YOU);
+    startRibbonLinger(ribbonReply, state.ttsSpoke === false ? RIBBON_LINGER_ERROR : RIBBON_LINGER_REPLY);
     reactLauncher("done");
     if (!wasCurrentTurn) return;
     setVoiceState(false);
@@ -3450,6 +4093,10 @@
   function finishLiveVoiceError(state, message, recovery = null) {
     if (!isLiveVoiceStateActive(state)) return;
     const shown = showCueError(state.cueId, message);
+    setReplyRibbon(String(message || "Voice turn failed."), { tone: "warn", streaming: false });
+    setRibbonStreaming(ribbonYou, false);
+    startRibbonLinger(ribbonYou, RIBBON_LINGER_YOU);
+    startRibbonLinger(ribbonReply, RIBBON_LINGER_ERROR);
     attachMicrophoneRecovery(state.cueId, recovery);
     if (liveVoice === state) {
       stopLiveVoiceTurn("error");
