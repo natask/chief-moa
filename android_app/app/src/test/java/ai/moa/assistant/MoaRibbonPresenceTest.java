@@ -17,15 +17,14 @@ public final class MoaRibbonPresenceTest {
     }
 
     @Test
-    public void streamingTextIsAmbientAndPaintsNoPlate() {
+    public void streamingTextIsAmbientAndPaintsACompactBubble() {
         MoaRibbonPresence presence = new MoaRibbonPresence();
         presence.setHasText(true);
         presence.setStreaming(true);
 
         assertSame(MoaRibbonPresence.State.AMBIENT, presence.state(1000));
-        // The whole point: nothing paints a filled rectangle unless touched.
-        assertEquals(0f, MoaRibbonPresence.plateAlpha(MoaRibbonPresence.State.AMBIENT, false), 0f);
-        assertTrue(MoaRibbonPresence.scrimVisible(MoaRibbonPresence.State.AMBIENT, false));
+        assertEquals(0.92f, MoaRibbonPresence.plateAlpha(MoaRibbonPresence.State.AMBIENT, false), 0.001f);
+        assertFalse(MoaRibbonPresence.scrimVisible(MoaRibbonPresence.State.AMBIENT, false));
     }
 
     @Test
@@ -110,9 +109,9 @@ public final class MoaRibbonPresenceTest {
     }
 
     @Test
-    public void reducedTransparencyIsTheOnlySanctionedOccludingAmbient() {
-        assertEquals(0f, MoaRibbonPresence.plateAlpha(MoaRibbonPresence.State.AMBIENT, false), 0f);
-        assertEquals(0.86f, MoaRibbonPresence.plateAlpha(MoaRibbonPresence.State.AMBIENT, true), 0.001f);
+    public void reducedTransparencyMakesTheAmbientBubbleFullyOpaque() {
+        assertEquals(0.92f, MoaRibbonPresence.plateAlpha(MoaRibbonPresence.State.AMBIENT, false), 0.001f);
+        assertEquals(1f, MoaRibbonPresence.plateAlpha(MoaRibbonPresence.State.AMBIENT, true), 0.001f);
         assertFalse(MoaRibbonPresence.scrimVisible(MoaRibbonPresence.State.AMBIENT, true));
     }
 

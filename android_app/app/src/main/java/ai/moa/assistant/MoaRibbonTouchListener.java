@@ -34,6 +34,8 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
 
         void onCopy();
 
+        void onHistory();
+
         void onHold();
 
         void onDoubleTap();
@@ -55,6 +57,7 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
     private boolean dragging;
     private boolean holdFired;
     private boolean railPress;
+    private boolean historyPress;
     private boolean owned;
     private int pendingTaps;
     private Runnable pendingHold;
@@ -80,6 +83,7 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
                 dragging = false;
                 holdFired = false;
                 railPress = ribbon.hitsRail(event.getX(), event.getY());
+                historyPress = ribbon.hitsHistory(event.getX(), event.getY());
                 callbacks.onPressChanged(true);
                 scheduleHold(view);
                 return true;
@@ -116,6 +120,11 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
                     return true;
                 }
                 if (holdFired || !committed) {
+                    return true;
+                }
+                if (historyPress) {
+                    historyPress = false;
+                    callbacks.onHistory();
                     return true;
                 }
                 if (railPress) {

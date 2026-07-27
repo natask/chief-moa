@@ -4,9 +4,9 @@ package ai.moa.assistant;
  * The opacity state machine for the overlay unit.
  *
  * The requirement in the user's words is "all of it should be basically
- * transparent unless I'm personally pressing down on something". That is exactly
- * the invariant encoded here: nothing in the unit paints a filled plate outside
- * {@code ENGAGED} / {@code DRAGGING}, and both of those states require a finger.
+ * transparent unless I'm personally pressing down on something". Later visual
+ * direction made the live transcript a deliberate bubble. Ambient therefore
+ * paints one compact translucent plate while dormant still paints nothing.
  *
  * Android has no hover, so the browser's proximity pre-light state does not
  * exist: {@code DORMANT -> ENGAGED} on touch is the only path.
@@ -156,9 +156,8 @@ final class MoaRibbonPresence {
     }
 
     /**
-     * How solid the ribbon's plate is. Zero everywhere the user is not touching:
-     * ambient legibility comes from the halo plus a per-glyph scrim that hugs the
-     * text, so an empty ribbon paints nothing at all.
+     * How solid the ribbon's plate is. Ambient text uses a compact translucent
+     * bubble; dormant/empty remains fully transparent.
      */
     static float plateAlpha(State state, boolean highContrast) {
         switch (state) {
@@ -167,17 +166,15 @@ final class MoaRibbonPresence {
             case DRAGGING:
                 return 0.70f;
             case AMBIENT:
-                // The only sanctioned occluding ambient, and only because the user
-                // asked the system for reduced transparency.
-                return highContrast ? 0.86f : 0f;
+                return highContrast ? 1f : 0.92f;
             default:
                 return 0f;
         }
     }
 
-    /** The per-glyph scrim replaces the plate whenever there is no plate. */
+    /** A scrim is retained only as a defensive fallback for future palette states. */
     static boolean scrimVisible(State state, boolean highContrast) {
-        return state == State.AMBIENT && !highContrast;
+        return false;
     }
 
     /** Whether the ribbon window should accept touch at all in this state. */

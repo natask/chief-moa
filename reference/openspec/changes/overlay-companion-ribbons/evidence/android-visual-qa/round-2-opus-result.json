@@ -1,0 +1,31 @@
+{
+  "capture": "Robolectric 4.14.1 native-graphics production-View render; not a device screenshot or browser mock",
+  "requested_model_alias": "opus",
+  "returned_model": "claude-opus-4-8",
+  "claude_code_version": "2.1.212",
+  "session_id": "77ad3ef4-e053-4e78-998b-fecec135d3b8",
+  "cost_usd": 0.2145225,
+  "permission_mode": "dontAsk",
+  "allowed_tools": ["Read"],
+  "screenshots": {
+    "collapsed": "android-overlay-collapsed.png",
+    "collapsed_sha256": "a9bbbd29628f075a23da72a2cf32cc1a5cbeca45b4a8b024b34428e881df67d3",
+    "expanded": "android-overlay-expanded.png",
+    "expanded_sha256": "d4ce23bbe39db597e4a3bae0722c9ec49822866e1d302b6998035943309ed6b9"
+  },
+  "prompt": "Round 2 final Android visual acceptance. Inspect only the two hash-bound Robolectric native-graphics production-View renders. Target: compact bubble matching browser direction, newest tail visible, small companion, tap-expanded full current turn, copy visible, explicit full-app/history handoff, overlay remains distinct from full app. Respond with model, verdict, pass/fail per target, and any blocker. Do not edit or spawn subagents.",
+  "result": {
+    "verdict": "PASS",
+    "targets": {
+      "compact_bubble": "PASS",
+      "newest_tail_visible": "PASS",
+      "small_companion": "PASS",
+      "expanded_full_current_turn": "PASS",
+      "copy_visible": "PASS",
+      "explicit_history_handoff": "PASS",
+      "overlay_full_app_boundary": "PASS"
+    },
+    "blocker": null,
+    "non_blocking_note": "Confirm expanded History and copy touch targets meet minimum tap size."
+  }
+}
