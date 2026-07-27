@@ -340,6 +340,7 @@
           </span>
         </span>
       </button>
+      ${AgeeRibbons.template()}
       <div id="agee-panel" role="dialog" aria-label="A.G. command">
         <div id="agee-page-context">
           <span id="agee-page-identity" aria-live="polite"></span>
@@ -378,6 +379,7 @@
     voiceState = root.querySelector("#agee-voice-state");
     transcriptEl = root.querySelector("#agee-transcript");
     tipEl = root.querySelector("#agee-tip");
+    setupRibbons();
 
     setupOverlayTooltips();
     setupCueLogInteractions();
@@ -601,6 +603,7 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
+    ribbons?.position(); // the ribbons are anchored to the mark: they move with it
     if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
   }
@@ -1017,6 +1020,25 @@
       if (!was) chime("wake");
       setTimeout(() => input.focus(), 0);
     }
+  }
+
+  // ---- Ribbons -----------------------------------------------------------
+  // The overlay is a companion between two single-line streams. The runtime
+  // lives in ribbon-runtime.js, its text model in ribbon-window.js and its
+  // geometry in ribbon-layout.js; content.js only supplies the host document,
+  // the companion anchor, and the clipboard/history capabilities.
+  let ribbons = null;
+
+  function setupRibbons() {
+    ribbons = AgeeRibbons.create({
+      root,
+      launcher,
+      placeLauncher,
+      copyText: copyTextToClipboard,
+      // History is a separate surface, not overlay content. The side panel
+      // already hydrates from the canonical gateway session projection.
+      openHistory: () => safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false })),
+    });
   }
 
   // Anchor the panel to the floating mark so the input opens right where the
@@ -2509,6 +2531,10 @@
     const cueId = newCueId();
     openTextSurface({ fresh: false });
     createCue(cueId, displayText, { presentation: "card" });
+    // A typed turn reads in the same two ribbons as a spoken one, so the unit
+    // shows one conversation regardless of how the turn was started.
+    ribbons?.setUser(displayText);
+    ribbons?.setReplyStreaming(true);
     // Keep the composer as a draft buffer. Responses render above it and must
     // not clear or replace whatever the user is typing.
     setSurfacePhase("editing");
@@ -2576,10 +2602,18 @@
   // Keep the legacy transcript node inert; visible voice feedback lives in
   // cue cards above the input so the draft buffer remains untouched.
   function setTranscript(text, interim = false) {
+    // The upper ribbon is the live transcription stream. An empty transcript
+    // only stops the caret: the ribbon retires on its own linger timer so the
+    // user can still read (and copy) what they said after the turn ends.
+    const value = String(text || "");
+    ribbons?.setUser(value, { interim });
     if (!transcriptEl) return;
-    transcriptEl.textContent = text || "";
-    transcriptEl.classList.toggle("agee-interim", !!interim && !!text);
+    transcriptEl.textContent = value;
+    transcriptEl.classList.toggle("agee-interim", !!interim && !!value);
   }
+
+  // The lower ribbon is the assistant response stream.
+  const setReplyRibbon = (text, options) => ribbons?.setReply(text, options);
 
   function setAmbientState(next) {
     ambientState = next === "on" ? "on" : "off";
@@ -2715,7 +2749,12 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    if (options.openText !== false) openTextSurface({ fresh: false });
+    // A spoken turn no longer opens the composer. Voice feedback lives in the
+    // two ribbons, which paint no surface and cannot cover the page; the panel
+    // is now a typed-input surface only. This is the cap the user asked for on
+    // 2026-07-16 and again on 2026-07-23 — overlay text and messages must stop
+    // covering the persistent line.
+    if (options.openText === true) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
@@ -2899,6 +2938,10 @@
       // never arrives, so the mark shows "responding" instead of hanging on
       // "thinking". assistant_audio_start re-asserts speaking; the flip is idempotent.
       if (isCurrentTurn) setAgentState("speaking");
+      // The lower ribbon is the response stream. It renders locally for the
+      // owning tab; background.js mirrors the same text into the worker-owned
+      // presentation so other tabs pick it up on the next broadcast.
+      if (isCurrentTurn) setReplyRibbon(displayText, { streaming: true });
       ensureVoiceCueCard(state, state.transcript || "Voice", displayText);
       updateCue(state.cueId, displayText, "running");
       return;
@@ -3209,6 +3252,9 @@
     root.dataset.ageeOwnerStatus = browserAgentOwner?.status || "";
     root.dataset.ageeOwnerCue = browserAgentOwner?.cue_id || "";
     root.removeAttribute("data-agee-owner-result");
+    // The ribbons render the worker-owned active turn, so switching tabs or
+    // navigating carries the visible turn with the user.
+    ribbons?.applyPresentation(msg.presentation, msg.isOwner === true);
   }
 
   function liveCancelTurnMessage(state, playedSegments, replacement = null) {
@@ -3403,6 +3449,10 @@
       : summary;
     ensureVoiceCueCard(state, state.transcript || "Voice", displaySummary);
     updateCue(state.cueId, displaySummary, "done");
+    // Freeze both ribbons and start their linger timers. A reply the device
+    // never spoke has to be read, so it stays up materially longer.
+    setReplyRibbon(displaySummary, { streaming: false });
+    ribbons?.endTurn({ spoken: state.ttsSpoke !== false });
     reactLauncher("done");
     if (!wasCurrentTurn) return;
     setVoiceState(false);
@@ -3450,6 +3500,8 @@
   function finishLiveVoiceError(state, message, recovery = null) {
     if (!isLiveVoiceStateActive(state)) return;
     const shown = showCueError(state.cueId, message);
+    setReplyRibbon(String(message || "Voice turn failed."), { tone: "warn", streaming: false });
+    ribbons?.endTurn({ error: true });
     attachMicrophoneRecovery(state.cueId, recovery);
     if (liveVoice === state) {
       stopLiveVoiceTurn("error");

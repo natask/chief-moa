@@ -758,6 +758,274 @@ async function main() {
 	      throw new Error(`shortcut voice/text smoke failed: ${JSON.stringify(shortcutVoice)}`);
 	    }
 
+    // Overlay ribbons: the companion between two single-line streams.
+    // Contract: reference/design/overlay-2026-07/spec.md. This drives the real
+    // worker-owned presentation broadcast (the same path that carries a turn
+    // across tabs) and then asserts the properties the whole redesign rests on:
+    // the unit renders both streams, truncates instead of growing, paints
+    // nothing while ambient, and reveals the copy affordance on a tap.
+    const ribbons = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const userText = "How much is the flight to Addis Ababa in early November " +
+          "if I leave from JFK and come back before the twenty second ".repeat(6);
+        const replyText = "Around 780 dollars round trip if you leave on the fourth " +
+          "and come back on the nineteenth and take the one-stop through Frankfurt ".repeat(8);
+        await chrome.tabs.sendMessage(tabId, { cmd: "open" }).catch(() => {});
+        await chrome.tabs.sendMessage(tabId, {
+          cmd: "browserAgentOwnerChanged",
+          owner: { tab_id: tabId, cue_id: "ribbon-smoke-cue", status: "responding" },
+          isOwner: true,
+          presentation: {
+            cue_id: "ribbon-smoke-cue",
+            user_text: userText,
+            response_text: replyText,
+            status: "responding",
+            // Only the corrected revision is supplied, so the rail must default
+            // to it (polished outranks it but does not exist) and must show
+            // polished as an explicitly unavailable row rather than faking it.
+            user_variants: { edited: "corrected revision of what you said" },
+          },
+        }).catch(() => {});
+        await sleep(160);
+
+        const measure = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (expectedUser, expectedReply) => {
+            const root = document.querySelector("#agee-root");
+            const you = document.querySelector("#agee-ribbon-you");
+            const reply = document.querySelector("#agee-ribbon-reply");
+            if (!root || !you || !reply) return { ok: false, error: "ribbon nodes missing" };
+            const read = (ribbon) => {
+              const line = ribbon.querySelector(".agee-ribbon-line");
+              const text = ribbon.querySelector(".agee-ribbon-text");
+              const viewport = ribbon.querySelector(".agee-ribbon-viewport");
+              const style = getComputedStyle(ribbon);
+              const rect = ribbon.getBoundingClientRect();
+              return {
+                live: ribbon.classList.contains("agee-ribbon-live"),
+                bottom: Math.round(rect.bottom),
+                clipped: ribbon.classList.contains("agee-ribbon-clipped"),
+                rendered: (text.textContent || "").length,
+                height: Math.round(rect.height),
+                width: Math.round(rect.width),
+                // Ambient must paint nothing: no plate, no border, no shadow.
+                background: style.backgroundColor,
+                boxShadow: style.boxShadow,
+                pointerEvents: style.pointerEvents,
+                // The line slides; the box never grows.
+                translateX: line.style.transform,
+                lineWraps: line.scrollHeight > viewport.clientHeight + 1,
+                copyOpacity: getComputedStyle(ribbon.querySelector(".agee-ribbon-copy")).opacity,
+              };
+            };
+            return {
+              ok: true,
+              unitState: root.dataset.ageeUnit || "",
+              launcherOpacity: getComputedStyle(document.querySelector("#agee-launcher")).opacity,
+              launcherTop: Math.round(document.querySelector("#agee-launcher").getBoundingClientRect().top),
+              replyTop: Math.round(reply.getBoundingClientRect().top),
+              you: read(you),
+              reply: read(reply),
+              expectedUserLength: expectedUser.length,
+              expectedReplyLength: expectedReply.length,
+              // The page itself must not be pushed around by overlay text.
+              docScrollHeight: document.documentElement.scrollHeight,
+              docScrollWidth: document.documentElement.scrollWidth,
+              // Only the glyph run is hittable while ambient, so an empty
+              // ribbon lets a click through to the page underneath.
+              glyphHittable: getComputedStyle(you.querySelector(".agee-ribbon-text")).pointerEvents,
+            };
+          },
+          args: [userText, replyText],
+        });
+        const before = measure?.[0]?.result || {};
+
+        // Tap the upper ribbon: solidify and reveal the copy rail.
+        const tapped = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const you = document.querySelector("#agee-ribbon-you");
+            const rect = you.getBoundingClientRect();
+            const opts = {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 41,
+              pointerType: "mouse",
+              button: 0,
+              clientX: Math.round(rect.left + rect.width / 2),
+              clientY: Math.round(rect.top + rect.height / 2),
+            };
+            you.querySelector(".agee-ribbon-text").dispatchEvent(new PointerEvent("pointerdown", opts));
+            you.dispatchEvent(new PointerEvent("pointerup", opts));
+            return true;
+          },
+        });
+        await sleep(420);
+        const after = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const root = document.querySelector("#agee-root");
+            const you = document.querySelector("#agee-ribbon-you");
+            const rect = you.getBoundingClientRect();
+            const style = getComputedStyle(you);
+            return {
+              unitState: root.dataset.ageeUnit || "",
+              copyOpacity: getComputedStyle(you.querySelector(".agee-ribbon-copy")).opacity,
+              copyPointerEvents: getComputedStyle(you.querySelector(".agee-ribbon-copy")).pointerEvents,
+              background: style.backgroundColor,
+              height: Math.round(rect.height),
+              width: Math.round(rect.width),
+              docScrollHeight: document.documentElement.scrollHeight,
+            };
+          },
+        });
+        return { tapped: tapped?.[0]?.result === true, before, after: after?.[0]?.result || {} };
+      })()
+    `);
+    const ribbonBefore = ribbons?.before || {};
+    const ribbonAfter = ribbons?.after || {};
+    if (ribbonBefore.ok !== true) {
+      throw new Error(`overlay ribbon smoke failed to read the unit: ${JSON.stringify(ribbons)}`);
+    }
+    // Both streams render, from the worker-owned presentation alone.
+    if (!ribbonBefore.you?.live || !ribbonBefore.reply?.live) {
+      throw new Error(`ribbons did not render the worker presentation: ${JSON.stringify(ribbonBefore)}`);
+    }
+    // The sliding window truncates instead of growing: the rendered node holds
+    // a bounded tail, the line is translated left, and nothing wraps.
+    for (const key of ["you", "reply"]) {
+      const ribbon = ribbonBefore[key];
+      const sourceLength = key === "you" ? ribbonBefore.expectedUserLength : ribbonBefore.expectedReplyLength;
+      if (
+        ribbon.rendered > 140 ||
+        ribbon.rendered >= sourceLength ||
+        ribbon.clipped !== true ||
+        ribbon.lineWraps !== false ||
+        ribbon.height !== 28 ||
+        !/^translateX\(-\d/.test(ribbon.translateX || "")
+      ) {
+        throw new Error(`${key} ribbon must slide a bounded window, not grow: ${JSON.stringify(ribbon)}`);
+      }
+    }
+    // Ambient paints nothing and intercepts nothing.
+    if (
+      ribbonBefore.unitState !== "ambient" ||
+      ribbonBefore.you.background !== "rgba(0, 0, 0, 0)" ||
+      ribbonBefore.reply.background !== "rgba(0, 0, 0, 0)" ||
+      ribbonBefore.you.boxShadow !== "none" ||
+      ribbonBefore.you.pointerEvents !== "none" ||
+      ribbonBefore.glyphHittable !== "auto" ||
+      Number(ribbonBefore.launcherOpacity) !== 0.92 ||
+      Number(ribbonBefore.you.copyOpacity) !== 0
+    ) {
+      throw new Error(`ambient overlay must paint no plate and take no page clicks: ${JSON.stringify(ribbonBefore)}`);
+    }
+    // A tap solidifies the ribbon and reveals the copy affordance. The ribbon
+    // itself expands (that is the point of the gesture), but its width is fixed
+    // and the page must not reflow. The geometry of the expand — which edge it
+    // grows from, and what stays still — is asserted in the next block.
+    if (
+      ribbons.tapped !== true ||
+      ribbonAfter.unitState !== "engaged" ||
+      Number(ribbonAfter.copyOpacity) !== 1 ||
+      ribbonAfter.copyPointerEvents !== "auto" ||
+      ribbonAfter.background === "rgba(0, 0, 0, 0)" ||
+      ribbonAfter.width !== ribbonBefore.you.width ||
+      ribbonAfter.docScrollHeight !== ribbonBefore.docScrollHeight
+    ) {
+      throw new Error(`tap must solidify the ribbon and reveal copy without reflowing the page: ${JSON.stringify({ ribbonBefore, ribbonAfter })}`);
+    }
+
+    // The tap that revealed the rail also expanded the bounded bar: the full
+    // text is now rendered, wrapped, and the bar grew AWAY from the companion.
+    const expand = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const read = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const you = document.querySelector("#agee-ribbon-you");
+            const launcher = document.querySelector("#agee-launcher");
+            const rect = you.getBoundingClientRect();
+            const line = you.querySelector(".agee-ribbon-line");
+            return {
+              expanded: you.classList.contains("agee-ribbon-expanded"),
+              rendered: (you.querySelector(".agee-ribbon-text").textContent || "").length,
+              height: Math.round(rect.height),
+              bottom: Math.round(rect.bottom),
+              whiteSpace: getComputedStyle(line).whiteSpace,
+              maxHeight: getComputedStyle(you).maxHeight,
+              launcherTop: Math.round(launcher.getBoundingClientRect().top),
+              replyTop: Math.round(document.querySelector("#agee-ribbon-reply").getBoundingClientRect().top),
+              docScrollHeight: document.documentElement.scrollHeight,
+            };
+          },
+        });
+        // Open the copy chooser from the rail's chevron.
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.querySelector("#agee-ribbon-you .agee-ribbon-chevron")?.click(),
+        });
+        await sleep(140);
+        const menu = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const rows = [...document.querySelectorAll("#agee-copy-menu button")];
+            return {
+              open: document.querySelector("#agee-copy-menu").classList.contains("agee-ribbon-menu-open"),
+              rows: rows.map((row) => ({
+                label: row.querySelector(".agee-copy-row-head").textContent.trim(),
+                why: row.querySelector(".agee-copy-why").textContent,
+                disabled: row.disabled === true,
+                isDefault: row.classList.contains("agee-copy-default"),
+              })),
+            };
+          },
+        });
+        return { expanded: read?.[0]?.result || {}, menu: menu?.[0]?.result || {} };
+      })()
+    `);
+    const expanded = expand?.expanded || {};
+    const copyMenu = expand?.menu || {};
+    if (
+      expanded.expanded !== true ||
+      expanded.rendered <= 140 ||
+      expanded.whiteSpace !== "pre-wrap" ||
+      expanded.height <= ribbonBefore.you.height ||
+      expanded.maxHeight === "none"
+    ) {
+      throw new Error(`tap must expand the bar to the full text within a height cap: ${JSON.stringify(expanded)}`);
+    }
+    // Grew away from the companion: the bottom edge, the companion, the other
+    // ribbon, and the page are all exactly where they were.
+    if (
+      expanded.bottom !== ribbonBefore.you.bottom ||
+      expanded.launcherTop !== ribbonBefore.launcherTop ||
+      expanded.replyTop !== ribbonBefore.replyTop ||
+      expanded.docScrollHeight !== ribbonBefore.docScrollHeight
+    ) {
+      throw new Error(`expanding must not move the companion, the other ribbon, or the page: ${JSON.stringify({ ribbonBefore, expanded })}`);
+    }
+    // Three variants, ranked, with the highest AVAILABLE one defaulted and the
+    // missing one shown as unavailable rather than silently substituted.
+    if (
+      copyMenu.open !== true ||
+      copyMenu.rows?.length !== 3 ||
+      !copyMenu.rows[0].label.startsWith("Polished") ||
+      copyMenu.rows[0].disabled !== true ||
+      copyMenu.rows[0].why !== "not generated for this turn" ||
+      copyMenu.rows[1].label !== "Corrected" ||
+      copyMenu.rows[1].disabled !== false ||
+      copyMenu.rows[1].isDefault !== true ||
+      copyMenu.rows[2].label !== "Literal transcript" ||
+      copyMenu.rows[2].disabled !== false
+    ) {
+      throw new Error(`copy rail must rank three variants and default to the highest available: ${JSON.stringify(copyMenu)}`);
+    }
+
     const dictationCopy = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
@@ -1370,6 +1638,13 @@ async function main() {
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
+        `ribbons rendered the worker presentation and slid a bounded window ` +
+        `(you ${ribbonBefore.you.rendered}/${ribbonBefore.expectedUserLength} chars, ` +
+        `reply ${ribbonBefore.reply.rendered}/${ribbonBefore.expectedReplyLength} chars, ` +
+        `${ribbonBefore.you.height}px tall, ambient background ${ribbonBefore.you.background}, ` +
+        `tap -> ${ribbonAfter.unitState}, expanded to ${expanded.rendered} chars in ${expanded.height}px ` +
+        `without moving the companion, copy rail offers ` +
+        `${copyMenu.rows.map((r) => r.label.split(" ")[0] + (r.disabled ? "(unavailable)" : r.isDefault ? "(default)" : "")).join("/")}), ` +
         `typed Amazon command opened results and rendered "${typedSearchSummary}", ` +
         `cross-tab owner moved ${ownershipResult.tabA}->${ownershipResult.tabB} with old tab revoked, ` +
         `type+click executed, demo result "${resultText}", no window shown, no focus taken.`,

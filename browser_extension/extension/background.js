@@ -2063,6 +2063,15 @@ async function updateBrowserAgentPresentation(patch = {}) {
       Object.hasOwn(patch, "response_text") ? patch.response_text : sameCue ? activeBrowserAgentPresentation?.response_text : "",
     ),
     status: String(patch.status || (sameCue ? activeBrowserAgentPresentation?.status : "running") || "running"),
+    // Derived revisions (corrected / writing-skill rewrites) travel with the
+    // turn when a producer supplies them. No gateway route emits them yet, so
+    // these stay undefined and the overlay's copy rail falls back to literal.
+    user_variants: Object.hasOwn(patch, "user_variants")
+      ? patch.user_variants
+      : sameCue ? activeBrowserAgentPresentation?.user_variants : undefined,
+    response_variants: Object.hasOwn(patch, "response_variants")
+      ? patch.response_variants
+      : sameCue ? activeBrowserAgentPresentation?.response_variants : undefined,
     updated_at: new Date().toISOString(),
   };
   const owner = await getActiveBrowserAgentOwner().catch(() => null);
@@ -4573,9 +4582,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         owner,
         isOwner: owner?.tab_id === sender.tab?.id && owner?.status !== "cleared",
+        // A newly built overlay hydrates the active turn's visible text from
+        // the worker, so a navigation does not blank the ribbons mid-turn.
+        presentation: activeBrowserAgentPresentation,
       }))
       .catch((error) => sendResponse({ ok: false, owner: null, error: String(error?.message || error) }));
     return true;
+  }
+  // Double-tapping a ribbon hands off to the history surface. The overlay is
+  // not a scrollback: the side panel renders the canonical gateway session
+  // projection. The open() call must stay synchronous to keep the user gesture.
+  if (msg.cmd === "openHistoryPanel") {
+    const opened = openAgentPanel(sender.tab);
+    sendResponse({ ok: opened });
+    return false;
   }
   if (msg.cmd === "devReloadExtension") {
     devReloadConfig()

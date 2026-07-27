@@ -1,0 +1,509 @@
+/* Ribbon overlay styles for the Aggie companion.
+   Contract: reference/design/overlay-2026-07/spec.md
+
+   Split out of overlay.css so the ribbon presentation can grow without
+   pushing the base overlay stylesheet past the repo source-size ceiling.
+   Loaded alongside overlay.css by the manifest's content_scripts entry, so
+   the cascade order is overlay.css then ribbons.css.
+*/
+
+/* ==========================================================================
+   Ribbons: the companion between two single-line streams.
+   Contract: reference/design/overlay-2026-07/spec.md
+
+   A ribbon is ONE line of text with no surface behind it. It never wraps,
+   never grows, and never reflows the page. The unit is transparent until the
+   user is physically touching it. This is the hard cap the user asked for
+   twice (2026-07-16, 2026-07-23): overlay text may no longer cover the page
+   or push the persistent line out of view.
+   ========================================================================== */
+#agee-root {
+  /* geometry */
+  --agee-ribbon-w: clamp(232px, 44vw, 340px);
+  --agee-ribbon-h: 28px;
+  --agee-ribbon-pad-x: 10px;
+  --agee-ribbon-gap: 8px;
+  --agee-ribbon-dot: 5px;
+  --agee-ribbon-dot-offset: 10px;
+  --agee-ribbon-edge: 16px;
+
+  /* colour — dark (default) */
+  --agee-ribbon-ink: #f4f4f6;
+  --agee-ribbon-ink-ambient: rgba(244, 244, 246, 0.88);
+  --agee-ribbon-muted: #9b9ba4;
+  --agee-ribbon-accent: #ffd76a;
+  --agee-ribbon-you: #7c5cff;
+  --agee-ribbon-agent: #f5a623;
+  --agee-ribbon-ok: #35c759;
+  --agee-ribbon-warn: #ff8a3d;
+  --agee-ribbon-plate: rgba(14, 15, 18, 0.72);
+  --agee-ribbon-plate-drag: rgba(14, 15, 18, 0.5);
+  --agee-ribbon-hairline: rgba(255, 255, 255, 0.14);
+  --agee-ribbon-scrim: rgba(9, 10, 12, 0.42);
+  --agee-ribbon-halo: 0 1px 2px rgba(0, 0, 0, 0.72), 0 0 8px rgba(0, 0, 0, 0.45);
+  --agee-ribbon-shadow: 0 8px 28px rgba(0, 0, 0, 0.46), 0 1px 2px rgba(0, 0, 0, 0.34);
+  --agee-ribbon-menu-bg: rgba(18, 19, 23, 0.86);
+  --agee-ribbon-menu-hover: rgba(255, 255, 255, 0.08);
+
+  /* motion */
+  --agee-ribbon-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --agee-ribbon-ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --agee-ribbon-ease-settle: cubic-bezier(0.16, 1.02, 0.3, 1);
+  --agee-ribbon-dur-fast: 120ms;
+  --agee-ribbon-dur-solidify: 140ms;
+  --agee-ribbon-dur-soften: 260ms;
+  --agee-ribbon-dur-slow: 420ms;
+  --agee-ribbon-dur-slide: 90ms;
+  --agee-ribbon-dur-menu: 160ms;
+}
+/* Light page behind the unit: the ambient glyphs sit directly on page content,
+   so the OS preference alone is wrong. content.js samples the effective
+   background luminance behind the unit and sets data-agee-ribbon-theme. */
+#agee-root[data-agee-ribbon-theme="light"] {
+  --agee-ribbon-ink: #141519;
+  --agee-ribbon-ink-ambient: rgba(20, 21, 25, 0.9);
+  --agee-ribbon-muted: #6b6c76;
+  --agee-ribbon-accent: #b87400;
+  --agee-ribbon-you: #5b3fe0;
+  --agee-ribbon-agent: #c06b00;
+  --agee-ribbon-ok: #1f8f3d;
+  --agee-ribbon-warn: #c24a00;
+  --agee-ribbon-plate: rgba(252, 252, 253, 0.76);
+  --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.54);
+  --agee-ribbon-hairline: rgba(0, 0, 0, 0.1);
+  --agee-ribbon-scrim: rgba(255, 255, 255, 0.52);
+  --agee-ribbon-halo: 0 1px 2px rgba(255, 255, 255, 0.88), 0 0 8px rgba(255, 255, 255, 0.62);
+  --agee-ribbon-shadow: 0 8px 28px rgba(16, 18, 24, 0.14), 0 1px 2px rgba(16, 18, 24, 0.1);
+  --agee-ribbon-menu-bg: rgba(252, 252, 253, 0.88);
+  --agee-ribbon-menu-hover: rgba(0, 0, 0, 0.05);
+}
+
+.agee-ribbon {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--agee-ribbon-w);
+  height: var(--agee-ribbon-h);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--agee-ribbon-pad-x);
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--agee-ribbon-dur-slow) var(--agee-ribbon-ease-in),
+    visibility 0s linear var(--agee-ribbon-dur-slow),
+    background-color var(--agee-ribbon-dur-soften) var(--agee-ribbon-ease-out),
+    box-shadow var(--agee-ribbon-dur-soften) var(--agee-ribbon-ease-out),
+    transform var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out);
+}
+.agee-ribbon.agee-ribbon-live {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out),
+    visibility 0s,
+    background-color var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out),
+    box-shadow var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out),
+    transform var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out);
+  animation: agee-ribbon-in var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out);
+}
+@keyframes agee-ribbon-in {
+  from { opacity: 0; transform: translateY(4px); filter: blur(3px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+/* Engaged/dragging: the plate materialises INSIDE the existing box. The
+   hairline is an inset shadow, not a border, so solidifying costs no layout. */
+#agee-root[data-agee-unit="engaged"] .agee-ribbon.agee-ribbon-live,
+#agee-root[data-agee-unit="dragging"] .agee-ribbon.agee-ribbon-live {
+  pointer-events: auto;
+  background: var(--agee-ribbon-plate);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
+}
+#agee-root[data-agee-unit="dragging"] .agee-ribbon.agee-ribbon-live {
+  background: var(--agee-ribbon-plate-drag);
+}
+#agee-root[data-agee-unit="engaged"] .agee-ribbon.agee-ribbon-held {
+  transform: translateY(-4px);
+}
+
+/* Speaker dot: the only always-on ribbon chrome, and the only way to tell the
+   two streams apart without labels. */
+.agee-ribbon-dot {
+  position: absolute;
+  left: calc(-1 * var(--agee-ribbon-dot-offset));
+  top: 50%;
+  width: var(--agee-ribbon-dot);
+  height: var(--agee-ribbon-dot);
+  margin-top: calc(-0.5 * var(--agee-ribbon-dot));
+  border-radius: 50%;
+  transition: transform var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out);
+}
+#agee-ribbon-you .agee-ribbon-dot { background: var(--agee-ribbon-you); }
+#agee-ribbon-reply .agee-ribbon-dot { background: var(--agee-ribbon-agent); }
+#agee-root.agee-state-listening #agee-ribbon-you .agee-ribbon-dot,
+#agee-root.agee-state-speaking #agee-ribbon-reply .agee-ribbon-dot {
+  animation: agee-ribbon-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes agee-ribbon-dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+}
+
+/* Viewport: the anti-reflow guarantee. Fixed box, hidden overflow, one nowrap
+   line inside translated so the newest character stays pinned right. */
+.agee-ribbon-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+.agee-ribbon-clipped .agee-ribbon-viewport {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  mask-image: linear-gradient(to right, transparent 0, #000 16px);
+}
+.agee-ribbon-line {
+  white-space: pre;
+  will-change: transform;
+  transition: transform var(--agee-ribbon-dur-slide) linear;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 450;
+  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
+  color: var(--agee-ribbon-ink-ambient);
+  text-shadow: var(--agee-ribbon-halo);
+  pointer-events: none;
+}
+/* The glyph run is the ONLY hit region while ambient. An empty ribbon has a
+   zero-area hit box, so a click lands on the page underneath. Events still
+   bubble to .agee-ribbon, which owns the gesture listeners. */
+.agee-ribbon-text {
+  pointer-events: auto;
+  background: var(--agee-ribbon-scrim);
+  padding: 1px 4px;
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  transition: background-color var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out);
+}
+#agee-root[data-agee-unit="engaged"] .agee-ribbon-line,
+#agee-root[data-agee-unit="dragging"] .agee-ribbon-line {
+  color: var(--agee-ribbon-ink);
+  text-shadow: none;
+}
+#agee-root[data-agee-unit="engaged"] .agee-ribbon-text,
+#agee-root[data-agee-unit="dragging"] .agee-ribbon-text {
+  background: transparent;
+}
+.agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
+.agee-ribbon-mute .agee-ribbon-line { color: var(--agee-ribbon-muted); }
+
+.agee-ribbon-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--agee-ribbon-accent);
+  opacity: 0;
+}
+.agee-ribbon-streaming .agee-ribbon-caret {
+  opacity: 1;
+  animation: agee-ribbon-caret 1060ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes agee-ribbon-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+
+/* Copy rail: revealed by a tap, never present in the ambient state. */
+.agee-ribbon-copy {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: 6px;
+  margin-right: -4px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--agee-ribbon-muted);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.8);
+  pointer-events: none;
+  transition:
+    opacity var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out),
+    transform var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out),
+    color var(--agee-ribbon-dur-fast) linear;
+}
+#agee-root[data-agee-unit="engaged"] .agee-ribbon-live .agee-ribbon-copy {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+.agee-ribbon-copy:hover { color: var(--agee-ribbon-ink); background: var(--agee-ribbon-menu-hover); }
+.agee-ribbon-copy:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: 1px; }
+.agee-ribbon-copy svg { width: 15px; height: 15px; }
+.agee-ribbon-copy .agee-ribbon-check { display: none; }
+.agee-ribbon-copied .agee-ribbon-copy { color: var(--agee-ribbon-ok); }
+.agee-ribbon-copied .agee-ribbon-copy .agee-ribbon-glyph { display: none; }
+.agee-ribbon-copied .agee-ribbon-copy .agee-ribbon-check { display: block; }
+
+/* Double-tap acknowledgement before the history surface opens. */
+.agee-ribbon-flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--agee-ribbon-accent);
+  opacity: 0.12;
+  animation: agee-ribbon-flash 180ms var(--agee-ribbon-ease-in) forwards;
+  pointer-events: none;
+}
+@keyframes agee-ribbon-flash {
+  to { opacity: 0; }
+}
+
+/* Copy caption: absolutely positioned so it can never reflow the unit. */
+.agee-ribbon-caption {
+  position: absolute;
+  left: var(--agee-ribbon-pad-x);
+  top: calc(100% + 4px);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--agee-ribbon-ok);
+  text-shadow: var(--agee-ribbon-halo);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--agee-ribbon-dur-fast) linear;
+}
+.agee-ribbon-copied .agee-ribbon-caption { opacity: 1; }
+
+/* Hold menu: at most four rows, no submenus, nothing that takes a model
+   action. Settings stay agent-opened only. */
+#agee-ribbon-menu {
+  position: absolute;
+  width: 176px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--agee-ribbon-menu-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
+  opacity: 0;
+  transform: scale(0.94) translateY(4px);
+  transform-origin: top center;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    opacity var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    transform var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    visibility 0s linear var(--agee-ribbon-dur-menu);
+}
+#agee-ribbon-menu.agee-ribbon-menu-open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    opacity var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    transform var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    visibility 0s;
+}
+#agee-ribbon-menu button {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 36px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--agee-ribbon-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+#agee-ribbon-menu button:hover:not(:disabled) { background: var(--agee-ribbon-menu-hover); }
+#agee-ribbon-menu button:disabled { color: var(--agee-ribbon-muted); cursor: default; }
+#agee-ribbon-menu button:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: -2px; }
+
+/* Companion opacity follows the unit state. Dormant is the resting state and
+   the default: the mark is present but recedes into the page. */
+#agee-root[data-agee-unit] #agee-launcher {
+  transition: opacity var(--agee-ribbon-dur-slow) var(--agee-ribbon-ease-out), transform 0.2s ease;
+}
+#agee-root[data-agee-unit="dormant"] #agee-launcher { opacity: 0.34; }
+#agee-root[data-agee-unit="near"] #agee-launcher { opacity: 0.7; }
+#agee-root[data-agee-unit="ambient"] #agee-launcher { opacity: 0.92; }
+#agee-root[data-agee-unit="engaged"] #agee-launcher { opacity: 1; }
+#agee-root[data-agee-unit="dragging"] #agee-launcher { opacity: 1; }
+
+.agee-ribbon:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .agee-ribbon,
+  .agee-ribbon-line,
+  .agee-ribbon-copy,
+  #agee-ribbon-menu {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+  .agee-ribbon-line { transition-duration: 0ms !important; }
+}
+/* Reduced transparency is the one sanctioned occluding state, and the user
+   asked for it: keep the plate on in the ambient state too. */
+@media (prefers-reduced-transparency: reduce) {
+  .agee-ribbon.agee-ribbon-live {
+    background: var(--agee-ribbon-plate);
+    box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
+  }
+  .agee-ribbon-text { background: transparent; }
+}
+
+/* ---- Expanded: the bounded bar opens ------------------------------------
+   The sliding window keeps the bar small; expand is how the user reads past
+   it. A tap opens the full text, wrapped and scrollable inside a height cap,
+   and brings the copy rail with it. The bar grows AWAY from the companion
+   (the upper ribbon is bottom-anchored, the lower one top-anchored), so the
+   companion never moves, the other ribbon never moves, and the page never
+   reflows. Expanded is an occluding state and that is correct: the user is
+   touching it, and it collapses the moment they are not. */
+.agee-ribbon.agee-ribbon-expanded {
+  height: auto;
+  max-height: min(112px, 30vh);
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  z-index: 2;
+}
+.agee-ribbon-expanded .agee-ribbon-viewport {
+  height: auto;
+  max-height: min(102px, 28vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  align-items: flex-start;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.agee-ribbon-expanded .agee-ribbon-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transform: none !important;
+  width: 100%;
+}
+.agee-ribbon-expanded .agee-ribbon-text {
+  background: transparent;
+  padding: 0;
+}
+.agee-ribbon-expanded .agee-ribbon-dot {
+  top: 14px;
+}
+.agee-ribbon-expanded .agee-ribbon-copy {
+  position: sticky;
+  top: 0;
+}
+
+/* ---- Copy rail: a three-way choice with a default -----------------------
+   Literal / corrected / polished, per voice-capture-notebook-ime 3.3. The
+   primary button copies the default; the chevron opens the chooser. */
+.agee-ribbon-chevron {
+  width: 18px;
+  margin-left: 0;
+}
+.agee-ribbon-chevron svg {
+  width: 13px;
+  height: 13px;
+}
+#agee-copy-menu {
+  position: absolute;
+  width: 214px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--agee-ribbon-menu-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
+  opacity: 0;
+  transform: scale(0.94) translateY(4px);
+  transform-origin: top right;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    opacity var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    transform var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    visibility 0s linear var(--agee-ribbon-dur-menu);
+}
+#agee-copy-menu.agee-ribbon-menu-open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  visibility: visible;
+  transition:
+    opacity var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    transform var(--agee-ribbon-dur-menu) var(--agee-ribbon-ease-settle),
+    visibility 0s;
+}
+#agee-copy-menu button {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--agee-ribbon-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+#agee-copy-menu button:hover:not(:disabled) { background: var(--agee-ribbon-menu-hover); }
+#agee-copy-menu button:disabled { cursor: default; opacity: 0.55; }
+#agee-copy-menu button:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: -2px; }
+#agee-copy-menu .agee-copy-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+#agee-copy-menu .agee-copy-tick {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--agee-ribbon-accent);
+  flex: 0 0 auto;
+  visibility: hidden;
+}
+#agee-copy-menu button.agee-copy-default .agee-copy-tick { visibility: visible; }
+#agee-copy-menu .agee-copy-why {
+  display: block;
+  margin-top: 1px;
+  padding-left: 13px;
+  font-size: 10.5px;
+  line-height: 14px;
+  font-weight: 450;
+  color: var(--agee-ribbon-muted);
+}

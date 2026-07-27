@@ -9,7 +9,19 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "tabs", "scripting", "storage", "debugger", "alarms", "offscreen", "sidePanel", "desktopCapture", "userScripts", "clipboardWrite"],
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage",
+    "debugger",
+    "alarms",
+    "offscreen",
+    "sidePanel",
+    "desktopCapture",
+    "userScripts",
+    "clipboardWrite"
+  ],
   "host_permissions": [
     "http://*/*",
     "https://*/*",
@@ -31,14 +43,32 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "content.js"],
-      "css": ["overlay.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "ui-spec-runtime.js",
+        "steering-ui.js",
+        "browser-command-transcript-runtime.js",
+        "document-context.js",
+        "ribbon-window.js",
+        "ribbon-layout.js",
+        "ribbon-runtime.js",
+        "content.js"
+      ],
+      "css": [
+        "overlay.css",
+        "ribbons.css"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["tweaks.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "tweaks.js"
+      ],
       "run_at": "document_start"
     }
   ],
@@ -78,7 +108,7 @@
     }
   },
   "action": {
-    "default_title": "A.G. — open panel",
+    "default_title": "A.G. \u2014 open panel",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -88,8 +118,12 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["moa-mark.png"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "moa-mark.png"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
