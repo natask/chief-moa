@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
@@ -341,12 +342,17 @@ final class MoaOverlayUnitController {
         return params;
     }
 
-    // The typed inset API arrived in API 30 and this app ships to API 26, so
-    // both accessors branch inline rather than behind a helper: lint cannot see
-    // through a helper's version guard, and silencing it would hide a real
-    // NoSuchMethodError on Android 8-10. Below API 30 the deprecated
-    // system-window insets carry the same status/navigation bar values, so the
-    // unit stays clear of the system bars on old devices instead of assuming 0.
+    // The typed inset API arrived in API 30 and this app ships to API 26, so both
+    // accessors branch inline rather than behind a helper: lint cannot see through
+    // a helper's version guard, and a suppression or a baseline would have kept
+    // the defect while hiding the report. The pre-30 fallback has to be a real
+    // answer, not zero — zero would put the ribbons under the status bar and
+    // behind the navigation bar on Android 8 through 10.
+    //
+    // The modern top asks for the cutout as well as the status bar, so the legacy
+    // top has to too. It matters here: the companion window is
+    // FLAG_LAYOUT_NO_LIMITS, so it can extend into a notch, and on API 28-29 the
+    // system window inset alone can under-report that. See MoaWindowInsetPolicy.
     private int insetTop() {
         WindowInsets insets = rootInsets();
         if (insets == null) {
@@ -356,7 +362,7 @@ final class MoaOverlayUnitController {
             return insets.getInsets(
                     WindowInsets.Type.statusBars() | WindowInsets.Type.displayCutout()).top;
         }
-        return insets.getSystemWindowInsetTop();
+        return MoaWindowInsetPolicy.legacyTop(legacySystemTop(insets), legacyCutoutTop(insets));
     }
 
     private int insetBottom() {
@@ -367,7 +373,26 @@ final class MoaOverlayUnitController {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             return insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
         }
+        return MoaWindowInsetPolicy.legacyBottom(legacySystemBottom(insets));
+    }
+
+    @SuppressWarnings("deprecation")
+    private static int legacySystemTop(WindowInsets insets) {
+        return insets.getSystemWindowInsetTop();
+    }
+
+    @SuppressWarnings("deprecation")
+    private static int legacySystemBottom(WindowInsets insets) {
         return insets.getSystemWindowInsetBottom();
+    }
+
+    private static int legacyCutoutTop(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            // No cutout API, and no device with a cutout, below API 28.
+            return 0;
+        }
+        DisplayCutout cutout = insets.getDisplayCutout();
+        return cutout == null ? 0 : cutout.getSafeInsetTop();
     }
 
     private WindowInsets rootInsets() {
