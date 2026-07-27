@@ -425,6 +425,8 @@ async function main() {
           target: { tabId },
           func: () => {
             const root = document.querySelector("#agee-root");
+            const launcher = document.querySelector("#agee-launcher");
+            const bird = document.querySelector("#agee-launcher .agee-bird");
             const panel = document.querySelector("#agee-panel");
             const input = document.querySelector("#agee-input");
             const voice = document.querySelector("#agee-voice");
@@ -433,9 +435,11 @@ async function main() {
             const voiceState = document.querySelector("#agee-voice-state");
             const pageIdentity = document.querySelector("#agee-page-identity");
             const historyButton = document.querySelector("#agee-history-button");
-            if (!root || !panel || !input || !voice || !stop || !log || !voiceState || !pageIdentity || !historyButton) {
+            if (!root || !launcher || !bird || !panel || !input || !voice || !stop || !log || !voiceState || !pageIdentity || !historyButton) {
               return { ok: false, error: "overlay nodes missing" };
             }
+            const launcherRect = launcher.getBoundingClientRect();
+            const birdRect = bird.getBoundingClientRect();
             const panelRect = panel.getBoundingClientRect();
             const voiceRect = voice.getBoundingClientRect();
             const stopStyle = getComputedStyle(stop);
@@ -449,6 +453,11 @@ async function main() {
               ok: true,
               rootCount: document.querySelectorAll("#agee-root").length,
               open: root.classList.contains("agee-open"),
+              launcherWidth: Math.round(launcherRect.width),
+              launcherHeight: Math.round(launcherRect.height),
+              launcherFontSize: getComputedStyle(launcher).fontSize,
+              birdWidth: Math.round(birdRect.width),
+              birdHeight: Math.round(birdRect.height),
               panelWidth: Math.round(panelRect.width),
               panelHeight: Math.round(panelRect.height),
               viewportWidth: window.innerWidth,
@@ -472,6 +481,15 @@ async function main() {
     `);
     if (!overlayMetrics?.ok) throw new Error(overlayMetrics?.error || "overlay metrics missing");
     if (overlayMetrics.rootCount !== 1) throw new Error(`expected one Aggie root, got: ${JSON.stringify(overlayMetrics)}`);
+    if (
+      overlayMetrics.launcherFontSize !== "22px" ||
+      overlayMetrics.launcherWidth !== 55 ||
+      overlayMetrics.launcherHeight !== 55 ||
+      overlayMetrics.birdWidth !== 44 ||
+      overlayMetrics.birdHeight !== 44
+    ) {
+      throw new Error(`desktop mascot is not compact: ${JSON.stringify(overlayMetrics)}`);
+    }
     if (!overlayMetrics.open || !overlayMetrics.activeInput) throw new Error(`overlay did not open and focus input: ${JSON.stringify(overlayMetrics)}`);
     if (!overlayMetrics.pageIdentity.includes("localhost") || overlayMetrics.historyLabel.trim() !== "History") {
       throw new Error(`overlay did not visibly ground the current page and history path: ${JSON.stringify(overlayMetrics)}`);
@@ -490,6 +508,39 @@ async function main() {
     }
     if (overlayMetrics.voiceStateDisplayWhenVoicing !== "none") {
       throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
+    }
+
+    await pageCdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 375,
+      height: 667,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const narrowMascotMetrics = await waitForEval(pageCdp, `
+      (() => {
+        const launcher = document.querySelector("#agee-launcher");
+        const bird = document.querySelector("#agee-launcher .agee-bird");
+        if (!launcher || !bird || !matchMedia("(max-width: 480px)").matches) return null;
+        const launcherRect = launcher.getBoundingClientRect();
+        const birdRect = bird.getBoundingClientRect();
+        return {
+          fontSize: getComputedStyle(launcher).fontSize,
+          launcherWidth: Math.round(launcherRect.width),
+          launcherHeight: Math.round(launcherRect.height),
+          birdWidth: Math.round(birdRect.width),
+          birdHeight: Math.round(birdRect.height),
+        };
+      })()
+    `);
+    await pageCdp.send("Emulation.clearDeviceMetricsOverride");
+    if (
+      narrowMascotMetrics?.fontSize !== "18px" ||
+      narrowMascotMetrics?.launcherWidth !== 45 ||
+      narrowMascotMetrics?.launcherHeight !== 45 ||
+      narrowMascotMetrics?.birdWidth !== 36 ||
+      narrowMascotMetrics?.birdHeight !== 36
+    ) {
+      throw new Error(`phone-sized browser mascot is not compact and usable: ${JSON.stringify(narrowMascotMetrics)}`);
     }
 
     // Prove an ordinary typed product-search request reaches the first-party

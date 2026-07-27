@@ -88,6 +88,18 @@ public final class MoaAssistantAudioProgressTrackerTest {
     }
 
     @Test
+    public void buildsBoundedIdempotentTtsRetryMessage() {
+        JSONObject event = MoaVoiceGatewaySocket.buildTtsRetryEvent("turn_123", "retry_456", 12);
+
+        assertEquals("retry_tts", event.optString("type"));
+        assertEquals("turn_123", event.optString("turn_id"));
+        assertEquals("retry_456", event.optString("retry_id"));
+        assertEquals(12, event.optInt("from_text_char"));
+        assertEquals(0, MoaVoiceGatewaySocket.buildTtsRetryEvent("t", "r", -1)
+                .optInt("from_text_char"));
+    }
+
+    @Test
     public void metadataParsingHandlesAliasesStringsAndInvalidBounds() throws Exception {
         assertNull(MoaAssistantAudioProgressTracker.parseSegmentMetadata(null));
 

@@ -74,7 +74,11 @@ final class MoaRibbonTokens {
     static final int MENU_TEXT_SP = 13;
 
     // --- Companion opacity ------------------------------------------------
-    static final float COMPANION_DORMANT_ALPHA = 0.18f;
+    // One dormant alpha for the whole overlay. MoaOrbPresentation owns the value
+    // because the companion's own touch listener fades to it too; the design
+    // contract's floor was 0.18 against the old 0.10, and master's 0.30 is the
+    // same "too faint to find" fix taken further.
+    static final float COMPANION_DORMANT_ALPHA = MoaOrbPresentation.IDLE_ALPHA;
     static final float COMPANION_AMBIENT_ALPHA = 0.92f;
     static final float COMPANION_ENGAGED_ALPHA = 1f;
     static final float COMPANION_DRAG_SCALE = 1.04f;

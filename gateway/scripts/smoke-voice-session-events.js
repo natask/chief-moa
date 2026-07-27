@@ -220,12 +220,18 @@ function assertStableAssistantEvents(events) {
   const done = eventOfType(events, "turn_done");
   // turn_done always carries reply_language + input_languages so a client overlay
   // can render a live "hears X / speaks Y" indicator every turn.
-  assert.deepEqual(Object.keys(done).sort(), ["branch_id", "first_audio_ms", "input_languages", "reply_language", "session_id", "status", "transcription_only", "turn_id", "type"]);
+  assert.deepEqual(Object.keys(done).sort(), [
+    "branch_id", "first_audio_ms", "input_languages", "reply_language", "session_id",
+    "status", "transcription_only", "tts_complete", "tts_delivery",
+    "tts_reply_text_chars", "tts_segments", "tts_spoke", "tts_spoken_text_end", "turn_id", "type",
+  ]);
   assert.equal(done.status, "completed");
   assert.equal(done.transcription_only, false);
   assert.ok(Number.isFinite(done.first_audio_ms), "turn_done must carry first_audio_ms after audio is emitted");
   assert.ok(Array.isArray(done.input_languages), "turn_done must always carry input_languages as an array");
   assert.equal(typeof done.reply_language, "string", "turn_done must always carry reply_language as a string");
+  assert.equal(done.tts_delivery, "complete");
+  assert.equal(done.tts_complete, true);
 }
 
 function assertCanonicalCompletion(completedTurns) {

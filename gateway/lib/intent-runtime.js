@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const {
   createDefaultIdFactory,
   buildCaptureEvent,
@@ -24,6 +25,20 @@ const {
   rehydrateProject,
   rehydrateIntentForMutation,
 } = require("./intent-runtime-rehydration");
+const { buildIntentContextPacket } = require("./intent-context-packet");
+
+const MESSAGE_ROUTE_ACTIONS = new Set([
+  "observation",
+  "note",
+  "update_existing_intent",
+  "new_intent",
+  "fork_intent",
+  "merge_intents",
+  "steer_existing_agent",
+  "launch_new_agent",
+  "request_decision",
+  "update_artifact",
+]);
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -127,8 +142,74 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     };
   }
 
+  function currentIsoTime() {
+    const value = typeof now === "function" ? now() : new Date().toISOString();
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+  }
+
+  function durableEvent({ intentId, eventType, idempotencyKey, payload, actor, correlationId, causationId }) {
+    return {
+      ...eventDescriptor({ intentId, eventType, idempotencyKey, payload }),
+      occurred_at: currentIsoTime(),
+      actor: actor && typeof actor === "object" ? actor : { kind: "gateway", id: "intent-runtime" },
+      authority: { boundary: "intent-runtime", execution: "proposal_event_log" },
+      correlation_id: text(correlationId || intentId, MAX_TEXT.id),
+      causation_id: text(causationId, MAX_TEXT.id),
+    };
+  }
+
+  async function appendIntentEvent(intentId, command, eventType, payload) {
+    const safeIntentId = requireBoundedText(intentId, MAX_TEXT.id, "intent_id");
+    const descriptor = durableEvent({
+      intentId: safeIntentId,
+      eventType,
+      idempotencyKey: namespaceIdempotencyKey(
+        safeIntentId,
+        eventType.slice("intent.".length),
+        command.idempotency_key || command.idempotencyKey || eventType,
+      ),
+      payload: { intent_id: safeIntentId, ...payload },
+      actor: command.actor,
+      correlationId: command.correlation_id || command.correlationId,
+      causationId: command.causation_id || command.causationId,
+    });
+    return withIntentSerialization([safeIntentId], async () => {
+      const existing = await existingIdempotentEvent(descriptor);
+      const state = await authoritativeState(safeIntentId);
+      if (existing) return rehydrateIntent(events, safeIntentId, command.limits || {});
+      const expected = command.expected_intent_version ?? command.expectedIntentVersion;
+      if (expected !== undefined && Number(expected) !== state.version) {
+        throw new Error(`intent version conflict: expected ${expected}, current ${state.version}`);
+      }
+      await appendVerified(withExpectedVersion(descriptor, state.version));
+      return rehydrateIntent(events, safeIntentId, command.limits || {});
+    });
+  }
+
   async function streamOccupancy(intentId) {
     return events.listEvents({ stream_id: intentStreamId(intentId), order: "asc", offset: 0, limit: 1 });
+  }
+
+  async function appendMessageStreamEvent(streamId, eventType, key, payload) {
+    return withIntentSerialization([streamId], async () => {
+      const descriptor = {
+        stream_id: streamId,
+        event_type: eventType,
+        idempotency_key: requireBoundedText(key, MAX_TEXT.idempotency, "idempotency_key"),
+        occurred_at: currentIsoTime(),
+        actor: { kind: "gateway", id: "intent-message-ingress" },
+        authority: { boundary: "intent-runtime", execution: "routing_record_only" },
+        correlation_id: text(payload.message_id, MAX_TEXT.id),
+        causation_id: "",
+        payload,
+      };
+      const existing = await existingIdempotentEvent(descriptor);
+      if (existing) return existing;
+      const latest = await events.listEvents({ stream_id: streamId, order: "desc", offset: 0, limit: 1 });
+      const version = latest.length ? Number(latest[0].stream_version || 0) : 0;
+      return appendVerified(withExpectedVersion(descriptor, version));
+    });
   }
 
   async function capture(input = {}) {
@@ -162,6 +243,12 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
       const existing = await existingIdempotentEvent(descriptor);
       const state = await authoritativeState(safeIntentId);
       if (existing) return rehydrateIntent(events, safeIntentId, command.limits || {});
+      const expectedIntentVersion = command.expected_intent_version ?? command.expectedIntentVersion;
+      if (expectedIntentVersion !== undefined
+        && (!Number.isSafeInteger(Number(expectedIntentVersion))
+          || Number(expectedIntentVersion) !== state.version)) {
+        throw new Error(`intent version conflict: expected ${expectedIntentVersion}, current ${state.version}`);
+      }
       const event = withExpectedVersion(buildTransitionEvent(state, safeIntentId, command, { now }), state.version);
       await appendVerified(event);
       return rehydrateIntent(events, safeIntentId, command.limits || {});
@@ -468,6 +555,200 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     throw new Error("rehydrate requires intent_id or project_id");
   }
 
+  async function contextPacket(intentId, options = {}) {
+    const safeIntentId = requireBoundedText(intentId, MAX_TEXT.id, "intent_id");
+    const state = await rehydrateIntent(events, safeIntentId, options.limits || {});
+    if (!state?.exists) return null;
+    return buildIntentContextPacket({
+      events,
+      state,
+      generatedAt: typeof now === "function" ? now() : new Date().toISOString(),
+      compactionModel: options.compaction_model || options.compactionModel,
+      compactionVersion: options.compaction_version || options.compactionVersion,
+    });
+  }
+
+  async function launch(input = {}) {
+    const raw = String(input.message || input.command || input.raw_text || input.rawText || "");
+    if (!raw.trim()) throw new Error("message is required");
+    if (raw.length > 64_000) throw new Error("message exceeds max length 64000");
+    const match = raw.match(/^\s*intent\s+launch\s+([\s\S]+?)\s*$/i);
+    const thought = requireBoundedText(match ? match[1] : raw, 64_000, "thought");
+    const key = requireBoundedText(input.idempotency_key || input.idempotencyKey, 180, "idempotency_key");
+    const stableId = `intent_${crypto.createHash("sha256").update(key).digest("hex").slice(0, 32)}`;
+    const intentId = requireBoundedText(input.intent_id || input.intentId || stableId, MAX_TEXT.id, "intent_id");
+    const objective = text(input.normalized_objective || input.normalizedObjective || thought, MAX_TEXT.objective);
+    await capture({
+      ...input,
+      intent_id: intentId,
+      statement: text(input.statement || thought, MAX_TEXT.statement),
+      normalized_objective: objective,
+      idempotency_key: `${key}:capture`,
+    });
+    await appendIntentEvent(intentId, {
+      ...input,
+      idempotency_key: `${key}:source`,
+    }, "intent.source_recorded", {
+      raw_text: raw,
+      source_digest: crypto.createHash("sha256").update(raw).digest("hex"),
+      revision: 1,
+      media_type: text(input.media_type || input.mediaType || "text/plain", 80),
+      source_ref: text(input.source_ref || input.sourceRef || input.transcript_ref || input.transcriptRef, 400),
+      provenance: input.provenance && typeof input.provenance === "object" ? input.provenance : {},
+    });
+    await transition(intentId, {
+      type: "intent.disambiguated",
+      idempotency_key: `${key}:clarified`,
+      constraints: input.constraints,
+      completion_criteria: input.completion_criteria || input.completionCriteria,
+    });
+    await transition(intentId, {
+      type: "intent.planned",
+      idempotency_key: `${key}:planned`,
+      next_step: input.next_step || input.nextStep || "Claim this intent and execute its first bounded next action.",
+    });
+    const state = await transition(intentId, {
+      type: "intent.execution_started",
+      idempotency_key: `${key}:active`,
+    });
+    return {
+      intent_id: intentId,
+      status: state.lifecycle_state,
+      confirmation: `Intent persisted: ${intentId}`,
+      context_packet: await contextPacket(intentId),
+    };
+  }
+
+  async function ingestMessage(input = {}) {
+    const raw = String(input.message || input.raw_text || input.rawText || "");
+    if (!raw.trim()) throw new Error("message is required");
+    if (raw.length > 64_000) throw new Error("message exceeds max length 64000");
+    const key = requireBoundedText(input.idempotency_key || input.idempotencyKey, 180, "idempotency_key");
+    const workspaceId = text(input.workspace_id || input.workspaceId || "default", 120) || "default";
+    const messageId = `message_${crypto.createHash("sha256").update(`${workspaceId}:${key}`).digest("hex").slice(0, 32)}`;
+    const streamId = `messages:${workspaceId}`;
+    const artifactContext = input.artifact_context || input.artifactContext || {};
+    const ingested = await appendMessageStreamEvent(streamId, "message.ingested", `message:${messageId}:ingested`, {
+      message_id: messageId,
+      workspace_id: workspaceId,
+      raw_text: raw,
+      source_digest: crypto.createHash("sha256").update(raw).digest("hex"),
+      source: input.source && typeof input.source === "object" ? input.source : {},
+      artifact_context: {
+        artifact_id: text(artifactContext.artifact_id || artifactContext.artifactId, MAX_TEXT.id),
+        version: text(artifactContext.version, MAX_TEXT.id),
+        ref: text(artifactContext.ref, MAX_TEXT.ref),
+      },
+    });
+    const routing = input.routing && typeof input.routing === "object" ? input.routing : {};
+    const action = String(routing.action || input.action || "observation").trim();
+    if (!MESSAGE_ROUTE_ACTIONS.has(action)) throw new Error(`unsupported message route action: ${action}`);
+    const targetIntentId = text(routing.intent_id || routing.intentId || input.intent_id || input.intentId, MAX_TEXT.id);
+    const routed = await appendMessageStreamEvent(streamId, "message.routed", `message:${messageId}:routed`, {
+      message_id: messageId,
+      ingested_event_id: ingested.event_id,
+      action,
+      intent_id: targetIntentId,
+      agent_id: text(routing.agent_id || routing.agentId, MAX_TEXT.id),
+      artifact_context: ingested.payload.artifact_context,
+      reason: text(routing.reason, MAX_TEXT.detail),
+      confidence: Math.max(0, Math.min(Number(routing.confidence || 0), 1)),
+      reversible: true,
+      supersedes_routing_event_id: text(routing.supersedes_routing_event_id || routing.supersedesRoutingEventId, MAX_TEXT.id),
+    });
+
+    let intent = null;
+    let packet = null;
+    if (["new_intent", "fork_intent"].includes(action)) {
+      const launched = await launch({
+        ...input,
+        message: raw,
+        idempotency_key: `${key}:intent`,
+        intent_id: targetIntentId || undefined,
+        parent_intent_id: action === "fork_intent" ? routing.parent_intent_id || routing.parentIntentId : undefined,
+        source_ref: `event://${ingested.event_id}`,
+      });
+      intent = await get(launched.intent_id);
+      packet = launched.context_packet;
+    } else if (action === "update_existing_intent") {
+      if (!targetIntentId) throw new Error("existing-intent route requires intent_id");
+      intent = await appendIntentEvent(targetIntentId, {
+        ...input,
+        idempotency_key: `${key}:intent-source`,
+      }, "intent.source_recorded", {
+        raw_text: raw,
+        source_digest: ingested.payload.source_digest,
+        revision: Number(input.revision || 1),
+        media_type: text(input.media_type || input.mediaType || "text/plain", 80),
+        source_ref: `event://${ingested.event_id}`,
+        provenance: { message_id: messageId, routing_event_id: routed.event_id },
+      });
+      packet = await contextPacket(targetIntentId);
+    }
+    return {
+      message_id: messageId,
+      ingested_event_id: ingested.event_id,
+      routing_event_id: routed.event_id,
+      route: action,
+      reversible: true,
+      intent_id: intent?.intent_id || targetIntentId || "",
+      context_packet: packet,
+      confirmation: intent ? `Message routed to intent ${intent.intent_id}` : "Message captured",
+    };
+  }
+
+  async function claim(intentId, input = {}) {
+    const safeIntentId = requireBoundedText(intentId, MAX_TEXT.id, "intent_id");
+    const rawKey = input.idempotency_key || input.idempotencyKey || "claim";
+    const claimKey = namespaceIdempotencyKey(safeIntentId, "run_claimed", rawKey);
+    if (await readIdempotentEvent(claimKey)) {
+      return rehydrateIntent(events, safeIntentId, input.limits || {});
+    }
+    const agentId = requireBoundedText(input.agent_id || input.agentId, MAX_TEXT.id, "agent_id");
+    const runId = requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id");
+    const leaseSeconds = Math.max(60, Math.min(Number(input.lease_seconds || input.leaseSeconds || 900), 86_400));
+    const leaseExpiresAt = new Date(Date.parse(currentIsoTime()) + leaseSeconds * 1_000).toISOString();
+    return appendIntentEvent(safeIntentId, input, "intent.run_claimed", {
+      agent_id: agentId,
+      run_id: runId,
+      lease_expires_at: leaseExpiresAt,
+    });
+  }
+
+  async function recordProgress(intentId, input = {}) {
+    const progress = text(input.progress, MAX_TEXT.note);
+    const nextStep = text(input.next_step || input.nextStep, MAX_TEXT.note);
+    const blockers = Array.isArray(input.blockers) ? input.blockers : [];
+    const evidenceRefs = normalizeRefs(input.evidence_refs || input.evidenceRefs);
+    const artifactRefs = normalizeRefs(input.artifact_refs || input.artifactRefs);
+    if (!progress && !nextStep && !blockers.length && !evidenceRefs.length && !artifactRefs.length) {
+      throw new Error("progress update must contain a meaningful change");
+    }
+    return appendIntentEvent(intentId, input, "intent.progress_recorded", {
+      agent_id: requireBoundedText(input.agent_id || input.agentId, MAX_TEXT.id, "agent_id"),
+      run_id: requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id"),
+      progress,
+      next_step: nextStep,
+      blockers,
+      evidence_refs: evidenceRefs,
+      artifact_refs: artifactRefs,
+    });
+  }
+
+  async function neglected(input = {}) {
+    const result = await list({
+      project_id: input.project_id || input.projectId || "",
+      lifecycle_state: input.lifecycle_state || input.lifecycleState || "active",
+      limit: input.limit || 100,
+    });
+    const threshold = Number(input.before_ms || input.beforeMs || Date.now());
+    const items = (result.items || []).filter((intent) => {
+      const lease = Date.parse(intent.run_lease_expires_at || "");
+      return !intent.current_run_id || !Number.isFinite(lease) || lease < threshold;
+    });
+    return { ...result, items, neglected_count: items.length };
+  }
+
   return {
     capture,
     transition,
@@ -478,6 +759,12 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     get,
     list,
     rehydrate,
+    contextPacket,
+    launch,
+    ingestMessage,
+    claim,
+    recordProgress,
+    neglected,
     limits: {
       list_page_size: 500,
       default_rehydrate_event_limit: MAX_MUTATION_EVENT_LIMIT,

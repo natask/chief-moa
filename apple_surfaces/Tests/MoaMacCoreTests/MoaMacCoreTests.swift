@@ -27,6 +27,38 @@ private let process = ProcessIdentity(bundleID: "com.example.Editor", pid: 42, p
     #expect(throws: MoaMacError.invalidDestination) { try DestinationPolicy.endpoint(origin: URL(string: "https://moa.example/other")!) }
 }
 
+@Test func chatRequestIsBoundedCanonicalAndContainsNoScreenEvidence() throws {
+    let request = try GatewayChatRequest(origin: URL(string: "https://moa.example")!, sessionID: "mac-test", prompt: "  Help me plan this  ")
+    #expect(request.endpoint.absoluteString == "https://moa.example/v1/chat")
+    let raw = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+    #expect(raw["source"] as? String == "moa-macos")
+    #expect(raw["session_id"] as? String == "mac-test")
+    #expect(raw["screen"] == nil)
+    #expect(raw["ax"] == nil)
+    let messages = try #require(raw["messages"] as? [[String: String]])
+    #expect(messages == [["role": "user", "content": "Help me plan this"]])
+    #expect(throws: MoaMacError.invalidDestination) {
+        try GatewayChatRequest(origin: URL(string: "https://moa.example/v1/chat")!, sessionID: "mac-test", prompt: "hello")
+    }
+    #expect(throws: GatewayChatError.emptyPrompt) {
+        try GatewayChatRequest(origin: URL(string: "https://moa.example")!, sessionID: "mac-test", prompt: "   ")
+    }
+    #expect(throws: GatewayChatError.promptTooLarge) {
+        try GatewayChatRequest(origin: URL(string: "https://moa.example")!, sessionID: "mac-test", prompt: String(repeating: "a", count: GatewayChatRequest.maximumPromptBytes + 1))
+    }
+}
+
+@Test func chatReplyIsInertAndBounded() throws {
+    let safe = Data(#"{"text":"Review this first","context":{"action":"continue","branch_id":"default","persisted":true}}"#.utf8)
+    #expect(try GatewayChatReplyDecoder.decode(safe) == GatewayChatReply(text: "Review this first"))
+    let withProposal = Data(#"{"text":"Review this first","actions":[{"kind":"press"}]}"#.utf8)
+    #expect(try GatewayChatReplyDecoder.decode(withProposal) == GatewayChatReply(text: "Review this first"))
+    #expect(throws: GatewayChatError.invalidResponse) { try GatewayChatReplyDecoder.decode(Data(#"{"actions":[]}"#.utf8)) }
+    #expect(throws: GatewayChatError.responseTooLarge) {
+        try GatewayChatReplyDecoder.decode(Data(repeating: 0x20, count: GatewayChatReplyDecoder.maximumResponseBytes + 1))
+    }
+}
+
 @Test func boundsRedactAndTruncate() throws {
     let nodes = (0..<150).map { AXNode(id: "n\($0)", parentID: nil, role: "AXTextField", subrole: nil, label: $0 == 0 ? "password secret" : String(repeating: "é", count: 300), enabled: true, focused: false, actions: ["AXPress"]) }
     let result = ObservationBounds.snapshot(nodes); #expect(result.nodes.count <= 128); #expect(result.truncated); #expect(result.nodes[0].label == nil); #expect((result.nodes[1].label?.utf8.count ?? 0) <= 256)
@@ -157,15 +189,50 @@ func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
 }
 
 #if os(macOS)
+private struct StaticConnectionStore: GatewayConnectionStore {
+    let origin: String
+    func loadOrigin() -> String { origin }
+    func loadSessionID() -> String { "mac-test-session" }
+    func saveOrigin(_ origin: String) throws {}
+}
+
+private actor FakeChatSender: GatewayChatSending {
+    private(set) var bodies: [Data] = []
+    func send(_ request: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply {
+        bodies.append(request.body)
+        return GatewayChatReply(text: "A bounded reply")
+    }
+}
+
+@MainActor @Test func commandModelSendsOneInertTurnAndPreservesGatewayOnlyBoundary() async throws {
+    let sender = FakeChatSender()
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: sender)
+    #expect(model.token.isEmpty)
+    model.token = "gateway-token"
+    #expect(model.isConfigured)
+    model.prompt = "Help with this"
+    await model.submit()
+    #expect(model.reply == "A bounded reply")
+    #expect(model.prompt.isEmpty)
+    #expect(model.status == "Reply received")
+    let bodies = await sender.bodies
+    #expect(bodies.count == 1)
+    let bodyText = String(decoding: try #require(bodies.first), as: UTF8.self)
+    #expect(!bodyText.contains("screen"))
+    #expect(!bodyText.contains("gateway-token"))
+    _ = CommandPaletteView(model: model).body
+}
+
 @MainActor @Test func macShellSafeStoppedControlsRemainInert() async {
     let model = SurfaceModel()
+    #expect(model.token.isEmpty)
     #expect(model.paused)
     model.resume()
     await model.pause()
     await model.stop()
     model.selectFrontmost()
     await model.start()
-    _ = StatusView().body
+    _ = StatusView(model: model).body
 }
 
 
@@ -230,8 +297,8 @@ func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
     let identity = ProcessIdentity(bundleID: "test.coverage", pid: ProcessInfo.processInfo.processIdentifier,
                                    processStart: NSRunningApplication.current.launchDate ?? now, signingIdentity: "test:coverage")
     let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App")
-    model.saveToken()
-    #expect(model.status == "Token save failed")
+    model.useConnectionForSession()
+    #expect(model.status == "Session connection validation failed")
     model.mode = .askEachTime
     model.origin = "http://not-loopback.example"
     await model.start()
@@ -241,5 +308,38 @@ func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
     try await Task.sleep(for: .milliseconds(450))
     await model.stop()
     #expect(model.paused)
+    #expect(model.token.isEmpty)
+}
+
+@MainActor @Test func sessionCredentialIsMemoryOnlyAndClearsOnDisconnect() async {
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender())
+    #expect(model.token.isEmpty)
+    model.token = "temporary-token"
+    #expect(model.useConnectionForSession())
+    await model.disconnect()
+    #expect(model.token.isEmpty)
+    let replacement = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender())
+    #expect(replacement.token.isEmpty)
+}
+
+@Test func runnableAppleSourcesForbidCredentialPersistenceAPIs() throws {
+    let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    let package = tests.deletingLastPathComponent().deletingLastPathComponent()
+    let roots = ["Sources", "Resources", "scripts"].map { package.appendingPathComponent($0) }
+    let forbidden = [
+        ["Sec", "Item"].joined(),
+        ["Keychain", "Token"].joined(),
+        ["app", ".agee", ".moa-mac", ".gateway"].joined(),
+        ["generic", "-password"].joined(),
+    ]
+    for root in roots {
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
+        for case let file as URL in enumerator where file.hasDirectoryPath == false {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for pattern in forbidden {
+                #expect(!text.contains(pattern), "Forbidden credential persistence API in \(file.path)")
+            }
+        }
+    }
 }
 #endif

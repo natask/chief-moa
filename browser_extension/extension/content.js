@@ -92,7 +92,7 @@
   // Mascot scale: one root scalar (font-size px on #agee-launcher) drives the
   // hit circle, the lion and every animation distance. Scroll on the lion
   // adjusts it; the value persists like the launcher position does.
-  const MASCOT_FONT_DEFAULT = 26;
+  const MASCOT_FONT_DEFAULT = 22;
   const MASCOT_FONT_MIN = 12;
   const MASCOT_FONT_MAX = 72;
   const MASCOT_SCALE_SAVE_DEBOUNCE_MS = 350;

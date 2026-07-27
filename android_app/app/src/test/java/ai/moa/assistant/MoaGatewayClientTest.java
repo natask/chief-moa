@@ -49,6 +49,7 @@ public final class MoaGatewayClientTest {
 
         assertEquals("hello back", response.text);
         assertEquals("conversation-1", response.conversationId);
+        assertEquals("branch-follow-up", response.branchId);
         assertEquals("POST", requests.get(0).method);
         assertEquals("/v1/chat", requests.get(0).path);
         assertEquals("Bearer secret-token", requests.get(0).authorization);
@@ -235,7 +236,7 @@ public final class MoaGatewayClientTest {
         }
 
         if ("/v1/chat".equals(request.path)) {
-            return new TestResponse(200, "{\"conversation_id\":\"conversation-1\",\"text\":\"hello back\"}");
+            return new TestResponse(200, "{\"conversation_id\":\"conversation-1\",\"text\":\"hello back\",\"context\":{\"branch_id\":\"branch-follow-up\"}}");
         } else if ("/v1/voice/turns".equals(request.path)) {
             return new TestResponse(200, "{\"classification\":\"control\",\"text\":\"\",\"actions\":[{\"type\":\"control\",\"name\":\"stop\"}]}");
         } else if ("/v1/agent/runs".equals(request.path) && "GET".equals(request.method)) {

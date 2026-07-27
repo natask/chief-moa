@@ -118,7 +118,8 @@ public final class MoaRibbonPresenceTest {
 
     @Test
     public void companionIsNearlyInvisibleAtRestAndFullyLitWhenTouched() {
-        assertEquals(0.18f, MoaRibbonPresence.companionAlpha(MoaRibbonPresence.State.DORMANT), 0.001f);
+        assertEquals(MoaOrbPresentation.IDLE_ALPHA,
+                MoaRibbonPresence.companionAlpha(MoaRibbonPresence.State.DORMANT), 0.001f);
         assertEquals(0.92f, MoaRibbonPresence.companionAlpha(MoaRibbonPresence.State.AMBIENT), 0.001f);
         assertEquals(1f, MoaRibbonPresence.companionAlpha(MoaRibbonPresence.State.ENGAGED), 0f);
         assertEquals(1f, MoaRibbonPresence.companionAlpha(MoaRibbonPresence.State.DRAGGING), 0f);

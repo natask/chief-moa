@@ -96,6 +96,8 @@ const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
 const { createSemanticTelemetryStore, opaqueLifecycleId } = require("./lib/semantic-telemetry-store");
 const { createIntentRuntime } = require("./lib/intent-runtime");
 const { createIntentWorkflow } = require("./lib/intent-workflow");
+const { createIntentPlane } = require("./lib/intent-plane");
+const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -668,6 +670,10 @@ const semanticTelemetry = createSemanticTelemetryStore({
 // can be linked to tasks and inert queued proposals in one idempotent workflow.
 const intentRuntime = createIntentRuntime({ events: eventSubstrate });
 const intentWorkflow = createIntentWorkflow({ intentRuntime, workHistory });
+const intentPlane = createIntentPlane({ events: eventSubstrate });
+const { routeIntentPlane } = createIntentPlaneHandlers({
+  plane: intentPlane, readJsonBody, sendJson, cleanError,
+});
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
   intentWorkflow,
@@ -1013,6 +1019,17 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const handled = await routeIntentRuntime(request, response, url);
+      if (handled) return;
+    }
+
+    // Shared Chief Moa persistent intent/agent projection. All first-class
+    // surfaces consume this authenticated gateway route; it executes no work.
+    if (url.pathname.startsWith("/v1/intent-plane")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const handled = await routeIntentPlane(request, response, url);
       if (handled) return;
     }
 
@@ -2208,6 +2225,24 @@ async function routeIntentRuntime(request, response, url) {
       sendJson(response, 201, { intent: await intentRuntime.capture(body) });
       return true;
     }
+    if (method === "POST" && pathname === "/v1/intent-runtime/launch") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, await intentRuntime.launch(body));
+      return true;
+    }
+    if (method === "POST" && pathname === "/v1/intent-runtime/messages") {
+      const body = await readJsonBody(request);
+      sendJson(response, 201, await intentRuntime.ingestMessage(body));
+      return true;
+    }
+    if (method === "GET" && pathname === "/v1/intent-runtime/neglected") {
+      sendJson(response, 200, await intentRuntime.neglected({
+        project_id: url.searchParams.get("project_id") || "",
+        before_ms: url.searchParams.get("before_ms") || undefined,
+        limit: url.searchParams.get("limit") || undefined,
+      }));
+      return true;
+    }
     if (method === "GET" && pathname === "/v1/intent-runtime/intents") {
       const intents = await intentRuntime.list({
         project_id: url.searchParams.get("project_id") || "",
@@ -2234,7 +2269,7 @@ async function routeIntentRuntime(request, response, url) {
       sendJson(response, 200, await intentRuntime.rehydrate(body));
       return true;
     }
-    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery))?$/);
+    const intentMatch = pathname.match(/^\/v1\/intent-runtime\/intents\/([^/]+)(?:\/(transition|connect|complete|delivery|context-packet|claim|progress))?$/);
     if (intentMatch) {
       const intentId = decodeURIComponent(intentMatch[1]);
       const action = intentMatch[2] || "";
@@ -2254,6 +2289,25 @@ async function routeIntentRuntime(request, response, url) {
           return true;
         }
         sendJson(response, 200, { delivery });
+        return true;
+      }
+      if (method === "GET" && action === "context-packet") {
+        const packet = await intentRuntime.contextPacket(intentId);
+        if (!packet) {
+          sendJson(response, 404, { error: "intent not found" });
+          return true;
+        }
+        sendJson(response, 200, { context_packet: packet });
+        return true;
+      }
+      if (method === "POST" && action === "claim") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.claim(intentId, body) });
+        return true;
+      }
+      if (method === "POST" && action === "progress") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { intent: await intentRuntime.recordProgress(intentId, body) });
         return true;
       }
       if (method === "POST" && action === "transition") {
@@ -5873,6 +5927,7 @@ function createAgentRun(body) {
     source: String(body.source || "unknown").slice(0, 80),
     conversation_id: body.conversation_id ? sanitizeId(body.conversation_id) : "",
     branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default",
+    intent_id: body.intent_id ? sanitizeOptionalBlankId(body.intent_id) : "",
     turn_id: body.turn_id ? sanitizeOptionalBlankId(body.turn_id) : "",
     broker_event_id: body.broker_event_id ? sanitizeOptionalBlankId(body.broker_event_id) : "",
     route_decision_id: body.route_decision_id ? sanitizeOptionalBlankId(body.route_decision_id) : "",

@@ -229,3 +229,15 @@
       hangover so quiet technical-phrase tails and spelled acronyms are retained.
 - [ ] 19.4 Verify identical browser PCM against the pre-change and candidate
       capture paths, then run one real browser turn before promotion.
+
+## 20. Partial hosted-speech recovery
+
+- [x] 20.1 Add explicit complete/partial/failed/not-requested TTS delivery
+      metadata to streamed assistant-audio completion and `turn_done`.
+- [x] 20.2 Add an idempotent same-socket `retry_tts` request that synthesizes
+      only the stored assistant-text suffix and does not rerun reasoning.
+- [x] 20.3 Add deterministic coverage where the second TTS segment fails after
+      the first is emitted, then prove suffix recovery and duplicate retry
+      suppression.
+- [ ] 20.4 Run an isolated real-provider preview and real Android playback QA
+      before active promotion.

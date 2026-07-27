@@ -11,6 +11,13 @@ The Android app SHALL provide an overlay control that remains available above ot
 - **WHEN** the user leaves the Moa app
 - **THEN** the assistant orb remains available without opening the full Moa app
 
+#### Scenario: Multiple launch paths target the running overlay
+- **WHEN** the app, assistant intent, or quick tile starts the overlay while it
+  is already active
+- **THEN** Android keeps one overlay service owner and one orb window
+- **AND** routes the new invocation to that existing owner instead of attaching
+  another orb
+
 ### Requirement: Tap-Based Voice Loop
 The overlay SHALL make the primary voice loop available through simple orb gestures.
 
@@ -49,30 +56,33 @@ earbud or headset buttons.
 - **WHEN** Android launches Moa through `android.intent.action.ASSIST` or
   `android.intent.action.VOICE_ASSIST`
 - **THEN** the app starts the overlay service
-- **AND** begins a voice turn when overlay and microphone permissions are
+- **AND** begins one latched manual voice turn when overlay and microphone permissions are
   available
+- **AND** does not submit on silence or automatically re-arm after a reply
 
 #### Scenario: Launch from earbud voice command action
 - **WHEN** Android launches Moa through `android.intent.action.VOICE_COMMAND`
   from an earbud or headset assistant gesture
 - **THEN** the app starts the overlay service
-- **AND** begins a voice turn using the same overlay transcript path as an orb
-  tap
+- **AND** begins a latched manual voice turn using the same overlay transcript
+  path as an orb tap
 
-#### Scenario: Assistant launch keeps listening after replies
-- **WHEN** Android launches Moa through an assistant or voice-command action
-  and the spoken response finishes
-- **THEN** the current response card clears
-- **AND** the overlay starts the next listening turn without requiring a new
-  assistant-button launch
-- **AND** a user stop gesture cancels the continuous loop locally
+#### Scenario: Repeated invocation commits the latched turn
+- **WHEN** an assistant-, voice-command-, or launcher-started voice turn is active
+- **AND** the user invokes the same entry again or single-clicks the orb
+- **THEN** Android commits that turn exactly once
+- **AND** does not re-arm the microphone after the reply
+
+#### Scenario: Hold remains push-to-talk after invocation
+- **WHEN** an invocation-started manual turn is active and the user holds the orb
+- **THEN** Android replaces it locally with push-to-talk capture
+- **AND** release commits the push-to-talk turn exactly once
 
 #### Scenario: Assistant launch before required permissions
 - **WHEN** Android launches Moa through an assistant or voice-command action
   before overlay or microphone permission is available
-- **THEN** the app opens the setup surface
-- **AND** preserves the user's intent to start the overlay after permissions are
-  granted
+- **THEN** the app shows a bounded permission hint without pretending capture
+  started
 
 #### Scenario: Media button is not an assistant command
 - **WHEN** a normal headset media play/pause button is routed to the active media
@@ -96,6 +106,21 @@ The Android app SHALL show current speech text while the user is speaking.
 - **THEN** the visible user transcript fades out
 - **AND** the assistant response appears in the same compact voice surface
 - **AND** previous voice-turn messages are not shown in that surface
+
+### Requirement: Launcher Opens The Overlay
+The normal Android launcher entry SHALL invoke the same single overlay voice
+surface as Android Assistant rather than opening the full control center.
+
+#### Scenario: User taps the app icon
+- **WHEN** the required overlay and microphone permissions are available and the
+  user taps the A.G. launcher icon
+- **THEN** Android starts or reuses the one overlay service
+- **AND** starts or commits the current latched manual turn
+- **AND** does not render `MainActivity`
+
+### Requirement: Recoverable Voice Failure
+Unexpected voice failures SHALL remain recoverable from the compact voice
+surface without reviving an intentionally superseded session.
 
 #### Scenario: Unexpected voice failure is recoverable
 - **WHEN** an active voice turn fails unexpectedly
@@ -190,10 +215,16 @@ The Android overlay SHALL provide discoverable local ways to remove the orb.
 The Android overlay SHALL remain available without visually dominating the
 current app.
 
-#### Scenario: Idle orb is barely visible
+#### Scenario: Idle orb stays visible without dominating the screen
 - **WHEN** the orb is idle and not touched
-- **THEN** Android renders it at approximately ten percent opacity
+- **THEN** Android renders the default orb at seventy percent of its 96dp base
+  window and approximately thirty percent opacity
 - **AND** pressing or dragging the orb restores full opacity for the gesture
+
+#### Scenario: User changes orb size
+- **WHEN** the user changes the orb-size setting while the overlay is active
+- **THEN** Android resizes the existing orb window without creating a second one
+- **AND** updates its drag bounds and anchored card placement for the new size
 
 ### Requirement: Stable Scrollable Voice Transcript
 The Android overlay SHALL give the voice transcript a stable viewport instead

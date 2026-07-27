@@ -6,7 +6,7 @@ const PAGE_TOOLS = new Set([
 ]);
 
 function createBrowserAutomationRuntime({
-  chromeApi, allowedUrl, activeTab, snapshot, captureScreenshot, act, screenFromSnapshot,
+  chromeApi, allowedUrl, authorizeUrl, activeTab, snapshot, captureScreenshot, act, screenFromSnapshot,
   maxScreenshotChars, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   async function execute(request) {
@@ -19,8 +19,13 @@ function createBrowserAutomationRuntime({
   }
 
   async function navigate(tool, input) {
-    const url = allowedUrl(input.url || input.href || input.target);
-    if (!url) return failure(tool, "blocked or invalid browser.navigate URL", "Browser navigation request was blocked.");
+    const rawUrl = input.url || input.href || input.target;
+    const authorization = authorizeUrl ? await authorizeUrl(rawUrl) : { ok: Boolean(allowedUrl(rawUrl)), url: allowedUrl(rawUrl) };
+    if (!authorization.ok) {
+      return failure(tool, authorization.error || "blocked or invalid browser.navigate URL",
+        authorization.instruction || "Browser navigation request was blocked.", { file_access: authorization.file_access || null });
+    }
+    const url = authorization.url;
     const requestedTabId = Number(input.tab_id ?? input.tabId);
     let tab;
     if (input.new_tab === true || input.newTab === true) {

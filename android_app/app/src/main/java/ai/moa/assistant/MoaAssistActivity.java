@@ -50,7 +50,6 @@ public final class MoaAssistActivity extends Activity {
     private void startVoiceService() {
         Intent service = new Intent(this, OverlayService.class);
         service.setAction(OverlayService.ACTION_ASSIST_BUTTON);
-        service.putExtra(OverlayService.EXTRA_START_VOICE, true);
         Log.i(TAG, "startVoiceService action=" + service.getAction());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(service);

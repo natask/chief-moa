@@ -49,7 +49,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private final WindowManager.LayoutParams orbParams;
     // The live orb window size in pixels. It changes with the user's scale
     // pref, so it is stored as already-resolved pixels, not a dp base.
-    private final int orbWindowPx;
+    private final int fallbackOrbWindowPx;
     private final int edgeMarginDp;
     private final Runnable onSingleTap;
     private final Runnable onDoublePressStart;
@@ -127,7 +127,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     ) {
         this.context = context;
         this.orbParams = orbParams;
-        this.orbWindowPx = orbWindowPx;
+        this.fallbackOrbWindowPx = orbWindowPx;
         this.edgeMarginDp = edgeMarginDp;
         this.onSingleTap = onSingleTap;
         this.onDoublePressStart = onDoublePressStart;
@@ -155,10 +155,10 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
             view.animate().cancel();
-            view.setAlpha(MoaRibbonTokens.COMPANION_ENGAGED_ALPHA);
+            view.setAlpha(1f);
             gestureUsesVoiceFirst = voiceFirstEnabled != null && voiceFirstEnabled.getAsBoolean();
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-            view.animate().alpha(MoaRibbonTokens.COMPANION_DORMANT_ALPHA).setDuration(180).start();
+            view.animate().alpha(MoaOrbPresentation.IDLE_ALPHA).setDuration(180).start();
         }
         if (gestureUsesVoiceFirst) {
             return onTouchVoiceFirst(view, event);
@@ -489,7 +489,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
 
     private int clampOrbX(int value) {
         int margin = dp(edgeMarginDp);
-        int max = context.getResources().getDisplayMetrics().widthPixels - orbWindowPx - margin;
+        int max = context.getResources().getDisplayMetrics().widthPixels - currentOrbWindowPx() - margin;
         return Math.max(margin, Math.min(value, max));
     }
 
@@ -502,8 +502,12 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
 
     private int clampOrbY(int value) {
         int margin = dp(edgeMarginDp);
-        int max = context.getResources().getDisplayMetrics().heightPixels - orbWindowPx - margin;
+        int max = context.getResources().getDisplayMetrics().heightPixels - currentOrbWindowPx() - margin;
         return Math.max(margin, Math.min(value, max));
+    }
+
+    private int currentOrbWindowPx() {
+        return orbParams.width > 0 ? orbParams.width : fallbackOrbWindowPx;
     }
 
     private int dp(int value) {

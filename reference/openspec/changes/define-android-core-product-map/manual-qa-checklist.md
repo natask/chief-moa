@@ -6,10 +6,19 @@
 - Launch Moa and grant overlay permission.
 - Grant microphone permission.
 - Start the assistant circle.
+- Start it again from the app, assistant entry point, and quick tile.
+- Confirm every invocation reuses the same single orb instead of adding another
+  overlay instance.
+- Confirm the default orb is about 67dp (70% of the 96dp base) and remains
+  readable at 30% idle opacity.
+- Change Orb size in the full app while the overlay is running.
+- Confirm the existing orb resizes immediately and remains inside the display.
 - Single tap the orb.
 - Confirm the chat menu opens for typed input.
 - Press and hold the orb, drag it to a new spot, and release.
 - Confirm the orb moves without opening the transcript overlay or chat menu.
+- Confirm hold-drag and drag-to-remove still work at the smaller default size
+  and after changing the size.
 - Double-click and hold the orb, speak a short request, and release.
 - Confirm release submits the turn without waiting for extra silence.
 - Confirm the transcript appears in the overlay/panel history.

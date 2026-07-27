@@ -75,6 +75,11 @@ final class MoaContextControlState {
         return value + NOT_SAVED_SUFFIX;
     }
 
+    static boolean requiresExactBoundary(JSONObject body) {
+        String action = body == null ? "" : safe(body.optString("context_action", ""));
+        return "new".equals(action) || "fork".equals(action) || "incognito".equals(action);
+    }
+
     private static String safe(String value) {
         return value == null ? "" : value.trim();
     }
