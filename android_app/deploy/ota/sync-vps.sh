@@ -20,6 +20,7 @@ LOCAL_OTA_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/gateway/data/android-ota}"
 HOST="${MOA_VPS_SSH:-}"
 # Host-side path of the gateway container's /data named volume.
 REMOTE_OTA_DIR="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
+REMOTE_PUBLIC_GATEWAY_URL="${MOA_VPS_PUBLIC_GATEWAY_URL:-}"
 SNAPSHOT_RETENTION="${MOA_OTA_SNAPSHOT_RETENTION:-5}"
 
 while [ $# -gt 0 ]; do
@@ -61,6 +62,10 @@ if [[ ! "$REMOTE_OTA_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] \
   || [[ "$REMOTE_OTA_DIR" == */.. ]] \
   || [[ "$REMOTE_OTA_DIR" == */. ]]; then
   echo "The remote OTA directory must be a normalized absolute path." >&2
+  exit 1
+fi
+if [[ ! "$REMOTE_PUBLIC_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "MOA_VPS_PUBLIC_GATEWAY_URL must be an HTTPS origin without a path." >&2
   exit 1
 fi
 if [[ ! "$SNAPSHOT_RETENTION" =~ ^[0-9]+$ ]] \
@@ -654,7 +659,8 @@ fi
 # gateway container and is never printed by this script or the remote verifier.
 if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" bash -s -- \
   "$REMOTE_OTA_DIR" verify-public "$RELEASE_ID" "$APK_SHA256" "$APK_SIZE" \
-  "$APP_ID" "$VERSION_CODE" "$VERSION_NAME" "$GIT_SHA" >/dev/null 2>&1 <<'REMOTE_PUBLIC_VERIFY'
+  "$APP_ID" "$VERSION_CODE" "$VERSION_NAME" "$GIT_SHA" \
+  "$REMOTE_PUBLIC_GATEWAY_URL" >/dev/null 2>&1 <<'REMOTE_PUBLIC_VERIFY'
 set -euo pipefail
 root="$1"
 phase="$2"
@@ -665,6 +671,7 @@ app_id="$6"
 version_code="$7"
 version_name="$8"
 git_sha="$9"
+public_gateway_url="${10}"
 [ "$phase" = verify-public ] || exit 1
 [[ "$root" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
 [[ "$release_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || exit 1
@@ -674,6 +681,7 @@ git_sha="$9"
 [[ "$version_code" =~ ^[0-9]+$ ]] || exit 1
 [[ "$version_name" =~ ^[A-Za-z0-9._+-]+$ ]] || exit 1
 [[ "$git_sha" =~ ^[A-Za-z0-9._-]+$ ]] || exit 1
+[[ "$public_gateway_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || exit 1
 
 container_ids="$(docker ps \
   --filter label=com.docker.compose.project=chief-moa \
@@ -685,11 +693,11 @@ gateway_container="$(printf '%s\n' "$container_ids" | sed -n '1p')"
 
 docker exec -i "$gateway_container" node - \
   "$release_id" "$apk_sha" "$apk_size" "$app_id" "$version_code" \
-  "$version_name" "$git_sha" <<'REMOTE_PUBLIC_NODE'
+  "$version_name" "$git_sha" "$public_gateway_url" <<'REMOTE_PUBLIC_NODE'
 const crypto = require("node:crypto");
-const [releaseId, apkSha, apkSizeText, appId, versionCodeText, versionName, gitSha] =
+const [releaseId, apkSha, apkSizeText, appId, versionCodeText, versionName, gitSha, publicGatewayUrl] =
   process.argv.slice(2);
-const base = String(process.env.PUBLIC_GATEWAY_URL || "").replace(/\/+$/, "");
+const base = String(publicGatewayUrl || "").replace(/\/+$/, "");
 const token = process.env.MOA_GATEWAY_TOKEN;
 if (!/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]+)?$/.test(base) || !token) process.exit(1);
 const headers = { authorization: `Bearer ${token}` };

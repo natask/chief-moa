@@ -198,6 +198,7 @@ run_sync_with_host() {
     OTA_MODULE_DIR="$ROOT_DIR/gateway/lib" \
     ANDROID_OTA_OUT_DIR="$local_dir" \
     MOA_VPS_OTA_DIR="$remote_dir" \
+    MOA_VPS_PUBLIC_GATEWAY_URL="https://api.example.invalid" \
     MOA_OTA_SKIP_BUILD=1 \
     MOA_OTA_SNAPSHOT_RETENTION=5 \
     "$@" \

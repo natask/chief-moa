@@ -126,6 +126,7 @@ deploy_android() {
   # OTA hosting moved to the VPS gateway (api.agee.app); the main machine is
   # decommissioned. The target is non-secret; SSH still owns authentication.
   if ! MOA_VPS_SSH="$vps_target" \
+    MOA_VPS_PUBLIC_GATEWAY_URL="$GATEWAY_URL" \
     ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
     bash "$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"; then
     log "android: OTA publication or public verification failed; not marking Android deployed"

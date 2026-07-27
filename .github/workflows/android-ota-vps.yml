@@ -348,6 +348,7 @@ jobs:
         env:
           VPS_SSH_TARGET: ${{ secrets.VPS_SSH_TARGET }}
           VPS_ANDROID_OTA_DIR: ${{ secrets.VPS_ANDROID_OTA_DIR }}
+          VPS_PUBLIC_GATEWAY_URL: ${{ secrets.VPS_PUBLIC_GATEWAY_URL }}
         run: |
           set -euo pipefail
           if ! sha256sum --check --status <(printf '%s  %s\n' \
@@ -359,6 +360,7 @@ jobs:
           if ! MOA_OTA_SKIP_BUILD=1 \
             MOA_VPS_SSH="$VPS_SSH_TARGET" \
             MOA_VPS_OTA_DIR="$VPS_ANDROID_OTA_DIR" \
+            MOA_VPS_PUBLIC_GATEWAY_URL="$VPS_PUBLIC_GATEWAY_URL" \
             bash android_app/deploy/ota/sync-vps.sh >"$RUNNER_TEMP/android-ota-sync.log" 2>&1; then
             echo "Android OTA VPS sync failed; output withheld because it may contain target details." >&2
             exit 1
