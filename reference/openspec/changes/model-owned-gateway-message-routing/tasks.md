@@ -11,5 +11,5 @@
       route proposal.
 - [ ] Replace explicit companion-creation parameter heuristics with structured
       model tool parameters.
-- [ ] Run `cd gateway && npm run check`.
-
+- [x] Run `cd gateway && npm run check`.
+- [ ] Run a live-model tool-call evaluation before promotion.
