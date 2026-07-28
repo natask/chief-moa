@@ -42,8 +42,8 @@ if [ "$phase" = ack ] && [ "${FAKE_SSH_FAIL_ACK_BEFORE:-0}" = 1 ]; then
   exit 255
 fi
 if [ "$phase" = verify-public ]; then
-  [ "${FAKE_PUBLIC_VERIFY_FAIL:-0}" != 1 ] || exit 78
-  exit 0
+  /bin/bash -s -- "$@"
+  exit $?
 fi
 /bin/bash -s -- "$@"
 status=$?
@@ -110,6 +110,48 @@ if [ "${FAKE_RSYNC_CORRUPT:-0}" = 1 ] && [[ "$remote_path" == */release/ ]]; the
 fi
 FAKE_RSYNC
 
+cat > "$FAKE_BIN/docker" <<'FAKE_DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+canonical_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+worker_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+printf 'docker %s\n' "$*" >> "$FAKE_CALL_LOG"
+if [ "${1:-}" = ps ]; then
+  [ "${FAKE_DOCKER_MISLABELED_WORKER:-0}" = 1 ] && printf '%s\n' "$worker_id"
+  printf '%s\n' "$canonical_id"
+  exit 0
+fi
+if [ "${1:-}" = compose ]; then
+  expected=(-p chief-moa -f /opt/chief-moa/app/docker-compose.yml -f /opt/chief-moa/app/docker-compose.vps.yml --env-file /opt/chief-moa/gateway.env ps -q gateway)
+  shift
+  [ "$#" -eq "${#expected[@]}" ] || exit 81
+  for expected_arg in "${expected[@]}"; do
+    [ "$1" = "$expected_arg" ] || exit 82
+    shift
+  done
+  case "${FAKE_COMPOSE_GATEWAY_IDS:-one}" in
+    one) printf '%s\n' "$canonical_id" ;;
+    zero) ;;
+    multiple) printf '%s\n%s\n' "$canonical_id" cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc ;;
+    invalid) printf '%s\n' not-a-container-id ;;
+    *) exit 83 ;;
+  esac
+  exit 0
+fi
+if [ "${1:-}" = exec ]; then
+  shift
+  [ "${1:-}" = -i ] || exit 84
+  shift
+  printf 'docker-exec-container %s\n' "${1:-}" >> "$FAKE_CALL_LOG"
+  [ "${1:-}" = "$canonical_id" ] || exit 85
+  [ "${FAKE_PUBLIC_VERIFY_FAIL:-0}" != 1 ] || exit 78
+  # Consume the inline Node verifier without running it or exposing a token.
+  /bin/cat >/dev/null
+  exit 0
+fi
+exit 86
+FAKE_DOCKER
+
 # macOS lacks GNU mv -T. The fake remote needs only its replace-destination
 # semantics so the production script can be exercised without weakening it.
 cat > "$FAKE_BIN/mv" <<'FAKE_MV'
@@ -157,7 +199,7 @@ if [ "${1:-}" = -f ]; then shift; fi
 exit 0
 FAKE_SYNC
 
-chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/rsync" "$FAKE_BIN/mv" "$FAKE_BIN/sha256sum" "$FAKE_BIN/sync"
+chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/rsync" "$FAKE_BIN/docker" "$FAKE_BIN/mv" "$FAKE_BIN/sha256sum" "$FAKE_BIN/sync"
 
 publish_release() {
   local dir="$1"
@@ -399,6 +441,39 @@ run_sync "$local_dir" "$remote_dir" "$case_dir/retry-output"
 [ -f "$remote_dir/releases/ai.moa.assistant-16/moa-assistant.apk" ]
 assert_no_target_leak "$case_dir/retry-output" "$remote_dir"
 
+# Compose service resolution ignores a worker carrying spoofed broad labels and
+# executes the verifier only in the canonical gateway returned by `compose ps`.
+case_dir="$TMP_DIR/public-compose-canonical"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$local_dir" 134 '2026-07-03T00:00:00Z' local-134
+: > "$FAKE_CALL_LOG"
+run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+  FAKE_DOCKER_MISLABELED_WORKER=1
+grep -Fq 'docker compose -p chief-moa -f /opt/chief-moa/app/docker-compose.yml -f /opt/chief-moa/app/docker-compose.vps.yml --env-file /opt/chief-moa/gateway.env ps -q gateway' "$FAKE_CALL_LOG"
+grep -Fq 'docker-exec-container aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$FAKE_CALL_LOG"
+if grep -Fq 'docker ps ' "$FAKE_CALL_LOG"; then exit 1; fi
+[ ! -e "$remote_dir/.publish-lock" ]
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# Zero, multiple, and malformed Compose gateway results all fail closed after
+# commit, retaining the durable publication lock for exact retry.
+for compose_result in zero multiple invalid; do
+  case_dir="$TMP_DIR/public-compose-$compose_result"
+  local_dir="$case_dir/local"
+  remote_dir="$case_dir/remote"
+  mkdir -p "$local_dir" "$remote_dir"
+  publish_release "$local_dir" 135 '2026-07-04T00:00:00Z' "local-135-$compose_result"
+  : > "$FAKE_CALL_LOG"
+  if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+    FAKE_COMPOSE_GATEWAY_IDS="$compose_result"; then exit 1; fi
+  [ -f "$remote_dir/.publish-lock/published.receipt" ]
+  grep -Fq 'authenticated public manifest/APK verification failed' "$case_dir/output"
+  if grep -Fq 'docker-exec-container ' "$FAKE_CALL_LOG"; then exit 1; fi
+  assert_no_target_leak "$case_dir/output" "$remote_dir"
+done
+
 # Public verification happens after the atomic commit but before ACK cleanup.
 # A failure must prevent success and preserve the durable owner lock so an
 # exact retry can reconcile and recheck the served bytes.
@@ -637,13 +712,22 @@ grep -Fq "docker exec -i \"\$gateway_container\" node -" "$SYNC_SCRIPT" || {
   echo "Public OTA verification must use the running gateway container token" >&2
   exit 1
 }
-grep -Fq -- "--filter label=com.docker.compose.container-number=1" "$SYNC_SCRIPT" || {
-  echo "Public OTA verification must select the Compose-owned gateway, not a worker with spoofable broad labels" >&2
+if ! grep -Fq 'docker compose -p chief-moa' "$SYNC_SCRIPT" \
+  || ! grep -Fq 'compose_root=/opt/chief-moa/app' "$SYNC_SCRIPT" \
+  || ! grep -Fq 'compose_env=/opt/chief-moa/gateway.env' "$SYNC_SCRIPT" \
+  || ! grep -Fq "\"\$compose_root/docker-compose.yml\"" "$SYNC_SCRIPT" \
+  || ! grep -Fq "\"\$compose_root/docker-compose.vps.yml\"" "$SYNC_SCRIPT" \
+  || ! grep -Fq -- "--env-file \"\$compose_env\" ps -q gateway" "$SYNC_SCRIPT"; then
+  echo "Public OTA verification must resolve the canonical gateway through the active Compose model" >&2
   exit 1
-}
+fi
+if grep -Fq 'docker ps ' "$SYNC_SCRIPT"; then
+  echo "Public OTA verification must not select containers through broad labels" >&2
+  exit 1
+fi
 grep -Fq 'process.env.MOA_GATEWAY_TOKEN' "$SYNC_SCRIPT" || {
   echo "Public OTA verification must read auth only inside the gateway container" >&2
   exit 1
 }
 
-echo "Android OTA VPS publication safety smoke passed (19 fake transport cases + workflow contract)."
+echo "Android OTA VPS publication safety smoke passed (23 fake transport cases + workflow contract)."

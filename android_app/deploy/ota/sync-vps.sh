@@ -683,14 +683,22 @@ public_gateway_url="${10}"
 [[ "$git_sha" =~ ^[A-Za-z0-9._-]+$ ]] || exit 1
 [[ "$public_gateway_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || exit 1
 
-container_ids="$(docker ps \
-  --filter label=com.docker.compose.project=chief-moa \
-  --filter label=com.docker.compose.service=gateway \
-  --filter label=com.docker.compose.container-number=1 \
-  --format '{{.ID}}')"
-[ "$(printf '%s\n' "$container_ids" | sed '/^$/d' | wc -l | tr -d '[:space:]')" = 1 ] || exit 1
-gateway_container="$(printf '%s\n' "$container_ids" | sed -n '1p')"
-[ -n "$gateway_container" ] || exit 1
+compose_root=/opt/chief-moa/app
+compose_env=/opt/chief-moa/gateway.env
+container_ids="$(docker compose -p chief-moa \
+  -f "$compose_root/docker-compose.yml" \
+  -f "$compose_root/docker-compose.vps.yml" \
+  --env-file "$compose_env" ps -q gateway)"
+gateway_container=""
+container_count=0
+while IFS= read -r container_id; do
+  [ -n "$container_id" ] || continue
+  [[ "$container_id" =~ ^[a-f0-9]{64}$ ]] || exit 1
+  container_count=$((container_count + 1))
+  [ "$container_count" -le 1 ] || exit 1
+  gateway_container="$container_id"
+done <<< "$container_ids"
+[ "$container_count" -eq 1 ] && [ -n "$gateway_container" ] || exit 1
 
 docker exec -i "$gateway_container" node - \
   "$release_id" "$apk_sha" "$apk_size" "$app_id" "$version_code" \
