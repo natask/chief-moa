@@ -145,6 +145,13 @@ storage never move to the gateway. Every side effect still becomes a bound
 proposal that the owning gateway/device policy revalidates, approves, executes,
 and receipts.
 
+Android media handoff resolves visible app labels against installed exported
+handlers on the device. VLC accepts only an explicit validated HTTPS or
+`content://` source; package selectors, file/intent URIs, ambiguous handlers,
+and title-only playback fail closed. Title search requires a separate catalog or
+source connector, and VLC transport remains unsupported until a fresh,
+package-bound MediaSession advertises a safely testable capability.
+
 ## Cross-surface release boundary
 
 Release selection is a shared planning contract over immutable artifact

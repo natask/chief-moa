@@ -30,6 +30,9 @@
 - [x] Make `media.open` receipts distinguish search, accessibility requirement,
       verified selection, and unverified playback; never claim exact playback
       from an intent or search launch alone.
+- [x] Add visible-label-only VLC resolution for installed exported handlers and
+      explicit HTTPS/content URI handoff; reject package selectors, file/intent
+      URIs, ambiguity, and title-only playback without a source connector.
 - [x] Add the private named media-spot cache; require a valid real video id and
       explicit approval before bounded gateway sync.
 - [x] Resolve saved spots by normalized exact/phrase/token text with ambiguity
