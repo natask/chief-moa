@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
     // Double-tapping an overlay ribbon opens history here, as a real window. The
     // overlay stays alive behind it and never becomes a scrollback itself.
     static final String EXTRA_SHOW_HISTORY = "ai.moa.assistant.extra.SHOW_HISTORY";
+    static final String EXTRA_RELEASE_BUNDLE_ID = "ai.moa.assistant.extra.RELEASE_BUNDLE_ID";
 
     private static final int REQUEST_AUDIO = 4101;
     private static final int REQUEST_CONTACTS = 4102;
@@ -98,6 +99,7 @@ public final class MainActivity extends Activity {
     private long updateDialogVersionCode;
     private boolean reviewUpdateOnNextCheck;
     private MoaReleaseCardController releaseController;
+    private int releasePollGeneration;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -112,6 +114,7 @@ public final class MainActivity extends Activity {
         setContentView(createContent());
         maybeRequestMicPermission();
         scrollToHistoryIfRequested(getIntent());
+        openReleaseCandidateIfRequested(getIntent());
     }
 
     @Override
@@ -128,6 +131,7 @@ public final class MainActivity extends Activity {
         updatePermissionState();
         maybeRequestMicPermission();
         scrollToHistoryIfRequested(intent);
+        openReleaseCandidateIfRequested(intent);
         if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
             collapseOverlaySurfaces();
         }
@@ -149,6 +153,13 @@ public final class MainActivity extends Activity {
             startOverlay();
             intent.removeExtra(EXTRA_START_OVERLAY);
         }
+        startBoundedReleasePolling();
+    }
+
+    @Override
+    protected void onPause() {
+        releasePollGeneration++;
+        super.onPause();
     }
 
     @Override
@@ -178,6 +189,31 @@ public final class MainActivity extends Activity {
         final View anchor = sessionHistoryStatus;
         scroll.post(() -> scroll.smoothScrollTo(0, anchor.getTop()));
         refreshControlCenter();
+    }
+
+    private void openReleaseCandidateIfRequested(Intent intent) {
+        if (intent == null) return;
+        String bundleId = MoaReleaseSelectionPolicy.exactDeepLinkBundleId(
+                intent.getStringExtra(EXTRA_RELEASE_BUNDLE_ID));
+        if (bundleId.isEmpty()) return;
+        intent.removeExtra(EXTRA_RELEASE_BUNDLE_ID);
+        releaseController.openCandidate(bundleId);
+        if (contentScroll != null && releaseController.anchor() != null) {
+            contentScroll.post(() -> contentScroll.smoothScrollTo(0, releaseController.anchor().getTop()));
+        }
+        releaseController.refresh();
+    }
+
+    private void startBoundedReleasePolling() {
+        int generation = ++releasePollGeneration;
+        for (int pass = 0; pass < 3; pass++) {
+            long delay = pass * 30_000L;
+            mainHandler.postDelayed(() -> {
+                if (generation != releasePollGeneration || isFinishing()) return;
+                MoaReleaseCandidateNotifier.checkAsync(this, MoaPrefs.gatewayUrl(this),
+                        MoaPrefs.gatewayToken(this), androidDeviceId());
+            }, delay);
+        }
     }
 
     private View createContent() {

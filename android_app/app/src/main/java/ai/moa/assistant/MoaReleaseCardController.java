@@ -5,6 +5,8 @@ import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -16,6 +18,8 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Full-app release UI. Assignment is always separate from Android installation. */
 final class MoaReleaseCardController {
@@ -46,6 +50,11 @@ final class MoaReleaseCardController {
     private Button installButton;
     private Button feedbackButton;
     private EditText feedbackInput;
+    private EditText searchInput;
+    private LinearLayout candidateColumn;
+    private TextView candidateCount;
+    private final ArrayList<MoaReleaseSelectionPolicy.Candidate> catalog = new ArrayList<>();
+    private String exactBundleFromIntent = "";
     private int generation;
     private MoaReleaseSelectionPolicy.View view;
     private MoaReleaseSelectionPolicy.Candidate selected;
@@ -53,6 +62,7 @@ final class MoaReleaseCardController {
     private String pinnedGatewayToken = "";
     private String localInstalledSha256 = "";
     private boolean disposed;
+    private View cardRoot;
 
     MoaReleaseCardController(Activity activity, Host host) {
         this.activity = activity;
@@ -61,6 +71,7 @@ final class MoaReleaseCardController {
 
     View createView() {
         LinearLayout card = card();
+        cardRoot = card;
         TextView title = text("Release", MoaColors.PAPER, 18, true);
         title.setPadding(0, 0, 0, dp(12));
         card.addView(title);
@@ -77,6 +88,25 @@ final class MoaReleaseCardController {
         actionStatus = text("Loading release control...", MoaColors.MUTED, 13, false);
         actionStatus.setPadding(0, dp(10), 0, 0);
         card.addView(actionStatus);
+
+        TextView browseTitle = text("Test candidates", MoaColors.PAPER, 16, true);
+        browseTitle.setPadding(0, dp(18), 0, dp(4));
+        card.addView(browseTitle);
+        candidateCount = text("Loading candidates…", MoaColors.MUTED, 13, false);
+        card.addView(candidateCount);
+        searchInput = input("Search by feature, version, or bundle");
+        searchInput.setMinLines(1);
+        searchInput.setMaxLines(1);
+        searchInput.setSingleLine(true);
+        searchInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { renderCatalog(); }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        card.addView(searchInput);
+        candidateColumn = new LinearLayout(activity);
+        candidateColumn.setOrientation(LinearLayout.VERTICAL);
+        card.addView(candidateColumn);
 
         Button refresh = secondary("Refresh releases");
         refresh.setOnClickListener(v -> refresh());
@@ -107,6 +137,10 @@ final class MoaReleaseCardController {
         return card;
     }
 
+    View anchor() {
+        return cardRoot;
+    }
+
     void refresh() {
         String gateway = host.gatewayUrl();
         String token = host.gatewayToken();
@@ -122,6 +156,14 @@ final class MoaReleaseCardController {
                 MoaReleaseControlClient client = releaseClient(gateway, token);
                 MoaReleaseSelectionPolicy.View next =
                         MoaReleaseSelectionPolicy.parseView(client.view(host.deviceId()));
+                ArrayList<MoaReleaseSelectionPolicy.Candidate> loaded = new ArrayList<>();
+                String cursor = "";
+                do {
+                    MoaReleaseSelectionPolicy.CatalogPage page =
+                            MoaReleaseSelectionPolicy.parseCatalog(client.candidates(cursor, 50));
+                    loaded.addAll(page.candidates);
+                    cursor = page.nextCursor;
+                } while (!cursor.isEmpty() && loaded.size() < 300);
                 String installedSha = host.installedArtifactSha256();
                 MoaReleaseSelectionPolicy.Candidate assigned = candidateForAssignment(next);
                 if (MoaReleaseSelectionPolicy.localMatchesAssignment(next, assigned, installedSha)
@@ -144,8 +186,11 @@ final class MoaReleaseCardController {
                     pinnedGatewayToken = token;
                     localInstalledSha256 = installedSha;
                     view = resolved;
+                    catalog.clear();
+                    catalog.addAll(loaded);
                     selected = candidateForAssignment(resolved);
                     render("Release control ready.", MoaColors.OK);
+                    renderCatalog();
                 });
             } catch (Exception error) {
                 main.post(() -> {
@@ -161,6 +206,7 @@ final class MoaReleaseCardController {
         generation++;
         view = null;
         selected = null;
+        catalog.clear();
         buttons(false, false);
         if (assignmentStatus != null) assignmentStatus.setText("Unavailable");
         if (stableStatus != null) stableStatus.setText("Unavailable");
@@ -168,6 +214,12 @@ final class MoaReleaseCardController {
         if (installButton != null) installButton.setVisibility(View.GONE);
         if (feedbackButton != null) feedbackButton.setEnabled(false);
         status(message, MoaColors.WARN);
+        renderCatalog();
+    }
+
+    void openCandidate(String bundleId) {
+        exactBundleFromIntent = bundleId == null ? "" : bundleId.trim();
+        if (searchInput != null) searchInput.setText(exactBundleFromIntent);
     }
 
     void close() {
@@ -268,6 +320,86 @@ final class MoaReleaseCardController {
         }, "moa-release-select").start();
     }
 
+    private void selectExact(MoaReleaseSelectionPolicy.Candidate candidate) {
+        MoaReleaseSelectionPolicy.View current = view;
+        if (current == null || candidate == null || !candidate.compatible) {
+            render("That candidate is not ready for this phone.", MoaColors.WARN);
+            return;
+        }
+        status("Selecting " + candidate.humanLabel() + "…", MoaColors.GOLD);
+        int operationGeneration = ++generation;
+        String gateway = pinnedGatewayUrl;
+        String token = pinnedGatewayToken;
+        new Thread(() -> {
+            try {
+                long sequence = current.assignment == null ? 0L : current.assignment.sequence;
+                JSONObject body = MoaReleaseSelectionPolicy.exactCandidateRequest(
+                        host.deviceId(), candidate, sequence, requestId("candidate"));
+                MoaReleaseControlClient client = releaseClient(gateway, token);
+                JSONObject response = client.selectCandidate(body);
+                MoaReleaseSelectionPolicy.Candidate offered =
+                        MoaReleaseSelectionPolicy.selectedCandidate(response, "candidate");
+                MoaReleaseSelectionPolicy.Assignment assignment =
+                        MoaReleaseSelectionPolicy.assignmentFromResponse(response);
+                main.post(() -> {
+                    if (!active(operationGeneration)) return;
+                    selected = offered.artifact == null ? candidate : new MoaReleaseSelectionPolicy.Candidate(
+                            candidate.releaseId, candidate.bundleId, "candidate", candidate.sourceRef,
+                            true, "", offered.artifact, candidate.createdAt, candidate.lineageKind,
+                            candidate.seriesParentBundleId, candidate.parallelParentBundleIds);
+                    view = new MoaReleaseSelectionPolicy.View(
+                            current.reportedInstalledReleaseId, current.reportedInstalledSha256,
+                            assignment, current.stable, current.preview,
+                            current.hasLastKnownGood, current.candidates);
+                    render(candidate.humanLabel() + " selected — not installed.", MoaColors.GOLD);
+                    renderCatalog();
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    if (active(operationGeneration)) render(
+                            "Selection changed or failed. Refresh before trying again; nothing was installed.",
+                            MoaColors.WARN);
+                });
+            }
+        }, "moa-release-candidate-select").start();
+    }
+
+    private void renderCatalog() {
+        if (candidateColumn == null || candidateCount == null) return;
+        candidateColumn.removeAllViews();
+        String selectedBundle = view == null || view.assignment == null ? "" : view.assignment.bundleId;
+        String query = searchInput == null ? exactBundleFromIntent : searchInput.getText().toString();
+        List<MoaReleaseSelectionPolicy.Candidate> visible =
+                MoaReleaseSelectionPolicy.rank(catalog, query, selectedBundle, localInstalledSha256);
+        candidateCount.setText(visible.size() + " of " + catalog.size()
+                + " published candidates · selection does not install");
+        if (visible.isEmpty()) {
+            TextView empty = text(catalog.isEmpty() ? "No published Android candidates yet."
+                    : "No candidate matches that search.", MoaColors.MUTED, 14, false);
+            empty.setPadding(0, dp(12), 0, dp(4));
+            candidateColumn.addView(empty);
+            return;
+        }
+        for (MoaReleaseSelectionPolicy.Candidate candidate : visible) {
+            LinearLayout row = card();
+            row.setElevation(0);
+            TextView title = text(candidate.humanLabel(), MoaColors.PAPER, 15, true);
+            row.addView(title);
+            String state = MoaReleaseSelectionPolicy.coarseState(
+                    candidate, selectedBundle, localInstalledSha256);
+            TextView detail = text(candidate.summary() + "\n" + candidate.relationLabel()
+                    + " · Android · published/" + (candidate.compatible ? "ready" : "blocked")
+                    + " · " + state, candidate.compatible ? MoaColors.MUTED : MoaColors.WARN, 13, false);
+            detail.setPadding(0, dp(5), 0, 0);
+            row.addView(detail);
+            Button choose = secondary(candidate.bundleId.equals(selectedBundle) ? "Selected" : "Select exact candidate");
+            choose.setEnabled(candidate.compatible && !candidate.bundleId.equals(selectedBundle));
+            choose.setOnClickListener(v -> selectExact(candidate));
+            row.addView(choose);
+            candidateColumn.addView(row);
+        }
+    }
+
     private void submitFeedback() {
         MoaReleaseSelectionPolicy.View current = view;
         MoaReleaseSelectionPolicy.Candidate candidate = selected;
@@ -307,6 +439,9 @@ final class MoaReleaseCardController {
     private MoaReleaseSelectionPolicy.Candidate candidateForAssignment(
             MoaReleaseSelectionPolicy.View current) {
         if (current == null || current.assignment == null) return null;
+        for (MoaReleaseSelectionPolicy.Candidate item : catalog) {
+            if (current.assignment.bundleId.equals(item.bundleId)) return item;
+        }
         for (MoaReleaseSelectionPolicy.Candidate item : current.candidates) {
             if (current.assignment.releaseId.equals(item.releaseId)
                     && current.assignment.channel.equals(item.channel)) return item;

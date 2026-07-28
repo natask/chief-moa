@@ -73,6 +73,15 @@ public final class MoaReleaseControlClientTest {
     }
 
     @Test
+    public void candidateCatalogEncodesCursorAndExactSelectionUsesNewRoutes() throws Exception {
+        client().candidates("bundle:a", 50);
+        assertEquals("/v1/release-control/apps/chief-moa/candidates?limit=50&cursor=bundle%3Aa",
+                target.get());
+        client().selectCandidate(new JSONObject().put("bundle_id", "bundle-a"));
+        assertEquals("/v1/release-control/apps/chief-moa/candidate-selections", target.get());
+    }
+
+    @Test
     public void artifactDownloadIsExactSizeAndLeavesNoPartialFile() throws Exception {
         File dir = Files.createTempDirectory("moa-release-client").toFile();
         File destination = new File(dir, "release.apk");

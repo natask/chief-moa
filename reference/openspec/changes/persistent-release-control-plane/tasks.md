@@ -127,6 +127,10 @@
       stable, publish bytes, or claim installation. Shared service fixtures
       prove sibling and composed candidates remain discoverable after the
       preview head moves, while invalid selections fail closed.
+      - [x] Android pages and searches the catalog, renders lineage/readiness and
+        exact selected/running state, sequence-checks exact bundle selection,
+        preserves stable fallback, and deep-links newly eligible notifications
+        into the full-app candidate view. Selection still does not install.
 
 - [ ] V0.3.1 Persist one preview lifecycle per immutable candidate with exact
       bundle, release, surface, artifact-digest, source-revision, endpoint or
