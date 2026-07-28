@@ -27,6 +27,9 @@
       override for installed stock/ReVanced-compatible variants.
 - [x] Add validated YouTube open/search/play behavior and versioned,
       package/signature-bound, fail-closed app-specific adapters where needed.
+- [x] Make `media.open` receipts distinguish search, accessibility requirement,
+      verified selection, and unverified playback; never claim exact playback
+      from an intent or search launch alone.
 - [x] Add the private named media-spot cache; require a valid real video id and
       explicit approval before bounded gateway sync.
 - [x] Resolve saved spots by normalized exact/phrase/token text with ambiguity

@@ -422,7 +422,8 @@ final class MoaActionBroker {
             return launch == null
                     ? mediaFailure(capability, packageName, "The selected YouTube app has no launch activity.")
                     : startMediaIntent(capability, packageName, launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            "Opened " + packageName + ".");
+                            "Opened " + packageName + "; no media selection or playback was verified.",
+                            "selection_unverified", false);
         }
         MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(packageName);
         if (hasSuppliedMediaBinding(args) && !matchesOptionalMediaBinding(args, snapshot)) {
@@ -432,9 +433,18 @@ final class MoaActionBroker {
         Intent search = new Intent(Intent.ACTION_SEARCH).setPackage(packageName)
                 .putExtra(SearchManager.QUERY, query).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         String channel = safe(args.optString("channel", ""));
-        if (shouldSelectYoutubeSearch(query, callback != null,
-                approvedYoutubeAutomationPackage(packageName),
-                search.resolveActivity(context.getPackageManager()) != null)) {
+        boolean handlerAvailable = search.resolveActivity(context.getPackageManager()) != null;
+        if (!handlerAvailable) {
+            return mediaOutcome(capability, packageName, false,
+                    "The selected YouTube app cannot handle search.", "selection_unverified");
+        }
+        if (!MoaAccessibilityService.isRunning()
+                || !approvedYoutubeAutomationPackage(packageName)) {
+            return mediaOutcome(capability, packageName, false,
+                    "Exact YouTube selection needs approved Screen access; no result was selected.",
+                    "needs_accessibility");
+        }
+        if (shouldSelectYoutubeSearch(query, callback != null, true, true)) {
             try {
                 context.startActivity(search);
             } catch (RuntimeException error) {
@@ -445,8 +455,9 @@ final class MoaActionBroker {
                     operationId, packageName, query, channel, callback), 700L);
             return ToolExecutionResult.pending("Opened YouTube search and waiting for the exact result.");
         }
-        return startMediaIntent(capability, packageName, search,
-                "Opened YouTube search for \"" + query + "\".");
+        return mediaOutcome(capability, packageName, false,
+                "Exact YouTube selection could not be verified without a result callback.",
+                "selection_unverified");
     }
 
     private void startYoutubeSearchSelection(
@@ -460,17 +471,21 @@ final class MoaActionBroker {
         MoaAccessibilityService.YoutubeStartResult started =
                 MoaAccessibilityService.executeYoutubeOperation(request, result -> {
                     boolean success = result.outcome == MoaYoutubeAccessibilityExecutor.Outcome.COMPLETE;
-                    String summary = success ? "Opened the exact YouTube search result."
+                    String summary = success ? "Selected the unique YouTube result; playback was not verified."
                             : "YouTube search stopped: " + result.reason + ".";
                     callback.onResult(success
-                            ? mediaSuccess(CAPABILITIES.get("media.open"), packageName, summary)
-                            : mediaFailure(CAPABILITIES.get("media.open"), packageName, summary));
+                            ? mediaOutcome(CAPABILITIES.get("media.open"), packageName, true,
+                                    summary, "selection_verified")
+                            : mediaOutcome(CAPABILITIES.get("media.open"), packageName, false,
+                                    summary, "selection_unverified"));
                 });
         if (started != MoaAccessibilityService.YoutubeStartResult.STARTED) {
-            callback.onResult(mediaFailure(CAPABILITIES.get("media.open"), packageName,
+            callback.onResult(mediaOutcome(CAPABILITIES.get("media.open"), packageName, false,
                     started == MoaAccessibilityService.YoutubeStartResult.BUSY
                             ? "Another YouTube operation is already running."
-                            : "Screen access is unavailable for YouTube search selection."));
+                            : "Screen access is unavailable for YouTube search selection.",
+                    started == MoaAccessibilityService.YoutubeStartResult.BUSY
+                            ? "selection_unverified" : "needs_accessibility"));
         }
     }
 
@@ -488,17 +503,19 @@ final class MoaActionBroker {
         Intent intent = new Intent(Intent.ACTION_VIEW, uri.build()).setPackage(packageName)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         return startMediaIntent(capability, packageName, intent,
-                "Opened YouTube video " + videoId + (positionMs > 0L ? " at the saved spot." : "."));
+                "Sent YouTube video " + videoId + " to the selected app; playback was not verified.",
+                "selection_unverified", false);
     }
 
     private ToolExecutionResult startMediaIntent(
-            Capability capability, String packageName, Intent intent, String successReply) {
+            Capability capability, String packageName, Intent intent, String successReply,
+            String outcome, boolean success) {
         if (intent.resolveActivity(context.getPackageManager()) == null) {
             return mediaFailure(capability, packageName, "The selected YouTube app cannot handle this request.");
         }
         try {
             context.startActivity(intent);
-            return mediaSuccess(capability, packageName, successReply);
+            return mediaOutcome(capability, packageName, success, successReply, outcome);
         } catch (RuntimeException error) {
             return mediaFailure(capability, packageName, "The selected YouTube app could not be opened.");
         }
@@ -1366,6 +1383,14 @@ final class MoaActionBroker {
 
     private ToolExecutionResult mediaFailure(Capability capability, String target, String reply) {
         return ToolExecutionResult.done(false, reply, recordReceipt(capability, target, false, reply));
+    }
+
+    private ToolExecutionResult mediaOutcome(
+            Capability capability, String target, boolean success, String reply, String outcome) {
+        JSONObject receipt = capability == null ? null : MoaActionReceiptStore.record(
+                context, capability.tool, capability.risk, capability.approval,
+                target, success, reply, outcome);
+        return ToolExecutionResult.done(success, reply, receipt);
     }
 
     private void syncMediaSpot(MoaMediaSpotStore.Spot spot) {

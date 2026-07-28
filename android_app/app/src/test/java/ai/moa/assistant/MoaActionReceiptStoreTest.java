@@ -30,4 +30,16 @@ public final class MoaActionReceiptStoreTest {
         assertEquals("previous", receipt.optString("previous_hash"));
         assertFalse(receipt.optString("hash").isEmpty());
     }
+
+    @Test
+    public void mediaReceiptCarriesExplicitTruthfulOutcomeInsideHash() {
+        JSONObject receipt = MoaActionReceiptStore.createReceipt(
+                "media.open", "navigation", "implicit_user_command", "youtube",
+                false, "Search opened; no result was selected.", 1234L, "previous",
+                "search_opened");
+
+        assertEquals("search_opened", receipt.optString("outcome"));
+        assertFalse(receipt.optBoolean("success"));
+        assertFalse(receipt.optString("hash").isEmpty());
+    }
 }

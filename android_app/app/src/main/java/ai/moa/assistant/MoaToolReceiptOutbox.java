@@ -264,10 +264,12 @@ final class MoaToolReceiptOutbox {
         if (source == null) return result;
         String risk = safe(source.optString("risk", ""));
         String approval = safe(source.optString("approval", ""));
+        String outcome = safe(source.optString("outcome", ""));
         String localHash = safe(source.optString("hash", ""));
         long recordedAtMs = source.optLong("timestamp_ms", 0L);
         if (!risk.isEmpty() && POLICY.matcher(risk).matches()) result.put("risk", risk);
         if (!approval.isEmpty() && POLICY.matcher(approval).matches()) result.put("approval", approval);
+        if (!outcome.isEmpty() && POLICY.matcher(outcome).matches()) result.put("outcome", outcome);
         if (SHA256.matcher(localHash).matches()) {
             result.put("local_hash", localHash.toLowerCase(Locale.ROOT));
         }

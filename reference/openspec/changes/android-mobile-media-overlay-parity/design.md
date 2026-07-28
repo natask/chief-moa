@@ -31,6 +31,13 @@ for one request. Future variants use the same capability only after a local
 named mapping is saved; a model-selected package name has no authority. The
 selected package and signing/version evidence are bound to execution.
 
+`media.open` receipts describe the strongest locally observed outcome. Opening
+a search or sending a watch URI is not playback success. Search operations use
+`search_opened`, `needs_accessibility`, or `selection_unverified`; only a unique
+title/channel match clicked and confirmed by the approved fixture may use
+`selection_verified`. `playback_verified` is reserved for a fresh observable
+media-session postcondition and is not inferred from an intent launch.
+
 Accessibility is reserved for visible states that MediaSession cannot express,
 not for arbitrary model-authored tap sequences. An undocumented variant adapter
 is a named, versioned local module with declared package/signature constraints,

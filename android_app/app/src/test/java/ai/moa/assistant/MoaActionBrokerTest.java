@@ -269,8 +269,11 @@ public final class MoaActionBrokerTest {
     public void exactSearchSelectionDoesNotRequireChannelMetadata() {
         assertTrue(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", true, true, true));
         assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("", true, true, true));
+        // Missing async receipt delivery or an approved accessibility fixture
+        // must never degrade into a claimed exact selection.
         assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", false, true, true));
         assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", true, false, true));
+        assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", true, true, false));
     }
 
     @Test
