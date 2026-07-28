@@ -10,18 +10,56 @@
 #   MOA_VPS_SSH=root@vps android_app/deploy/ota/sync-vps.sh
 #   android_app/deploy/ota/sync-vps.sh --host root@vps
 #
-# This low-level publisher requires --host or MOA_VPS_SSH. The repository
-# deployment entrypoint resolves its tracked canonical production target.
+# This low-level publisher accepts --host or MOA_VPS_SSH, but falls back to
+# the repository's tracked, non-secret canonical production target in
+# scripts/deploy-targets.json when neither is set, so a human running this
+# script directly (e.g. to recover a stuck lock) does not have to already know
+# the deploy target. MOA_VPS_PUBLIC_GATEWAY_URL falls back the same way. Both
+# remain overridable. See DEPLOYMENT.md's "Android OTA" section for the full
+# publish/recover/rollback story, including how to read a stuck-lock failure.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LOCAL_OTA_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/gateway/data/android-ota}"
+DEPLOY_TARGETS_FILE="${MOA_DEPLOY_TARGETS_FILE:-$ROOT_DIR/scripts/deploy-targets.json}"
 HOST="${MOA_VPS_SSH:-}"
 # Host-side path of the gateway container's /data named volume.
 REMOTE_OTA_DIR="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
 REMOTE_PUBLIC_GATEWAY_URL="${MOA_VPS_PUBLIC_GATEWAY_URL:-}"
 SNAPSHOT_RETENTION="${MOA_OTA_SNAPSHOT_RETENTION:-5}"
+# Secondary signal only (see the lock-reclaim comment below): how long a
+# completed-but-abandoned publish lock must sit before an unrelated operation
+# may reclaim it. This guards against racing a publish that is still running
+# its own post-commit acknowledgement cleanup.
+RECLAIM_MIN_AGE_SECONDS="${MOA_OTA_LOCK_RECLAIM_MIN_AGE_SECONDS:-300}"
+
+# Non-secret canonical target lookup, shared in spirit with scripts/deploy.sh's
+# production_vps_target(). Read-only; never writes or prints the file's path
+# unless the field itself is missing (in which case the caller's own error
+# names the file to fix, not any secret).
+canonical_target_field() {
+  node - "$DEPLOY_TARGETS_FILE" "$1" <<'NODE'
+const fs = require("node:fs");
+const [file, field] = process.argv.slice(2);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {
+  process.exit(1);
+}
+const value = config?.production?.[field];
+if (typeof value !== "string" || !value) process.exit(1);
+process.stdout.write(value);
+NODE
+}
+
+if [ -z "$HOST" ]; then
+  HOST="$(canonical_target_field vps_ssh 2>/dev/null || true)"
+fi
+if [ -z "$REMOTE_PUBLIC_GATEWAY_URL" ]; then
+  REMOTE_PUBLIC_GATEWAY_URL="$(canonical_target_field public_gateway_url 2>/dev/null || true)"
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -38,11 +76,11 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$HOST" ]; then
-  echo "No VPS host. Pass --host user@vps or set MOA_VPS_SSH." >&2
+  echo "Missing VPS host: no --host, no MOA_VPS_SSH, and $DEPLOY_TARGETS_FILE has no readable production.vps_ssh. Set MOA_VPS_SSH=user@host, pass --host user@host, or fix that tracked file." >&2
   exit 1
 fi
 if [[ ! "$HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
-  echo "The VPS host must be a plain user@host target." >&2
+  echo "The VPS host must be a plain user@host target (got a value from --host, MOA_VPS_SSH, or $DEPLOY_TARGETS_FILE that does not match)." >&2
   exit 1
 fi
 SSH_HOST="${HOST#*@}"
@@ -65,13 +103,22 @@ if [[ ! "$REMOTE_OTA_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] \
   exit 1
 fi
 if [[ ! "$REMOTE_PUBLIC_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
-  echo "MOA_VPS_PUBLIC_GATEWAY_URL must be an HTTPS origin without a path." >&2
+  if [ -z "$REMOTE_PUBLIC_GATEWAY_URL" ]; then
+    echo "Missing public gateway origin: no MOA_VPS_PUBLIC_GATEWAY_URL, and $DEPLOY_TARGETS_FILE has no readable production.public_gateway_url. Set MOA_VPS_PUBLIC_GATEWAY_URL=https://<host>, fix that tracked file, or read the value from the running gateway's GET /health (public_gateway_url field)." >&2
+  else
+    echo "MOA_VPS_PUBLIC_GATEWAY_URL must be an HTTPS origin without a path (got a value from the environment or $DEPLOY_TARGETS_FILE that does not match)." >&2
+  fi
   exit 1
 fi
 if [[ ! "$SNAPSHOT_RETENTION" =~ ^[0-9]+$ ]] \
   || [ "$SNAPSHOT_RETENTION" -lt 1 ] \
   || [ "$SNAPSHOT_RETENTION" -gt 20 ]; then
   echo "MOA_OTA_SNAPSHOT_RETENTION must be between 1 and 20." >&2
+  exit 1
+fi
+if [[ ! "$RECLAIM_MIN_AGE_SECONDS" =~ ^[0-9]+$ ]] \
+  || [ "$RECLAIM_MIN_AGE_SECONDS" -gt 86400 ]; then
+  echo "MOA_OTA_LOCK_RECLAIM_MIN_AGE_SECONDS must be an integer between 0 and 86400." >&2
   exit 1
 fi
 
@@ -221,12 +268,62 @@ cleanup_remote_best_effort() {
 }
 trap cleanup_remote_best_effort EXIT
 
+# Translate a bounded, non-secret preflight reason token into an
+# operator-facing message. Under CI (GITHUB_ACTIONS=true) this always stays
+# generic: the calling workflow step already withholds this script's full
+# output because it may reveal target details in a shared build log, and
+# that decision must not be undone just because the message got more
+# detailed. A human running this script directly gets the specific reason
+# and remediation instead of having to read this script and the remote
+# store by hand.
+print_preflight_failure() {
+  local reason="$1"
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "Remote OTA backup/preflight failed; no release was published." >&2
+    return
+  fi
+  case "$reason" in
+    lock-in-progress-no-receipt)
+      echo "Remote OTA publish lock is held with no completion receipt: a publish is still running, or crashed before finishing. This is NOT auto-recoverable -- do not clear it automatically. Confirm on the VPS that no publish is actually in flight, then inspect (and only if truly abandoned, remove by hand) \$REMOTE_OTA_DIR/.publish-lock. See DEPLOYMENT.md's OTA lock-recovery section." >&2
+      ;;
+    lock-receipt-too-recent)
+      echo "Remote OTA publish lock has a completion receipt that matches the live release, but it is younger than the ${RECLAIM_MIN_AGE_SECONDS}s reclaim age (MOA_OTA_LOCK_RECLAIM_MIN_AGE_SECONDS). Its owner may still be finishing its own cleanup. Wait a few minutes and retry; this is not stuck." >&2
+      ;;
+    lock-receipt-live-mismatch)
+      echo "Remote OTA publish lock has a completion receipt that does NOT match the live release on the VPS. This needs manual inspection before any publish proceeds -- the remote store may have been modified out of band. See DEPLOYMENT.md's OTA lock-recovery section." >&2
+      ;;
+    lock-receipt-corrupt)
+      echo "Remote OTA publish lock exists but its owner/receipt files are malformed. This needs manual inspection; it will not self-clear. See DEPLOYMENT.md's OTA lock-recovery section." >&2
+      ;;
+    remote-store-corrupt)
+      echo "The remote OTA store's current release pointer or files are structurally inconsistent. This needs manual inspection before another publish can proceed safely." >&2
+      ;;
+    remote-store-not-empty-unexpected)
+      echo "The remote OTA store has no current release, but is not empty either (stray files or a releases/ entry without a current pointer). This needs manual inspection before another publish can proceed safely." >&2
+      ;;
+    remote-tools-missing)
+      echo "The VPS is missing one of the required tools (sha256sum, cmp, readlink, sync, stat, date). Install it and retry." >&2
+      ;;
+    *)
+      echo "Remote OTA backup/preflight failed; no release was published. Re-run with the remote lock state inspected by hand if this repeats; see DEPLOYMENT.md's OTA lock-recovery section." >&2
+      ;;
+  esac
+}
+
 # Acquire a remote publication lock, validate the prior current pointer, and
 # create a verified, bounded snapshot before any upload or mutable update.
-if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" bash -s -- \
+#
+# Failures below report a bounded, non-secret reason token on stdout right
+# before exiting non-zero (never a raw path or host). The caller translates
+# that token into an operator-facing message locally and only under a
+# non-CI shell; stderr stays fully suppressed here so nothing from the
+# remote session (banners, tool output) can leak either way.
+PREFLIGHT_REASON=""
+if ! PREFLIGHT_REASON="$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" bash -s -- \
   "$REMOTE_OTA_DIR" preflight "$SNAPSHOT_ID" "$OPERATION_ID" "$SNAPSHOT_RETENTION" \
   "$RELEASE_ID" "$APK_SHA256" "$APK_SIZE" "$RELEASE_META_SHA256" "$LATEST_SHA256" \
-  >/dev/null 2>&1 <<'REMOTE_PREFLIGHT'
+  "$RECLAIM_MIN_AGE_SECONDS" \
+  2>/dev/null <<'REMOTE_PREFLIGHT'
 set -euo pipefail
 umask 077
 root="$1"
@@ -239,7 +336,12 @@ apk_sha="$7"
 apk_size="$8"
 release_meta_sha="$9"
 latest_sha="${10}"
- [ "$phase" = preflight ] || exit 1
+reclaim_min_age_seconds="${11}"
+# Print a bounded reason token on stdout, then exit 1. Called at every
+# operator-actionable decision point below instead of a bare `exit 1` so the
+# caller can report which invariant failed without re-deriving it by hand.
+fail() { printf '%s\n' "$1"; exit 1; }
+[ "$phase" = preflight ] || exit 1
 [[ "$root" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
 [[ "$root" != *"//"* && "$root" != *"/../"* && "$root" != *"/./"* \
   && "$root" != */.. && "$root" != */. ]] || exit 1
@@ -251,10 +353,13 @@ latest_sha="${10}"
 [[ "$apk_size" =~ ^[0-9]+$ ]] || exit 1
 [[ "$release_meta_sha" =~ ^[a-f0-9]{64}$ ]] || exit 1
 [[ "$latest_sha" =~ ^[a-f0-9]{64}$ ]] || exit 1
-command -v sha256sum >/dev/null 2>&1 || exit 1
-command -v cmp >/dev/null 2>&1 || exit 1
-command -v readlink >/dev/null 2>&1 || exit 1
-command -v sync >/dev/null 2>&1 || exit 1
+[[ "$reclaim_min_age_seconds" =~ ^[0-9]+$ ]] || exit 1
+command -v sha256sum >/dev/null 2>&1 || fail remote-tools-missing
+command -v cmp >/dev/null 2>&1 || fail remote-tools-missing
+command -v readlink >/dev/null 2>&1 || fail remote-tools-missing
+command -v sync >/dev/null 2>&1 || fail remote-tools-missing
+command -v stat >/dev/null 2>&1 || fail remote-tools-missing
+command -v date >/dev/null 2>&1 || fail remote-tools-missing
 hash_file() { sha256sum "$1" | awk '{print $1}'; }
 size_file() { wc -c < "$1" | tr -d '[:space:]'; }
 json_string() {
@@ -272,7 +377,9 @@ json_number() {
 
 if [ -L "$root" ] || { [ -e "$root" ] && [ ! -d "$root" ]; }; then exit 1; fi
 mkdir -p -- "$root"
-for name in releases .publish-staging .publish-snapshots; do
+# .publish-locks-recovered retains evidence for locks reclaimed below. Nothing
+# in this preflight step ever deletes an entry once written.
+for name in releases .publish-staging .publish-snapshots .publish-locks-recovered; do
   item="$root/$name"
   if [ -e "$item" ] || [ -L "$item" ]; then
     [ -d "$item" ] && [ ! -L "$item" ] || exit 1
@@ -299,37 +406,86 @@ preflight_cleanup() {
 }
 trap preflight_cleanup EXIT
 
-# A prior client may have lost its SSH result after the host committed. Only an
-# exact durable receipt plus exact canonical bytes can reconcile that unknown
-# operation. Anything else remains locked for operator inspection.
+# A prior client may have lost its SSH result after the host committed, or
+# died between committing the receipt and running its own acknowledgement
+# cleanup. Distinguish three lock states:
+#
+#   - No receipt at all: the prior publish is still running, or crashed
+#     before it finished. This is exactly what the lock protects, and it is
+#     NEVER auto-reclaimed here, regardless of age.
+#   - A receipt that exactly matches the candidate bytes this operation is
+#     itself publishing: this call is an exact retry of the same publish
+#     that already committed. Reconcile immediately, exactly as before --
+#     no age delay, since a client retrying its own publish is not racing
+#     the cleanup of a different owner.
+#   - A receipt for a DIFFERENT release whose own recorded hashes match the
+#     live store exactly: some other publish genuinely completed and only
+#     its cleanup was abandoned. An abandoned lock must not block every
+#     future publish, only ones that would race an unfinished one, so this
+#     is also reclaimed -- but only after the secondary age gate, since its
+#     owner may still be running its own post-commit acknowledgement.
 if [ -e "$lock" ] || [ -L "$lock" ]; then
-  [ -d "$lock" ] && [ ! -L "$lock" ] || exit 1
-  [ -f "$lock/owner" ] && [ ! -L "$lock/owner" ] || exit 1
-  [ -f "$lock/published.receipt" ] && [ ! -L "$lock/published.receipt" ] || exit 1
+  [ -d "$lock" ] && [ ! -L "$lock" ] || fail lock-receipt-corrupt
+  [ -f "$lock/owner" ] && [ ! -L "$lock/owner" ] || fail lock-receipt-corrupt
+  lock_owner="$(cat "$lock/owner")" || fail lock-receipt-corrupt
+  if [ ! -f "$lock/published.receipt" ] || [ -L "$lock/published.receipt" ]; then
+    fail lock-in-progress-no-receipt
+  fi
   read -r receipt_operation receipt_release receipt_apk receipt_size receipt_meta receipt_latest \
-    < "$lock/published.receipt" || exit 1
-  [ "$(cat "$lock/owner")" = "$receipt_operation" ] || exit 1
-  [ "$receipt_release" = "$release_id" ] \
+    < "$lock/published.receipt" || fail lock-receipt-corrupt
+  [ "$lock_owner" = "$receipt_operation" ] || fail lock-receipt-corrupt
+  [[ "$receipt_operation" =~ ^publish-[A-Za-z0-9._-]+$ ]] || fail lock-receipt-corrupt
+  [[ "$receipt_release" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || fail lock-receipt-corrupt
+  [[ "$receipt_apk" =~ ^[a-f0-9]{64}$ ]] || fail lock-receipt-corrupt
+  [[ "$receipt_size" =~ ^[0-9]+$ ]] || fail lock-receipt-corrupt
+  [[ "$receipt_meta" =~ ^[a-f0-9]{64}$ ]] || fail lock-receipt-corrupt
+  [[ "$receipt_latest" =~ ^[a-f0-9]{64}$ ]] || fail lock-receipt-corrupt
+
+  exact_retry=0
+  if [ "$receipt_release" = "$release_id" ] \
     && [ "$receipt_apk" = "$apk_sha" ] \
     && [ "$receipt_size" = "$apk_size" ] \
     && [ "$receipt_meta" = "$release_meta_sha" ] \
-    && [ "$receipt_latest" = "$latest_sha" ] || exit 1
-  [[ "$receipt_operation" =~ ^publish-[A-Za-z0-9._-]+$ ]] || exit 1
+    && [ "$receipt_latest" = "$latest_sha" ]; then
+    exact_retry=1
+  fi
+
+  # The fields recorded in the receipt itself -- not necessarily this new
+  # operation candidate -- must match the live store exactly. This is the
+  # primary safety proof that the prior publish finished: the receipt is
+  # written last, after every other file already matches it, so a
+  # half-finished publish can never produce a match here.
   prior_stage="$root/.publish-staging/$receipt_operation"
-  [ -d "$prior_stage" ] && [ ! -L "$prior_stage" ] || exit 1
   [ -L "$root/current" ] \
-    && [ "$(readlink "$root/current")" = "releases/$release_id" ] || exit 1
-  [ "$(hash_file "$root/releases/$release_id/moa-assistant.apk")" = "$apk_sha" ] || exit 1
-  [ "$(size_file "$root/releases/$release_id/moa-assistant.apk")" = "$apk_size" ] || exit 1
-  [ "$(hash_file "$root/releases/$release_id/release.json")" = "$release_meta_sha" ] || exit 1
-  [ "$(hash_file "$root/moa-assistant.apk")" = "$apk_sha" ] || exit 1
-  [ "$(hash_file "$root/latest.json")" = "$latest_sha" ] || exit 1
-  rm -rf -- "$prior_stage" "$lock"
-  [ ! -e "$prior_stage" ] && [ ! -L "$prior_stage" ] || exit 1
-  [ ! -e "$lock" ] && [ ! -L "$lock" ] || exit 1
+    && [ "$(readlink "$root/current")" = "releases/$receipt_release" ] || fail lock-receipt-live-mismatch
+  [ "$(hash_file "$root/releases/$receipt_release/moa-assistant.apk")" = "$receipt_apk" ] || fail lock-receipt-live-mismatch
+  [ "$(size_file "$root/releases/$receipt_release/moa-assistant.apk")" = "$receipt_size" ] || fail lock-receipt-live-mismatch
+  [ "$(hash_file "$root/releases/$receipt_release/release.json")" = "$receipt_meta" ] || fail lock-receipt-live-mismatch
+  [ "$(hash_file "$root/moa-assistant.apk")" = "$receipt_apk" ] || fail lock-receipt-live-mismatch
+  [ "$(hash_file "$root/latest.json")" = "$receipt_latest" ] || fail lock-receipt-live-mismatch
+
+  if [ "$exact_retry" -ne 1 ]; then
+    # Only for a release different from the one this operation is
+    # publishing, after the receipt is already proven to describe the
+    # live, completed publish, apply the secondary age gate.
+    receipt_mtime="$(stat -c %Y "$lock/published.receipt" 2>/dev/null)" || fail lock-receipt-corrupt
+    now_ts="$(date +%s)" || fail lock-receipt-corrupt
+    receipt_age=$(( now_ts - receipt_mtime ))
+    [ "$receipt_age" -ge "$reclaim_min_age_seconds" ] || fail lock-receipt-too-recent
+  fi
+
+  # Verified complete and abandoned: move the lock aside as retained recovery
+  # evidence (never delete it) and clear its private staging leftovers, then
+  # fall through to acquire a fresh lock for this operation below.
+  recovered="$root/.publish-locks-recovered/$(date -u +%Y%m%dT%H%M%SZ)-${receipt_operation}"
+  [ ! -e "$recovered" ] && [ ! -L "$recovered" ] || fail lock-receipt-corrupt
+  mv -- "$lock" "$recovered" || fail lock-receipt-corrupt
+  rm -rf -- "$prior_stage"
+  [ ! -e "$prior_stage" ] && [ ! -L "$prior_stage" ] || fail lock-receipt-corrupt
+  [ ! -e "$lock" ] && [ ! -L "$lock" ] || fail lock-receipt-corrupt
 fi
 
-mkdir -- "$lock" || exit 1
+mkdir -- "$lock" || fail lock-in-progress-no-receipt
 lock_owned=1
 printf '%s\n' "$operation" > "$lock/owner"
 [ ! -e "$stage" ] && [ ! -L "$stage" ] || exit 1
@@ -338,33 +494,33 @@ mkdir -p -- "$stage/release" "$stage/legacy" "$snapshot"
 printf '%s\n' "$operation" > "$snapshot/operation"
 
 if [ -e "$root/current" ] || [ -L "$root/current" ]; then
-  [ -L "$root/current" ] || exit 1
+  [ -L "$root/current" ] || fail remote-store-corrupt
   current_target="$(readlink "$root/current")"
-  [[ "$current_target" =~ ^releases/([a-z0-9][a-z0-9._-]{0,127})$ ]] || exit 1
+  [[ "$current_target" =~ ^releases/([a-z0-9][a-z0-9._-]{0,127})$ ]] || fail remote-store-corrupt
   current_release="${BASH_REMATCH[1]}"
   current_dir="$root/releases/$current_release"
-  [ -d "$current_dir" ] && [ ! -L "$current_dir" ] || exit 1
+  [ -d "$current_dir" ] && [ ! -L "$current_dir" ] || fail remote-store-corrupt
   for file in "$current_dir/moa-assistant.apk" "$current_dir/release.json" \
     "$root/moa-assistant.apk" "$root/latest.json"; do
-    [ -f "$file" ] && [ ! -L "$file" ] || exit 1
+    [ -f "$file" ] && [ ! -L "$file" ] || fail remote-store-corrupt
   done
-  cmp -s "$current_dir/moa-assistant.apk" "$root/moa-assistant.apk" || exit 1
+  cmp -s "$current_dir/moa-assistant.apk" "$root/moa-assistant.apk" || fail remote-store-corrupt
   prior_sha="$(hash_file "$current_dir/moa-assistant.apk")"
   prior_size="$(size_file "$current_dir/moa-assistant.apk")"
-  [ "$(json_string sha256 "$current_dir/release.json")" = "$prior_sha" ] || exit 1
-  [ "$(json_string sha256 "$root/latest.json")" = "$prior_sha" ] || exit 1
-  [ "$(json_number size_bytes "$current_dir/release.json")" = "$prior_size" ] || exit 1
-  [ "$(json_number size_bytes "$root/latest.json")" = "$prior_size" ] || exit 1
-  [ "$(json_string apk "$current_dir/release.json")" = moa-assistant.apk ] || exit 1
-  [ "$(json_string apk "$root/latest.json")" = moa-assistant.apk ] || exit 1
-  [ "$(json_string release_id "$root/latest.json")" = "$current_release" ] || exit 1
+  [ "$(json_string sha256 "$current_dir/release.json")" = "$prior_sha" ] || fail remote-store-corrupt
+  [ "$(json_string sha256 "$root/latest.json")" = "$prior_sha" ] || fail remote-store-corrupt
+  [ "$(json_number size_bytes "$current_dir/release.json")" = "$prior_size" ] || fail remote-store-corrupt
+  [ "$(json_number size_bytes "$root/latest.json")" = "$prior_size" ] || fail remote-store-corrupt
+  [ "$(json_string apk "$current_dir/release.json")" = moa-assistant.apk ] || fail remote-store-corrupt
+  [ "$(json_string apk "$root/latest.json")" = moa-assistant.apk ] || fail remote-store-corrupt
+  [ "$(json_string release_id "$root/latest.json")" = "$current_release" ] || fail remote-store-corrupt
   for key in app_id version_name git_sha published_at; do
     [ "$(json_string "$key" "$current_dir/release.json")" = \
-      "$(json_string "$key" "$root/latest.json")" ] || exit 1
+      "$(json_string "$key" "$root/latest.json")" ] || fail remote-store-corrupt
   done
   for key in version_code min_sdk; do
     [ "$(json_number "$key" "$current_dir/release.json")" = \
-      "$(json_number "$key" "$root/latest.json")" ] || exit 1
+      "$(json_number "$key" "$root/latest.json")" ] || fail remote-store-corrupt
   done
   printf 'existing\n' > "$snapshot/state"
   printf '%s\n' "$current_target" > "$snapshot/current.target"
@@ -372,19 +528,19 @@ if [ -e "$root/current" ] || [ -L "$root/current" ]; then
   cp -p -- "$current_dir/release.json" "$snapshot/current.release.json"
   cp -p -- "$root/latest.json" "$snapshot/latest.json"
   cp -p -- "$root/moa-assistant.apk" "$snapshot/moa-assistant.apk"
-  cmp -s "$root/latest.json" "$snapshot/latest.json" || exit 1
-  cmp -s "$root/moa-assistant.apk" "$snapshot/moa-assistant.apk" || exit 1
+  cmp -s "$root/latest.json" "$snapshot/latest.json" || fail remote-store-corrupt
+  cmp -s "$root/moa-assistant.apk" "$snapshot/moa-assistant.apk" || fail remote-store-corrupt
   (
     cd "$snapshot"
     sha256sum current.release.json latest.json moa-assistant.apk > checksums.sha256
     sha256sum -c checksums.sha256 >/dev/null
   )
 else
-  [ ! -e "$root/moa-assistant.apk" ] && [ ! -L "$root/moa-assistant.apk" ] || exit 1
-  [ ! -e "$root/latest.json" ] && [ ! -L "$root/latest.json" ] || exit 1
+  [ ! -e "$root/moa-assistant.apk" ] && [ ! -L "$root/moa-assistant.apk" ] || fail remote-store-not-empty-unexpected
+  [ ! -e "$root/latest.json" ] && [ ! -L "$root/latest.json" ] || fail remote-store-not-empty-unexpected
   shopt -s nullglob
   release_entries=("$root/releases"/*)
-  [ "${#release_entries[@]}" -eq 0 ] || exit 1
+  [ "${#release_entries[@]}" -eq 0 ] || fail remote-store-not-empty-unexpected
   printf 'empty\n' > "$snapshot/state"
   : > "$snapshot/checksums.sha256"
 fi
@@ -401,8 +557,8 @@ done
 [ -f "$snapshot/state" ] && [ -f "$snapshot/checksums.sha256" ] || exit 1
 ready=1
 REMOTE_PREFLIGHT
-then
-  echo "Remote OTA backup/preflight failed; no release was published." >&2
+)"; then
+  print_preflight_failure "$PREFLIGHT_REASON"
   exit 1
 fi
 REMOTE_PREPARED=1
