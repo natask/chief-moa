@@ -13,6 +13,8 @@ bounded local action when the user asks the agent to open them.
 - Route a permitted assist invocation directly to
   `OverlayService.ACTION_ASSIST_BUTTON`, which opens the orb and begins a
   continuous streaming voice turn.
+- Route the normal launcher icon through the same thin assist activity. Keep the
+  full control center available from the icon's long-press `Settings` shortcut.
 - Show only a short permission hint when overlay or microphone permission is
   absent. The assist path does not open a setup or settings surface.
 - Route taps on the ongoing overlay notification back into the assist/voice
@@ -39,7 +41,8 @@ an Android activity.
 - A claimed `app.settings.open` request opens the existing full app and returns
   a local receipt naming the tool, navigation risk, implicit user-command
   approval, app target, result, timestamp, and previous receipt hash.
-- Direct launcher access to the full app and its settings remains unchanged.
+- Tapping the launcher icon starts the companion voice overlay; long-pressing it
+  exposes the full-app `Settings` shortcut.
 
 ## Verification
 
