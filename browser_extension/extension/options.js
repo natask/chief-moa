@@ -396,7 +396,7 @@ grantMicEl.addEventListener("click", async () => {
         autoGainControl: true,
       },
     });
-    flashMic("Microphone granted to AEG ✓");
+    flashMic("Microphone granted to AG ✓");
     renderMicrophoneRecoveryState("granted");
   } catch (err) {
     flashMic(`Microphone blocked: ${String(err.message || err)}`, false);

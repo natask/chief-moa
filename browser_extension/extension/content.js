@@ -60,7 +60,7 @@
     lastLocalTextHotkeyAt = 0,
     lastLocalVoiceHotkeyAt = 0,
     lastExternalVoiceCommandAt = 0,
-    // The AEG mark stays where the user drops it and reacts visually to state.
+    // The AG mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
   // Custom tooltip chip + viewport-resize batching for the overlay.
@@ -113,7 +113,7 @@
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
-  // Language chip: what A.G. currently hears (STT) and speaks (reply), read
+  // Language chip: what AG currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
   let ageeProfileCacheValue = null;
   let lastReplyLanguageCode = "";
@@ -324,7 +324,7 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, scroll to resize, hold to talk" aria-label="AEG">
+      <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, scroll to resize, hold to talk" aria-label="AG">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
@@ -343,8 +343,8 @@
           </span>
         </span>
       </button>
-      <div id="agee-remove-target" role="status" aria-live="polite" aria-hidden="true">Remove AEG</div>
-      <div id="agee-panel" role="dialog" aria-label="AEG command">
+      <div id="agee-remove-target" role="status" aria-live="polite" aria-hidden="true">Remove AG</div>
+      <div id="agee-panel" role="dialog" aria-label="AG command">
         <div id="agee-page-context">
           <span id="agee-page-identity" aria-live="polite"></span>
           <button id="agee-copy-history" type="button" aria-expanded="false" aria-controls="agee-history">Copy</button>
@@ -361,7 +361,7 @@
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
           <span id="agee-dot"></span>
-          <textarea id="agee-input" rows="1" placeholder="Ask AEG" autocomplete="off" spellcheck="true"></textarea>
+          <textarea id="agee-input" rows="1" placeholder="Ask AG" autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
           <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
@@ -1197,7 +1197,7 @@
           <button type="button" data-agee-confirm="yes">Allow</button>
           <button type="button" data-agee-confirm="no">Cancel</button>
         </div>`;
-      row.querySelector(".agee-confirm-text").textContent = text || "Allow AEG to continue?";
+      row.querySelector(".agee-confirm-text").textContent = text || "Allow AG to continue?";
       row.addEventListener("click", (event) => {
         const button = event.target.closest("[data-agee-confirm]");
         if (!button) return;
@@ -1573,7 +1573,7 @@
       wrap.className = "agee-ui-control agee-ui-text";
       const inputEl = document.createElement("input");
       inputEl.type = "text";
-      inputEl.placeholder = control.label || "Ask AEG";
+      inputEl.placeholder = control.label || "Ask AG";
       inputEl.value = control.value || "";
       inputEl.addEventListener("keydown", (event) => {
         event.stopPropagation();
@@ -1696,7 +1696,7 @@
     const scale = Number(pet.scale);
     return {
       id,
-      name: name || "AEG companion",
+      name: name || "AG companion",
       summary: compactText(record.companion_summary || record.summary, 140),
       source: compactText(record.source, 40),
       palette,
@@ -1716,7 +1716,7 @@
   }
 
   // ---- Language chip -----------------------------------------------------
-  // "Hears en·am · Speaks am": a short, always-legible readout of what A.G.
+  // "Hears en·am · Speaks am": a short, always-legible readout of what AG
   // currently understands (STT) and replies in (TTS/text), so the active
   // language is never a guess. Understood-language data comes from the
   // cached gateway profile (input_languages / input_language_primary); the
@@ -1788,7 +1788,7 @@
     launcher.style.removeProperty("--agee-pet-color");
     launcher.style.removeProperty("--agee-pet-dark");
     launcher.style.removeProperty("--agee-pet-scale");
-    launcher.setAttribute("aria-label", "AEG");
+    launcher.setAttribute("aria-label", "AG");
     launcher.dataset.ageeTip = "Click to type, drag to move, scroll to resize, hold to talk";
     launcher.removeAttribute("title");
     if (image) image.removeAttribute("src");
@@ -1804,8 +1804,8 @@
     launcher.style.setProperty("--agee-pet-scale", String(activeCompanionPet.scale));
     const label = `${activeCompanionPet.name} companion`;
     const motionSummary = activeCompanionPet.motion.replace(/-/g, " ");
-    launcher.setAttribute("aria-label", `AEG, ${label}`);
-    launcher.setAttribute("title", `AEG - ${label}`);
+    launcher.setAttribute("aria-label", `AG, ${label}`);
+    launcher.setAttribute("title", `AG - ${label}`);
     launcher.dataset.ageeTip = `${label} - ${motionSummary}`;
     if (image && activeCompanionPet.imageSrc) image.src = activeCompanionPet.imageSrc;
   }
@@ -2194,7 +2194,7 @@
     card.dataset.cue = cueId;
     const you = document.createElement("div");
     you.className = "agee-row agee-you";
-    you.textContent = String(label || entry?.label || "AEG");
+    you.textContent = String(label || entry?.label || "AG");
     // Assistant header: a glowing status dot plus the label, so state reads from
     // the header rather than a heavy left border.
     const head = document.createElement("div");
@@ -2203,7 +2203,7 @@
     headDot.className = "agee-cue-dot";
     const headName = document.createElement("span");
     headName.className = "agee-cue-name";
-    headName.textContent = "AEG";
+    headName.textContent = "AG";
     head.appendChild(headDot);
     head.appendChild(headName);
     // Skeleton shimmer shown while waiting, replaced by the answer once it
@@ -3777,7 +3777,7 @@
       if (!res && extensionContextInvalidated) return;
       if (res?.stored) {
         // The reply arrives on this same cue as progress/done messages.
-        updateCue(cueId, "video stored — sending to AEG ...", "running");
+        updateCue(cueId, "video stored — sending to AG ...", "running");
         return;
       }
       updateCue(cueId, res?.error || "Video note upload failed.", "error");
@@ -4295,7 +4295,7 @@
       // confirm in. Those actions already passed the background's own local
       // action validator (the trust boundary), so skip the inline confirm when
       // req.background is set. Foreground actions keep the inline confirm.
-      if (!req.background && needsConfirmation(el, req) && !(await askInlineConfirm(`Let AEG ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
+      if (!req.background && needsConfirmation(el, req) && !(await askInlineConfirm(`Let AG ${req.action} "${label(el || document.activeElement) || "this element"}"?`))) {
         return { result: `user cancelled ${req.action}` };
       }
       switch (req.action) {
@@ -4441,7 +4441,7 @@
         act(msg).then(reply);
         return true;
       case "confirm":
-        askInlineConfirm(msg.text || "Allow AEG to continue?").then((ok) => reply({ ok }));
+        askInlineConfirm(msg.text || "Allow AG to continue?").then((ok) => reply({ ok }));
         return true;
       case "progress":
         updateCue(msg.cueId, msg.text, "running");

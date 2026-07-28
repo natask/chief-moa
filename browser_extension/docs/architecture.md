@@ -1,6 +1,6 @@
-# Architecture: Agee Browser Prototype
+# Architecture: AG Browser Prototype
 
-Agee starts as a Chrome Manifest V3 extension because the browser is the smallest surface where a user-owned interface can appear on top of real work and, when explicitly asked, experiment with page-aware actions.
+AG starts as a Chrome Manifest V3 extension because the browser is the smallest surface where a user-owned interface can appear on top of real work and, when explicitly asked, experiment with page-aware actions.
 
 ## Goals
 

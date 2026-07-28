@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install the "double-tap Command to summon A.G." Karabiner-Elements rule.
+# Install the "double-tap Command to summon AG" Karabiner-Elements rule.
 #
-# What it does: registers a complex-modification rule that fires the A.G. global
+# What it does: registers a complex-modification rule that fires the AG global
 # Chrome command (Command+Shift+9) and raises Chrome when you tap the left
 # Command key twice quickly. Normal Command shortcuts (Cmd+C, Cmd+Tab, ...) keep
 # working because the rule only acts on a solo double tap.
@@ -23,7 +23,7 @@ ASSETS_DIR="$KARABINER_DIR/assets/complex_modifications"
 
 CHROME_APP="${AG_CHROME_APP:-Google Chrome}"
 SUMMON_KEY="${AG_SUMMON_KEY:-9}"
-DESC="Double-tap Left Command to raise Chrome and open the A.G. overlay"
+DESC="Double-tap Left Command to raise Chrome and open the AG overlay"
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required (brew install jq)"; exit 1; }
 [ -f "$RULE_FILE" ] || { echo "error: rule file not found: $RULE_FILE"; exit 1; }
@@ -47,7 +47,7 @@ RULE_JSON="$(jq \
 
 # Publish an importable asset copy so the Karabiner UI also lists the rule.
 mkdir -p "$ASSETS_DIR"
-jq -n --argjson rule "$RULE_JSON" '{title: "A.G. double-tap Command summon", rules: [$rule]}' \
+jq -n --argjson rule "$RULE_JSON" '{title: "AG double-tap Command summon", rules: [$rule]}' \
   > "$ASSETS_DIR/ag-double-command.json"
 echo "wrote asset: $ASSETS_DIR/ag-double-command.json"
 
@@ -79,5 +79,5 @@ mv "$TMP" "$KARABINER_JSON"
 echo "installed and enabled rule in all profiles: $DESC"
 echo
 echo "Karabiner-Elements reloads the config automatically."
-echo "Double-tap the left Command key from any app to summon the A.G. overlay."
-echo "Also confirm A.G. shows Command+Shift+$SUMMON_KEY at chrome://extensions/shortcuts (scope: Global)."
+echo "Double-tap the left Command key from any app to summon the AG overlay."
+echo "Also confirm AG shows Command+Shift+$SUMMON_KEY at chrome://extensions/shortcuts (scope: Global)."

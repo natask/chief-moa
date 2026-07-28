@@ -1,6 +1,6 @@
 # Customization Path
 
-Agee should be customizable from inside the application, but the extension
+AG should be customizable from inside the application, but the extension
 package is a stable thin client. User-specific customization is served by the
 engine as data, not by silently updating executable extension behavior from a
 website.

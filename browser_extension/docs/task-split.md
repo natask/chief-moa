@@ -13,7 +13,7 @@ Output:
 
 Questions answered:
 
-- What is Agee?
+- What is AG?
 - Why browser first?
 - Why interface first?
 - Why open source?
@@ -28,8 +28,8 @@ Output:
 Questions answered:
 
 - Who is already building in this space?
-- What should Agee borrow?
-- What should Agee avoid?
+- What should AG borrow?
+- What should AG avoid?
 - Does the first prototype build on another project or start small?
 
 Delegated result:
@@ -133,7 +133,7 @@ Manual runtime gate:
 - Save API key in options.
 - Open a low-risk site.
 - Press Cmd/Ctrl+,.
-- Ask Agee to act.
+- Ask AG to act.
 - Confirm overlay progress and page action.
 
 ## Next Delegation Candidates

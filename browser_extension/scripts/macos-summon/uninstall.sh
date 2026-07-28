@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Remove the "double-tap Command to summon A.G." Karabiner-Elements rule.
+# Remove the "double-tap Command to summon AG" Karabiner-Elements rule.
 # Backs up karabiner.json before any change. Safe to re-run.
 
 KARABINER_DIR="${KARABINER_CONFIG_DIR:-$HOME/.config/karabiner}"
 KARABINER_JSON="$KARABINER_DIR/karabiner.json"
 ASSETS_DIR="$KARABINER_DIR/assets/complex_modifications"
-DESC_MATCH="open the A.G. overlay"
+DESC_MATCH="open the AG overlay"
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required"; exit 1; }
 
@@ -34,8 +34,8 @@ if [ -f "$KARABINER_JSON" ]; then
 
   jq empty "$TMP" || { echo "error: produced invalid JSON; leaving config untouched."; rm -f "$TMP"; exit 1; }
   mv "$TMP" "$KARABINER_JSON"
-  echo "removed the A.G. double-tap rule from all profiles."
+  echo "removed the AG double-tap rule from all profiles."
 fi
 
 echo "done. Karabiner-Elements reloads the config automatically."
-echo "The A.G. Command+Shift+9 global shortcut stays in Chrome; remove it at chrome://extensions/shortcuts if you want."
+echo "The AG Command+Shift+9 global shortcut stays in Chrome; remove it at chrome://extensions/shortcuts if you want."

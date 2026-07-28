@@ -38,7 +38,7 @@ tokens, voice tickets, and durable state.
 
 ## Onboarding Flow
 
-1. Open the A.G. toolbar icon and choose Options.
+1. Open the AG toolbar icon and choose Options.
 2. Enter the stable gateway URL.
 3. Register this browser device or paste the per-device token.
 4. Click the gateway test button.
@@ -93,7 +93,7 @@ Browser voice has two separate setup gates:
 
 Required output:
 
-- Microphone denied: grant microphone to the A.G. extension from Options or
+- Microphone denied: grant microphone to the AG extension from Options or
   `chrome://extensions`.
 - Ticket 401/403: device token was rejected for voice.
 - Ticket or socket 404: gateway reachable, but voice routes are not deployed at

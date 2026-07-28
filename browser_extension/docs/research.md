@@ -1,8 +1,8 @@
 # Research: Browser-Native Interface Prior Art
 
-This note turns the raw `__LOG__.md` question into a build decision: should Agee build its own first browser extension, borrow from an existing project, or wrap an existing agent runtime?
+This note turns the raw `__LOG__.md` question into a build decision: should AG build its own first browser extension, borrow from an existing project, or wrap an existing agent runtime?
 
-The latest direction is explicit: Nanobrowser is not the product shape, a sidebar is not the primary UI, and Agee should not position itself as a browser agent. The useful part to borrow is the browser-native capability surface. The product should be an interface and experimentation layer that can later host agentic behavior.
+The latest direction is explicit: Nanobrowser is not the product shape, a sidebar is not the primary UI, and AG should not position itself as a browser agent. The useful part to borrow is the browser-native capability surface. The product should be an interface and experimentation layer that can later host agentic behavior.
 
 ## What Exists
 
@@ -16,9 +16,9 @@ What it proves:
 - BYO-key browser automation is understandable to early adopters.
 - A multi-agent planner/navigator/validator loop is a credible architecture for later versions.
 
-Gap for Agee:
+Gap for AG:
 
-- Agee should not copy the browser-agent framing.
+- AG should not copy the browser-agent framing.
 - The differentiator has to be user-owned extensibility, fast iteration, and an on-page product surface that can become the user's personal agent layer.
 
 ### Browser Use
@@ -30,11 +30,11 @@ What it proves:
 - DOM affordances plus screenshots are a workable first perception model.
 - The hard problem is not only action execution; it is keeping state fresh after every action.
 
-Gap for Agee:
+Gap for AG:
 
 - It is not the browser-extension product surface by itself.
 - It is more useful as architecture inspiration than as the first dependency.
-- Agee should avoid letting automation architecture swallow the interface thesis.
+- AG should avoid letting automation architecture swallow the interface thesis.
 
 ### PageAgent
 
@@ -45,9 +45,9 @@ What it proves:
 - A content-script style page executor can cover many useful tasks before adding a heavy native companion.
 - DOM/text-driven actions are a good first layer, with optional screenshots for disambiguation.
 
-Gap for Agee:
+Gap for AG:
 
-- Agee still needs the product shell: Cmd/Ctrl+,, BYO keys, settings, progress, safety, and an ownership story.
+- AG still needs the product shell: Cmd/Ctrl+,, BYO keys, settings, progress, safety, and an ownership story.
 
 ### Stagehand
 
@@ -58,7 +58,7 @@ What it proves:
 - Production browser agents should not hand every decision to the model.
 - Structured flows plus AI fallback are easier to debug than pure autonomy.
 
-Gap for Agee:
+Gap for AG:
 
 - Stagehand is a developer automation library, not the user-facing browser extension layer.
 
@@ -71,9 +71,9 @@ What they prove:
 - Stable element references and commands such as `observe`, `click(ref)`, `type(ref, text)`, and `screenshot` are easier to inspect than raw DOM dumps.
 - "Use my real browser session" is a strong user-owned direction.
 
-Gap for Agee:
+Gap for AG:
 
-- Agee's first extension can borrow the command vocabulary without adopting a CLI-first runtime.
+- AG's first extension can borrow the command vocabulary without adopting a CLI-first runtime.
 
 ### Automa
 
@@ -84,9 +84,9 @@ What it proves:
 - Browser extension automation is an established user behavior.
 - Workflow/history/status surfaces matter once users start repeating tasks.
 
-Gap for Agee:
+Gap for AG:
 
-- Its workflow-builder model is not the first Agee surface.
+- Its workflow-builder model is not the first AG surface.
 - Licensing and architectural weight make it a poor code base to absorb for v0.
 
 ### WXT, Plasmo, and cmdk
@@ -97,7 +97,7 @@ What they prove:
 
 - A production extension should probably move to a real extension framework and accessible command-palette primitives.
 
-Gap for Agee:
+Gap for AG:
 
 - The current artifact intentionally stays no-build so it can be loaded and inspected immediately.
 
@@ -111,7 +111,7 @@ What they prove:
 - Users can opt into script-like power when there is a walkthrough.
 - The install flow needs clear steps: install extension, pin it, enable script permissions, install or create tweaks.
 
-Gap for Agee:
+Gap for AG:
 
 - Remote script updates are too risky for the first prototype.
 - The v0 should support declarative customization first and document userScripts as a later explicit permission path.
@@ -125,10 +125,10 @@ What they prove:
 - Browser control is legible.
 - Users will try agentic browsing when the UX is simple.
 
-Gap for Agee:
+Gap for AG:
 
-- Hosted-only products create the exact silo Agee is trying to avoid.
-- Agee must make ownership, inspectability, and modification part of the product.
+- Hosted-only products create the exact silo AG is trying to avoid.
+- AG must make ownership, inspectability, and modification part of the product.
 
 ### Browser Extension APIs
 
@@ -150,7 +150,7 @@ Constraints:
 
 ## Build vs Borrow
 
-Build the first Agee prototype directly as a no-build MV3 extension.
+Build the first AG prototype directly as a no-build MV3 extension.
 
 Borrow ideas, not the whole stack:
 

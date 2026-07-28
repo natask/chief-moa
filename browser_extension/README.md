@@ -1,4 +1,4 @@
-# AEG
+# AG
 
 An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-click the on-page control to type, drag it to move it, or double-click and hold it to talk directly on the website you are using. **Cmd/Ctrl+.** uses the same voice path: tap to start, tap again to commit, or hold to talk until release. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
@@ -47,7 +47,7 @@ Development is **headless and off-screen**. It drives **Chrome for Testing**
 (from the puppeteer cache) with a throwaway profile — never your daily
 Chrome/Brave — so it never opens a window, never steals focus, and never
 prompts. Branded Google Chrome hard-blocks `--load-extension`; Chrome for
-Testing allows it and loads the real agee service worker.
+Testing allows it and loads the real AG service worker.
 
 ```sh
 npm run dev
@@ -85,11 +85,11 @@ is separate from the quiet flow on purpose:
    printed.
 2. Run `npm run doctor`. It confirms the baked gateway URL/token, exercises the
    live gateway with that token, and reports whether a daily browser profile has
-   agee loaded from this repo path.
-3. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the [extension/](extension/) folder. If agee is already listed, click its reload icon and confirm the path shown in the card is this folder. It stays installed across browser restarts.
-4. Open the agee toolbar icon → Options → **Grant microphone** once if you plan to use voice. That grant belongs to the extension, not to the websites where the overlay appears.
+   AG loaded from this repo path.
+3. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the [extension/](extension/) folder. If AG is already listed, click its reload icon and confirm the path shown in the card is this folder. It stays installed across browser restarts.
+4. Open the AG toolbar icon → Options → **Grant microphone** once if you plan to use voice. That grant belongs to the extension, not to the websites where the overlay appears.
 5. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
-6. Press **Cmd+,** (Mac) / **Ctrl+,**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the agee card or remove the old copy and load [extension/](extension/) again.
+6. Press **Cmd+,** (Mac) / **Ctrl+,**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the AG card or remove the old copy and load [extension/](extension/) again.
 
 The Moa mark floats on the page when idle, glows while it works, and rings
 (a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
@@ -100,7 +100,7 @@ text streams into the result stack above the input. The extension does not
 render visible chat history; session history stays on the gateway and can be
 queried by asking Moa.
 Voice uses an extension offscreen document for microphone capture, so websites
-do not need per-site microphone approval for AEG turns. Capture starts before
+do not need per-site microphone approval for AG turns. Capture starts before
 the gateway has finished opening the voice session; early PCM chunks queue until
 `session_ready`, then flush in order before any commit so the first syllables are
 preserved. Cmd/Ctrl+. and the Moa mark's legacy double-click share one voice contract:
@@ -115,12 +115,12 @@ send. Holding the mascot keeps push-to-talk in that thread and sends on release.
 A double-click uses the same start/stop toggle in a fresh thread, while a
 triple-click cancels any pending capture without sending and opens chat.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
-permission error and opens the AEG Options page; grant the microphone there or
+permission error and opens the AG Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.
 Explicit open-tab commands such as `open https://example.com in a new tab`
 create a browser tab locally; open-and-report requests still run through the
 background browser task path with receipts.
-To override the baked defaults, use the **agee** toolbar icon → Options.
+To override the baked defaults, use the **AG** toolbar icon → Options.
 
 Only while developing the extension package, optionally open
 `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777` in
@@ -178,8 +178,8 @@ npm run smoke
 that current source no longer contains the old browser-side Anthropic fallback,
 confirms `extension/agee.config.json` has the live gateway URL and a token
 without printing the token, posts a real authenticated turn to
-`/v1/voice/turns`, and scans common Chrome/Chromium profiles for an agee install
-that points at this checkout. A warning that no daily profile has agee installed
+`/v1/voice/turns`, and scans common Chrome/Chromium profiles for an AG install
+that points at this checkout. A warning that no daily profile has AG installed
 means the headless tests can pass while the browser you are looking at is still
 missing or stale.
 
@@ -188,7 +188,7 @@ permissions/commands are present, and the extension/harness JavaScript has valid
 syntax. It also fails if microphone capture moves back into the content script.
 
 `smoke` launches headless Chrome for Testing with a throwaway profile, loads the
-real [extension/](extension/), and confirms the agee background **service worker**
+real [extension/](extension/), and confirms the AG background **service worker**
 loads with a stable id. It then drives the real background → content-script
 message path (`snapshot`, `type`, `click`) against the demo page and captures a
 screenshot — no window shown, no focus taken. It exercises the **real** extension;

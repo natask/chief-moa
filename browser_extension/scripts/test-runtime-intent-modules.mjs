@@ -35,7 +35,7 @@ test("browser intent parsing separates direct open, task, and page-context reque
   assert.deepEqual(parseBrowserSearchIntent("find me an ergonomic red chair on Amazon"), {
     query: "ergonomic red chair", provider: "amazon", active: true,
   });
-  assert.deepEqual(parseBrowserSearchIntent("Hey A.G., open a new tab that says mechanical keyboards"), {
+  assert.deepEqual(parseBrowserSearchIntent("Hey AG, open a new tab that says mechanical keyboards"), {
     query: "mechanical keyboards", provider: "google", active: true,
   });
   assert.deepEqual(parseBrowserSearchIntent("search Amazon for desk lamps"), {

@@ -1,4 +1,4 @@
-// Headless smoke for the AEG side panel agent surface.
+// Headless smoke for the AG side panel agent surface.
 //
 // Loads the REAL extension in Chrome for Testing, opens sidepanel.html as an
 // extension page, and proves the panel bridge end to end: the page boots, the

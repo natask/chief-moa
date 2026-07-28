@@ -107,7 +107,7 @@ async function waitForAgeeWorker(port, timeoutMs = 15000) {
         const manifest = await evaluate(candidate, `(() => {
           try {
             const value = globalThis.chrome?.runtime?.getManifest?.();
-            return value?.name === "AEG" && value.permissions?.includes("userScripts") ? value : null;
+            return value?.name === "AG" && value.permissions?.includes("userScripts") ? value : null;
           } catch {
             return null;
           }
@@ -120,7 +120,7 @@ async function waitForAgeeWorker(port, timeoutMs = 15000) {
     }
     await delay(150);
   }
-  throw new Error("Timed out waiting for the AEG extension service worker");
+  throw new Error("Timed out waiting for the AG extension service worker");
 }
 
 async function probe(worker) {

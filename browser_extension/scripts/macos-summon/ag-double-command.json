@@ -1,8 +1,8 @@
 {
-  "title": "A.G. double-tap Command summon",
+  "title": "AG double-tap Command summon",
   "rules": [
     {
-      "description": "Double-tap Left Command to raise Chrome and open the A.G. overlay",
+      "description": "Double-tap Left Command to raise Chrome and open the AG overlay",
       "manipulators": [
         {
           "type": "basic",

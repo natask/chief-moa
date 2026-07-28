@@ -28,7 +28,7 @@ The prototype is not validated by existing as code. It needs direct feedback.
 4. Open `chrome-extension://<extension-id>/dev.html?server=http://localhost:7777` in a separate extension page.
 5. Open `http://localhost:7777/fixtures/demo.html`, or open another low-risk page.
 6. Press Cmd/Ctrl+,. If Chrome reports a shortcut conflict, set the shortcut at `chrome://extensions/shortcuts`.
-7. Ask Agee to search for something.
+7. Ask AG to search for something.
 8. Watch the overlay show progress and execute the first click/type/key sequence.
 
 ## Automated Smoke

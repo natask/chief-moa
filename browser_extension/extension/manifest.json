@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "AEG",
-  "version": "0.1.98",
+  "name": "AG",
+  "version": "0.1.99",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -51,33 +51,33 @@
         "mac": "Command+Shift+8",
         "default": "Ctrl+Shift+8"
       },
-      "description": "Open the AEG panel (works on every page, including chrome:// pages)"
+      "description": "Open the AG panel (works on every page, including chrome:// pages)"
     },
     "toggle-agee": {
       "suggested_key": {
         "mac": "Command+Comma",
         "default": "Ctrl+Comma"
       },
-      "description": "Open AEG command mode"
+      "description": "Open AG command mode"
     },
     "toggle-agee-voice": {
       "suggested_key": {
         "mac": "Command+Period",
         "default": "Ctrl+Period"
       },
-      "description": "Start or send AEG voice"
+      "description": "Start or send AG voice"
     },
     "open-agee-global": {
       "suggested_key": {
         "mac": "Command+Shift+9",
         "default": "Ctrl+Shift+9"
       },
-      "description": "Start or finish AEG dictation from any app while Chrome is running",
+      "description": "Start or finish AG dictation from any app while Chrome is running",
       "global": true
     }
   },
   "action": {
-    "default_title": "AEG — open panel",
+    "default_title": "AG — open panel",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

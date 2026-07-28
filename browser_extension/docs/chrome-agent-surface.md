@@ -4,7 +4,7 @@ Status: draft, created 2026-06-18.
 
 This note consolidates the current repo research, recent cross-agent chat
 history, and current Chrome extension API constraints for the browser-based Moa
-surface, currently named Agee.
+surface, currently named AG.
 
 ## Source Trail
 
@@ -43,7 +43,7 @@ that can combine:
 - a gateway handoff path for model routing, memory, agent runs, and heavier
   execution.
 
-That is enough to make Agee the browser-based Moa interface. It is not enough to
+That is enough to make AG the browser-based Moa interface. It is not enough to
 make the extension a silent operating-system controller.
 
 ## What Chrome Allows
@@ -65,7 +65,7 @@ Important constraints:
 
 Product implication: do not design around Cmd+, as the guaranteed global
 shortcut. Keep Cmd/Ctrl+, for in-browser invocation, and add a separate global
-"summon Agee" command whose default is Chrome-compliant and whose setup screen
+"summon AG" command whose default is Chrome-compliant and whose setup screen
 points to `chrome://extensions/shortcuts`.
 
 ### Whole-Screen And Other-App Capture
@@ -164,7 +164,7 @@ Verification:
 
 ## Current Answer To The Product Question
 
-Yes, Chrome is a viable first surface for the browser-based Moa/Agee assistant.
+Yes, Chrome is a viable first surface for the browser-based Moa/AG assistant.
 It supports a global trigger and user-approved whole-screen capture. The UI will
 need setup and status affordances because Chrome deliberately routes powerful
 capabilities through user-visible permission and shortcut controls.

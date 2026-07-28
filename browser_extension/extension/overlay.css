@@ -979,7 +979,7 @@ button.agee-ui-list-row:hover {
 }
 
 /* ---- Language chip -------------------------------------------------------- */
-/* A short, always-visible readout of what A.G. currently hears (STT) and
+/* A short, always-visible readout of what AG currently hears (STT) and
    speaks (reply) — "Hears en·am · Speaks am". Styled like other muted meta
    text; hidden (via the `hidden` attribute from content.js) when there is no
    language data yet rather than showing a blank or "undefined" line. */

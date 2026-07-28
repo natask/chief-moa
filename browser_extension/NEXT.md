@@ -1,8 +1,8 @@
-# A.G.: Next Direction
+# AG: Next Direction
 
 ## What This Is
 
-A.G. should start as an open source browser-native interface shell.
+AG should start as an open source browser-native interface shell.
 
 The immediate product is a browser extension with a small on-page surface that can be invoked by click or keyboard shortcut, then used through typing or speech. It should feel like a personal interface to agents, not a sidebar, not a separate browser agent, and not another silo.
 
@@ -130,7 +130,7 @@ Message people directly. Post publicly. Make the artifact legible enough that se
 
 ## One-Sentence Version
 
-A.G. is an open source, user-owned browser interface that lets people invoke agents through voice or command mode on any website, starting as a Chrome extension and growing into a personal layer they can modify, self-host, and extend.
+AG is an open source, user-owned browser interface that lets people invoke agents through voice or command mode on any website, starting as a Chrome extension and growing into a personal layer they can modify, self-host, and extend.
 
 ## Next Actions
 
