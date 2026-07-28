@@ -15,7 +15,7 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
         return response(401, { error: "unauthorized" });
       }
       const method = String(request.method || "GET").toUpperCase();
-      const match = String(request.path || "").match(/^\/v1\/release-control\/apps\/([^/]+)\/(view|assignments|fallback|install-receipts|feedback)$/);
+      const match = String(request.path || "").match(/^\/v1\/release-control\/apps\/([^/]+)\/(view|candidates|candidate-selections|assignments|fallback|install-receipts|feedback)$/);
       if (!match) return response(404, { error: "not_found" });
       const applicationId = decodeURIComponent(match[1]);
       const action = match[2];
@@ -49,6 +49,13 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
       if (method === "GET" && action === "view") {
         return response(200, publicView(await service.view(input), input.surface || input.surface_id));
       }
+      if (method === "GET" && action === "candidates") {
+        return response(200, publicCatalog(await service.listCandidates(input), trustedSurface));
+      }
+      if (method === "POST" && action === "candidate-selections") {
+        const assignment = await service.selectCandidate(input);
+        return response(201, await assignmentEnvelope(service, input, assignment));
+      }
       if (method === "POST" && action === "assignments") {
         const assignment = await service.assign(input);
         return response(201, await assignmentEnvelope(service, input, assignment));
@@ -81,11 +88,34 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
   };
 }
 
+function publicCatalog(catalog, surface) {
+  return {
+    schema_version: 1,
+    candidates: catalog.items.map((bundle) => {
+      const artifact = bundle.artifacts.find((item) => item.surface_id === surface) || null;
+      return {
+        bundle_id: bundle.bundle_id,
+        compatibility_version: bundle.compatibility_version,
+        created_at: bundle.created_at,
+        lineage: bundle.lineage,
+        release_id: artifact?.release_id || null,
+        artifact: artifact ? publicArtifact(artifact) : null,
+      };
+    }),
+    next_cursor: catalog.next_cursor,
+  };
+}
+
 async function assignmentEnvelope(service, input, assignment) {
   const view = publicView(await service.view(input), input.surface || input.surface_id);
   const surface = String(input.surface || input.surface_id || "").trim();
-  const candidate = view.candidates.find((item) => item.bundle_id === assignment.bundle_id
+  let candidate = view.candidates.find((item) => item.bundle_id === assignment.bundle_id
     && (!surface || item.artifact.surface === surface)) || null;
+  if (!candidate && assignment.operation === "select_candidate") {
+    const catalog = publicCatalog(await service.listCandidates({ ...input, limit: 100 }), surface);
+    const exact = catalog.candidates.find((item) => item.bundle_id === assignment.bundle_id);
+    if (exact?.artifact) candidate = { ...exact, artifact: exact.artifact };
+  }
   return {
     assignment_receipt: publicAssignment(assignment, candidate?.release_id || null),
     effective_assignment: view.effective_assignment,

@@ -16,6 +16,8 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
   requireMethods(adapter, [
     "listBundles", "listChannelHeads", "listAssignmentEvents", "appendAssignmentEvent",
     "listInstallReceipts", "appendInstallReceipt", "listFeedback", "appendFeedback",
+    "listPublicationReceipts",
+    "listPublishedBundles",
   ]);
 
   async function view(input) {
@@ -95,6 +97,60 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
       idempotency_key: idempotencyKey,
       actor_id: input.actor_id,
       created_at: now(),
+    });
+    return adapter.appendAssignmentEvent(event, expected);
+  }
+
+  async function listCandidates(input) {
+    const tenantId = key(input.tenant_id, "tenant_id");
+    const applicationId = key(input.application_id, "application_id");
+    authorize(input, "read", applicationId, "all");
+    const limit = integer(input.limit ?? 20, "limit", 1);
+    if (limit > 100) throw new Error("limit is invalid");
+    const cursor = input.cursor == null || input.cursor === "" ? null : key(input.cursor, "cursor");
+    const ordered = (await adapter.listPublishedBundles(tenantId, applicationId)).map(normalizeReleaseBundle)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.bundle_id.localeCompare(a.bundle_id));
+    const start = cursor == null ? 0 : ordered.findIndex((item) => item.bundle_id === cursor) + 1;
+    if (cursor != null && start === 0) throw mismatch("candidate_cursor_unknown");
+    const items = ordered.slice(start, start + limit);
+    return Object.freeze({
+      schema_version: "release-candidate-catalog/v1",
+      items: Object.freeze(items),
+      next_cursor: start + limit < ordered.length ? items.at(-1).bundle_id : null,
+    });
+  }
+
+  async function selectCandidate(input) {
+    const context = await loadContext(input);
+    const bundleId = key(input.bundle_id, "bundle_id");
+    authorize(input, "assign_channel", context.applicationId, "preview");
+    const bundle = context.bundles.find((item) => item.bundle_id === bundleId);
+    if (!bundle) throw mismatch("candidate_unknown");
+    const published = (await adapter.listPublicationReceipts(context.tenantId, context.applicationId))
+      .some((item) => item.bundle_id === bundleId);
+    if (!published) throw mismatch("candidate_not_published");
+    const artifact = artifactForSurface(bundle, input.surface || input.surface_id);
+    if (!artifact) throw mismatch("candidate_surface_missing");
+    if (input.release_id != null && key(input.release_id, "release_id") !== artifact.release_id) throw mismatch("candidate_release_mismatch");
+    const stable = context.heads.get("stable");
+    if (!stable) throw new Error("stable channel head not found");
+    const expected = integer(input.expected_sequence, "expected_sequence", 0);
+    const scopeType = key(input.scope_type || "device", "scope_type");
+    const scopeId = key(input.scope_id || input.device_id, "scope_id");
+    if (scopeType !== "device" || scopeId !== key(input.device_id, "device_id")) throw mismatch("candidate_device_scope_required");
+    const idempotencyKey = requiredIdempotencyKey(input.idempotency_key);
+    const prior = context.assignments.find((item) => item.scope_type === scopeType && item.scope_id === scopeId && item.idempotency_key === idempotencyKey);
+    if (prior) {
+      if (prior.bundle_id !== bundleId || prior.operation !== "select_candidate") throw mismatch("idempotency_key_reused");
+      return prior;
+    }
+    const event = normalizeAssignmentEvent({
+      event_id: input.event_id || idempotentEventId("assign", context, scopeType, scopeId, idempotencyKey),
+      tenant_id: context.tenantId, application_id: context.applicationId,
+      scope_type: scopeType, scope_id: scopeId, sequence: expected + 1,
+      channel: "candidate", bundle_id: bundleId, stable_fallback_bundle_id: stable.bundle_id,
+      operation: "select_candidate", idempotency_key: idempotencyKey,
+      actor_id: input.actor_id, created_at: now(),
     });
     return adapter.appendAssignmentEvent(event, expected);
   }
@@ -216,7 +272,7 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     };
   }
 
-  return Object.freeze({ view, assign, fallback, recordInstallReceipt, recordFeedback });
+  return Object.freeze({ view, listCandidates, selectCandidate, assign, fallback, recordInstallReceipt, recordFeedback });
 }
 
 function latestHeads(records) {

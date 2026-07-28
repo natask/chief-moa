@@ -210,6 +210,12 @@ bound to the assignment, release id, surface, and artifact SHA-256. The control
 plane retains a last-known-good assignment so a client can request a bounded
 fallback without treating a UI selection as a completed rollback.
 
+Published historical bundles remain available through a paginated candidate
+catalog after either channel head advances. Immutable lineage can name one
+series parent and bounded parallel parents for composed work. Exact candidate
+selection is device-scoped and sequence-checked; it appends an assignment but
+does not move stable/preview or grant publication authority.
+
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
 be reported as a later one. macOS and Windows remain protocol/library seams
