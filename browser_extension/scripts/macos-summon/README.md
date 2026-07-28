@@ -1,8 +1,8 @@
-# Dictate with A.G. from anywhere on macOS (double-tap Command)
+# Dictate with AEG from anywhere on macOS (double-tap Command)
 
-This raises Chrome and starts A.G. dictation when you tap the left Command key
+This raises Chrome and starts AEG dictation when you tap the left Command key
 twice quickly, from any application, even when Chrome is not focused. Double-tap
-Command again to stop. A.G. copies the literal mixed-language transcript to the
+Command again to stop. AEG copies the literal mixed-language transcript to the
 clipboard without running the reasoning or text-to-speech stages.
 
 Two pieces work together:
@@ -32,7 +32,7 @@ is the lighter path on this machine. If you later remove Karabiner, the
 
 - Karabiner-Elements installed and running (https://karabiner-elements.pqrs.org/).
 - `jq` on PATH (`brew install jq`).
-- The A.G. extension loaded in Chrome (the global command ships in its manifest).
+- The AEG extension loaded in Chrome (the global command ships in its manifest).
 
 ## Install
 
@@ -78,20 +78,20 @@ that ever bites.
 ## Manual QA (the hotkey cannot be verified headlessly)
 
 1. Load the extension unpacked in Chrome (or reload it after this change).
-2. Open `chrome://extensions/shortcuts`. Confirm A.G. lists
-   "Open A.G. overlay from any app while Chrome is running" bound to
+2. Open `chrome://extensions/shortcuts`. Confirm AEG lists
+   "Open AEG overlay from any app while Chrome is running" bound to
    Command+Shift+9 with scope Global. If scope shows "In Chrome", click the scope
    selector and set it to Global.
 3. First, test the Chrome side alone: with a normal web page focused in Chrome,
-   press Command+Shift+9. The A.G. overlay should open.
+   press Command+Shift+9. The AEG overlay should open.
 4. Run `./install.sh`. Karabiner-Elements > Complex Modifications should now list
-   the enabled A.G. rule.
+   the enabled AEG rule.
 5. Focus a different app (Finder, Notes, a terminal). Double-tap the left Command
-   key. Chrome should come forward and A.G. should start listening on the active
+   key. Chrome should come forward and AEG should start listening on the active
    web tab. Speak, double-tap Command again, return to the original app, and
    paste the copied transcript.
 6. Switch Chrome's active tab to a `chrome://` page (for example
-   `chrome://settings`). From another app, double-tap Command again. A.G. should
+   `chrome://settings`). From another app, double-tap Command again. AEG should
    open on another web tab, or open a new tab, instead of failing on the
    non-injectable page.
 7. Confirm normal Command usage still works: Cmd+C, Cmd+V, Cmd+Tab, holding
@@ -111,7 +111,7 @@ The Chrome global shortcut stays registered in the extension; remove it at
 ## Troubleshooting
 
 - Double tap does nothing: open Karabiner-Elements > Complex Modifications and
-  confirm the A.G. rule is present and enabled. Re-run `install.sh` if not.
+  confirm the AEG rule is present and enabled. Re-run `install.sh` if not.
 - Overlay opens but Chrome stays behind: the `open -a` app name does not match
   your Chrome. Re-run with `AG_CHROME_APP="<your Chrome app name>"`.
 - Command+Shift+9 conflicts with something else: re-run with a different

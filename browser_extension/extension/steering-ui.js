@@ -77,6 +77,49 @@
       positionPanel();
     }
   }
+  async function copyTranscriptAndOpenHistory({
+    transcript,
+    view,
+    button,
+    status,
+    copyText,
+    sendMessage,
+    positionPanel,
+    document,
+  }) {
+    if (!view || !button || !status) return { copied: false, historyOpened: false };
+    const value = String(transcript || "").trim();
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    status.textContent = value ? "Copying transcript and opening history…" : "Opening history…";
+    try {
+      const [copyResult, historyResult] = await Promise.allSettled([
+        value ? copyText(value) : Promise.resolve(false),
+        sendMessage({ cmd: "history" }),
+      ]);
+      const copied = copyResult.status === "fulfilled" && copyResult.value === true;
+      const historyResponse = historyResult.status === "fulfilled" ? historyResult.value : null;
+      const historyOpened = historyResponse?.ok === true;
+      if (historyOpened) {
+        renderHistory(view, historyResponse.turns, document);
+        view.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+      }
+      if (copied && historyOpened) status.textContent = "Transcript copied. History opened.";
+      else if (copied) status.textContent = "Transcript copied, but saved history could not be opened.";
+      else if (historyOpened) status.textContent = value
+        ? "History opened, but the transcript could not be copied."
+        : "History opened. There is no transcript to copy yet.";
+      else status.textContent = value
+        ? "The transcript could not be copied and saved history could not be opened."
+        : "Saved history could not be opened.";
+      return { copied, historyOpened };
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      positionPanel();
+    }
+  }
   function formatSteeredAssistantText(latestText, boundaryText = "") {
     const latest = String(latestText || "").trim();
     const boundary = String(boundaryText || "").trim();
@@ -101,6 +144,7 @@
     isCurrentLiveVoiceState,
     selectResolvedCueIds: (cards) => (Array.isArray(cards) ? cards : [])
       .filter((card) => card?.id && card.active !== true && card.protected !== true).map((card) => card.id),
+    copyTranscriptAndOpenHistory,
     toggleHistorySnapshot,
   });
 })(globalThis);

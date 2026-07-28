@@ -117,6 +117,35 @@
   transform-origin: center bottom;
   filter: drop-shadow(0 0.05em 0.09em rgba(0, 0, 0, 0.5));
 }
+#agee-launcher[hidden] {
+  display: none !important;
+}
+#agee-remove-target {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  z-index: 2147483647;
+  display: none;
+  transform: translateX(-50%);
+  min-width: 112px;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 105, 97, 0.55);
+  border-radius: 999px;
+  background: rgba(28, 12, 12, 0.92);
+  color: #ffaaa5;
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+#agee-remove-target.agee-remove-visible {
+  display: block;
+}
+#agee-remove-target.agee-remove-armed {
+  color: #fff;
+  background: rgba(174, 35, 27, 0.96);
+  transform: translateX(-50%) scale(1.06);
+}
 #agee-root.agee-companion-pet-active #agee-launcher .agee-pet-mark {
   display: block;
 }
@@ -714,6 +743,9 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 10px 12px 12px;
 }
+#agee-root.agee-has-ui-spec #agee-ui-surface:empty {
+  display: none;
+}
 .agee-ui-shell {
   display: grid;
   gap: 10px;
@@ -993,6 +1025,34 @@ button.agee-ui-list-row:hover {
   font-size: 11px;
   padding: 2px 4px;
 }
+#agee-copy-history {
+  appearance: none;
+  background: rgba(74, 155, 255, 0.1);
+  border: 1px solid rgba(74, 155, 255, 0.22);
+  border-radius: 999px;
+  color: #dbeaff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+#agee-copy-history:hover,
+#agee-copy-history:focus-visible,
+#agee-copy-history[aria-expanded="true"] {
+  background: rgba(74, 155, 255, 0.18);
+  border-color: rgba(74, 155, 255, 0.42);
+}
+.agee-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
 #agee-history-button:hover,
 #agee-history-button:focus-visible,
 #agee-history-button[aria-expanded="true"] {
@@ -1013,7 +1073,14 @@ button.agee-ui-list-row:hover {
 }
 .agee-history-turn {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 8px 0;
+}
+.agee-history-turn:empty {
+  display: none;
 }
 .agee-history-turn:first-child {
   border-top: 0;
@@ -1027,11 +1094,28 @@ button.agee-ui-list-row:hover {
   white-space: pre-wrap;
 }
 .agee-history-you {
-  color: var(--agee-muted);
-  margin-bottom: 4px !important;
+  align-self: flex-end;
+  max-width: min(88%, 36rem);
+  padding: 7px 10px;
+  border: 1px solid rgba(74, 155, 255, 0.18);
+  border-radius: 12px 12px 4px 12px;
+  background: rgba(74, 155, 255, 0.12);
+  color: #e8f1ff;
+  text-align: left;
 }
 .agee-history-assistant {
+  align-self: flex-start;
+  max-width: min(88%, 36rem);
+  padding: 7px 10px;
+  border: 1px solid var(--agee-card-line);
+  border-radius: 12px 12px 12px 4px;
+  background: rgba(255, 255, 255, 0.055);
   color: #e7e7ea;
+}
+.agee-history-you:empty,
+.agee-history-assistant:empty,
+.agee-history-empty:empty {
+  display: none;
 }
 
 /* ---- Result stack: cue cards ---------------------------------------------- */
@@ -1055,6 +1139,9 @@ button.agee-ui-list-row:hover {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.agee-row:empty {
+  display: none;
 }
 .agee-you {
   color: #9bbcff;
@@ -1096,10 +1183,20 @@ button.agee-ui-list-row:hover {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .agee-cue .agee-you {
-  padding: 0 0 7px 0;
+  width: fit-content;
+  max-width: 88%;
+  margin: 0 0 9px auto;
+  padding: 7px 10px;
+  border: 1px solid rgba(74, 155, 255, 0.18);
+  border-radius: 12px 12px 4px 12px;
+  background: rgba(74, 155, 255, 0.12);
   font-weight: 600;
-  color: #ededf0;
+  color: #e8f1ff;
   line-height: 1.5;
+  text-align: left;
+}
+.agee-cue .agee-you:empty {
+  display: none;
 }
 .agee-cue-head {
   display: flex;
@@ -1129,12 +1226,20 @@ button.agee-ui-list-row:hover {
   color: var(--agee-muted);
 }
 .agee-cue-status {
+  width: fit-content;
   font-size: 14px;
   line-height: 1.5;
   color: #dcdce2;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-width: 34ch;
+  max-width: min(88%, 34rem);
+  padding: 7px 10px;
+  border: 1px solid var(--agee-card-line);
+  border-radius: 12px 12px 12px 4px;
+  background: rgba(255, 255, 255, 0.055);
+}
+.agee-cue-status:empty {
+  display: none;
 }
 @keyframes agee-cue-pulse {
   0%, 100% { opacity: 0.45; transform: scale(0.82); }
@@ -1190,6 +1295,19 @@ button.agee-ui-list-row:hover {
 .agee-cue-done .agee-cue-status,
 .agee-cue-error .agee-cue-status {
   animation: agee-fade-in 0.22s ease-out;
+}
+.agee-cue-running.agee-cue-streaming .agee-cue-status::after {
+  content: " ···";
+  display: inline-block;
+  width: 1.7em;
+  color: var(--agee-muted);
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: agee-stream-wait 0.9s steps(3, end) infinite;
+}
+@keyframes agee-stream-wait {
+  from { width: 0; }
+  to { width: 1.7em; }
 }
 @keyframes agee-fade-in {
   from { opacity: 0; transform: translateY(2px); }
@@ -1484,6 +1602,12 @@ button.agee-ui-list-row:hover {
      rather than leaving it behind a hover that can never fire. */
   .agee-cue-dismiss {
     opacity: 1;
+  }
+  .agee-cue .agee-you,
+  .agee-cue-status,
+  .agee-history-you,
+  .agee-history-assistant {
+    max-width: 92%;
   }
 }
 @media (max-width: 380px) {

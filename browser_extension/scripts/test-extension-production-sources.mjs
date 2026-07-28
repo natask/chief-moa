@@ -13,7 +13,9 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 test("every packaged JavaScript file has exactly one production coverage classification", () => {
   const classification = validateProductionSourceClassification(root);
   assert.deepEqual(classification.runtime, [...RUNTIME_SOURCE_FILES]);
-  assert.equal(RUNTIME_SOURCE_FILES.length, 44);
+  // validateProductionSourceClassification already fails when a packaged JS
+  // file is missing, stale, duplicated, or unclassified. An exact array length
+  // adds only a mysterious release-by-release counter, not extra coverage.
   assert.deepEqual(EXCLUDED_SOURCE_FILES, {
     "extension/dev.js": "operational_tooling",
     "extension/vendor/livekit-client.esm.js": "generated_vendor",

@@ -403,7 +403,7 @@ async function stopAndUploadVideoCapture(msg) {
     return { stored: false, error: "No video was captured." };
   }
   if (!msg.gatewayUrl) {
-    return { stored: false, error: "No gateway URL set. Open A.G. Options and set the Agent gateway URL." };
+    return { stored: false, error: "No gateway URL set. Open AEG Options and set the Agent gateway URL." };
   }
   const headers = {
     "content-type": blob.type || "video/webm",

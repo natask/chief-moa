@@ -62,11 +62,76 @@ assert.match(contentSource, /if \(state\.commitWhenReady\) commitLiveVoiceTurn\(
 assert.match(backgroundSource, /all_branches_context: false/);
 assert.match(contentSource, /contextAction: state\.contextControls\.action/);
 assert.match(backgroundSource, /options\.contextAction \? \{ context_action: options\.contextAction, all_branches_context: false \}/);
-assert.match(backgroundSource, /files: \["ui-spec-runtime\.js", "steering-ui\.js", "document-context\.js", "content\.js"\]/);
+assert.match(backgroundSource, /files: \["ui-spec-runtime\.js", "steering-ui\.js", "launcher-removal-runtime\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "content\.js"\]/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);
 assert.match(contentSource, /scheduleCueRetirement\(cueId\)/);
 assert.match(steeringSource, /sendMessage\(\{ cmd: "history" \}\)/);
+
+const attributes = new Map();
+const button = {
+  disabled: false,
+  setAttribute: (name, value) => attributes.set(name, value),
+  removeAttribute: (name) => attributes.delete(name),
+};
+const status = { textContent: "" };
+const view = {
+  hidden: true,
+  children: [],
+  replaceChildren() { this.children = []; },
+  appendChild(child) { this.children.push(child); },
+};
+const fakeDocument = {
+  createElement(tagName) {
+    return {
+      tagName,
+      className: "",
+      textContent: "",
+      children: [],
+      appendChild(child) { this.children.push(child); },
+      get childElementCount() { return this.children.length; },
+    };
+  },
+};
+let copiedText = "";
+let positioned = 0;
+const copyHistoryResult = await helpers.copyTranscriptAndOpenHistory({
+  transcript: "  Current transcript  ",
+  view,
+  button,
+  status,
+  copyText: async (text) => { copiedText = text; return true; },
+  sendMessage: async (message) => {
+    assert.deepEqual({ ...message }, { cmd: "history" });
+    return { ok: true, turns: [{ transcript: "Question", reply: "Answer" }] };
+  },
+  positionPanel: () => { positioned += 1; },
+  document: fakeDocument,
+});
+assert.deepEqual({ ...copyHistoryResult }, { copied: true, historyOpened: true });
+assert.equal(copiedText, "Current transcript");
+assert.equal(view.hidden, false);
+assert.equal(attributes.get("aria-expanded"), "true");
+assert.equal(attributes.has("aria-busy"), false);
+assert.equal(button.disabled, false);
+assert.equal(status.textContent, "Transcript copied. History opened.");
+assert.equal(view.children[0].children[0].className, "agee-history-you");
+assert.equal(view.children[0].children[1].className, "agee-history-assistant");
+assert.equal(positioned, 1);
+
+const partialStatus = { textContent: "" };
+const partialResult = await helpers.copyTranscriptAndOpenHistory({
+  transcript: "Still copy this",
+  view: { ...view, hidden: true },
+  button,
+  status: partialStatus,
+  copyText: async () => true,
+  sendMessage: async () => ({ ok: false, error: "offline" }),
+  positionPanel: () => {},
+  document: fakeDocument,
+});
+assert.deepEqual({ ...partialResult }, { copied: true, historyOpened: false });
+assert.equal(partialStatus.textContent, "Transcript copied, but saved history could not be opened.");
 
 console.log("browser steering UI tests passed");

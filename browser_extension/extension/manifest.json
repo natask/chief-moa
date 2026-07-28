@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "A.G.",
-  "version": "0.1.88",
+  "name": "AEG",
+  "version": "0.1.98",
   "description": "Open-source browser agent. Cmd+, to type, Cmd+. to talk. Pipes to your self-hosted gateway. It sees your page and acts in it.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -31,7 +31,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["ui-spec-runtime.js", "steering-ui.js", "browser-command-transcript-runtime.js", "document-context.js", "content.js"],
+      "js": ["ui-spec-runtime.js", "steering-ui.js", "launcher-removal-runtime.js", "browser-command-transcript-runtime.js", "document-context.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
@@ -51,33 +51,33 @@
         "mac": "Command+Shift+8",
         "default": "Ctrl+Shift+8"
       },
-      "description": "Open the A.G. panel (works on every page, including chrome:// pages)"
+      "description": "Open the AEG panel (works on every page, including chrome:// pages)"
     },
     "toggle-agee": {
       "suggested_key": {
         "mac": "Command+Comma",
         "default": "Ctrl+Comma"
       },
-      "description": "Open A.G. command mode"
+      "description": "Open AEG command mode"
     },
     "toggle-agee-voice": {
       "suggested_key": {
         "mac": "Command+Period",
         "default": "Ctrl+Period"
       },
-      "description": "Start or send A.G. voice"
+      "description": "Start or send AEG voice"
     },
     "open-agee-global": {
       "suggested_key": {
         "mac": "Command+Shift+9",
         "default": "Ctrl+Shift+9"
       },
-      "description": "Start or finish A.G. dictation from any app while Chrome is running",
+      "description": "Start or finish AEG dictation from any app while Chrome is running",
       "global": true
     }
   },
   "action": {
-    "default_title": "A.G. — open panel",
+    "default_title": "AEG — open panel",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

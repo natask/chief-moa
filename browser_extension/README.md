@@ -1,4 +1,4 @@
-# agee
+# AEG
 
 An open-source, browser-native interface shell. Hit **Cmd/Ctrl+,** or single-click the on-page control to type, drag it to move it, or double-click and hold it to talk directly on the website you are using. **Cmd/Ctrl+.** uses the same voice path: tap to start, tap again to commit, or hold to talk until release. The extension is a thin client for your agent gateway: the browser holds only gateway connection state, while the gateway owns model routing, provider credentials, state, and customization serving.
 
@@ -100,7 +100,7 @@ text streams into the result stack above the input. The extension does not
 render visible chat history; session history stays on the gateway and can be
 queried by asking Moa.
 Voice uses an extension offscreen document for microphone capture, so websites
-do not need per-site microphone approval for A.G. turns. Capture starts before
+do not need per-site microphone approval for AEG turns. Capture starts before
 the gateway has finished opening the voice session; early PCM chunks queue until
 `session_ready`, then flush in order before any commit so the first syllables are
 preserved. Cmd/Ctrl+. and the Moa mark's legacy double-click share one voice contract:
@@ -115,7 +115,7 @@ send. Holding the mascot keeps push-to-talk in that thread and sends on release.
 A double-click uses the same start/stop toggle in a fresh thread, while a
 triple-click cancels any pending capture without sending and opens chat.
 If Chrome blocks offscreen microphone capture, the overlay shows a visible
-permission error and opens the A.G. Options page; grant the microphone there or
+permission error and opens the AEG Options page; grant the microphone there or
 set Microphone to Allow for the extension from `chrome://extensions`.
 Explicit open-tab commands such as `open https://example.com in a new tab`
 create a browser tab locally; open-and-report requests still run through the
