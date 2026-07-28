@@ -14,6 +14,13 @@ export function createMemoryReleaseAdapter(seed = {}) {
     async listBundles(tenantId, applicationId) {
       return clone(state.bundles.filter((item) => item.tenant_id === tenantId && item.application_id === applicationId));
     },
+    async listPublishedBundles(tenantId, applicationId) {
+      const published = new Set(state.publication_receipts
+        .filter((item) => item.tenant_id === tenantId && item.application_id === applicationId)
+        .map((item) => item.bundle_id));
+      return clone(state.bundles.filter((item) => item.tenant_id === tenantId
+        && item.application_id === applicationId && published.has(item.bundle_id)));
+    },
     async listChannelHeads(tenantId, applicationId) {
       return clone(state.channel_heads.filter((item) => item.tenant_id === tenantId && item.application_id === applicationId));
     },
