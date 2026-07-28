@@ -25,6 +25,12 @@ Android app
   permissions, approvals, phone-local actions, local action receipts, and
   package-installer handoff for app updates.
 
+  The compact overlay keeps separate bounded windows so transparent space does
+  not intercept touches intended for the underlying app. During a deliberate
+  drag it retains those windows but moves only the companion once per display
+  frame; ribbons and draft controls soft-hide and freeze, then reanchor once
+  from their latest retained state on release or cancellation.
+
 Browser extension
   Owns: browser-local UI, text/voice capture, page context collection, and
   brokered page actions, including extension-local Chrome DevTools Protocol

@@ -88,6 +88,8 @@ public final class OverlayService extends Service {
     private WindowManager.LayoutParams orbParams;
     private WindowManager.LayoutParams panelParams;
     private MoaFrameCoalescer orbDragFrameCoalescer;
+    private final MoaOverlayDragMode overlayDragMode = new MoaOverlayDragMode();
+    private final MoaWindowLayoutState orbDragLayoutState = new MoaWindowLayoutState();
     private View orbRemoveTarget;
     private View orbRemovalUndoChip;
     private final MoaOrbRemovalUndo orbRemovalUndo = new MoaOrbRemovalUndo();
@@ -95,6 +97,8 @@ public final class OverlayService extends Service {
     private int orbDragStartX;
     private int orbDragStartY;
     private boolean orbRemoveTargetActive;
+    private int orbDragScreenWidth;
+    private int orbDragScreenHeight;
     private View panelView;
     private LinearLayout messageColumn;
     private ScrollView messageScroll;
@@ -588,6 +592,9 @@ public final class OverlayService extends Service {
             }
             mainHandler.post(() -> {
                 if (v == panelView) {
+                    if (overlayDragMode.isDragging()) {
+                        return;
+                    }
                     positionSurfaceNearOrb(panelView, panelParams);
                 }
             });
@@ -607,7 +614,14 @@ public final class OverlayService extends Service {
     private void showOrbRemoveTarget() {
         orbDragStartX = orbParams == null ? 0 : orbParams.x;
         orbDragStartY = orbParams == null ? 0 : orbParams.y;
+        boolean beganDrag = overlayDragMode.begin();
         overlayUnit.setDragging(true);
+        if (beganDrag) {
+            orbDragScreenWidth = getResources().getDisplayMetrics().widthPixels;
+            orbDragScreenHeight = getResources().getDisplayMetrics().heightPixels;
+            orbDragLayoutState.reset();
+            setDragDependentControlsHidden(true);
+        }
         if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
             return;
         }
@@ -622,6 +636,14 @@ public final class OverlayService extends Service {
 
     private void applyLatestOrbDragFrame() {
         if (orbView == null || orbParams == null) {
+            return;
+        }
+        MoaOverlayDragMode.FramePlan plan = overlayDragMode.movingFrame();
+        if (!plan.submitDependents) {
+            if (orbDragLayoutState.changed(orbParams)) {
+                MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+            }
+            updateOrbRemoveTargetState();
             return;
         }
         // Anchor the composer FIRST: its always-above rule may push the orb down,
@@ -640,8 +662,10 @@ public final class OverlayService extends Service {
 
     private MoaOrbOverlayGeometry.Bounds removeTargetBounds() {
         return MoaOrbOverlayGeometry.removeTargetBounds(
-                getResources().getDisplayMetrics().widthPixels,
-                getResources().getDisplayMetrics().heightPixels,
+                orbDragScreenWidth > 0 ? orbDragScreenWidth
+                        : getResources().getDisplayMetrics().widthPixels,
+                orbDragScreenHeight > 0 ? orbDragScreenHeight
+                        : getResources().getDisplayMetrics().heightPixels,
                 dp(MoaOrbRemoveTarget.WIDTH_DP),
                 dp(MoaOrbRemoveTarget.HEIGHT_DP),
                 dp(MoaOrbRemoveTarget.BOTTOM_INSET_DP));
@@ -674,9 +698,29 @@ public final class OverlayService extends Service {
         }
         boolean remove = Boolean.TRUE.equals(completedDrop) && orbRemoveTargetActive;
         removeOrbRemoveTarget();
-        overlayUnit.setDragging(false);
+        if (overlayDragMode.finish()) {
+            orbDragScreenWidth = 0;
+            orbDragScreenHeight = 0;
+            setDragDependentControlsHidden(false);
+            overlayUnit.setDragging(false);
+            // Restore and re-anchor the latest retained text/control state once.
+            applyLatestOrbDragFrame();
+        }
         if (remove) {
             beginReversibleOrbRemoval();
+        }
+    }
+
+    private void setDragDependentControlsHidden(boolean hidden) {
+        float alpha = hidden ? 0f : 1f;
+        int accessibility = hidden
+                ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO;
+        for (View dependent : new View[]{panelView, voiceCancelControl, voiceSendControl}) {
+            if (dependent == null) continue;
+            dependent.animate().cancel();
+            dependent.setAlpha(alpha);
+            dependent.setImportantForAccessibility(accessibility);
         }
     }
 
@@ -971,9 +1015,15 @@ public final class OverlayService extends Service {
         int size = orbParams.width > 0 ? orbParams.width : scaledOrbSizePx();
         int margin = dp(ORB_EDGE_MARGIN_DP);
         orbParams.x = MoaRibbonUnitLayout.dragCompanionX(
-                orbDragStartX, dx, getResources().getDisplayMetrics().widthPixels, size, margin);
+                orbDragStartX, dx,
+                orbDragScreenWidth > 0 ? orbDragScreenWidth
+                        : getResources().getDisplayMetrics().widthPixels,
+                size, margin);
         orbParams.y = MoaRibbonUnitLayout.dragCompanionY(
-                orbDragStartY, dy, getResources().getDisplayMetrics().heightPixels, size, margin);
+                orbDragStartY, dy,
+                orbDragScreenHeight > 0 ? orbDragScreenHeight
+                        : getResources().getDisplayMetrics().heightPixels,
+                size, margin);
         updateOrbDragSurfaces();
     }
 
@@ -1005,6 +1055,10 @@ public final class OverlayService extends Service {
             return;
         }
         showVoiceDraftControls();
+        if (overlayDragMode.isDragging()) {
+            setDragDependentControlsHidden(true);
+            return;
+        }
         updateVoiceDraftControlPositions();
     }
 

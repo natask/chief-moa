@@ -27,10 +27,10 @@ import java.util.List;
  * persistent transcript line. A ribbon is one line in a viewport that content
  * never resizes.
  *
- * On Android the unit is three separate WindowManager windows. "Moves as one"
- * therefore is not free — it is this class: every position derives from the
- * companion's anchor, and one drag writes three sets of layout params in the
- * same coalesced frame.
+ * On Android the unit is three separate bounded WindowManager windows. Every
+ * resting position derives from the companion anchor. During a deliberate drag
+ * the ribbons stay attached (so the active gesture view is never detached),
+ * retain incoming content, and soft-hide while only the companion moves.
  *
  * {@link OverlayService} keeps the voice session, the composer, and the
  * companion's own gestures; it drives this class with the current turn's text
@@ -95,6 +95,7 @@ final class MoaOverlayUnitController {
     private int toneColor;
     private final MoaWindowLayoutState youLayoutState = new MoaWindowLayoutState();
     private final MoaWindowLayoutState replyLayoutState = new MoaWindowLayoutState();
+    private boolean dragMode;
 
     MoaOverlayUnitController(Host host) {
         this.host = host;
@@ -286,6 +287,9 @@ final class MoaOverlayUnitController {
     // --- Geometry ---------------------------------------------------------
 
     void position() {
+        if (dragMode) {
+            return;
+        }
         WindowManager.LayoutParams companionParams = host.companionParams();
         if (youView == null || replyView == null || companionParams == null) {
             return;
@@ -445,8 +449,20 @@ final class MoaOverlayUnitController {
             companion.setScaleX(scale);
             companion.setScaleY(scale);
         }
-        position();
+        if (dragMode) {
+            softHideForDrag(youView);
+            softHideForDrag(replyView);
+        } else {
+            position();
+        }
         schedulePresenceTick(now);
+    }
+
+    private static void softHideForDrag(View view) {
+        if (view == null) return;
+        view.animate().cancel();
+        view.setAlpha(0f);
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
     }
 
     /**
@@ -512,11 +528,26 @@ final class MoaOverlayUnitController {
     }
 
     void setDragging(boolean dragging) {
+        if (dragMode == dragging) {
+            return;
+        }
+        dragMode = dragging;
+        if (dragging) {
+            closeMenu();
+        }
         youPresence.setDragging(dragging);
         replyPresence.setDragging(dragging);
         if (!dragging) {
             youPresence.setPointerDown(false);
             replyPresence.setPointerDown(false);
+        }
+        if (!dragging) {
+            if (youView != null) {
+                youView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+            }
+            if (replyView != null) {
+                replyView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+            }
         }
         applyPresence();
     }
@@ -524,8 +555,8 @@ final class MoaOverlayUnitController {
     // --- Gestures ---------------------------------------------------------
 
     // Every element of the unit is a drag handle, and the anchor is always the
-    // companion: a ribbon drag writes the companion's x/y and all three windows
-    // follow in the same coalesced frame.
+    // companion. A ribbon remains attached through ACTION_UP while the bounded
+    // drag mode moves only the companion window.
     private MoaRibbonTouchListener attachGestures(
             final MoaRibbonView ribbon,
             final MoaRibbonPresence presence,

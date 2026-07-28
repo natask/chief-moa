@@ -30,6 +30,10 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 - **WHEN** the user presses the orb, holds, and moves it
 - **THEN** the app repositions the orb
 - **AND** it does not start voice capture or toggle the chat menu
+- **AND** after touch slop Android moves only the companion window per display
+  frame, while retaining and soft-hiding dependent ribbons and draft controls
+- **AND** release or cancellation reanchors the latest retained dependent state
+  once without dropping streamed transcript or voice-control updates
 
 #### Scenario: Double-click-and-hold push-to-talk
 - **WHEN** the user double-clicks and holds the orb while no voice turn is active
