@@ -13,11 +13,9 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.provider.ContactsContract;
-
 import org.json.JSONException;
 import org.json.JSONArray;
 import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -71,7 +69,7 @@ final class MoaActionBroker {
         if (lower.equals("/screen")) {
             Capability capability = CAPABILITIES.get("screen.summary");
             if (!MoaAccessibilityService.isRunning()) {
-                return LocalActionResult.handled("Screen access is not running. Open A.G. and enable screen access in Android accessibility settings.");
+                return LocalActionResult.handled("Screen access is not running. Open AG and enable screen access in Android accessibility settings.");
             }
             String summary = MoaAccessibilityService.currentScreenSummary();
             if (summary.isEmpty()) {
@@ -128,6 +126,10 @@ final class MoaActionBroker {
             return LocalActionResult.handled(success ? "Pressed home." : "I could not press home from here.");
         }
 
+        if (MoaControlCenterCommand.isExplicitRequest(trimmed)) {
+            return openControlCenter();
+        }
+
         if (isAppListCommand(trimmed)) {
             return listLauncherAppsForCommand();
         }
@@ -138,6 +140,20 @@ final class MoaActionBroker {
         }
 
         return LocalActionResult.notHandled();
+    }
+
+    private LocalActionResult openControlCenter() {
+        Capability capability = CAPABILITIES.get("ui.control_center");
+        Intent intent = new Intent(context, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            context.startActivity(intent);
+            recordReceipt(capability, "control_center", true, "Opened AG control center.");
+            return LocalActionResult.handled("Opened the AG control center.");
+        } catch (RuntimeException error) {
+            recordReceipt(capability, "control_center", false, "Control center launch failed.");
+            return LocalActionResult.handled("I could not open the AG control center.");
+        }
     }
 
     ToolExecutionResult executeToolRequest(String tool, JSONObject input) {
@@ -396,18 +412,20 @@ final class MoaActionBroker {
         try {
             context.startActivity(intent);
             JSONObject receipt = recordReceipt(
-                    capability, context.getPackageName(), true, "Opened A.G. settings.");
-            return ToolExecutionResult.done(true, "Opened A.G. settings.", receipt);
+                    capability, context.getPackageName(), true, "Opened AG settings.");
+            return ToolExecutionResult.done(true, "Opened AG settings.", receipt);
         } catch (RuntimeException error) {
             JSONObject receipt = recordReceipt(
-                    capability, context.getPackageName(), false, "A.G. settings could not be opened.");
-            return ToolExecutionResult.done(false, "A.G. settings could not be opened.", receipt);
+                    capability, context.getPackageName(), false, "AG settings could not be opened.");
+            return ToolExecutionResult.done(false, "AG settings could not be opened.", receipt);
         }
     }
 
     private ToolExecutionResult openMediaForTool(
             String requestId, JSONObject args, ToolResultCallback callback) {
         Capability capability = CAPABILITIES.get("media.open");
+        String requestedApp = safe(args.optString("app_name", args.optString("appName", "")));
+        if (MoaVlcOpenPolicy.isVlcLabel(requestedApp)) return openVlcSource(capability, args);
         String packageName = resolveMediaOpenYoutubePackage(args);
         if (packageName.isEmpty()) {
             return mediaFailure(capability, "youtube", "The preferred YouTube app is not installed.");
@@ -424,7 +442,8 @@ final class MoaActionBroker {
             return launch == null
                     ? mediaFailure(capability, packageName, "The selected YouTube app has no launch activity.")
                     : startMediaIntent(capability, packageName, launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            "Opened " + packageName + ".");
+                            "Opened " + packageName + "; no media selection or playback was verified.",
+                            "selection_unverified", false);
         }
         MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(packageName);
         if (hasSuppliedMediaBinding(args) && !matchesOptionalMediaBinding(args, snapshot)) {
@@ -434,9 +453,18 @@ final class MoaActionBroker {
         Intent search = new Intent(Intent.ACTION_SEARCH).setPackage(packageName)
                 .putExtra(SearchManager.QUERY, query).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         String channel = safe(args.optString("channel", ""));
-        if (shouldSelectYoutubeSearch(query, callback != null,
-                approvedYoutubeAutomationPackage(packageName),
-                search.resolveActivity(context.getPackageManager()) != null)) {
+        boolean handlerAvailable = search.resolveActivity(context.getPackageManager()) != null;
+        if (!handlerAvailable) {
+            return mediaOutcome(capability, packageName, false,
+                    "The selected YouTube app cannot handle search.", "selection_unverified");
+        }
+        if (!MoaAccessibilityService.isRunning()
+                || !approvedYoutubeAutomationPackage(packageName)) {
+            return mediaOutcome(capability, packageName, false,
+                    "Exact YouTube selection needs approved Screen access; no result was selected.",
+                    "needs_accessibility");
+        }
+        if (shouldSelectYoutubeSearch(query, callback != null, true, true)) {
             try {
                 context.startActivity(search);
             } catch (RuntimeException error) {
@@ -447,8 +475,23 @@ final class MoaActionBroker {
                     operationId, packageName, query, channel, callback), 700L);
             return ToolExecutionResult.pending("Opened YouTube search and waiting for the exact result.");
         }
-        return startMediaIntent(capability, packageName, search,
-                "Opened YouTube search for \"" + query + "\".");
+        return mediaOutcome(capability, packageName, false,
+                "Exact YouTube selection could not be verified without a result callback.",
+                "selection_unverified");
+    }
+
+    private ToolExecutionResult openVlcSource(Capability capability, JSONObject args) {
+        MoaVlcOpenPolicy.Result result = MoaVlcOpenPolicy.resolve(args, context.getPackageManager());
+        switch (result.status) {
+            case NEEDS_SOURCE: return mediaFailure(capability, "vlc", "VLC needs an explicit HTTPS or content URI. A title alone cannot be played without a media catalog or source connector (needs_source).");
+            case NOT_FOUND: return mediaFailure(capability, "vlc", "No installed VLC handler was found for this source.");
+            case AMBIGUOUS: return mediaFailure(capability, "vlc", "Multiple VLC handlers matched this source; choose one locally before retrying.");
+            case REJECTED: return mediaFailure(capability, "vlc", "VLC request rejected: " + result.reason + ".");
+            case MATCH: return startMediaIntent(capability, result.packageName, result.intent,
+                    "Opened the explicit media source in VLC; playback was not verified.",
+                    "selection_unverified", false);
+            default: return mediaFailure(capability, "vlc", "VLC request could not be resolved.");
+        }
     }
 
     private void startYoutubeSearchSelection(
@@ -462,17 +505,21 @@ final class MoaActionBroker {
         MoaAccessibilityService.YoutubeStartResult started =
                 MoaAccessibilityService.executeYoutubeOperation(request, result -> {
                     boolean success = result.outcome == MoaYoutubeAccessibilityExecutor.Outcome.COMPLETE;
-                    String summary = success ? "Opened the exact YouTube search result."
+                    String summary = success ? "Selected the unique YouTube result; playback was not verified."
                             : "YouTube search stopped: " + result.reason + ".";
                     callback.onResult(success
-                            ? mediaSuccess(CAPABILITIES.get("media.open"), packageName, summary)
-                            : mediaFailure(CAPABILITIES.get("media.open"), packageName, summary));
+                            ? mediaOutcome(CAPABILITIES.get("media.open"), packageName, true,
+                                    summary, "selection_verified")
+                            : mediaOutcome(CAPABILITIES.get("media.open"), packageName, false,
+                                    summary, "selection_unverified"));
                 });
         if (started != MoaAccessibilityService.YoutubeStartResult.STARTED) {
-            callback.onResult(mediaFailure(CAPABILITIES.get("media.open"), packageName,
+            callback.onResult(mediaOutcome(CAPABILITIES.get("media.open"), packageName, false,
                     started == MoaAccessibilityService.YoutubeStartResult.BUSY
                             ? "Another YouTube operation is already running."
-                            : "Screen access is unavailable for YouTube search selection."));
+                            : "Screen access is unavailable for YouTube search selection.",
+                    started == MoaAccessibilityService.YoutubeStartResult.BUSY
+                            ? "selection_unverified" : "needs_accessibility"));
         }
     }
 
@@ -490,19 +537,21 @@ final class MoaActionBroker {
         Intent intent = new Intent(Intent.ACTION_VIEW, uri.build()).setPackage(packageName)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         return startMediaIntent(capability, packageName, intent,
-                "Opened YouTube video " + videoId + (positionMs > 0L ? " at the saved spot." : "."));
+                "Sent YouTube video " + videoId + " to the selected app; playback was not verified.",
+                "selection_unverified", false);
     }
 
     private ToolExecutionResult startMediaIntent(
-            Capability capability, String packageName, Intent intent, String successReply) {
+            Capability capability, String packageName, Intent intent, String successReply,
+            String outcome, boolean success) {
         if (intent.resolveActivity(context.getPackageManager()) == null) {
-            return mediaFailure(capability, packageName, "The selected YouTube app cannot handle this request.");
+            return mediaFailure(capability, packageName, "The selected media app cannot handle this request.");
         }
         try {
             context.startActivity(intent);
-            return mediaSuccess(capability, packageName, successReply);
+            return mediaOutcome(capability, packageName, success, successReply, outcome);
         } catch (RuntimeException error) {
-            return mediaFailure(capability, packageName, "The selected YouTube app could not be opened.");
+            return mediaFailure(capability, packageName, "The selected media app could not be opened.");
         }
     }
 
@@ -1030,7 +1079,7 @@ final class MoaActionBroker {
 
     static String playlistDisclosure(
             String operation, String playlist, String replacement, String packageName) {
-        return "Allow A.G. to " + safe(operation)
+        return "Allow AG to " + safe(operation)
                 + (safe(playlist).isEmpty() ? " this playlist" : " playlist \"" + safe(playlist) + "\"")
                 + ("rename".equals(safe(operation)) ? " to \"" + safe(replacement) + "\"" : "")
                 + " in " + safe(packageName) + "?";
@@ -1368,6 +1417,14 @@ final class MoaActionBroker {
 
     private ToolExecutionResult mediaFailure(Capability capability, String target, String reply) {
         return ToolExecutionResult.done(false, reply, recordReceipt(capability, target, false, reply));
+    }
+
+    private ToolExecutionResult mediaOutcome(
+            Capability capability, String target, boolean success, String reply, String outcome) {
+        JSONObject receipt = capability == null ? null : MoaActionReceiptStore.record(
+                context, capability.tool, capability.risk, capability.approval,
+                target, success, reply, outcome);
+        return ToolExecutionResult.done(success, reply, receipt);
     }
 
     private void syncMediaSpot(MoaMediaSpotStore.Spot spot) {
@@ -1746,7 +1803,7 @@ final class MoaActionBroker {
     }
 
     static final String CONTACTS_PERMISSION_MISSING =
-            "Contacts permission not granted. Open the A.G. app to grant it.";
+            "Contacts permission not granted. Open the AG app to grant it.";
 
     static String openUrlTarget(JSONObject input) {
         JSONObject args = input == null ? new JSONObject() : input;
@@ -1856,6 +1913,7 @@ final class MoaActionBroker {
         capabilities.put("app.launch", new Capability("app.launch", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.list", new Capability("app.list", RISK_READ_ONLY, "none"));
         capabilities.put("app.settings.open", new Capability("app.settings.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));
+        capabilities.put("ui.control_center", new Capability("ui.control_center", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("email.compose", new Capability("email.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("sms.compose", new Capability("sms.compose", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_TARGET_APP_CONFIRMATION));
         capabilities.put("url.open", new Capability("url.open", RISK_NAVIGATION, APPROVAL_IMPLICIT));

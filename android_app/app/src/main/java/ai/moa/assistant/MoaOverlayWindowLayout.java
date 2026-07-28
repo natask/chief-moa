@@ -53,12 +53,6 @@ final class MoaOverlayWindowLayout {
         }
     }
 
-    static int transcriptBodyHeight(int screenHeight, float density) {
-        int min = Math.round(220 * density);
-        int max = Math.round(360 * density);
-        return Math.max(min, Math.min(max, Math.round(screenHeight * 0.36f)));
-    }
-
     static void animateIn(View view, int translationY) {
         view.setAlpha(0f);
         view.setTranslationY(translationY);

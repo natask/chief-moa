@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
+  "artifact_digests": {
+    "android": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "browser": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "references": [
+    { "path": "gemini_images", "required": false, "provenance": "user-supplied repository reference directory" }
+  ],
+  "rounds": 2,
+  "critique": { "command": "claude", "requested_model": "opus" },
+  "states": [
+    "idle", "user_stream_short", "user_stream_tail", "assistant_stream_tail",
+    "expanded_transcript", "engaged", "light_background", "dark_background", "large_text"
+  ]
+}

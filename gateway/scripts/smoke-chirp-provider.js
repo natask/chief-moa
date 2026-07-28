@@ -19,7 +19,7 @@ main().catch((error) => {
 
 async function main() {
   const previousFetch = global.fetch;
-  const state = { expected: null, lastBody: null };
+  const state = { expected: null, lastBody: null, transcripts: [] };
   const calls = [];
   global.fetch = async (url, options = {}) => {
     calls.push({ url, options });
@@ -47,7 +47,7 @@ async function main() {
       status: 200,
       json: async () => ({
         results: [{
-          alternatives: [{ transcript: "hello from chirp" }],
+          alternatives: [{ transcript: state.transcripts.shift() || "hello from chirp" }],
         }],
       }),
     };
@@ -155,6 +155,7 @@ async function main() {
     // A turn-pinned profile change changes only the prompt, never the provider
     // recognition language code.
     state.expected = { model: "chirp_3", promptIncludes: ["Amharic", "Ethiopic"], promptExcludes: ["English"] };
+    state.transcripts = ["ሰላም ከቺርፕ"];
     await provider.processTurn({
       ...turn,
       effectiveProfile: {
@@ -181,6 +182,22 @@ async function main() {
       },
     });
     assert.equal(calls.length, 4, "batch fallback should preserve the turn-pinned speaker context");
+
+    // A dominant unexpected-script final retries exactly once from retained
+    // audio with the same profile evidence plus the bounded quality instruction.
+    state.expected = {
+      model: "chirp_3",
+      promptIncludes: ["English", "Amharic", "verbatim"],
+    };
+    state.transcripts = ["यह गलत लिपि में आया", "corrected retained audio transcript"];
+    const beforeQualityRetry = calls.length;
+    const recovered = await provider.processTurn(turn, { onTranscriptFinal: async () => {} });
+    assert.equal(calls.length - beforeQualityRetry, 2, "wrong-script recovery makes one initial request and one retry");
+    assert.equal(recovered.transcript, "corrected retained audio transcript");
+    assert.match(
+      JSON.parse(String(calls.at(-1).options.body)).config.features.customPromptConfig.customPrompt,
+      /Quality retry for this retained audio/,
+    );
 
     // More than two prompt languages is capped at primary + one alternate so
     // the transcription instruction stays focused and bounded.

@@ -258,8 +258,14 @@ final class MoaVoiceSamplePlayer {
         }
 
         @Override
-        public void onTurnDone(String turnId, String status, boolean transcriptionOnly, boolean ttsSpoke, String replyLanguage) {
+        public void onTurnDone(String turnId, String status, boolean transcriptionOnly,
+                boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
             finishCurrent();
+        }
+
+        @Override
+        public void onTtsRetryDone(String turnId, String retryId, String status,
+                int fromTextChar, String error) {
         }
 
         @Override
@@ -284,7 +290,7 @@ final class MoaVoiceSamplePlayer {
             }
             String text = safe(voice.optString("sample_text", ""));
             if (text.isEmpty()) {
-                text = "This is " + voiceId + ". This is a Moa voice sample.";
+                text = "This is " + voiceId + ". This is an AG voice sample.";
             }
             out.add(new VoiceSample(voiceId, text));
         }

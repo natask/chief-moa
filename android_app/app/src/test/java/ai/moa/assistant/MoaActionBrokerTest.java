@@ -108,6 +108,7 @@ public final class MoaActionBrokerTest {
         assertTrue(MoaActionBroker.isKnownTool("url.open"));
         assertTrue(MoaActionBroker.isKnownTool("phone.dial"));
         assertTrue(MoaActionBroker.isKnownTool("contact.open"));
+        assertTrue(MoaActionBroker.isKnownTool("ui.control_center"));
         assertFalse(MoaActionBroker.isKnownTool("phone.call"));
 
         assertEquals("navigation", MoaActionBroker.capabilityRisk("url.open"));
@@ -116,6 +117,8 @@ public final class MoaActionBrokerTest {
         assertEquals("target_app_confirmation", MoaActionBroker.capabilityApproval("phone.dial"));
         assertEquals("navigation", MoaActionBroker.capabilityRisk("contact.open"));
         assertEquals("implicit_user_command", MoaActionBroker.capabilityApproval("contact.open"));
+        assertEquals("navigation", MoaActionBroker.capabilityRisk("ui.control_center"));
+        assertEquals("implicit_user_command", MoaActionBroker.capabilityApproval("ui.control_center"));
 
         assertTrue(MoaActionBroker.isKnownTool("media.open"));
         assertTrue(MoaActionBroker.isKnownTool("media.control"));
@@ -264,8 +267,11 @@ public final class MoaActionBrokerTest {
     public void exactSearchSelectionDoesNotRequireChannelMetadata() {
         assertTrue(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", true, true, true));
         assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("", true, true, true));
+        // Missing async receipt delivery or an approved accessibility fixture
+        // must never degrade into a claimed exact selection.
         assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", false, true, true));
         assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", true, false, true));
+        assertFalse(MoaActionBroker.shouldSelectYoutubeSearch("Specific video", true, true, false));
     }
 
     @Test
@@ -306,7 +312,7 @@ public final class MoaActionBrokerTest {
     @Test
     public void reportsContactPermissionAndMissMessages() {
         assertEquals(
-                "Contacts permission not granted. Open the A.G. app to grant it.",
+                "Contacts permission not granted. Open the AG app to grant it.",
                 MoaActionBroker.CONTACTS_PERMISSION_MISSING
         );
         assertEquals("No contact found matching \"Mom\".", MoaActionBroker.contactNotFoundReply("Mom"));

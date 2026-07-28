@@ -48,19 +48,67 @@ final class MoaOrbOverlayGeometry {
         return new Position(x, y, adjustedOrbY);
     }
 
-    static boolean isInRemoveTarget(
+    /** The painted remove target's window rectangle, bottom-centre. */
+    static final class Bounds {
+        final int left;
+        final int top;
+        final int width;
+        final int height;
+
+        Bounds(int left, int top, int width, int height) {
+            this.left = left;
+            this.top = top;
+            this.width = width;
+            this.height = height;
+        }
+
+        int right() {
+            return left + width;
+        }
+
+        int bottom() {
+            return top + height;
+        }
+    }
+
+    static Bounds removeTargetBounds(
             int screenWidth,
             int screenHeight,
+            int targetWidth,
+            int targetHeight,
+            int bottomInset
+    ) {
+        int left = Math.max(0, (screenWidth - targetWidth) / 2);
+        int top = Math.max(0, screenHeight - targetHeight - Math.max(0, bottomInset));
+        return new Bounds(left, top, targetWidth, targetHeight);
+    }
+
+    /**
+     * Whether the dragged companion is over the remove target.
+     *
+     * This used to test a large invisible zone — 270dp wide by 170dp tall against
+     * a 150x58dp painted pill — so a drag that merely passed near the bottom of
+     * the screen armed removal. The zone is now the painted rectangle inflated by
+     * one tolerance, so what arms removal is what the user can see, and the
+     * companion's centre has to actually be on it.
+     */
+    static boolean isInRemoveTarget(
+            Bounds target,
             int orbX,
             int orbY,
             int orbSize,
-            int bottomZoneHeight,
-            int horizontalRadius
+            int tolerance
     ) {
+        if (target == null) {
+            return false;
+        }
         int centerX = orbX + orbSize / 2;
         int centerY = orbY + orbSize / 2;
-        return centerY >= screenHeight - bottomZoneHeight
-                && Math.abs(centerX - screenWidth / 2) <= horizontalRadius;
+        int slack = Math.max(0, tolerance);
+        return centerX >= target.left - slack
+                && centerX <= target.right() + slack
+                && centerY >= target.top - slack
+                && centerY <= target.bottom() + slack;
     }
 
     private static int clamp(int value, int min, int max) {

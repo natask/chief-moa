@@ -41,6 +41,25 @@ public class MoaToolReceiptOutboxTest {
     }
 
     @Test
+    public void truthfulMediaOutcomeSurvivesRetryWithoutReexecution() throws Exception {
+        MemoryState state = new MemoryState();
+        MoaToolReceiptOutbox first = outbox(state);
+        MoaToolReceiptOutbox.Reservation reservation = first.reserve("toolreq_truth", CLAIM, "android_1");
+        JSONObject local = localReceipt("media.open", false).put("outcome", "selection_unverified");
+        MoaToolReceiptOutbox.Completion completion = first.complete(
+                reservation, "media.open", false,
+                "Selected app opened; playback was not verified.", local);
+
+        MoaToolReceiptOutbox restarted = outbox(state);
+        MoaToolReceiptOutbox.PendingReceipt pending = restarted.snapshot().pending.get(0);
+        assertEquals(completion.pending.bodyJson, pending.bodyJson);
+        assertEquals("selection_unverified",
+                pending.body().getJSONObject("local_receipt").getString("outcome"));
+        assertEquals(MoaToolReceiptOutbox.ReservationStatus.RETRY_PENDING,
+                restarted.reserve("toolreq_truth", CLAIM, "android_1").status);
+    }
+
+    @Test
     public void capacityRejectsBeforeActionWithoutEvictingUnresolvedEvidence() {
         MemoryState state = new MemoryState();
         MoaToolReceiptOutbox outbox = outbox(state);

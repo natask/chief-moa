@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Comparator;
 
 /** Pure, fail-closed parser for the Android release-control projection. */
 final class MoaReleaseSelectionPolicy {
@@ -52,9 +53,21 @@ final class MoaReleaseSelectionPolicy {
         final boolean compatible;
         final String compatibilityReason;
         final Artifact artifact;
+        final String createdAt;
+        final String lineageKind;
+        final String seriesParentBundleId;
+        final List<String> parallelParentBundleIds;
 
         Candidate(String releaseId, String bundleId, String channel, String sourceRef,
                   boolean compatible, String compatibilityReason, Artifact artifact) {
+            this(releaseId, bundleId, channel, sourceRef, compatible, compatibilityReason,
+                    artifact, "", "root", "", Collections.emptyList());
+        }
+
+        Candidate(String releaseId, String bundleId, String channel, String sourceRef,
+                  boolean compatible, String compatibilityReason, Artifact artifact,
+                  String createdAt, String lineageKind, String seriesParentBundleId,
+                  List<String> parallelParentBundleIds) {
             this.releaseId = releaseId;
             this.bundleId = bundleId;
             this.channel = channel;
@@ -62,6 +75,11 @@ final class MoaReleaseSelectionPolicy {
             this.compatible = compatible;
             this.compatibilityReason = compatibilityReason;
             this.artifact = artifact;
+            this.createdAt = createdAt;
+            this.lineageKind = lineageKind;
+            this.seriesParentBundleId = seriesParentBundleId;
+            this.parallelParentBundleIds = Collections.unmodifiableList(
+                    new ArrayList<>(parallelParentBundleIds));
         }
 
         boolean installable() {
@@ -72,6 +90,38 @@ final class MoaReleaseSelectionPolicy {
             String version = artifact == null ? "" : artifact.versionName;
             String base = channel + (version.isEmpty() ? "" : " · v" + version);
             return sourceRef.isEmpty() ? base : base + " · " + sourceRef;
+        }
+
+
+        String humanLabel() {
+            String version = artifact == null ? "" : artifact.versionName;
+            return version.isEmpty() ? bundleId : "A.G. " + version;
+        }
+
+        String summary() {
+            if ("composed".equals(lineageKind)) {
+                return "Combines " + parallelParentBundleIds.size() + " parallel feature slices.";
+            }
+            if (!seriesParentBundleId.isEmpty()) {
+                return "Continues after " + seriesParentBundleId + ".";
+            }
+            return "Independent release candidate.";
+        }
+
+        String relationLabel() {
+            if ("composed".equals(lineageKind)) return "parallel bundle";
+            if (!seriesParentBundleId.isEmpty()) return "series";
+            return "root";
+        }
+    }
+
+    static final class CatalogPage {
+        final List<Candidate> candidates;
+        final String nextCursor;
+
+        CatalogPage(List<Candidate> candidates, String nextCursor) {
+            this.candidates = Collections.unmodifiableList(new ArrayList<>(candidates));
+            this.nextCursor = nextCursor;
         }
     }
 
@@ -238,6 +288,94 @@ final class MoaReleaseSelectionPolicy {
                 .put("expected_assignment_sequence", requireSequence(expectedSequence))
                 .put("idempotency_key", requireId(idempotencyKey, "idempotency_key"));
         return body;
+    }
+
+    static CatalogPage parseCatalog(JSONObject payload) {
+        if (payload == null || payload.optInt("schema_version", 0) != 1) {
+            throw new IllegalArgumentException("candidate catalog schema is invalid");
+        }
+        JSONArray items = payload.optJSONArray("candidates");
+        if (items == null || items.length() > 100) {
+            throw new IllegalArgumentException("candidate catalog page is invalid");
+        }
+        ArrayList<Candidate> parsed = new ArrayList<>();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item == null) throw new IllegalArgumentException("release candidate is invalid");
+            String bundleId = requireId(item.optString("bundle_id", ""), "candidate.bundle_id");
+            int compatibilityVersion = item.optInt("compatibility_version", 0);
+            JSONObject lineage = item.optJSONObject("lineage");
+            if (lineage == null) throw new IllegalArgumentException("candidate lineage is missing");
+            String kind = requireLineageKind(lineage.optString("kind", ""));
+            String seriesParent = optionalId(lineage.optString("series_parent_bundle_id", ""));
+            JSONArray parents = lineage.optJSONArray("parallel_parent_bundle_ids");
+            if (parents == null || parents.length() > 32) {
+                throw new IllegalArgumentException("candidate parallel lineage is invalid");
+            }
+            ArrayList<String> parallelParents = new ArrayList<>();
+            for (int p = 0; p < parents.length(); p++) {
+                parallelParents.add(requireId(parents.optString(p, ""), "parallel_parent_bundle_id"));
+            }
+            Artifact artifact = parseArtifact(item.optJSONObject("artifact"));
+            String releaseId = artifact == null ? optionalId(item.optString("release_id", ""))
+                    : requireId(item.optString("release_id", ""), "candidate.release_id");
+            boolean compatible = compatibilityVersion == 1 && artifact != null;
+            parsed.add(new Candidate(releaseId, bundleId, "candidate", "", compatible,
+                    compatible ? "" : artifact == null ? "Android artifact unavailable"
+                            : "Requires compatibility version 1",
+                    artifact, bounded(item.optString("created_at", ""), 80), kind,
+                    seriesParent, parallelParents));
+        }
+        String cursor = optionalId(payload.optString("next_cursor", ""));
+        return new CatalogPage(parsed, cursor);
+    }
+
+    static JSONObject exactCandidateRequest(String deviceId, Candidate candidate,
+                                            long expectedSequence, String idempotencyKey) throws Exception {
+        if (candidate == null || !"candidate".equals(candidate.channel) || !candidate.compatible
+                || candidate.artifact == null) {
+            throw new IllegalArgumentException("an exact compatible candidate is required");
+        }
+        return new JSONObject()
+                .put("device_id", requireId(deviceId, "device_id"))
+                .put("surface", "android")
+                .put("bundle_id", candidate.bundleId)
+                .put("release_id", candidate.releaseId)
+                .put("expected_assignment_sequence", requireSequence(expectedSequence))
+                .put("idempotency_key", requireId(idempotencyKey, "idempotency_key"));
+    }
+
+    static List<Candidate> rank(List<Candidate> input, String query, String selectedBundleId,
+                                String runningDigest) {
+        String needle = safe(query).toLowerCase(Locale.US);
+        ArrayList<Candidate> result = new ArrayList<>();
+        for (Candidate item : input == null ? Collections.<Candidate>emptyList() : input) {
+            String haystack = (item.humanLabel() + " " + item.summary() + " " + item.bundleId
+                    + " " + item.releaseId + " " + item.relationLabel()).toLowerCase(Locale.US);
+            if (needle.isEmpty() || haystack.contains(needle)) result.add(item);
+        }
+        String selected = safe(selectedBundleId);
+        String running = safe(runningDigest).toLowerCase(Locale.US);
+        result.sort(Comparator
+                .comparingInt((Candidate item) -> item.bundleId.equals(selected) ? 0
+                        : item.artifact != null && item.artifact.sha256.equals(running) ? 1
+                        : item.compatible ? 2 : 3)
+                .thenComparing((Candidate item) -> item.createdAt, Comparator.reverseOrder())
+                .thenComparing(item -> item.bundleId));
+        return Collections.unmodifiableList(result);
+    }
+
+    static String coarseState(Candidate candidate, String selectedBundleId, String runningDigest) {
+        if (candidate == null) return "unavailable";
+        if (candidate.artifact != null && candidate.artifact.sha256.equals(
+                safe(runningDigest).toLowerCase(Locale.US))) return "running";
+        if (candidate.bundleId.equals(safe(selectedBundleId))) return "selected";
+        return candidate.compatible ? "ready" : "blocked";
+    }
+
+    static String exactDeepLinkBundleId(String value) {
+        String candidate = safe(value);
+        return candidate.matches(ID) ? candidate : "";
     }
 
     static JSONObject fallbackRequest(String deviceId, long expectedSequence,
@@ -427,10 +565,19 @@ final class MoaReleaseSelectionPolicy {
 
     private static String requireChannel(String value) {
         String channel = safe(value).toLowerCase(Locale.US);
-        if (!"stable".equals(channel) && !"preview".equals(channel)) {
+        if (!"stable".equals(channel) && !"preview".equals(channel)
+                && !"candidate".equals(channel)) {
             throw new IllegalArgumentException("release channel is unsupported");
         }
         return channel;
+    }
+
+    private static String requireLineageKind(String value) {
+        String kind = safe(value).toLowerCase(Locale.US);
+        if (!List.of("root", "series", "parallel", "composed").contains(kind)) {
+            throw new IllegalArgumentException("candidate lineage kind is invalid");
+        }
+        return kind;
     }
 
     private static String requireId(String value, String field) {

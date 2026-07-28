@@ -41,3 +41,31 @@ signed URLs, or unredacted provider endpoints in returned diagnostic data.
   redacted before storage or response
 - **AND** diagnosis data exposes only the redacted provider metadata needed for
   debugging
+
+### Requirement: Partial Speech Has A Recoverable Terminal Receipt
+The gateway SHALL distinguish complete, partial, failed, and deliberately
+unrequested hosted speech even when reasoning and text generation completed.
+Every cascaded `turn_done` receipt SHALL carry `tts_delivery`, `tts_complete`,
+the emitted segment count, the exclusive assistant-text bound represented by
+emitted PCM, and the full reply character count. A synthesis failure SHALL
+also identify the zero-based failed segment and a bounded error.
+
+#### Scenario: A later TTS segment fails
+- **WHEN** at least one hosted speech segment reached the client and a later
+  segment fails synthesis
+- **THEN** `turn_done.status` remains `completed` for the completed text turn
+- **AND** `tts_delivery` is `partial`, `tts_complete` is false, and
+  `tts_spoken_text_end` identifies the suffix that remains unheard
+- **AND** `assistant_audio_done` does not claim complete speech
+
+#### Scenario: The client retries only the unheard suffix
+- **WHEN** the client sends `retry_tts` with the completed turn id, a unique
+  retry id, and `from_text_char` from the terminal receipt
+- **THEN** the gateway synthesizes that stored assistant-text suffix without
+  rerunning reasoning
+- **AND** returns an idempotent `tts_retry_done` receipt
+- **AND** a duplicate retry id never synthesizes or replays audio twice
+- **AND** retry is authorized only for the exact recorded partial/failed turn
+  and exact recorded suffix boundary
+- **AND** a changed request under the same turn/retry identity conflicts
+- **AND** retry attempts and retained receipts are bounded

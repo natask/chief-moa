@@ -234,9 +234,26 @@ export function normalizeReleaseBundle(input) {
     application_id: cleanId(input.application_id, "bundle.application_id"),
     bundle_id: cleanId(input.bundle_id, "bundle.bundle_id"),
     compatibility_version: cleanInteger(input.compatibility_version ?? 1, "bundle.compatibility_version", 1),
+    lineage: normalizeBundleLineage(input.lineage, input.bundle_id),
     artifacts: Object.freeze(artifacts),
     created_at: cleanText(input.created_at, "bundle.created_at", 80),
   });
+}
+
+export function normalizeBundleLineage(input, bundleId) {
+  const value = input == null ? {} : input;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("bundle.lineage is invalid");
+  const seriesParent = value.series_parent_bundle_id == null
+    ? null : cleanId(value.series_parent_bundle_id, "bundle.lineage.series_parent_bundle_id");
+  const parallelParents = [...new Set((value.parallel_parent_bundle_ids || []).map((item) =>
+    cleanId(item, "bundle.lineage.parallel_parent_bundle_ids")))].sort();
+  if (parallelParents.length > 32) throw new Error("bundle.lineage.parallel_parent_bundle_ids is invalid");
+  const self = cleanId(bundleId, "bundle.bundle_id");
+  if (seriesParent === self || parallelParents.includes(self)) throw new Error("bundle lineage cannot reference itself");
+  if (seriesParent && parallelParents.includes(seriesParent)) throw new Error("bundle lineage parent is duplicated");
+  const kind = cleanId(value.kind || (parallelParents.length ? "composed" : seriesParent ? "series" : "root"), "bundle.lineage.kind");
+  if (!["root", "series", "parallel", "composed"].includes(kind)) throw new Error("bundle.lineage.kind is invalid");
+  return Object.freeze({ kind, series_parent_bundle_id: seriesParent, parallel_parent_bundle_ids: Object.freeze(parallelParents) });
 }
 
 export function artifactForSurface(bundle, surfaceId) {

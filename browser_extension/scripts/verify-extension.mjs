@@ -7,6 +7,8 @@ const requiredFiles = [
   "extension/background.js",
   "extension/browser-automation-contract.js",
   "extension/browser-automation-runtime.js",
+  "extension/browser-diagnostics-contract.js",
+  "extension/browser-file-access-runtime.js",
   "extension/browser-command-runtime.js",
   "extension/browser-command-transcript-runtime.js",
   "extension/browser-agent-loop-policy.js",
@@ -101,6 +103,14 @@ const configSource = readFileSync("extension/config.js", "utf8");
 const contentSource = readFileSync("extension/content.js", "utf8");
 const documentContextSource = readFileSync("extension/document-context.js", "utf8");
 const overlayCssSource = readFileSync("extension/overlay.css", "utf8");
+const ribbonsCssSource = readFileSync("extension/ribbons.css", "utf8");
+const ribbonWindowSource = readFileSync("extension/ribbon-window.js", "utf8");
+const ribbonLayoutSource = readFileSync("extension/ribbon-layout.js", "utf8");
+const ribbonRuntimeSource = readFileSync("extension/ribbon-runtime.js", "utf8");
+// The ribbon presentation is split across three files by responsibility (text
+// model, geometry, DOM runtime) plus its own stylesheet, so the structural
+// assertions below read the combined surface rather than content.js alone.
+const ribbonSource = [ribbonWindowSource, ribbonLayoutSource, ribbonRuntimeSource].join("\n");
 const offscreenSource = readFileSync("extension/offscreen.js", "utf8");
 const offscreenHtmlSource = readFileSync("extension/offscreen.html", "utf8");
 const offscreenVoiceBridgeSource = readFileSync("extension/offscreen-voice-bridge.js", "utf8");
@@ -1009,8 +1019,12 @@ if (!/function isIdentityProfileControl/.test(contentSource) || !/your name/.tes
   throw new Error("browser Live voice must route spoken assistant-name changes through the gateway profile-control path");
 }
 
-if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,220}conversationActive = true;/.test(contentSource)) {
-  throw new Error("browser voice start must keep the input surface open while the user speaks");
+// A spoken turn must NOT open the composer panel. Voice feedback lives in the
+// two ribbons, which paint no surface in the ambient state and are height-fixed,
+// so a turn can never cover the page or push the persistent line out of view.
+// Contract: reference/design/overlay-2026-07/spec.md.
+if (!/if \(options\.openText === true\) openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,220}conversationActive = true;/.test(contentSource)) {
+  throw new Error("browser voice start must leave the composer closed and render the turn in the ribbons");
 }
 
 const openTextSurfaceBody = sourceBetween(
@@ -1419,6 +1433,131 @@ for (const text of [
   if (looksLikePageContextQuestion(text)) {
     throw new Error(`page-context detector should ignore: ${text.slice(0, 80)}`);
   }
+}
+
+// ---- Overlay ribbons -------------------------------------------------------
+// Contract: reference/design/overlay-2026-07/spec.md. The overlay is a
+// companion between two single-line streams. The unit must never grow, wrap, or
+// reflow the page, and must paint nothing until the user is touching it.
+if (
+  !/id="\$\{id\}"/.test(ribbonRuntimeSource) || !/agee-ribbon-you/.test(ribbonRuntimeSource) ||
+  !/agee-ribbon-reply/.test(ribbonRuntimeSource) ||
+  !/class="agee-ribbon-viewport"/.test(ribbonRuntimeSource) ||
+  !/class="agee-ribbon-line"/.test(ribbonRuntimeSource)
+) {
+  throw new Error("the overlay must build an upper transcription ribbon and a lower response ribbon");
+}
+
+// The sliding window is the hard cap: a bounded tail of the buffer is rendered
+// inside a fixed viewport and the line is translated so the newest character
+// stays pinned right. Growing, wrapping, or resizing the box is a regression.
+if (
+  !/const WINDOW_CHARS = \d+;/.test(ribbonWindowSource) ||
+  !/const BUFFER_MAX_CHARS = \d+;/.test(ribbonWindowSource) ||
+  !/function graphemeTail\(/.test(ribbonWindowSource) ||
+  !/graphemeTail\(buffer, WINDOW_CHARS\)/.test(ribbonWindowSource) ||
+  !/return Math\.min\(0, inner - line\);/.test(ribbonWindowSource) ||
+  !/translateX\(\$\{overflow\}px\)/.test(ribbonRuntimeSource)
+) {
+  throw new Error("the ribbons must render a bounded tail window and slide instead of growing");
+}
+if (
+  !/\.agee-ribbon-viewport\s*\{[^}]*overflow:\s*hidden;/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-line\s*\{[^}]*white-space:\s*pre;/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon\s*\{[^}]*height:\s*var\(--agee-ribbon-h\);/.test(ribbonsCssSource)
+) {
+  throw new Error("ribbon geometry must be fixed: one nowrap line inside a height-locked hidden viewport");
+}
+
+// Transparent until touched: the ambient ribbon paints no plate and takes no
+// pointer events; only the glyph run is hittable, so an empty ribbon lets a
+// click reach the page underneath.
+if (
+  !/\.agee-ribbon\s*\{[^}]*background:\s*transparent;[^}]*pointer-events:\s*none;/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-text\s*\{\s*pointer-events:\s*auto;/.test(ribbonsCssSource) ||
+  !/#agee-root\[data-agee-unit="engaged"\] \.agee-ribbon\.agee-ribbon-live,/.test(ribbonsCssSource) ||
+  !/#agee-root\[data-agee-unit="dormant"\] #agee-launcher \{ opacity: 0\.34; \}/.test(ribbonsCssSource)
+) {
+  throw new Error("the ambient overlay must paint no plate and must not intercept page clicks");
+}
+
+// The unit moves as one: dragging a ribbon moves the companion anchor and the
+// ribbons are re-laid out from it.
+if (
+  !/function ribbonPlacement\(/.test(ribbonLayoutSource) ||
+  !/ribbons\?\.position\(\); \/\/ the ribbons are anchored to the mark/.test(contentSource) ||
+  !/placeLauncher\(startLeft \+ dx, startTop \+ dy, false\);/.test(ribbonRuntimeSource)
+) {
+  throw new Error("dragging any ribbon must move the whole unit through the companion anchor");
+}
+
+// Tap expands the bounded bar to the full text AND reveals the copy rail in
+// the same gesture. Expanded is height-capped, wraps instead of sliding, and
+// is released by latch expiry so the overlay is never left occluding.
+if (
+  !/function expand\(ribbon\)/.test(ribbonRuntimeSource) ||
+  !/function collapse\(ribbon\)/.test(ribbonRuntimeSource) ||
+  !/engage\(true\);\s*\n\s*toggleExpanded\(ribbon\);/.test(ribbonRuntimeSource) ||
+  !/latchTimer = setTimeout\(\(\) => unlatch\(\), LATCH_MS\);/.test(ribbonRuntimeSource) ||
+  !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*max-height:/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-expanded \.agee-ribbon-line\s*\{[^}]*white-space:\s*pre-wrap;/.test(ribbonsCssSource)
+) {
+  throw new Error("a ribbon tap must expand the bounded bar to the full text and reveal the copy rail");
+}
+// The expanded bar grows AWAY from the companion, so the companion never moves
+// and the page never reflows: the upper ribbon is bottom-anchored.
+if (!/youAnchor: flip \? "top" : "bottom"/.test(ribbonLayoutSource) || !/you\.el\.style\.bottom = `\$\{place\.youBottom\}px`;/.test(ribbonRuntimeSource)) {
+  throw new Error("the upper ribbon must be bottom-anchored so expanding grows away from the companion");
+}
+
+// Copy is a three-way choice with a default, not one button: literal,
+// corrected, and a named writing-skill rewrite (voice-capture-notebook-ime
+// 3.3). The rail falls back to the highest-ranked variant that exists and
+// never substitutes one for another silently.
+if (
+  !/VARIANT_RANK = Object\.freeze\(\["skill", "edited", "literal"\]\);/.test(ribbonWindowSource) ||
+  !/function defaultVariant\(/.test(ribbonWindowSource) ||
+  !/function openCopyMenu\(/.test(ribbonRuntimeSource) ||
+  !/not generated for this turn/.test(ribbonWindowSource) ||
+  !/if \(key\) ribbon\.chosenVariant = key;/.test(ribbonRuntimeSource) ||
+  !/user_variants: Object\.hasOwn\(patch, "user_variants"\)/.test(backgroundSource)
+) {
+  throw new Error("the copy rail must offer literal/corrected/polished with an available-variant default");
+}
+// The literal transcript is a derived-revision parent and is never mutated:
+// copy only ever reads, and `literal` tracks the live buffer.
+if (
+  !/ribbon\.variants\.literal = ribbon\.buffer;/.test(ribbonRuntimeSource) ||
+  /ribbon\.buffer = TextModel\.variantText\(/.test(ribbonRuntimeSource)
+) {
+  throw new Error("copying a derived variant must never overwrite the literal transcript");
+}
+
+// Interaction layer: tap reveals copy, hold opens a bounded menu, double tap
+// hands off to the history surface instead of growing a scrollback.
+if (
+  !/const HOLD_MS = 340;/.test(ribbonRuntimeSource) ||
+  !/const MULTITAP_MS = 260;/.test(ribbonRuntimeSource) ||
+  !/async function copy\(ribbon, key\)/.test(ribbonRuntimeSource) ||
+  !/function openMenu\(ribbon\)/.test(ribbonRuntimeSource) ||
+  !/openHistory,/.test(ribbonRuntimeSource) ||
+  !/safeRuntimeSendMessage\(\{ cmd: "openHistoryPanel" \}\)/.test(contentSource) ||
+  !/msg\.cmd === "openHistoryPanel"/.test(backgroundSource)
+) {
+  throw new Error("ribbon tap/hold/double-tap must map to copy, a bounded menu, and the history surface");
+}
+if (/rows\.push\(\{ label: "Settings"/.test(ribbonRuntimeSource)) {
+  throw new Error("the overlay must not expose a settings entry point; settings are agent-opened only");
+}
+
+// The ribbons render the worker-owned active turn, so the visible turn follows
+// the user across tabs and navigations rather than resetting per page.
+if (
+  !/applyPresentation\(presentation, isOwner\)/.test(ribbonRuntimeSource) ||
+  !/ribbons\?\.applyPresentation\(msg\.presentation, msg\.isOwner === true\)/.test(contentSource) ||
+  !/presentation: activeBrowserAgentPresentation,/.test(backgroundSource)
+) {
+  throw new Error("the ribbons must render the worker-owned presentation state, not a parallel per-tab store");
 }
 
 console.log("extension verification passed");

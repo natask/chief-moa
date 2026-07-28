@@ -171,6 +171,9 @@ signal completed without a client acknowledgement.
       the exact transcript on the Android clipboard and shows a visible copied
       receipt; keep partial streaming rows non-copyable until finalized.
 - [ ] 13.6 Publish and physically smoke the transcript-copy Android OTA.
+- [x] 13.7 Make every Android overlay launch path reuse one process owner and
+      one orb window; apply the existing 70% default size and live size refresh,
+      use 30% idle opacity, and preserve hold-drag and drag-to-remove geometry.
 
 Release evidence: commit `b99379b0` built candidate
 `ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256
@@ -179,34 +182,65 @@ The VPS backup/preflight gate failed before publication, so the active OTA head
 did not move. No authorized phone was attached; the candidate is neither
 installed nor physically smoked.
 
-## 14. Mobile Voice Finish Recovery
+## 14. Overlay-First Android Invocation
 
-- [x] 14.1 Make normal push-to-talk release commit the owned streaming
+- [x] 14.1 Route the normal launcher icon through the thin Assistant activity
+      instead of rendering the full control center.
+- [x] 14.2 Make launcher, Assistant, voice-assist, and voice-command invocations
+      start/commit one manual latched turn without silence auto-submit or re-arm.
+- [x] 14.3 Keep orb hold/release as push-to-talk while an invoked turn is open.
+- [x] 14.4 Keep the control center reachable through the explicit launcher
+      Settings shortcut, notification, Quick Settings, and spoken/typed "show
+      app UI" commands.
+- [ ] 14.5 Complete physical-phone QA for launcher reuse, repeated Assistant
+      invocation, orb click commit, orb hold/release, and permission hints.
+
+Verification evidence: Android JVM tests and `assembleDebug` pass. The merged
+APK manifest has exactly one `MAIN`/`LAUNCHER` entry on `MoaAssistActivity`;
+`MainActivity` has none. Strict OpenSpec validation is locally blocked because
+the installed CLI cannot import its `commander` dependency.
+
+## 15. Mobile Voice Finish Recovery
+
+- [x] 15.1 Make normal push-to-talk release commit the owned streaming
       controller exactly once instead of gating finish on transient transport
       activity.
-- [x] 14.2 Keep Android `ACTION_CANCEL`, hold-drag cancellation, discard, and
+- [x] 15.2 Keep Android `ACTION_CANCEL`, hold-drag cancellation, discard, and
       barge-in replacement as explicit non-commit paths.
-- [x] 14.3 Give unexpected voice and private-turn startup failures one
+- [x] 15.3 Give unexpected voice and private-turn startup failures one
       accessible, generation-bound `Record again` action.
-- [x] 14.4 Add deterministic gesture/session tests for capture then normal
+- [x] 15.4 Add deterministic gesture/session tests for capture then normal
       finish, intentional cancellation, deferred startup, stale close, and
       one-shot retry.
-- [ ] 14.5 Complete physical-phone QA and confirm gateway evidence contains one
+- [ ] 15.5 Complete physical-phone QA and confirm gateway evidence contains one
       `commit_turn` and no `cancel_turn` for a normal hold/release turn.
 
-## 15. Mobile Voice End-to-End Benchmark Evidence
+## 16. Mobile Voice End-to-End Benchmark Evidence
 
-- [x] 15.1 Add content-free Android lifecycle timings from actual microphone,
+- [x] 16.1 Add content-free Android lifecycle timings from actual microphone,
       socket/result, AudioTrack playback, drain, and terminal seams.
-- [x] 15.2 Replace fixed-delay playback completion with bounded playback-head
+- [x] 16.2 Replace fixed-delay playback completion with bounded playback-head
       drain confirmation and an explicit timeout outcome.
-- [x] 15.3 Retain at most 100 private on-device terminal samples and expose
+- [x] 16.3 Retain at most 100 private on-device terminal samples and expose
       completion/failure/teardown, audible-success, p50, and p95 in the full app.
-- [x] 15.4 Hash existing session/turn identity for local lifecycle correlation;
+- [x] 16.4 Hash existing session/turn identity for local lifecycle correlation;
       never retain raw identity, content, credentials, URLs, or exception text.
-- [x] 15.5 Add deterministic ordering tests for PCM receipt, audio-done drain
+- [x] 16.5 Add deterministic ordering tests for PCM receipt, audio-done drain
       ownership, immediate turn completion, disabled playback, playback errors,
       post-terminal suppression, and concurrent metrics retention.
-- [ ] 15.6 Establish the real-phone benchmark with repeated audible success,
+- [ ] 16.6 Establish the real-phone benchmark with repeated audible success,
       playback-disabled, cancel/replacement, connection-loss, and drain-timeout
       trials against the exact installed APK.
+
+## 17. Android App Display Name
+
+- [x] 17.1 Present the Android app name as exactly `AG`, without dots, across
+      the launcher, Assistant chooser, Quick Settings, accessibility and media
+      service settings, overlay/chat UI, notifications, shortcuts, clipboard
+      labels, and user-facing setup/update copy.
+- [x] 17.2 Preserve the existing application id, package and service class
+      names, signer continuity, update authority, protocol source identifiers,
+      gateway headers, and routing vocabulary.
+- [x] 17.3 Verify the focused naming assertions plus Android unit tests, lint,
+      and debug assembly, then build a local candidate without publishing or
+      installing it.

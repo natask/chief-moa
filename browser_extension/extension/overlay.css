@@ -72,9 +72,9 @@
   position: absolute;
   right: max(18px, env(safe-area-inset-right));
   bottom: max(18px, env(safe-area-inset-bottom));
-  font-size: var(--agee-mascot-font, 26px);
-  width: 2.8em;
-  height: 2.8em;
+  font-size: var(--agee-mascot-font, 22px);
+  width: 2.5em;
+  height: 2.5em;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1589,6 +1589,12 @@ button.agee-ui-list-row:hover {
 
 /* ---- Small screens ------------------------------------------------------- */
 @media (max-width: 480px) {
+  /* Keep the touch target usable while making the visible mascot less
+     obstructive on phone-sized browser surfaces. A persisted user scale still
+     wins through the inline --agee-mascot-font property. */
+  #agee-launcher {
+    font-size: var(--agee-mascot-font, 18px);
+  }
   #agee-panel {
     width: calc(100vw - 16px);
   }
@@ -1625,10 +1631,5 @@ button.agee-ui-list-row:hover {
   }
   #agee-input {
     font-size: 14px;
-  }
-  /* Smaller default knob on narrow screens; a user-set scale still wins
-     because content.js writes --agee-mascot-font as an inline property. */
-  #agee-launcher {
-    font-size: var(--agee-mascot-font, 20px);
   }
 }

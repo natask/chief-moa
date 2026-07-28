@@ -110,6 +110,21 @@ Product implication: the v0 action layer should stay page-first. Whole-screen
 capture can inform the model, but it should not imply cross-app clicking or
 typing from the extension.
 
+### Local files and diagnostics
+
+The AG browser-tool facade can navigate to `file://` and inspect that rendered
+document only after Chrome reports
+`chrome.extension.isAllowedFileSchemeAccess() === true`. The user must open
+`chrome://extensions`, choose AG → Details, and turn on **Allow access to file
+URLs**. AG reports that instruction when the toggle is off and never attempts
+to enable it.
+
+This is browser access, not arbitrary filesystem access. The extension receives
+only what Chrome renders at the requested file URL. Console and network
+diagnostics use a short-lived, bounded `chrome.debugger` attachment against an
+explicitly addressed tab and return a receipt; cookies, authorization headers,
+browser storage, and raw response bodies are not exported.
+
 ## Agent Enablement Brief
 
 Use this context pack when starting a fresh agent to continue the browser-based

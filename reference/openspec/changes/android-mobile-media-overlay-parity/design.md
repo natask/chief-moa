@@ -31,12 +31,26 @@ for one request. Future variants use the same capability only after a local
 named mapping is saved; a model-selected package name has no authority. The
 selected package and signing/version evidence are bound to execution.
 
+`media.open` receipts describe the strongest locally observed outcome. Opening
+a search or sending a watch URI is not playback success. Search operations use
+`search_opened`, `needs_accessibility`, or `selection_unverified`; only a unique
+title/channel match clicked and confirmed by the approved fixture may use
+`selection_verified`. `playback_verified` is reserved for a fresh observable
+media-session postcondition and is not inferred from an intent launch.
+
 Accessibility is reserved for visible states that MediaSession cannot express,
 not for arbitrary model-authored tap sequences. An undocumented variant adapter
 is a named, versioned local module with declared package/signature constraints,
 supported version range, bounded selectors/state transitions, and fixtures. An
 unknown version, signature change, missing selector, ambiguous state, or UI drift
 disables that adapter and returns a receipt rather than guessing.
+
+VLC is resolved separately and only on-device from the visible `VLC` label among
+exported handlers for the validated source. `media.open` may hand VLC an explicit
+HTTPS or `content://` URI with read permission; it rejects file paths, `file://`,
+intent URIs, model-authored packages, missing or ambiguous handlers, and weak
+title-only identity. A title-only request returns `needs_source` until a catalog
+or source connector supplies a concrete URI, and never claims playback.
 
 ## Saved spots and cross-surface recall
 

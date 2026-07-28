@@ -1,0 +1,87 @@
+{
+  "intent": "in-rgh.1",
+  "started_at": "2026-07-25T08:36:27.669Z",
+  "finished_at": "2026-07-25T08:37:07.712Z",
+  "gateway_url": "https://api.agee.app",
+  "result": "passed",
+  "runtime": {
+    "runtime_mode": "modular",
+    "configured": true,
+    "provider": "chirp",
+    "selected_providers": {
+      "native_live": null,
+      "stt": "chirp",
+      "reasoning": "gateway",
+      "tts": "gemini-tts"
+    },
+    "model": "chirp_3",
+    "audio_format": {
+      "encoding": "pcm16",
+      "sample_rate": 16000,
+      "channels": 1
+    }
+  },
+  "browser_turns": [
+    {
+      "language": "English",
+      "turn_id": "smoke_turn_ms047mcd",
+      "attempts": 1,
+      "playback_scheduled": true,
+      "assistant_audio_bytes_received": 121848,
+      "terminal_event": "turn_done"
+    },
+    {
+      "language": "Amharic",
+      "turn_id": "smoke_turn_ms0483bs",
+      "attempts": 1,
+      "playback_scheduled": true,
+      "assistant_audio_bytes_received": 152856,
+      "terminal_event": "turn_done"
+    }
+  ],
+  "canonical_stored_turns": [
+    {
+      "turn_id": "smoke_turn_ms047mcd",
+      "http_status": 200,
+      "source": "agee-extension",
+      "transcript_source": "stt",
+      "transcript": "Can you hear me clearly? This is an Aggie browser extension smoke test.",
+      "assistant_text": "አዎ፣ ጌታዬ፤ በደንብ እሰማዎታለሁ። ፈተናውን ለመቀጠል ዝግጁ ነኝ።",
+      "voice_session": {
+        "provider": "chirp-cascaded",
+        "model": "gemini-3.5-flash",
+        "input_languages": ["en-US", "am-ET"],
+        "reply_language": "am-ET",
+        "tts_spoke": true,
+        "tts_error": "",
+        "capture_audio_bytes": 180478,
+        "transport_committed": true,
+        "assistant_audio_bytes": 121844
+      }
+    },
+    {
+      "turn_id": "smoke_turn_ms0483bs",
+      "http_status": 200,
+      "source": "agee-extension",
+      "transcript_source": "stt",
+      "transcript": "ሰላም የያጊ የብራውዘር ድምጽ መቆጣጠሪያ ነው እባክህ በአማርኛ መልስልኝ",
+      "assistant_text": "ጌታዬ ሆይ፥ ሰላም! እኔ ኤ.ጂ. ነኝ። በአማርኛ እመልስልዎታለሁ። ምን መርዳት እችላለሁ?",
+      "voice_session": {
+        "provider": "chirp-cascaded",
+        "model": "gemini-3.5-flash",
+        "input_languages": ["en-US", "am-ET"],
+        "reply_language": "am-ET",
+        "tts_spoke": true,
+        "tts_error": "",
+        "capture_audio_bytes": 130762,
+        "transport_committed": true,
+        "assistant_audio_bytes": 152852
+      }
+    }
+  ],
+  "verification": {
+    "extension_verify": "passed (133 tests)",
+    "extension_smoke": "passed (real extension, headless Chrome for Testing)",
+    "secret_handling": "gateway token was injected in-memory and was not printed or stored in evidence"
+  }
+}

@@ -82,11 +82,67 @@ public final class MoaOrbOverlayGeometryTest {
         assertEquals(1700 - 430 - 12, position.y);
     }
 
+    // 3x density: a 200x72dp target 34dp off the bottom, 12dp of tolerance.
+    private static final int TARGET_W = 600;
+    private static final int TARGET_H = 216;
+    private static final int TARGET_INSET = 102;
+    private static final int TOLERANCE = 36;
+    private static final int ORB = 288;
+
+    private static MoaOrbOverlayGeometry.Bounds target() {
+        return MoaOrbOverlayGeometry.removeTargetBounds(1080, 2340, TARGET_W, TARGET_H, TARGET_INSET);
+    }
+
+    @Test
+    public void removeTargetIsBottomCentred() {
+        MoaOrbOverlayGeometry.Bounds bounds = target();
+
+        assertEquals(240, bounds.left);
+        assertEquals(840, bounds.right());
+        assertEquals(2340 - TARGET_H - TARGET_INSET, bounds.top);
+        assertEquals(2340 - TARGET_INSET, bounds.bottom());
+    }
+
     @Test
     public void bottomRemoveHitUsesLatestOrbCenter() {
+        MoaOrbOverlayGeometry.Bounds bounds = target();
+        int onTargetY = bounds.top + TARGET_H / 2 - ORB / 2;
+
         assertTrue(MoaOrbOverlayGeometry.isInRemoveTarget(
-                1080, 1920, 492, 1702, 96, 170, 135));
+                bounds, 540 - ORB / 2, onTargetY, ORB, TOLERANCE));
         assertFalse(MoaOrbOverlayGeometry.isInRemoveTarget(
-                1080, 1920, 100, 1702, 96, 170, 135));
+                bounds, 0, onTargetY, ORB, TOLERANCE));
+    }
+
+    @Test
+    public void theArmedZoneIsThePaintedRectanglePlusOneTolerance() {
+        MoaOrbOverlayGeometry.Bounds bounds = target();
+        int centreY = bounds.top + TARGET_H / 2;
+
+        // Just outside the painted pill but inside the tolerance: armed.
+        assertTrue(MoaOrbOverlayGeometry.isInRemoveTarget(
+                bounds, bounds.right() + TOLERANCE - ORB / 2, centreY - ORB / 2, ORB, TOLERANCE));
+        // One pixel past the tolerance: not armed.
+        assertFalse(MoaOrbOverlayGeometry.isInRemoveTarget(
+                bounds, bounds.right() + TOLERANCE + 1 - ORB / 2, centreY - ORB / 2, ORB, TOLERANCE));
+    }
+
+    @Test
+    public void dragsThatMerelyPassNearTheBottomNoLongerArmRemoval() {
+        MoaOrbOverlayGeometry.Bounds bounds = target();
+
+        // The old rule armed on ANY orb centre within 170dp of the bottom and
+        // 135dp of the horizontal middle — a zone several times the painted pill.
+        // A drag along the bottom-left corner is now inert.
+        assertFalse(MoaOrbOverlayGeometry.isInRemoveTarget(
+                bounds, 0, 2340 - ORB, ORB, TOLERANCE));
+        // So is one that stops well above the target.
+        assertFalse(MoaOrbOverlayGeometry.isInRemoveTarget(
+                bounds, 540 - ORB / 2, bounds.top - 400, ORB, TOLERANCE));
+    }
+
+    @Test
+    public void aMissingTargetNeverArms() {
+        assertFalse(MoaOrbOverlayGeometry.isInRemoveTarget(null, 540, 2000, ORB, TOLERANCE));
     }
 }

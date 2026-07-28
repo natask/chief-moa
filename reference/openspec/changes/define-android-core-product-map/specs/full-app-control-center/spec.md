@@ -1,5 +1,28 @@
 ## ADDED Requirements
 
+### Requirement: Explicit Control-Center Entry
+The full Android app SHALL remain available for setup and deep inspection
+without being the default launcher surface.
+
+#### Scenario: User explicitly requests the app UI
+- **WHEN** the user opens the overlay notification, uses the launcher Settings
+  shortcut or Quick Settings entry, or says an explicit command such as "show
+  me the app UI"
+- **THEN** Android opens the full control center
+- **AND** collapses large overlay surfaces while keeping the single overlay
+  service available
+
+### Requirement: Android Display Name
+The Android surface SHALL present the app name as exactly `AG`, without dots,
+while preserving its existing package identity, signer, update authority, and
+cross-surface protocol identifiers.
+
+#### Scenario: User finds an Android surface
+- **WHEN** Android renders the launcher, Assistant chooser, Quick Settings,
+  accessibility or notification settings, shortcuts, or app-owned UI
+- **THEN** the user-visible app name is `AG`
+- **AND** an installed update remains compatible with the existing app identity
+
 ### Requirement: Setup And Health
 The full Android app SHALL expose setup state for overlay permission, microphone permission, screen access, gateway health, and harness availability.
 

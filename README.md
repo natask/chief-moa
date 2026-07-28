@@ -30,8 +30,9 @@ proposal before any platform-local action runs.
   runs.
 - `release_control_plane`: persistent release authority contract and domain
   model above applications, clients, and build/QA runners.
-- `apple_surfaces`: shared Aggie authority library plus the native `MoaMac`
-  observation/suggestion surface and unsigned QA bundle tooling.
+- `apple_surfaces`: shared Aggie authority library plus the native menu-bar
+  `MoaMac` voice/typed companion, privacy-scoped observation/suggestion surface,
+  and ad-hoc-signed QA bundle tooling.
 
 ## Common commands
 
@@ -88,6 +89,11 @@ swift test
 swift build --product MoaMac
 bash scripts/package-moa-mac.sh
 ```
+
+The package command creates a versioned QA ZIP and SHA-256 under
+`apple_surfaces/dist/`. The app has no packaged gateway: configure the user's
+canonical origin and gateway token from its command panel. This artifact is not
+Developer ID signed or notarized.
 
 Packaging does not launch the application or request Accessibility/Screen
 Recording. Real TCC QA and production distribution require an isolated account,

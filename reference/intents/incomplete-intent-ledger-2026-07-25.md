@@ -18,6 +18,20 @@ ready and unassigned; it does not mean a live worker is making progress.
 
 ## Selected near-term priorities
 
+### 2026-07-27 release-candidate catalog slice
+
+- **Stable ID:** `intent:chief-moa:release-candidate-catalog`
+- **Status:** `candidate`.
+- **Outcome:** immutable paginated published-bundle discovery with
+  series/parallel lineage and exact device selection independent of channel
+  heads.
+- **Evidence:** migration 004, the shared catalog fixture, and release-control
+  service/HTTP tests.
+- **Boundary:** read/select/receipt/feedback only for devices; no publication,
+  promotion, deployment, or channel movement.
+- **Next gate:** independent review and Postgres migration/restore smoke before
+  merge or deployment.
+
 This table is an ordering aid, not a complete inventory. The numbered sections
 below are authoritative and include additional runnable and longer-horizon
 intents.

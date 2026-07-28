@@ -11,6 +11,7 @@ const { createSttStage, createReasonerStage, createTtsStage } = require("./voice
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
 const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
+const { finalizeStreamingOrBatchTranscript } = require("./transcript-quality");
 const { phoneActionGeminiDeclaration } = require("./surface-skills");
 const {
   adcAccessToken,
@@ -852,6 +853,7 @@ class CascadedVoiceProvider {
         audio_format: CLIENT_AUDIO_FORMAT,
         transcription_only: true,
         transcript_language_rejected: transcription.languageRejected === true,
+        transcript_quality: transcription.transcript_quality || null,
       };
     }
 
@@ -864,22 +866,10 @@ class CascadedVoiceProvider {
       return this.cascadedResult(transcript, reasoning, false, transcription);
     }
     const modality = this.replyModality(turn);
-    // Gate hoisting: the reply (OUTPUT) language and modality are pinned ONCE,
-    // BEFORE the LLM stream starts, so chunk 1 can synthesize mid-stream with
-    // the turn-pinned voice. A mid-turn profile language switch takes effect
-    // next turn; a post-stream language divergence is recorded as
-    // tts_language_mismatch instead of re-synthesizing.
     const pinnedLanguage = this.replyLanguage(turn);
-    // Like the language, the TTS voice is pinned ONCE per turn, from the turn's
-    // effective profile (which carries a validated session_start voice
-    // override), so every streamed chunk speaks with the same voice and a
-    // per-session voice never leaks into other sessions.
     const pinnedVoice = this.ttsVoiceName(turn.effectiveProfile);
-    // Delivery pace/tone are pinned per turn like the voice, so every streamed
-    // chunk speaks at one speed; a mid-turn change applies next turn.
     const pinnedRate = this.speakingRate(turn.effectiveProfile);
     const pinnedTone = this.voiceTone(turn.effectiveProfile);
-    // The factor the client resamples by (1.0 unless Gemini-TTS client-rate mode).
     const clientRate = this.clientPlaybackRate(pinnedRate);
     const turnStartedAtMs = Date.now();
     const pipeline = this.streamingEnabledForTurn() && modality !== "text" && this.canSynthesize(pinnedLanguage)
@@ -975,17 +965,11 @@ class CascadedVoiceProvider {
     const ttsText = String(reasoning.tts_text || reasoning.speak || "").trim();
     const ttsStyle = String(reasoning.tts_style || "").trim();
     if (speak) {
-      // Sent when the LLM stream ends. On a multi-chunk streaming turn this
       // deliberately lands BETWEEN binary frames (audio-before-text is the
       // streaming contract); a one-chunk reply may still deliver text first.
       await hooks.onAssistantText(speak);
     }
 
-    // Leg 3 (streaming) — the pipelined per-chunk TTS already synthesized and
-    // emitted audio while the reasoner streamed. Flush the tail, then fold the
-    // pipeline outcome into the result. finish() never throws: a mid-stream
-    // synthesis fault degrades to a text-only remainder with tts_error set and
-    // a superseded turn aborts silently.
     if (pipeline) {
       if (speak && pipeline.deltaCount() === 0 && ttsText) {
         // The reasoner streamed no deltas (non-streaming provider or fallback
@@ -1002,8 +986,6 @@ class CascadedVoiceProvider {
       try {
         stream = await pipeline.finish();
       } catch (error) {
-        // finish() must never throw; if it does, that is a pipeline-guard
-        // escape: count it on the breaker and degrade to text-only.
         reportVoiceStreamingFault(`streaming_pipeline_escape: ${cleanError(error)}`);
         streamError = cleanError(error);
       }
@@ -1030,9 +1012,13 @@ class CascadedVoiceProvider {
       const extras = {
         modality,
         ttsError: streamTtsError,
+        ttsDelivery: streamTtsError ? (streamSpoke ? "partial" : "failed") : (streamSpoke ? "complete" : "not_requested"),
         streaming: true,
         firstAudioMs: stream?.firstAudioMs,
         ttsSegments: stream ? stream.segments : 0,
+        ttsFailedSegmentIndex: stream?.failedSegmentIndex,
+        ttsSpokenTextEnd: stream?.spokenTextEnd,
+        ttsReplyTextChars: speak.length,
         reasonerFirstDeltaMs: stream?.firstDeltaMs,
       };
       const finalLanguage = String(reasoning.language || "").trim().toLowerCase();
@@ -1153,7 +1139,15 @@ class CascadedVoiceProvider {
     }
     this.lastTtsError = ttsError;
 
-    return this.cascadedResult(transcript, reasoning, spoke, transcription, { modality, ttsError });
+    return this.cascadedResult(transcript, reasoning, spoke, transcription, {
+      modality,
+      ttsError,
+      ttsDelivery: ttsError ? "failed" : (spoke ? "complete" : "not_requested"),
+      ttsSegments: spoke ? 1 : 0,
+      ttsFailedSegmentIndex: ttsError ? 0 : null,
+      ttsSpokenTextEnd: spoke ? speak.length : 0,
+      ttsReplyTextChars: speak.length,
+    });
   }
 
   cascadedResult(transcript, reasoning, spoke, transcription = {}, options = {}) {
@@ -1174,14 +1168,26 @@ class CascadedVoiceProvider {
       // turn, never a failure; `tts_error` is only set on a real synthesis fault.
       modality: options.modality || this.replyModality(),
       tts_error: options.ttsError || "",
+      tts_delivery: options.ttsDelivery || (spoke ? "complete" : "not_requested"),
+      tts_complete: options.ttsDelivery === "complete" || (!options.ttsDelivery && spoke),
+      tts_spoken_text_end: Number.isFinite(options.ttsSpokenTextEnd)
+        ? Math.max(0, Math.round(options.ttsSpokenTextEnd))
+        : 0,
+      tts_reply_text_chars: Number.isFinite(options.ttsReplyTextChars)
+        ? Math.max(0, Math.round(options.ttsReplyTextChars))
+        : String(reasoning.speak || "").trim().length,
+      ...(Number.isInteger(options.ttsFailedSegmentIndex) && options.ttsFailedSegmentIndex >= 0
+        ? { tts_failed_segment_index: options.ttsFailedSegmentIndex }
+        : {}),
       transcript_language_rejected: transcription.languageRejected === true,
+      transcript_quality: transcription.transcript_quality || null,
       classification: reasoning.classification || "chat",
       // Additive streaming metadata (absent on non-streaming turns; old code
       // reading new records ignores it, new code reading old records treats
       // absence as the non-streaming default).
       ...(options.streaming ? { streaming: true } : {}),
       ...(Number.isFinite(options.firstAudioMs) ? { first_audio_ms: Math.max(0, Math.round(options.firstAudioMs)) } : {}),
-      ...(options.streaming && Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
+      ...(Number.isFinite(options.ttsSegments) ? { tts_segments: options.ttsSegments } : {}),
       ...(Number.isFinite(options.reasonerFirstDeltaMs) ? { reasoner_first_delta_ms: Math.max(0, Math.round(options.reasonerFirstDeltaMs)) } : {}),
       ...(options.ttsLanguageMismatch ? { tts_language_mismatch: true } : {}),
       // Client-forwardable action envelopes proposed by the reasoner's tools
@@ -1220,15 +1226,6 @@ class CascadedVoiceProvider {
     return Math.max(1, Math.min(4, numberFrom(this.env.VOICE_TTS_CONCURRENCY, 2)));
   }
 
-  // The pipelined per-chunk TTS emitter. Sanitized reply deltas stream in; the
-  // chunker cuts sentence/clause chunks; at most `ttsConcurrency()` synthesize
-  // requests run concurrently while emission stays STRICTLY ordered through a
-  // promise chain (chunk n+1's PCM is held until chunk n's sendAudio resolves).
-  // Nothing here may throw out of finish(): a synthesis fault degrades the
-  // remainder to text-only with tts_error set, and a TurnSupersededError from
-  // the session-server write guard aborts silently (no tts_error, no events
-  // for the dead turn). One nulled stream crash-looped this gateway 24 times
-  // in a day; the guard lives on the write, not only in callers.
   createStreamingReplyPipeline({ hooks, language, turnStartedAtMs, voice, speakingRate, tone, playbackRate }) {
     const provider = this;
     const chunker = createSpeechChunker(this.chunkerOptions());
@@ -1240,12 +1237,16 @@ class CascadedVoiceProvider {
       emitted: 0,
       nextSegmentIndex: 0,
       textCursor: 0,
+      sourceText: "",
+      sourceSearchCursor: 0,
       started: false,
       failed: false,
       superseded: false,
       finished: false,
       ttsError: "",
+      failedSegmentIndex: null,
       firstAudioAtMs: 0,
+      spokenTextEnd: 0,
     };
     let emitChain = Promise.resolve();
     let permits = this.ttsConcurrency();
@@ -1280,11 +1281,14 @@ class CascadedVoiceProvider {
       abortController.abort();
       clearForceTimer();
     };
-    const markFailed = (error) => {
-      if (state.superseded || state.failed) return;
+    const markFailed = (error, segmentIndex = null) => {
+      if (state.superseded) return;
+      if (!state.failed) state.ttsError = cleanError(error);
       state.failed = true;
-      state.ttsError = state.ttsError || cleanError(error);
-      abortController.abort();
+      if (Number.isInteger(segmentIndex) && segmentIndex >= 0 && (
+        !Number.isInteger(state.failedSegmentIndex) || segmentIndex < state.failedSegmentIndex)) {
+        state.failedSegmentIndex = segmentIndex;
+      }
       clearForceTimer();
       console.warn(JSON.stringify({
         level: "warn",
@@ -1295,12 +1299,11 @@ class CascadedVoiceProvider {
       }));
     };
 
-    // Synthesis faults are caught HERE, at the source, so a failed chunk stops
-    // later chunks from ever issuing their requests (not merely from emitting).
-    const synthesizeChunk = async (text) => {
+    const synthesizeChunk = async (text, segmentIndex) => {
       await acquire();
       try {
-        if (state.superseded || state.failed) {
+        if (state.superseded || (Number.isInteger(state.failedSegmentIndex)
+            && segmentIndex >= state.failedSegmentIndex)) {
           return null;
         }
         const pcm = await provider.ttsStage.synthesize({
@@ -1317,10 +1320,10 @@ class CascadedVoiceProvider {
         }
         return { pcm, text };
       } catch (error) {
-        if (state.superseded || state.failed || error?.name === "AbortError") {
+        if (state.superseded || error?.name === "AbortError") {
           return null;
         }
-        markFailed(error);
+        markFailed(error, segmentIndex);
         return null;
       } finally {
         release();
@@ -1335,18 +1338,18 @@ class CascadedVoiceProvider {
       if (!normalizedText) {
         return;
       }
-      // The reasoner chunker normalizes away boundary whitespace. Preserve the
-      // one-character separator used by the stored assistant reply so segment
-      // offsets remain usable when reconstructing the unheard suffix.
-      const textStart = state.textCursor + (state.textCursor > 0 ? 1 : 0);
+      const exactStart = state.sourceText.indexOf(normalizedText, state.sourceSearchCursor);
+      const textStart = exactStart >= 0 ? exactStart : state.textCursor;
       const textEnd = textStart + normalizedText.length;
       const segmentIndex = state.nextSegmentIndex;
       state.nextSegmentIndex += 1;
       state.textCursor = textEnd;
-      const synthPromise = synthesizeChunk(normalizedText);
+      state.sourceSearchCursor = textEnd;
+      const synthPromise = synthesizeChunk(normalizedText, segmentIndex);
       emitChain = emitChain.then(async () => {
         const synthesized = await synthPromise;
-        if (!synthesized || state.superseded || state.failed) {
+        if (!synthesized || state.superseded || (Number.isInteger(state.failedSegmentIndex)
+            && segmentIndex >= state.failedSegmentIndex)) {
           return;
         }
         const pcm = synthesized.pcm;
@@ -1367,14 +1370,12 @@ class CascadedVoiceProvider {
             pcm_ms: pcmDurationMs(pcm.length, CLIENT_AUDIO_FORMAT),
           });
         }
-        // The segment metadata rides along so the session server can keep a
-        // frame->reply-text ledger: on interruption it is the only way to know
-        // which words were already spoken (binary PCM frames carry no text).
         await hooks.sendAudio(pcm, {
           segmentIndex,
           segmentText: normalizedText,
         });
         state.emitted += 1;
+        state.spokenTextEnd = Math.max(state.spokenTextEnd, textEnd);
         if (!state.firstAudioAtMs) {
           state.firstAudioAtMs = Date.now();
         }
@@ -1383,7 +1384,7 @@ class CascadedVoiceProvider {
           markSuperseded();
           return;
         }
-        markFailed(error);
+        markFailed(error, segmentIndex);
       });
     };
 
@@ -1421,6 +1422,7 @@ class CascadedVoiceProvider {
           return;
         }
         state.deltaCount += 1;
+        state.sourceText += text;
         if (!state.firstDeltaAtMs) {
           state.firstDeltaAtMs = Date.now();
         }
@@ -1435,10 +1437,6 @@ class CascadedVoiceProvider {
           state.style = value;
         }
       },
-      // Zero-delta fallback: the reasoner returned a COMPLETE reply without
-      // streaming any deltas (non-streaming provider, fallback path, stubs).
-      // Speak it as ONE chunk — the pre-streaming single-call shape — instead
-      // of re-chunking text that is already fully known.
       pushFinalText(text) {
         if (state.superseded || state.failed || state.finished) {
           return;
@@ -1448,15 +1446,12 @@ class CascadedVoiceProvider {
           return;
         }
         state.deltaCount += 1;
+        state.sourceText = value;
         if (!state.firstDeltaAtMs) {
           state.firstDeltaAtMs = Date.now();
         }
         enqueue(value);
       },
-      // Gateway-produced interim speech (a tool-call acknowledgment): synthesize
-      // and emit NOW as one standalone chunk, bypassing the sentence chunker so
-      // a short line is never held back waiting for min-chars while a tool runs.
-      // Counted as a delta so the zero-delta fallback never double-speaks.
       pushImmediate(text) {
         if (state.superseded || state.failed || state.finished) {
           return;
@@ -1489,7 +1484,16 @@ class CascadedVoiceProvider {
         clearForceTimer();
         if (state.started && !state.superseded) {
           try {
-            await hooks.onAssistantAudioDone();
+            await hooks.onAssistantAudioDone({
+              complete: !state.failed,
+              tts_delivery: state.failed ? (state.emitted > 0 ? "partial" : "failed") : "complete",
+              tts_segments: state.emitted,
+              ...(Number.isInteger(state.failedSegmentIndex)
+                ? { tts_failed_segment_index: state.failedSegmentIndex }
+                : {}),
+              tts_spoken_text_end: state.spokenTextEnd,
+              ...(state.ttsError ? { tts_error: state.ttsError } : {}),
+            });
           } catch (error) {
             if (isTurnSupersededError(error)) {
               markSuperseded();
@@ -1501,12 +1505,13 @@ class CascadedVoiceProvider {
         return {
           spoke: state.emitted > 0 && !state.superseded,
           segments: state.emitted,
-          // A superseded turn is silent: no tts_error, no events for it.
           ttsError: state.superseded ? "" : state.ttsError,
           superseded: state.superseded,
           started: state.started,
           firstAudioMs: state.firstAudioAtMs ? state.firstAudioAtMs - turnStartedAtMs : null,
           firstDeltaMs: state.firstDeltaAtMs ? state.firstDeltaAtMs - turnStartedAtMs : null,
+          failedSegmentIndex: state.failedSegmentIndex,
+          spokenTextEnd: state.spokenTextEnd,
         };
       },
     };
@@ -1514,13 +1519,11 @@ class CascadedVoiceProvider {
 
   // The reply-delivery modality from the effective agent profile: "text" (write,
   // no hosted audio), "speech" (speak), or "auto" (default; speak when a hosted
-  // voice can synthesize). Read fresh per turn so a spoken change applies next.
   replyModality(turnOrProfile) {
     const profile = this.profileForTurn(turnOrProfile);
     return String(profile?.response_modality || "auto").trim().toLowerCase() || "auto";
   }
 
-  // Synthesize gateway-produced reply text (today a profile-control confirmation)
   // into hosted reply audio and stream it through the same hooks the cascaded
   // reply uses. The streaming server calls this to SPEAK confirmations that are
   // produced after processTurn — the profile change itself is applied once by the
@@ -1869,6 +1872,7 @@ class CascadedVoiceProvider {
             transcript: result?.alternatives?.[0]?.transcript || "",
             isFinal: result?.isFinal === true || result?.is_final === true,
             languageCode: result?.languageCode || result?.language_code || "",
+            resultEndOffset: result?.resultEndOffset?.seconds != null ? `${result.resultEndOffset.seconds}:${result.resultEndOffset.nanos || 0}` : (result?.result_end_offset?.seconds != null ? `${result.result_end_offset.seconds}:${result.result_end_offset.nanos || 0}` : ""),
           }));
         },
         onPartial: hooks && typeof hooks.onTranscriptPartial === "function"
@@ -1895,33 +1899,24 @@ class CascadedVoiceProvider {
   // windowed batch path over the stored file — a broken stream never fails the
   // turn.
   async runSttStage(turn) {
-    const stream = turn?.sttStream;
-    if (stream && typeof stream.finalize === "function") {
-      try {
-        const result = await stream.finalize();
-        if (result && result.ok && result.text) {
-          return {
-            text: result.text,
-            languageRejected: false,
-            streaming: true,
-            rotations: result.rotations || 0,
-          };
-        }
-        if (result && !result.ok && result.error) {
-          reportVoiceStreamingFault(`stt_stream_result: ${result.error}`);
-        }
-      } catch (error) {
-        reportVoiceStreamingFault(`stt_stream_finalize: ${cleanError(error)}`);
-      }
-    }
-    return this.transcribePcmWindowed(turn, this.sttPromptLanguageCodes(turn));
+    const promptLanguageCodes = this.sttPromptLanguageCodes(turn);
+    return finalizeStreamingOrBatchTranscript({
+      stream: turn?.sttStream,
+      batch: () => this.transcribePcmWindowed(turn, promptLanguageCodes),
+      reportStreamingFault: reportVoiceStreamingFault,
+      languageCodes: promptLanguageCodes,
+      basePrompt: this.sttCustomPrompt(turn, promptLanguageCodes),
+      retryFromAudio: (customPrompt) => this.transcribePcmWindowed(turn, promptLanguageCodes, {
+        customPrompt,
+      }),
+    });
   }
 
   // Batch path with no length limit: batch :recognize caps inline audio (~60s),
   // so audio longer than a 55s window is split on frame boundaries, each window
   // transcribed independently and the transcripts concatenated. Short audio
   // takes the single-request path unchanged.
-  async transcribePcmWindowed(turn, promptLanguageCodes = this.sttPromptLanguageCodes(turn)) {
+  async transcribePcmWindowed(turn, promptLanguageCodes = this.sttPromptLanguageCodes(turn), options = {}) {
     const sampleRate = Math.max(1, Number(turn.format?.sample_rate || CLIENT_AUDIO_FORMAT.sample_rate));
     const channels = Math.max(1, Number(turn.format?.channels || CLIENT_AUDIO_FORMAT.channels));
     const audio = fs.readFileSync(turn.pcmPath);
@@ -1931,14 +1926,14 @@ class CascadedVoiceProvider {
     let windowBytes = Math.max(frameBytes, Math.floor(55 * bytesPerSecond));
     windowBytes -= windowBytes % frameBytes; // align to a whole sample frame
     if (audio.length <= windowBytes) {
-      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
+      return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile, options);
     }
     const texts = [];
     let anyRejected = false;
     for (let offset = 0; offset < audio.length; offset += windowBytes) {
       const window = audio.subarray(offset, Math.min(offset + windowBytes, audio.length));
       if (window.length < frameBytes) break;
-      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
+      const part = await this.transcribePcmBuffer(window, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile, options);
       if (part.text) texts.push(part.text);
       if (part.languageRejected) anyRejected = true;
     }
@@ -1953,10 +1948,11 @@ class CascadedVoiceProvider {
     return this.transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes, turn.effectiveProfile);
   }
 
-  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes(), effectiveProfile = null) {
+  async transcribePcmBuffer(audio, sampleRate, channels, promptLanguageCodes = this.sttPromptLanguageCodes(), effectiveProfile = null, options = {}) {
     const token = await this.accessToken();
     const sttLanguageCodes = this.sttLanguageCodes();
-    const customPrompt = this.sttCustomPrompt(effectiveProfile, promptLanguageCodes);
+    const customPrompt = String(options.customPrompt || "").trim()
+      || this.sttCustomPrompt(effectiveProfile, promptLanguageCodes);
     const sttHeaders = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",

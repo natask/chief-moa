@@ -72,6 +72,22 @@ Moa Gateway
   companion manifests, pet manifests, engine-served browser customizations, and
   signed Android APK update artifacts.
 
+  The Chief Moa persistent intent plane is an authenticated projection over the
+  same gateway product-event substrate. It is not a separate intent product or
+  JSON store. A stable intent identity relates user-confirmed objective,
+  provenance, sensitivity, owner, agents, runs, artifacts, progress and durable
+  user pings. MoaMac, Android, browser, web/ag.app and future iPhone surfaces
+  consume the same `/v1/intent-plane` contract and preserve those canonical
+  identities when handing work across surfaces. Inferred intentions require
+  explicit user confirmation before admission, and plane records grant no
+  external-action authority.
+
+  First-class agent identities become durable only when an explicit launcher
+  adapter or the bounded manual registration route records them. Current Codex
+  subagent identities are not silently imported. A future launcher adapter must
+  register the stable agent id, owning intent, reason, launcher provenance,
+  capabilities/authority and current run before claiming plane continuity.
+
   The same gateway binary runs in `local`, `self-host`, or `hosted` mode.
   Remote modes bind to `0.0.0.0`, require `MOA_GATEWAY_TOKEN` and
   `DATABASE_URL`, trust proxy headers only when configured, and should publish a
@@ -94,6 +110,12 @@ Moa Gateway
   action, task, model invocation, or agent dispatch. Projection and routing run
   after the latency-sensitive transcript/clipboard result and may reconcile
   idempotently from completed turns after a restart.
+
+  Streaming STT treats provider hypotheses as replacements, not append-only
+  text. Final result identities are idempotent within a provider stream, while
+  bounded word overlap reconciles stream rotation and reconnect boundaries.
+  Only the reconciled final transcript may enter the canonical turn,
+  capture-block projection, clipboard result, or downstream message.
 
 Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
@@ -122,6 +144,13 @@ not a credential source: cookies, authorization headers, passwords, and browser
 storage never move to the gateway. Every side effect still becomes a bound
 proposal that the owning gateway/device policy revalidates, approves, executes,
 and receipts.
+
+Android media handoff resolves visible app labels against installed exported
+handlers on the device. VLC accepts only an explicit validated HTTPS or
+`content://` source; package selectors, file/intent URIs, ambiguous handlers,
+and title-only playback fail closed. Title search requires a separate catalog or
+source connector, and VLC transport remains unsupported until a fresh,
+package-bound MediaSession advertises a safely testable capability.
 
 ## Cross-surface release boundary
 
@@ -187,6 +216,19 @@ activated, or smoked. Those transitions require separate platform receipts
 bound to the assignment, release id, surface, and artifact SHA-256. The control
 plane retains a last-known-good assignment so a client can request a bounded
 fallback without treating a UI selection as a completed rollback.
+
+Published historical bundles remain available through a paginated candidate
+catalog after either channel head advances. Immutable lineage can name one
+series parent and bounded parallel parents for composed work. Exact candidate
+selection is device-scoped and sequence-checked; it appends an assignment but
+does not move stable/preview or grant publication authority.
+
+Android discovers that catalog only during bounded foreground polling, can
+search and select an exact bundle in the full app, and may notify when the
+newest eligible candidate changes. The notification deep-links to that exact
+bundle; neither discovery, notification, nor selection downloads or installs
+the APK. Stable fallback and the existing digest/signer/install receipt path
+remain the only Android release-transition authorities.
 
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
@@ -335,7 +377,7 @@ actor-isolated and any effect is available only through an injected executor
 after all local checks pass.
 
 The library seam has no transport, provider credential, canonical conversation
-store, Keychain policy, OS action implementation, SwiftUI product shell,
+store, credential-persistence policy, OS action implementation, SwiftUI product shell,
 signing, update or distribution authority. The `AggieSurfaceApp` product is a
 static SwiftUI demo shell over this seam; an unsigned macOS or iOS Simulator
 build is compilation evidence only and does not establish device behavior,
@@ -343,6 +385,27 @@ security, accessibility, energy use, signing or production readiness. Permanent
 companion versus seamless-assistant UX remains an explicit product decision.
 
 The macOS-only `MoaMac` product adds the native proactive surface:
+
+```text
+explicit app launch, menu-bar Speak, or Control-Space
+  -> one app-owned compact command panel (no AX read or pixel capture)
+  -> first invocation starts one latched literal WS voice capture
+  -> second invocation commits that capture and keeps feedback visible
+  -> typed Send remains a bounded authenticated POST /v1/chat
+```
+
+The command panel stores the non-secret canonical gateway origin in app
+preferences. The gateway bearer token exists only in process memory, defaults
+to empty, and is cleared on explicit disconnect/stop and app termination.
+Credential persistence APIs are prohibited in Apple runnable sources and
+configuration. The panel contains no packaged destination or provider
+credentials, rejects redirects, uses an ephemeral URL session, and never
+attaches screen context implicitly. Provider selection and credentials remain
+gateway-owned. This is the first daily companion slice; ticketed live
+assistant audio replies, shared session-event presentation, pointer overlays,
+and approved native actions remain staged work.
+
+The privacy-scoped proactive flow remains separate:
 
 ```text
 Paused launch (no AX read, screen capture, or network)
@@ -364,7 +427,8 @@ only the same process's focused window, re-encoded and size-bounded. Neither
 macOS permission alone starts observation or release.
 
 There is no packaged gateway destination. Network modes require a canonical
-user-configured HTTPS origin (HTTP only on loopback) and a Keychain bearer token.
+user-configured HTTPS origin (HTTP only on loopback) and a session-only bearer
+token supplied after launch.
 Ask mode binds exact serialized bytes and SHA-256 to a final approval;
 trusted-server mode displays the origin/evidence/screenshot scope and expiry.
 The gateway route requires exact bearer authentication, treats AX/pixels as
@@ -377,6 +441,16 @@ element/state fingerprint binding, and fsync-backed pending/terminal receipts
 are wired and audited. The current ad-hoc-signed QA bundle is compilation and
 package evidence only; it has not been launched or TCC-tested and is not a
 production signing/notarization artifact.
+
+`MoaMac` has one singleton compact invocation panel. Explicit app launch, the
+registered global shortcut, or the menu-bar Speak action shows that panel and
+starts one latched literal voice capture. Repeating the summon commits the same
+capture; it never hides an active microphone session. Explicit dismissal
+cancels before hiding. The Privacy & Screen Context settings scene is reachable
+only through its explicit menu action and grants no authority to the invocation
+panel. The browser extension remains a separate browser-owned dictation surface;
+neither surface borrows the other's microphone, clipboard, tab, AX, or action
+authority.
 
 ## Runtime Flows
 
@@ -401,6 +475,14 @@ mathematical language without requiring a user-maintained term dictionary and
 without allowing Chirp to invent unsupported words.
 Provider-detected language is diagnostic evidence only; it neither mutates the
 profile nor limits recognition.
+After streaming or batch recognition finalizes, one gateway quality boundary
+checks whether an unexpected script dominates the hypothesis under the explicit
+input-language profile. Small mixed-script fragments remain valid. A rejected
+hypothesis gets one batch retry from the retained PCM with a profile-derived
+verbatim prompt. If that retry also fails, no earlier streaming or provider
+fallback can restore the rejected text: the client receives a structured
+quality-failure receipt and the candidate does not enter reasoning, finalized
+transcript hooks, capture projection, or canonical conversation history.
 
 Browser voice capture prefers a native 16 kHz Web Audio graph. When Chrome uses
 another device rate, the extension applies stateful area downsampling so
@@ -414,9 +496,11 @@ Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
 drag repositions the orb without starting voice, and double-click-and-hold is
 the manual push-to-talk path. Recording starts only after the second press is
 held briefly, and release commits the turn without waiting for silence
-detection. Continuous voice is an optional secondary loop for launch paths that
-do not have a release event, where silence commits each turn and the mic re-arms
-after the reply. The browser extension
+detection. Android launcher and standard Assistant/voice-command entry are
+manual toggles: the first invocation starts one latched current-thread capture
+and the next invocation or matching orb click commits it. They never use silence
+to submit or re-arm after a reply. A still orb hold remains push-to-talk and
+release sends. The browser extension
 mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
 Cmd+. (Ctrl+.) mirrors the browser mark's double-click voice path. A quick
 Cmd+. tap, or a quick mark double-click, toggles a manual voice turn on; the
@@ -434,11 +518,22 @@ and cross-surface: single click toggles current-thread capture; a still hold is
 push-to-talk in that thread and release sends; double-click toggles capture in a
 fresh thread; triple-click cancels without sending and opens chat. Starting a
 fresh-thread capture cancels an active current-thread capture without sending.
+Android stores the resolved non-incognito branch with the shared session and
+reuses it for later single-click chat, HTTP voice, streaming voice, and socket
+reconnects; a fresh-thread switch failure stops the turn instead of silently
+filing it on `default`. Automatic agent follow-ups bind only to active runs in
+that exact session and branch. One intent may continue its most recent run, but
+concurrent runs for different intents are ambiguous and fall through normal
+intent resolution rather than using a globally recent run.
 Large movement after a hold starts cancels capture and escapes into drag. No
 separate X/Send side controls own disposition, and normal manual turns never
 wait for silence detection. The one open chat/transcript card follows the orb
-and flips wholly above or below it. Android drag-to-remove and explicit Hide
-actions keep their existing behavior. Keyboard shortcuts and flag-off legacy
+and stays wholly above it. Android drag-to-remove and explicit Hide
+actions keep their existing behavior. Android app, assistant-intent, and quick
+tile starts converge on one process-local overlay owner and one orb window. The
+mobile orb defaults to 70% of its 96dp base window and 30% idle opacity, becomes
+fully opaque while touched, and live size changes update drag/card geometry
+without replacing the owner. Keyboard shortcuts and flag-off legacy
 behavior remain unchanged. Delivery policy is separate from gesture mechanics.
 The gateway owns versioned, device-scoped Ask/Note/Coach admission as internal
 routing state. Clients do not expose a mode selector: the user changes behavior
@@ -771,6 +866,18 @@ reasoner sees the delivery state (modality, TTS availability, the previous
 turn's `tts_error`) as a hint block, so "why did you answer in text?" gets a
 truthful answer and the model can change `response_modality` by tool call.
 
+Hosted speech completion is independently receipted from text-turn completion.
+`turn_done` reports `tts_delivery` (`complete`, `partial`, `failed`, or
+`not_requested`), `tts_complete`, emitted segments, the exclusive assistant-text
+bound represented by emitted PCM, and the full reply length. A later-segment
+synthesis fault therefore keeps the completed assistant text while identifying
+the exact unheard suffix. Android may send an idempotent same-socket
+`retry_tts {turn_id,retry_id,from_text_char}` request; the gateway synthesizes
+only that stored suffix, does not rerun reasoning, and closes the attempt with
+`tts_retry_done`. The request is admitted only for a recorded partial/failed
+receipt and its exact recorded suffix boundary. Idempotency binds turn, retry
+identity, and request digest; attempts and receipt memory are bounded.
+
 ### Streaming cascaded voice
 
 ```text
@@ -1058,7 +1165,9 @@ only the engine URL/session token.
 The extension also advertises a first-party local browser facade through the
 gateway device-tool broker. Its dedicated vocabulary covers navigation,
 description-to-Google/Amazon search, snapshot/query/text/wait/screenshot, and
-click/fill/type. Page tools accept explicit tab IDs and either fresh bounded
+click/fill/type. It also exposes direct tab list/open/focus/close/reload,
+bounded console and network observations, and a read-only permission-status
+probe. Page tools accept explicit tab IDs and either fresh bounded
 element indexes or semantic role/name/label/placeholder/test-ID locators. The
 extension resolves semantic targets against browser-local page evidence,
 executes actions through the existing local validator, preserves risky-click
@@ -1066,6 +1175,16 @@ confirmation, and returns bounded receipts with retryable target failures.
 This facade is A.G. code running inside the A.G. extension; Tweeks MCP/native
 messaging is behavioral prior art only and is not a runtime adapter or
 dependency.
+
+Local-file navigation is part of that same facade, not a host-filesystem
+reader. The manifest declares `file:///*`, but Chrome keeps it inactive until
+the user turns on **Allow access to file URLs** in the extension's Details
+page. The extension checks `chrome.extension.isAllowedFileSchemeAccess()` on
+every file navigation, advertises the current boolean in its device heartbeat,
+and returns the exact one-time Chrome instruction when access is off. It never
+changes that toggle or reads a path outside a browser-visible `file://`
+document. Page/file contents remain untrusted evidence and all existing action
+and receipt bounds still apply.
 
 Ordinary typed commands and finalized browser-voice transcripts pass through a
 small deterministic browser-command classifier before any model-backed turn.
@@ -1561,6 +1680,21 @@ contact up through ContactsContract and opens its card, requires
 `READ_CONTACTS`, and returns a clear "needs contacts permission" result
 instead of crashing when that permission is missing.
 
+Android's on-device Accessibility reach is intentionally narrow and does not
+match the browser's CDP surface. `MoaAccessibilityService` exposes only a
+generic click/back/home primitive plus one named adapter,
+`MoaYoutubeAccessibilityExecutor`, bound to an allowed package/signature and
+version range for playlist membership/create/rename/delete operations. There
+is no general-purpose "find and tap/type any on-screen element" tool
+registered anywhere in the cross-device hub or the code-mode capability table:
+every model-facing Android action is one of the fixed Phone Action /
+Device-Local Media entries above (app launch, URL open, dial, contact open,
+media transport/bookmark/playlist), not open-ended UI automation. Extending
+Android to browser-parity element-level interaction (arbitrary tap/type/scroll
+by locator, outside the YouTube-scoped adapter) is unbuilt and would need its
+own capability name, risk tier, approval flow, and accessibility dispatch
+before it could be proposed as a tool.
+
 ### Account Connection And Credential Health
 
 ```text
@@ -1835,7 +1969,10 @@ queues.
 ## Source Map
 
 - `android_app/app/src/main/java/ai/moa/assistant/MainActivity.java`:
-  setup/full-app entry surface.
+  explicit setup/full-app control-center surface.
+- `android_app/app/src/main/java/ai/moa/assistant/MoaAssistActivity.java`:
+  launcher and Android Assistant/voice-command entry that forwards into the
+  single overlay service without rendering the full app.
 - `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
   floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:
@@ -1843,7 +1980,9 @@ queues.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaActionBroker.java`:
   local routing for screen context and local action commands.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaAccessibilityService.java`:
-  accessibility-backed screen context and visible UI operations.
+  generic click/back/home plus the YouTube-scoped
+  `MoaYoutubeAccessibilityExecutor` driver (playlist operations only); not a
+  general element-level UI-automation tool — see Cross-Device Tool Hub.
 - `gateway/server.js`: HTTP API, voice router, model calls,
   conversation storage, agent-run execution, device-client registry, and
   cross-device tool-request queue.
@@ -1928,6 +2067,20 @@ queues.
   transport, turn storage, transcript events, and assistant audio events.
 - `gateway/lib/voice-providers.js`: Swappable streaming voice
   provider package boundary, currently loopback and Gemini Live.
+- `apple_surfaces/Sources/MoaMac/main.swift`: menu-bar lifecycle, global
+  Control-Space registration, and floating command-panel ownership.
+- `apple_surfaces/Sources/MoaMacCore/GatewayChat.swift`: bounded canonical
+  macOS chat request and inert reply decoding.
+- `apple_surfaces/Sources/MoaMacCore/GatewayVoice.swift`: bounded literal voice
+  session envelope, PCM frame, server-event, and capture-state contracts.
+- `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: session-only
+  gateway credential state, summon lifecycle, and redirect-rejecting ephemeral
+  chat transport.
+- `apple_surfaces/Sources/MoaMacShell/GatewayVoiceShell.swift`: explicit
+  microphone capture and authenticated voice WebSocket adapter.
+- `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact
+  voice/typed companion surface; it does not own Accessibility or pixel-capture
+  authority.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,

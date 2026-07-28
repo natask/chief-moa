@@ -23,6 +23,17 @@ from user edits, writing-skill rewrites, summaries, coaching feedback, and agent
 outputs. Derived text SHALL record its parent and derivation kind and SHALL NOT
 silently overwrite the literal transcript.
 
+#### Scenario: Streaming provider repeats or overlaps a hypothesis
+
+- **WHEN** a streaming transcription provider redelivers a final result during
+  retry or reconnect, or a rotated stream begins with words already finalized
+  by the prior stream
+- **THEN** the gateway identifies repeated provider segments idempotently and
+  reconciles meaningful boundary overlap in original order
+- **AND** the canonical turn, capture block, clipboard output, and submitted
+  message each contain one copy of the spoken passage
+- **AND** short deliberate repetitions remain literal speech
+
 #### Scenario: Writing skill produces a reversible candidate
 - **WHEN** the user applies a named writing skill to a transcribed block
 - **THEN** the system stores the result as a derived revision

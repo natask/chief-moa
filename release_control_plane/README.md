@@ -50,6 +50,11 @@ creates fake seed data, or silently advances stable.
 The source path is ready for a Docker-host smoke. No production publication has
 occurred from this candidate.
 
+Device clients can page immutable published candidates independently of moving
+stable/preview heads and select one exact bundle for their own device. Lineage
+records series and parallel/composed ancestry. Selection is an append-only
+assignment; it neither publishes a bundle nor moves a channel.
+
 See
 `reference/openspec/changes/persistent-release-control-plane` for the product
 model and staged implementation plan.

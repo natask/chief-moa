@@ -686,6 +686,7 @@ public_gateway_url="${10}"
 container_ids="$(docker ps \
   --filter label=com.docker.compose.project=chief-moa \
   --filter label=com.docker.compose.service=gateway \
+  --filter label=com.docker.compose.container-number=1 \
   --format '{{.ID}}')"
 [ "$(printf '%s\n' "$container_ids" | sed '/^$/d' | wc -l | tr -d '[:space:]')" = 1 ] || exit 1
 gateway_container="$(printf '%s\n' "$container_ids" | sed -n '1p')"

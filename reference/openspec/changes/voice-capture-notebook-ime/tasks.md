@@ -26,6 +26,10 @@ alignment.
   no reasoning or TTS stage.
 - [x] 0B.2 Route the existing macOS global summon to start/finish dictation and
   copy the final transcript to the clipboard.
+- [x] 0B.4 Make long-form streaming transcript assembly idempotent for repeated
+  provider result identities and reconcile meaningful rotation/reconnect
+  overlap without deleting short deliberate repetition. Verify sanitized
+  English and Amharic fixtures through the gateway final-turn path.
 - [x] 0B.3 Preserve explicit configured input-language evidence and the canonical
   retained voice turn while keeping agent dispatch out of this path.
 - [x] 0B.4 Make the extension worker authoritative for the one active dictation
@@ -34,6 +38,10 @@ alignment.
 - [x] 0B.5 Keep a one-click Copy control on the completed dictation card so the
   exact final transcript can be copied again after the automatic clipboard
   attempt, with a visible clipboard-replaced or retryable-failure receipt.
+- [x] 0B.6 Reject a dominant unexpected-script final hypothesis at one common
+  streaming/batch boundary, retry once from retained PCM using the configured
+  input-language evidence, and fail visibly without reasoning, final hooks,
+  fallback resurrection, or canonical history when the retry is still invalid.
 - Acceptance: double-tap Command starts capture, a second double-tap commits it,
   the final English/Amharic transcript is paste-ready, and the gateway performs
   zero reasoning and TTS calls for the turn. The completed card keeps a Copy
@@ -103,8 +111,12 @@ alignment.
 - [ ] 2.2 Add a compact overlay capture tray for consecutive independent blocks.
 - [ ] 2.3 Add notebook list/detail UI with replay, literal transcript, edit,
   copy/share, retry, retention/delete, and revision provenance.
-- [ ] 2.4 Add a reversible bottom-center drag-to-hide target for the orb.
+- [x] 2.4 Add a reversible bottom-center drag-to-hide target for the orb.
+      (Done in `overlay-companion-ribbons`: the armed zone is now the painted
+      200x72dp target plus 12dp, and a drop is undoable for 5s.)
 - [ ] 2.5 Add unit coverage for capture state and drag-to-hide decisions.
+      (Drag-to-hide half done: `MoaOrbRemovalUndoTest` and the bounded-target
+      cases in `MoaOrbOverlayGeometryTest`. Capture state still open.)
 - Acceptance: three hold/release gestures create three separately copyable
   blocks and dragging to Hide removes only the orb surface.
 - Verification: Android unit tests, `assembleDebug`, and physical-phone QA.

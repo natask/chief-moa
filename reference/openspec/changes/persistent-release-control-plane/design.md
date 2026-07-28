@@ -145,6 +145,11 @@ Master-Orch internals.
 
 The current repository slice implements these parts:
 
+- Published bundles also form an immutable, paginated candidate catalog.
+  Optional lineage names one series parent and bounded parallel parents. A
+  device may select an exact published bundle with optimistic sequencing; this
+  appends an assignment only and grants no publish or promotion authority.
+
 - The domain normalizes immutable multi-surface bundles, channel-head events,
   assignment events, install receipts, and exact-release feedback.
 - The service resolves assignment precedence, records preview or stable device
@@ -201,6 +206,8 @@ The implemented transport uses these routes:
 
 ```text
 GET  /v1/release-control/apps/{application_id}/view
+GET  /v1/release-control/apps/{application_id}/candidates
+POST /v1/release-control/apps/{application_id}/candidate-selections
 POST /v1/release-control/apps/{application_id}/assignments
 POST /v1/release-control/apps/{application_id}/fallback
 POST /v1/release-control/apps/{application_id}/install-receipts

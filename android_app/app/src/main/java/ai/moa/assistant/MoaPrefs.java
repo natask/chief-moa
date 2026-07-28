@@ -27,6 +27,8 @@ final class MoaPrefs {
     private static final String KEY_GATEWAY_URL = "gateway_url";
     private static final String KEY_GATEWAY_TOKEN = "gateway_token";
     private static final String KEY_CONVERSATION_ID = "conversation_id";
+    private static final String KEY_CONVERSATION_BRANCH_ID = "conversation_branch_id";
+    private static final String KEY_CONVERSATION_BRANCH_SESSION_ID = "conversation_branch_session_id";
     private static final String KEY_HISTORY_JSON = "history_json";
     private static final String KEY_SPOKEN_REPLIES_ENABLED = "spoken_replies_enabled";
     // One-time flag that flips the earlier hidden "quiet" default to audible.
@@ -227,6 +229,28 @@ final class MoaPrefs {
         prefs(context).edit().putString(KEY_CONVERSATION_ID, conversationId.trim()).apply();
     }
 
+    static String conversationBranchId(Context context, String conversationId) {
+        String session = safe(conversationId);
+        SharedPreferences preferences = prefs(context);
+        if (!session.equals(safe(preferences.getString(KEY_CONVERSATION_BRANCH_SESSION_ID, "")))) {
+            return "default";
+        }
+        String branch = safe(preferences.getString(KEY_CONVERSATION_BRANCH_ID, ""));
+        return branch.isEmpty() ? "default" : branch;
+    }
+
+    static void setConversationBranchId(Context context, String conversationId, String branchId) {
+        String session = safe(conversationId);
+        String branch = safe(branchId);
+        if (session.isEmpty() || branch.isEmpty() || branch.startsWith("inc-")) {
+            return;
+        }
+        prefs(context).edit()
+                .putString(KEY_CONVERSATION_BRANCH_SESSION_ID, session)
+                .putString(KEY_CONVERSATION_BRANCH_ID, branch)
+                .apply();
+    }
+
     static String historyJson(Context context) {
         return prefs(context).getString(KEY_HISTORY_JSON, "");
     }
@@ -263,7 +287,7 @@ final class MoaPrefs {
         return firstNonEmpty(
                 activeCompanion(context).optString("name", ""),
                 agentProfile(context).optString("assistant_name", ""),
-                "A.G."
+                "AG"
         );
     }
 
