@@ -304,6 +304,43 @@ public final class MoaActionBrokerTest {
     }
 
     @Test
+    public void registersBoundedSemanticAccessibilityTools() throws Exception {
+        assertTrue(MoaActionBroker.isKnownTool("screen.set_text"));
+        assertTrue(MoaActionBroker.isKnownTool("screen.scroll"));
+        assertEquals("external_side_effect", MoaActionBroker.capabilityRisk("screen.set_text"));
+        assertEquals("local_confirmation", MoaActionBroker.capabilityApproval("screen.set_text"));
+        assertEquals("navigation", MoaActionBroker.capabilityRisk("screen.scroll"));
+        assertEquals("implicit_user_command", MoaActionBroker.capabilityApproval("screen.scroll"));
+
+        JSONObject input = new JSONObject().put("expected_window_id", 17)
+                .put("label", "Message").put("text", "Hello").put("direction", "up");
+        assertEquals(17, MoaSemanticAccessibilityActions.expectedWindowId(input));
+        assertEquals("Message", MoaSemanticAccessibilityActions.label(input));
+        assertEquals("Hello", MoaSemanticAccessibilityActions.text(input));
+        assertFalse(MoaSemanticAccessibilityActions.scrollForward(input));
+        assertTrue(MoaSemanticAccessibilityActions.scrollForward(new JSONObject().put("direction", "down")));
+        assertEquals(null, MoaSemanticAccessibilityActions.scrollForward(
+                new JSONObject().put("direction", "sideways")));
+    }
+
+    @Test
+    public void rejectsOversizedSemanticAccessibilityArguments() throws Exception {
+        String longLabel = String.join("", Collections.nCopies(161, "x"));
+        String longText = String.join("", Collections.nCopies(4097, "x"));
+        assertEquals("", MoaSemanticAccessibilityActions.label(
+                new JSONObject().put("label", longLabel)));
+        assertEquals(null, MoaSemanticAccessibilityActions.text(
+                new JSONObject().put("text", longText)));
+        assertEquals("", MoaSemanticAccessibilityActions.text(
+                new JSONObject().put("text", "")));
+        assertEquals(null, MoaSemanticAccessibilityActions.text(new JSONObject()));
+        assertTrue(MoaSemanticAccessibilityActions.sensitiveLabel("Password"));
+        assertTrue(MoaSemanticAccessibilityActions.sensitiveLabel("Card security code"));
+        assertTrue(MoaSemanticAccessibilityActions.sensitiveLabel("Enter PIN"));
+        assertFalse(MoaSemanticAccessibilityActions.sensitiveLabel("Message"));
+    }
+
+    @Test
     public void reportsContactPermissionAndMissMessages() {
         assertEquals(
                 "Contacts permission not granted. Open the A.G. app to grant it.",

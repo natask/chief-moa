@@ -195,6 +195,14 @@ final class MoaActionBroker {
             return ToolExecutionResult.done(clicked, clicked ? "Tapped \"" + label + "\"." : "No visible clickable item matched \"" + label + "\".", receipt);
         }
 
+        if ("screen.set_text".equals(name)) {
+            return prepareSetText(requestId, args);
+        }
+
+        if ("screen.scroll".equals(name)) {
+            return executeSemanticScroll(args);
+        }
+
         if ("system.back".equals(name)) {
             Capability capability = CAPABILITIES.get("system.back");
             if (!MoaAccessibilityService.isRunning()) {
@@ -267,7 +275,6 @@ final class MoaActionBroker {
 
         return ToolExecutionResult.done(false, "Unsupported local tool: " + name + ".", null);
     }
-
     JSONObject screenSnapshot() {
         return MoaAccessibilityService.currentScreenSnapshot();
     }
@@ -307,7 +314,28 @@ final class MoaActionBroker {
         JSONObject args = input == null ? new JSONObject() : input;
         return safe(args.optString("expected_package", args.optString("expectedPackage", "")));
     }
-
+    private ToolExecutionResult prepareSetText(String requestId, JSONObject args) {
+        Capability capability = CAPABILITIES.get("screen.set_text");
+        MoaSemanticAccessibilityActions.Outcome outcome = MoaSemanticAccessibilityActions.prepareSetText(requestId, args, approvals);
+        if (outcome.success) return ToolExecutionResult.confirmation(outcome.summary);
+        return ToolExecutionResult.done(false, outcome.summary,
+                recordReceipt(capability, MoaSemanticAccessibilityActions.label(args), false, outcome.summary));
+    }
+    private ToolExecutionResult executeApprovedSetText(JSONObject args, String currentPackage) {
+        Capability capability = CAPABILITIES.get("screen.set_text");
+        String label = MoaSemanticAccessibilityActions.label(args);
+        MoaSemanticAccessibilityActions.Outcome outcome = MoaSemanticAccessibilityActions.setText(args);
+        return ToolExecutionResult.done(outcome.success, outcome.summary,
+                recordReceipt(capability, currentPackage + ":" + label, outcome.success, outcome.summary));
+    }
+    private ToolExecutionResult executeSemanticScroll(JSONObject args) {
+        Capability capability = CAPABILITIES.get("screen.scroll");
+        String label = MoaSemanticAccessibilityActions.label(args);
+        String expectedPackage = expectedPackage(args);
+        MoaSemanticAccessibilityActions.Outcome outcome = MoaSemanticAccessibilityActions.scroll(args);
+        return ToolExecutionResult.done(outcome.success, outcome.summary,
+                recordReceipt(capability, expectedPackage + ":" + label, outcome.success, outcome.summary));
+    }
     private static String currentPackageName() {
         return safe(MoaAccessibilityService.freshActivePackage());
     }
@@ -359,6 +387,9 @@ final class MoaActionBroker {
                     .put("approval", capability.approval);
             if ("screen.tap_text".equals(tool)) {
                 item.put("required_input", new JSONArray().put("expected_package"));
+            } else if (Set.of("screen.set_text", "screen.scroll").contains(tool)) {
+                item.put("required_input", new JSONArray()
+                        .put("expected_package").put("expected_window_id"));
             } else if ("media.control".equals(tool)) {
                 item.put("required_input", new JSONArray().put("action"));
             } else if ("media.playlist".equals(tool)) {
@@ -1041,7 +1072,7 @@ final class MoaActionBroker {
             ToolResultCallback callback) {
         String toolName = safe(tool).toLowerCase(Locale.US);
         Capability capability = CAPABILITIES.get(toolName);
-        if (!Set.of("media.playlist", "media.bookmark").contains(toolName)) {
+        if (!Set.of("media.playlist", "media.bookmark", "screen.set_text").contains(toolName)) {
             return mediaFailure(capability, "approval", "Unsupported confirmation request.");
         }
         if (!approved) {
@@ -1050,7 +1081,8 @@ final class MoaActionBroker {
             if (rejected.outcome == MoaActionApprovalController.Outcome.ALREADY_TERMINAL) {
                 return ToolExecutionResult.pending("Approval was already terminal.");
             }
-            return mediaFailure(capability, requestId, "Media change cancelled.");
+            return mediaFailure(capability, requestId,
+                    "screen.set_text".equals(toolName) ? "Text entry cancelled." : "Media change cancelled.");
         }
         String currentPackage = "media.bookmark".equals(toolName)
                 ? MEDIA_STORE_AUTHORITY : currentPackageName();
@@ -1062,6 +1094,9 @@ final class MoaActionBroker {
         if (!decision.mayExecute) {
             return mediaFailure(capability, requestId,
                     "The change was not executed because its target or request changed.");
+        }
+        if ("screen.set_text".equals(toolName)) {
+            return executeApprovedSetText(args, currentPackage);
         }
         if ("media.bookmark".equals(toolName)) {
             String operation = safe(args.optString("operation", args.optString("action", "remember")))
@@ -1851,6 +1886,8 @@ final class MoaActionBroker {
         Map<String, Capability> capabilities = new HashMap<>();
         capabilities.put("screen.summary", new Capability("screen.summary", RISK_READ_ONLY, "none"));
         capabilities.put("screen.tap_text", new Capability("screen.tap_text", RISK_NAVIGATION, APPROVAL_IMPLICIT));
+        capabilities.put("screen.set_text", new Capability("screen.set_text", RISK_EXTERNAL_SIDE_EFFECT, APPROVAL_LOCAL_CONFIRMATION));
+        capabilities.put("screen.scroll", new Capability("screen.scroll", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("system.back", new Capability("system.back", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("system.home", new Capability("system.home", RISK_NAVIGATION, APPROVAL_IMPLICIT));
         capabilities.put("app.launch", new Capability("app.launch", RISK_NAVIGATION, APPROVAL_IMPLICIT));

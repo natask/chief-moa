@@ -173,6 +173,9 @@ final class MoaActionApprovalController {
                     ? ApprovalRequirement.IMPLICIT
                     : ApprovalRequirement.CONFIRMATION_REQUIRED;
         }
+        if ("screen.set_text".equals(name)) {
+            return ApprovalRequirement.CONFIRMATION_REQUIRED;
+        }
         return ApprovalRequirement.BLOCKED;
     }
 

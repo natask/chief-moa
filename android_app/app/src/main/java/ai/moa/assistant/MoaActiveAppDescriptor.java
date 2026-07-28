@@ -113,7 +113,9 @@ final class MoaActiveAppDescriptor {
                     .put("accessibility_navigation"));
             adapter.put("capabilities", new JSONArray()
                     .put("screen.summary")
-                    .put("screen.tap_text"));
+                    .put("screen.tap_text")
+                    .put("screen.set_text")
+                    .put("screen.scroll"));
             adapter.put("constraints", new JSONArray()
                     .put("local_allowlist_validation")
                     .put("no_cookie_export")

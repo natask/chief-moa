@@ -9,6 +9,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.text.InputType;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
@@ -135,13 +136,19 @@ public final class MoaAccessibilityService extends AccessibilityService {
     }
 
     static JSONObject currentActiveAppDescriptor() {
-        return MoaActiveAppDescriptor.create(
+        JSONObject descriptor = MoaActiveAppDescriptor.create(
                 isRunning(),
                 latestPackage,
                 latestClass,
                 latestUpdatedAtMs,
                 System.currentTimeMillis()
         );
+        try {
+            int windowId = currentActiveWindowId();
+            descriptor.put("window_id", windowId >= 0 ? windowId : JSONObject.NULL);
+        } catch (JSONException ignored) {
+        }
+        return descriptor;
     }
 
     static JSONArray currentExecutionAdapters() {
@@ -191,6 +198,58 @@ public final class MoaAccessibilityService extends AccessibilityService {
         return clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 ? TapResult.CLICKED
                 : TapResult.NOT_FOUND;
+    }
+
+    static SemanticActionResult setTextByLabel(
+            String label, String value, String expectedPackage, int expectedWindowId) {
+        MoaAccessibilityService service = activeService;
+        AccessibilityNodeInfo root = validatedRoot(service, expectedPackage, expectedWindowId);
+        if (root == null) {
+            return service == null ? SemanticActionResult.UNAVAILABLE : SemanticActionResult.STALE_TARGET;
+        }
+        AccessibilityNodeInfo match = findMatchingNode(root, normalize(label));
+        AccessibilityNodeInfo editable = nearbyEditable(match);
+        if (editable == null) return SemanticActionResult.NOT_FOUND;
+        Bundle arguments = new Bundle();
+        arguments.putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+        return editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                ? SemanticActionResult.PERFORMED : SemanticActionResult.FAILED;
+    }
+
+    static SemanticActionResult scrollByLabel(
+            String label, boolean forward, String expectedPackage, int expectedWindowId) {
+        MoaAccessibilityService service = activeService;
+        AccessibilityNodeInfo root = validatedRoot(service, expectedPackage, expectedWindowId);
+        if (root == null) {
+            return service == null ? SemanticActionResult.UNAVAILABLE : SemanticActionResult.STALE_TARGET;
+        }
+        AccessibilityNodeInfo match = findMatchingNode(root, normalize(label));
+        AccessibilityNodeInfo scrollable = nearbyScrollable(match);
+        if (scrollable == null) return SemanticActionResult.NOT_FOUND;
+        int action = forward ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+        return scrollable.performAction(action)
+                ? SemanticActionResult.PERFORMED : SemanticActionResult.FAILED;
+    }
+
+    private static AccessibilityNodeInfo validatedRoot(
+            MoaAccessibilityService service, String expectedPackage, int expectedWindowId) {
+        if (service == null || expectedWindowId < 0 || normalize(expectedPackage).isEmpty()) return null;
+        AccessibilityNodeInfo root = service.getRootInActiveWindow();
+        if (root == null || root.getPackageName() == null
+                || root.getWindowId() != expectedWindowId
+                || !MoaActiveAppDescriptor.packageMatches(
+                        expectedPackage, root.getPackageName().toString())) return null;
+        return root;
+    }
+
+    enum SemanticActionResult {
+        PERFORMED,
+        STALE_TARGET,
+        NOT_FOUND,
+        FAILED,
+        UNAVAILABLE
     }
 
     enum TapResult {
@@ -332,6 +391,50 @@ public final class MoaAccessibilityService extends AccessibilityService {
             current = current.getParent();
         }
         return null;
+    }
+
+    private static AccessibilityNodeInfo nearbyEditable(AccessibilityNodeInfo node) {
+        return MoaSemanticNodeResolver.nearby(node, nodeAccess(true));
+    }
+
+    private static AccessibilityNodeInfo nearbyScrollable(AccessibilityNodeInfo node) {
+        return MoaSemanticNodeResolver.nearby(node, nodeAccess(false));
+    }
+
+    private static MoaSemanticNodeResolver.Access<AccessibilityNodeInfo> nodeAccess(
+            boolean editable) {
+        return new MoaSemanticNodeResolver.Access<AccessibilityNodeInfo>() {
+            @Override public AccessibilityNodeInfo parent(AccessibilityNodeInfo node) {
+                return node.getParent();
+            }
+            @Override public int childCount(AccessibilityNodeInfo node) {
+                return node.getChildCount();
+            }
+            @Override public AccessibilityNodeInfo childAt(AccessibilityNodeInfo node, int index) {
+                return node.getChild(index);
+            }
+            @Override public boolean eligible(AccessibilityNodeInfo node) {
+                return editable ? node.isEditable() && !isSensitiveTextField(node)
+                        : node.isScrollable();
+            }
+        };
+    }
+
+    static boolean isSensitiveTextInput(int inputType, boolean password) {
+        if (password) return true;
+        int typeClass = inputType & InputType.TYPE_MASK_CLASS;
+        int variation = inputType & InputType.TYPE_MASK_VARIATION;
+        if (typeClass == InputType.TYPE_CLASS_NUMBER) {
+            return variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD;
+        }
+        return typeClass == InputType.TYPE_CLASS_TEXT
+                && (variation == InputType.TYPE_TEXT_VARIATION_PASSWORD
+                || variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD);
+    }
+
+    private static boolean isSensitiveTextField(AccessibilityNodeInfo node) {
+        return node == null || isSensitiveTextInput(node.getInputType(), node.isPassword());
     }
 
     private static String normalize(CharSequence value) {
