@@ -39,7 +39,10 @@ PUBLISH_ENV = {
 }.freeze
 OBSERVE_ENV = VERIFICATION_ENV.merge(
   "EXPECTED_GIT_SHA" => "${{ github.sha }}",
-  "HEALTH_URL" => "https://api.agee.app/health"
+  "HEALTH_URL" => "https://api.agee.app/health",
+  # Read-only token for the compare call that separates an intermediate
+  # promotion from a real regression. The job declares contents: read.
+  "GITHUB_TOKEN" => "${{ github.token }}"
 ).freeze
 VERIFY_SCRIPT = <<~'BASH'
   set -euo pipefail
@@ -105,13 +108,38 @@ OBSERVE_SCRIPT = <<~'BASH'
 
     if [ -n "$starting_sha" ] && [ "$live_sha" != "unavailable" ] \
       && [ "$live_sha" != "$EXPECTED_GIT_SHA" ] && [ "$live_sha" != "$starting_sha" ]; then
-      # The gateway is now serving a THIRD commit: neither the
-      # pre-deploy build nor the one we expected. update.sh's own
-      # rollback only ever restores the pre-deploy commit, so this
-      # is not explainable by "still promoting" or "safely rolled
-      # back" -- treat it as a real regression, not a timeout.
-      echo "::error::active gateway now serves an unexpected commit ($live_sha) that is neither the pre-deploy commit ($starting_sha) nor the expected commit ($EXPECTED_GIT_SHA) -- this looks like a real regression, not a slow promotion" >&2
-      exit 1
+      # A THIRD commit: neither the pre-deploy build nor the expected
+      # one. That is NOT automatically a regression. When master moves
+      # several times in quick succession the droplet promotes each
+      # vps-deploy ref move in sequence, so the gateway legitimately
+      # passes through intermediate commits on its way to ours. Run
+      # 30350237688 (2026-07-28) failed exactly this way: expected
+      # 91ffd7f4, observed 944cebe1, which is an ancestor of it.
+      #
+      # Ask GitHub whether the observed commit is behind ours. compare
+      # base...head reports "ahead" when head is ahead of base, so
+      # base=observed head=expected returning ahead/identical means the
+      # observed commit is on the path to ours -- keep waiting.
+      cmp_status="$(curl -fsS --connect-timeout 5 --max-time 10 \
+        -H "Authorization: Bearer $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github+json" \
+        "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/$live_sha...$EXPECTED_GIT_SHA" 2>/dev/null \
+        | ruby -rjson -e 'print(JSON.parse(STDIN.read)["status"].to_s)' 2>/dev/null || true)"
+      case "$cmp_status" in
+        ahead|identical)
+          echo "active gateway serves $live_sha, an ancestor of $EXPECTED_GIT_SHA (intermediate promotion in progress); continuing to wait"
+          ;;
+        behind|diverged)
+          echo "::error::active gateway now serves $live_sha, which is $cmp_status relative to the expected commit $EXPECTED_GIT_SHA and is not the pre-deploy commit ($starting_sha) -- this is a real regression, not a slow promotion" >&2
+          exit 1
+          ;;
+        *)
+          # Could not classify it. Do not claim a regression on a
+          # failed API call; keep waiting and let the timeout report
+          # honestly rather than assert something unproven.
+          echo "could not classify observed commit $live_sha against $EXPECTED_GIT_SHA (compare status: '${cmp_status:-unavailable}'); continuing to wait"
+          ;;
+      esac
     fi
 
     echo "waiting for active gateway: expected=$EXPECTED_GIT_SHA observed=$live_sha"
