@@ -207,6 +207,12 @@ The Android overlay SHALL provide discoverable local ways to remove the orb.
   the same release, then stops the overlay service
 - **AND** no overlay window visibly outlives the orb
 
+#### Scenario: Move while speech capture is active
+- **WHEN** the user drags the compact overlay while speech capture is active
+- **THEN** Android moves the complete overlay unit without canceling or ending capture
+- **AND** releasing a push-to-talk drag commits through the normal release path
+- **AND** Android does not expose or arm the removal target until speech capture has ended
+
 #### Scenario: Explicit hide fallback
 - **WHEN** the user taps Hide in the chat header or overlay notification
 - **THEN** Android stops the overlay service and removes all overlay windows

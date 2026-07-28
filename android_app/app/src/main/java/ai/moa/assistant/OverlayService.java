@@ -657,11 +657,24 @@ public final class OverlayService extends Service {
             orbDragLayoutState.reset();
             setDragDependentControlsHidden(true);
         }
-        if (orbRemoveTarget != null || !Settings.canDrawOverlays(this)) {
+        // Speech owns the compact unit until the user explicitly finishes it.
+        // Dragging may reposition that unit, but must never offer a second,
+        // accidental exit affordance while microphone capture is active.
+        if (speechCaptureOwnsOverlay() || orbRemoveTarget != null
+                || !Settings.canDrawOverlays(this)) {
             return;
         }
         orbRemoveTarget = MoaOrbRemoveTarget.show(
                 this, windowManager, MoaOverlayWindowType.resolve());
+    }
+
+    private boolean speechCaptureOwnsOverlay() {
+        return pushToTalkVoiceTurn
+                || audioNoteActive
+                || continuousVoiceLoop
+                || pendingContinuousVoiceRestart != null
+                || streamingVoiceActive()
+                || voiceController.isActive();
     }
     private void updateOrbDragSurfaces() {
         if (orbDragFrameCoalescer != null) {

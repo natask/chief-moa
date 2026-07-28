@@ -31,10 +31,8 @@ import java.util.function.Supplier;
 //   fourth tap and beyond  -> nothing
 //   press-and-hold, still  -> onDoublePressStart / onPressToTalkRelease
 //                             (push to talk; the mic warms at press-down)
-//   hold + large move      -> onPressToTalkCancel, then reposition the orb: once
-//                             the hold has confirmed, a move past doubleTapSlop
-//                             cancels the capture (nothing sent) and turns the
-//                             gesture into a normal drag. Smaller drift is ignored.
+//   hold + large move      -> reposition the unit while capture stays active;
+//                             release still commits the owned push-to-talk turn.
 //   press + move past slop -> reposition the orb, no callback (unchanged)
 final class MoaOrbTouchListener implements View.OnTouchListener {
     private static final long DOUBLE_CLICK_HOLD_MS = 120;
@@ -100,6 +98,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     // ACTION_DOWN so a mid-gesture flag flip cannot mix the two machines.
     private boolean gestureUsesVoiceFirst;
     private boolean voiceFirstHoldActive;
+    private boolean voiceFirstHoldDragging;
     private Runnable pendingVoiceFirstHold;
     private Runnable pendingVoiceFirstTapResolve;
 
@@ -278,6 +277,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 downTimeMs = event.getEventTime();
                 moved = false;
                 voiceFirstHoldActive = false;
+                voiceFirstHoldDragging = false;
                 if (voiceFirstTapResolver.hasOpenChord()) {
                     cancelVoiceFirstTapResolve();
                 }
@@ -291,16 +291,15 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                 int dx = Math.round(event.getRawX() - downX);
                 int dy = Math.round(event.getRawY() - downY);
                 if (voiceFirstHoldActive) {
-                    // A confirmed press-to-talk owns the gesture. Small drift is
-                    // ignored so a shaky hold never repositions the orb. A large
-                    // move (past doubleTapSlop) is the escape hatch: cancel the
-                    // capture the hold started without committing it, then let the
-                    // drag reposition the orb from the current finger position.
+                    // Moving a live capture repositions the compact unit. It does
+                    // not become a hidden cancel gesture: capture remains visibly
+                    // owned until release, which commits it normally.
                     if (Math.abs(dx) > doubleTapSlop || Math.abs(dy) > doubleTapSlop) {
-                        voiceFirstHoldActive = false;
-                        moved = true;
-                        onOrbDragStart.run();
-                        onPressToTalkCancel.run();
+                        if (!voiceFirstHoldDragging) {
+                            voiceFirstHoldDragging = true;
+                            moved = true;
+                            onOrbDragStart.run();
+                        }
                         moveOrbTo(event);
                         onOrbDragMove.run();
                     }
@@ -330,10 +329,19 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     voiceFirstHoldActive = false;
                     resetVoiceFirstTapChord();
                     if (action == MotionEvent.ACTION_UP) {
+                        if (voiceFirstHoldDragging) {
+                            moveOrbTo(event);
+                            onOrbDragMove.run();
+                            onOrbDragEnd.accept(true);
+                        }
                         onPressToTalkRelease.run();
                     } else {
+                        if (voiceFirstHoldDragging) {
+                            onOrbDragEnd.accept(false);
+                        }
                         onPressToTalkCancel.run();
                     }
+                    voiceFirstHoldDragging = false;
                     return true;
                 }
                 // No hold consumed the warm mic, so drop it.
