@@ -386,8 +386,8 @@ public final class OverlayService extends Service {
     }
 
     private Notification overlayNotification() {
-        Intent intent = new Intent(this, MoaAssistActivity.class)
-                .setAction(Intent.ACTION_ASSIST);
+        Intent intent = MoaAssistantLaunchCoordinator.assistActivityIntent(
+                this, MoaAssistantLaunchCoordinator.SOURCE_NOTIFICATION);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             flags |= PendingIntent.FLAG_IMMUTABLE;

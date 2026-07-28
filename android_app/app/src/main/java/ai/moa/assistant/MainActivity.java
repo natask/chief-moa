@@ -104,6 +104,12 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (MoaAssistantLaunchCoordinator.isAssistAction(getIntent().getAction())) {
+            startActivity(MoaAssistantLaunchCoordinator.assistActivityIntent(
+                    this, "main_activity_assist_redirect"));
+            finish();
+            return;
+        }
 
         Window window = getWindow();
         window.setStatusBarColor(MoaColors.SURFACE_0);
