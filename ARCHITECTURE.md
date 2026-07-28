@@ -216,6 +216,13 @@ series parent and bounded parallel parents for composed work. Exact candidate
 selection is device-scoped and sequence-checked; it appends an assignment but
 does not move stable/preview or grant publication authority.
 
+Android discovers that catalog only during bounded foreground polling, can
+search and select an exact bundle in the full app, and may notify when the
+newest eligible candidate changes. The notification deep-links to that exact
+bundle; neither discovery, notification, nor selection downloads or installs
+the APK. Stable fallback and the existing digest/signer/install receipt path
+remain the only Android release-transition authorities.
+
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
 be reported as a later one. macOS and Windows remain protocol/library seams

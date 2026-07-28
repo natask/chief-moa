@@ -50,6 +50,17 @@ final class MoaReleaseControlClient {
                 + "&surface=android", null);
     }
 
+    JSONObject candidates(String cursor, int limit) throws Exception {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("candidate page limit is invalid");
+        String path = BASE_PATH + "/candidates?limit=" + limit;
+        if (!safe(cursor).isEmpty()) path += "&cursor=" + encode(cursor);
+        return releaseJson("GET", path, null);
+    }
+
+    JSONObject selectCandidate(JSONObject body) throws Exception {
+        return releaseJson("POST", BASE_PATH + "/candidate-selections", body);
+    }
+
     JSONObject assign(JSONObject body) throws Exception {
         return releaseJson("POST", BASE_PATH + "/assignments", body);
     }

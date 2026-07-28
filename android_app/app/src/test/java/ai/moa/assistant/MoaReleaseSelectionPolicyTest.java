@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import java.util.List;
 
 public final class MoaReleaseSelectionPolicyTest {
     private static final String DIGEST = "a".repeat(64);
@@ -180,6 +181,78 @@ public final class MoaReleaseSelectionPolicyTest {
             return;
         }
         throw new AssertionError("Expected candidate bound rejection");
+    }
+
+    @Test
+    public void catalogRanksZeroOneAndManyWithSeriesAndParallelLineage() throws Exception {
+        MoaReleaseSelectionPolicy.CatalogPage empty = MoaReleaseSelectionPolicy.parseCatalog(
+                new JSONObject().put("schema_version", 1).put("candidates", new JSONArray()));
+        assertTrue(empty.candidates.isEmpty());
+
+        JSONObject series = catalogCandidate("bundle-series", "release-series", "series",
+                "bundle-root", new JSONArray(), "0.2.0", "2026-07-25T00:00:00Z");
+        JSONObject composed = catalogCandidate("bundle-composed", "release-composed", "composed",
+                null, new JSONArray().put("bundle-a").put("bundle-b"), "0.3.0",
+                "2026-07-26T00:00:00Z");
+        MoaReleaseSelectionPolicy.CatalogPage page = MoaReleaseSelectionPolicy.parseCatalog(
+                new JSONObject().put("schema_version", 1)
+                        .put("candidates", new JSONArray().put(series).put(composed))
+                        .put("next_cursor", "bundle-series"));
+        assertEquals("bundle-series", page.nextCursor);
+        assertEquals("series", page.candidates.get(0).relationLabel());
+        assertEquals("parallel bundle", page.candidates.get(1).relationLabel());
+        List<MoaReleaseSelectionPolicy.Candidate> ranked = MoaReleaseSelectionPolicy.rank(
+                page.candidates, "parallel", "bundle-series", "");
+        assertEquals(1, ranked.size());
+        assertEquals("bundle-composed", ranked.get(0).bundleId);
+        assertEquals("selected", MoaReleaseSelectionPolicy.coarseState(
+                page.candidates.get(0), "bundle-series", ""));
+    }
+
+    @Test
+    public void exactCandidateRequestCarriesBundleReleaseAndExpectedSequence() throws Exception {
+        MoaReleaseSelectionPolicy.Candidate candidate = MoaReleaseSelectionPolicy.parseCatalog(
+                new JSONObject().put("schema_version", 1).put("candidates", new JSONArray().put(
+                        catalogCandidate("bundle-a", "release-a", "root", null,
+                                new JSONArray(), "0.2.0", "2026-07-25T00:00:00Z"))))
+                .candidates.get(0);
+        JSONObject request = MoaReleaseSelectionPolicy.exactCandidateRequest(
+                "android_1", candidate, 9L, "pick-a");
+        assertEquals("bundle-a", request.getString("bundle_id"));
+        assertEquals("release-a", request.getString("release_id"));
+        assertEquals(9L, request.getLong("expected_assignment_sequence"));
+        assertEquals("bundle-a", MoaReleaseSelectionPolicy.exactDeepLinkBundleId("bundle-a"));
+        assertEquals("", MoaReleaseSelectionPolicy.exactDeepLinkBundleId("bundle-a?select=other"));
+    }
+
+    @Test
+    public void staleSelectionDoesNotHideDeterministicFallback() throws Exception {
+        MoaReleaseSelectionPolicy.View view = MoaReleaseSelectionPolicy.parseView(
+                baseView().put("last_known_good", new JSONObject()
+                        .put("assignment_id", "assignment-1")
+                        .put("bundle_id", "bundle-stable-1")
+                        .put("release_id", "stable-1")));
+        assertTrue(view.hasLastKnownGood);
+        JSONObject fallback = MoaReleaseSelectionPolicy.fallbackRequest(
+                "android_1", view.assignment.sequence, "fallback-8");
+        assertEquals(7L, fallback.getLong("expected_assignment_sequence"));
+        assertEquals("android", fallback.getString("surface"));
+    }
+
+    private static JSONObject catalogCandidate(String bundleId, String releaseId, String kind,
+                                               String seriesParent, JSONArray parallelParents,
+                                               String version, String createdAt) throws Exception {
+        JSONObject lineage = new JSONObject().put("kind", kind)
+                .put("parallel_parent_bundle_ids", parallelParents);
+        if (seriesParent == null) lineage.put("series_parent_bundle_id", JSONObject.NULL);
+        else lineage.put("series_parent_bundle_id", seriesParent);
+        return new JSONObject().put("bundle_id", bundleId).put("release_id", releaseId)
+                .put("compatibility_version", 1).put("created_at", createdAt)
+                .put("lineage", lineage)
+                .put("artifact", new JSONObject().put("surface", "android")
+                        .put("app_id", "ai.moa.assistant").put("version_code", 20)
+                        .put("version_name", version).put("sha256", DIGEST)
+                        .put("size_bytes", 1024).put("download_url", "https://api.example.test/a.apk"));
     }
 
     private static JSONObject candidate(
