@@ -431,3 +431,60 @@ function assignment(event_id, scope_type, scope_id, sequence, channel, bundle_id
     actor_id: "nat", created_at: at, future_assignment_field: "ignored",
   };
 }
+
+test("published sibling and composed candidates remain paginated and exactly selectable after preview moves", async () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL("./fixtures/candidate-catalog-v1.json", import.meta.url), "utf8"));
+  const created = ["2026-07-24T00:00:00Z", "2026-07-25T00:00:00Z", "2026-07-26T00:00:00Z"];
+  const ids = ["bundle-sibling-a", "bundle-sibling-b", "bundle-composed"];
+  const bundles = seed().bundles.concat(ids.map((bundle_id, index) => ({
+    tenant_id: "personal", application_id: "chief-moa", bundle_id,
+    compatibility_version: 1, created_at: created[index], lineage: fixture.lineage[bundle_id],
+    artifacts: [artifact("android", `android-${bundle_id}`, [digestA, digestB, digestC][index], `2.0.${index}`)],
+  })), {
+    tenant_id: "personal", application_id: "chief-moa", bundle_id: "draft-unpublished",
+    compatibility_version: 1, created_at: "2026-07-27T00:00:00Z",
+    artifacts: [artifact("android", "android-draft", digestA, "3.0.0")],
+  });
+  const publication_receipts = ids.map((bundle_id, index) => ({
+    receipt_id: `published-${index}`, tenant_id: "personal", application_id: "chief-moa",
+    bundle_id, channel: "preview", new_sequence: index + 1, created_at: created[index],
+  }));
+  const { service, http } = harness({
+    bundles,
+    publication_receipts,
+    channel_heads: seed().channel_heads.concat([
+      { tenant_id: "personal", application_id: "chief-moa", channel: "preview", bundle_id: "bundle-composed", sequence: 3, updated_at: created[2] },
+    ]),
+  });
+  const first = await http({ method: "GET", path: "/v1/release-control/apps/chief-moa/candidates", query: { limit: 2 } });
+  const second = await http({ method: "GET", path: "/v1/release-control/apps/chief-moa/candidates", query: { limit: 2, cursor: first.body.next_cursor } });
+  assert.deepEqual([...first.body.candidates, ...second.body.candidates].map((item) => item.bundle_id), fixture.candidate_order);
+  assert.deepEqual(first.body.candidates[0].lineage, fixture.lineage["bundle-composed"]);
+
+  const selected = await http({
+    method: "POST", path: "/v1/release-control/apps/chief-moa/candidate-selections",
+    body: { expected_assignment_sequence: 0, bundle_id: "bundle-sibling-a", release_id: "android-bundle-sibling-a", idempotency_key: "pick-sibling-a" },
+  });
+  assert.equal(selected.status, 201);
+  assert.equal(selected.body.assignment_receipt.bundle_id, "bundle-sibling-a");
+  assert.equal(selected.body.assignment_receipt.sequence, 1);
+  assert.equal(selected.body.assignment_receipt.release_id, "android-bundle-sibling-a");
+  assert.equal(selected.body.platform_action.kind, "android_install_review");
+
+  await assert.rejects(() => service.selectCandidate({
+    tenant_id: "personal", application_id: "chief-moa", device_id: "phone-1", actor_id: "nat",
+    authority, surface: "android", expected_sequence: 0, bundle_id: "bundle-sibling-b", idempotency_key: "stale",
+  }), (error) => error.code === "assignment_sequence_conflict");
+  for (const [bundle_id, reason] of [["missing", "candidate_unknown"], ["draft-unpublished", "candidate_not_published"]]) {
+    await assert.rejects(() => service.selectCandidate({
+      tenant_id: "personal", application_id: "chief-moa", device_id: "phone-2", actor_id: "nat",
+      authority, surface: "android", expected_sequence: 0, bundle_id, idempotency_key: `reject-${bundle_id}`,
+    }), (error) => error.reason === reason);
+  }
+
+  await assert.rejects(() => service.selectCandidate({
+    tenant_id: "other-tenant", application_id: "chief-moa", device_id: "phone-1", actor_id: "other-owner",
+    authority: { actor_id: "other-owner", owner_id: "other-owner" }, surface: "android",
+    expected_sequence: 0, bundle_id: "bundle-sibling-a", idempotency_key: "cross-tenant",
+  }), (error) => error.reason === "candidate_unknown");
+});

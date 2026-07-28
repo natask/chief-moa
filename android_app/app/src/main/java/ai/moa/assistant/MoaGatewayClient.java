@@ -34,7 +34,8 @@ final class MoaGatewayClient {
         return new GatewayTextResponse(
                 text,
                 response.optString("conversation_id", "").trim(),
-                turnNotPersisted(response));
+                turnNotPersisted(response),
+                branchIdFromTurn(response));
     }
 
     JSONObject voiceTurn(JSONObject body) throws Exception {
@@ -87,6 +88,20 @@ final class MoaGatewayClient {
             }
         }
         return "";
+    }
+
+    static String branchIdFromTurn(JSONObject response) {
+        if (response == null) {
+            return "";
+        }
+        JSONObject context = response.optJSONObject("context");
+        if (context != null) {
+            String branch = safe(context.optString("branch_id", ""));
+            if (!branch.isEmpty()) {
+                return branch;
+            }
+        }
+        return safe(response.optString("branch_id", ""));
     }
 
     // Record mode: upload a finished raw-audio note. This is a plain HTTP POST
@@ -690,15 +705,21 @@ final class MoaGatewayClient {
         final String conversationId;
         // True when the gateway did not persist this turn (incognito context).
         final boolean notSaved;
+        final String branchId;
 
         GatewayTextResponse(String text, String conversationId) {
-            this(text, conversationId, false);
+            this(text, conversationId, false, "");
         }
 
         GatewayTextResponse(String text, String conversationId, boolean notSaved) {
+            this(text, conversationId, notSaved, "");
+        }
+
+        GatewayTextResponse(String text, String conversationId, boolean notSaved, String branchId) {
             this.text = text;
             this.conversationId = conversationId == null ? "" : conversationId.trim();
             this.notSaved = notSaved;
+            this.branchId = branchId == null ? "" : branchId.trim();
         }
     }
 }

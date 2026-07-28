@@ -18,6 +18,8 @@ import { browserLocalToolManifest as browserAutomationLocalToolManifest } from "
 import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
 import { createBrowserTabRuntime } from "./browser-tab-runtime.js";
 import { authorizeCdpCommand, compactCdpOutput, normalizeCdpProfile } from "./browser-cdp-policy.js";
+import { allowedFileSchemeAccess, authorizeBrowserUrl } from "./browser-file-access-runtime.js";
+import { compactDiagnosticEntry, normalizeDiagnosticRequest } from "./browser-diagnostics-contract.js";
 import { createBrowserCommandRuntime } from "./browser-command-runtime.js";
 import {
   MICROPHONE_RECOVERY_TARGET,
@@ -76,7 +78,7 @@ chrome.runtime.onStartup.addListener(() => {
   initializePrivacyState().then(() => ensureContentOnOpenTabs()).catch(() => {});
 });
 const MAX_ELEMENTS = 100;
-const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
+const ALLOWED_NAVIGATION_PROTOCOLS = new Set(["http:", "https:", "file:"]);
 // Cues run concurrently: the user keeps talking, each utterance is its own lane.
 // Keyed by cueId (a per-cue string), each value is { controller, tabId } so we
 // can cancel one cue or all cues on a tab without blocking new ones.
@@ -728,10 +730,17 @@ async function executeBrowserToolRequest(request) {
       };
     }
     if (tool === "browser.tab.open") {
-      const url = allowedBrowserTaskUrl(input.url || input.href || input.target);
-      if (!url) {
-        return { ok: false, error: "blocked or invalid browser.tab.open URL", summary: "Browser tab open request was blocked." };
+      const authorization = await authorizeBrowserUrl(chrome, input.url || input.href || input.target, ALLOWED_NAVIGATION_PROTOCOLS);
+      if (!authorization.ok) {
+        return {
+          ok: false,
+          error: authorization.error || "blocked or invalid browser.tab.open URL",
+          summary: authorization.instruction || "Browser tab open request was blocked.",
+          result: { file_access: authorization.file_access || null },
+          local_receipt: { tool, success: false, policy: authorization.error || "blocked_url" },
+        };
       }
+      const url = authorization.url;
       const background = input.background === true || input.active === false;
       const { tab, ownership } = await browserTabs.open({ url, background, requestId: request?.id || input.request_id || null });
       return {
@@ -741,7 +750,7 @@ async function executeBrowserToolRequest(request) {
         local_receipt: { schema: "moa.browser-action-receipt.v1", tool, success: true, tab_id: tab.id || null, request_id: ownership.request_id, ownership_nonce: ownership.ownership_nonce, ownership_expires_at_ms: ownership.expires_at_ms, background, focus_changed: !background },
       };
     }
-    if (tool === "browser.tab.activate") {
+    if (tool === "browser.tab.activate" || tool === "browser.tab.focus") {
       const tabId = Number(input.tab_id ?? input.tabId);
       if (!Number.isFinite(tabId)) {
         return { ok: false, error: "browser.tab.activate requires tab_id", summary: "Browser tab activate request was missing a tab id." };
@@ -753,6 +762,37 @@ async function executeBrowserToolRequest(request) {
         summary: `Activated browser tab ${tabId}.`,
         result: { tab_id: tabId, title: tab?.title || "", url: tab?.url || "" },
         local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.permissions.status") {
+      const fileAccess = await allowedFileSchemeAccess(chrome);
+      return {
+        ok: true,
+        summary: fileAccess.allowed
+          ? "AG may navigate browser tabs to file URLs."
+          : fileAccess.instruction,
+        result: { file_scheme_access: fileAccess },
+        local_receipt: { tool, success: true },
+      };
+    }
+    if (tool === "browser.page.console" || tool === "browser.page.network") {
+      const normalized = normalizeDiagnosticRequest(input);
+      const tab = normalized.tabId == null
+        ? (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0]
+        : await chrome.tabs.get(normalized.tabId);
+      if (!tab?.id) {
+        return { ok: false, error: "no target tab", summary: "No browser tab was available for diagnostics.", local_receipt: { tool, success: false } };
+      }
+      const kind = tool.endsWith(".console") ? "console" : "network";
+      const result = await collectCdpDiagnostics(tab.id, kind, normalized);
+      return {
+        ok: result.ok,
+        summary: result.ok
+          ? `Captured ${result.entries.length} bounded ${kind} diagnostic entr${result.entries.length === 1 ? "y" : "ies"} from browser tab ${tab.id}.`
+          : `Browser ${kind} diagnostics failed.`,
+        error: result.error || "",
+        result,
+        local_receipt: { tool, success: result.ok, cdp: true, duration_ms: normalized.durationMs },
       };
     }
     if (tool === "browser.tab.close") {
@@ -840,7 +880,9 @@ async function executeBrowserToolRequest(request) {
 }
 
 const browserAutomationRuntime = createBrowserAutomationRuntime({
-  chromeApi: chrome, allowedUrl: allowedBrowserTaskUrl, captureScreenshot: captureScreenshotViaDebugger,
+  chromeApi: chrome, allowedUrl: allowedBrowserTaskUrl,
+  authorizeUrl: (value) => authorizeBrowserUrl(chrome, value, ALLOWED_NAVIGATION_PROTOCOLS),
+  captureScreenshot: captureScreenshotViaDebugger,
   activeTab: async () => (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0] || null,
   snapshot: async (tabId) => (await ensureContent(tabId), normalizeBrowserSnapshot(await ask(tabId, { cmd: "snapshot" }))),
   act: (tabId, request) => ask(tabId, { cmd: "act", ...request }),
@@ -882,11 +924,19 @@ async function executeGatewayBrowserTask(task) {
 
     for (const action of actions) {
       const method = String(action?.method || "");
-      const params = action?.params && typeof action.params === "object" ? action.params : {};
+      const params = action?.params && typeof action.params === "object" ? { ...action.params } : {};
       const authorization = authorizeCdpCommand({ method, params, profile: task.authority_profile || "automation", tabUrl: startUrl, commandIndex: actionResults.length });
       if (!authorization.ok) {
         actionResults.push({ method, ok: false, policy_code: authorization.code, error: authorization.error });
         continue;
+      }
+      if (method === "Page.navigate") {
+        const authorization = await authorizeBrowserUrl(chrome, params.url, ALLOWED_NAVIGATION_PROTOCOLS);
+        if (!authorization.ok) {
+          actionResults.push({ method, ok: false, error: authorization.error, instruction: authorization.instruction || "" });
+          continue;
+        }
+        params.url = authorization.url;
       }
       try {
         const result = await debuggerSend(target, method, params);
@@ -965,12 +1015,17 @@ async function executeCdpActionsOnTab(tabId, actions, { profile = "semantic", ta
         continue;
       }
       if (method === "Page.navigate") {
-        const url = allowedBrowserTaskUrl(params.url);
-        if (!url) {
-          actionResults.push({ method, ok: false, error: "blocked or invalid navigation URL" });
+        const authorization = await authorizeBrowserUrl(chrome, params.url, ALLOWED_NAVIGATION_PROTOCOLS);
+        if (!authorization.ok) {
+          actionResults.push({
+            method,
+            ok: false,
+            error: authorization.error || "blocked or invalid navigation URL",
+            instruction: authorization.instruction || "",
+          });
           continue;
         }
-        params.url = url;
+        params.url = authorization.url;
       }
       try {
         const result = await debuggerSend(target, method, params);
@@ -1030,6 +1085,46 @@ function allowedBrowserTaskUrl(value) {
     return ALLOWED_NAVIGATION_PROTOCOLS.has(url.protocol) ? url.href : "";
   } catch {
     return "";
+  }
+}
+
+async function collectCdpDiagnostics(tabId, kind, { durationMs, limit }) {
+  const target = { tabId };
+  const entries = [];
+  let attached = false;
+  const onEvent = (source, method, params) => {
+    if (source?.tabId !== tabId || entries.length >= limit) return;
+    if (kind === "console" && (method === "Runtime.consoleAPICalled" || method === "Log.entryAdded")) {
+      entries.push(compactDiagnosticEntry({ method, ...params }));
+    }
+    if (kind === "network" && method.startsWith("Network.")) {
+      entries.push(compactDiagnosticEntry({ method, ...params }));
+    }
+  };
+  try {
+    await debuggerAttach(target);
+    attached = true;
+    chrome.debugger.onEvent.addListener(onEvent);
+    if (kind === "console") {
+      await debuggerSend(target, "Runtime.enable");
+      await debuggerSend(target, "Log.enable");
+    } else {
+      await debuggerSend(target, "Network.enable", { maxTotalBufferSize: 1_000_000, maxResourceBufferSize: 100_000 });
+      const observed = await debuggerSend(target, "Runtime.evaluate", {
+        expression: `JSON.stringify(performance.getEntriesByType("resource").slice(-${limit}).map(e=>({name:e.name,initiatorType:e.initiatorType,duration:e.duration,transferSize:e.transferSize})))`,
+        returnByValue: true,
+      });
+      try {
+        for (const entry of JSON.parse(observed?.result?.value || "[]")) entries.push(compactDiagnosticEntry({ method: "Performance.resource", entry }));
+      } catch {}
+    }
+    if (durationMs > 0) await new Promise((resolve) => setTimeout(resolve, durationMs));
+    return { ok: true, tab_id: tabId, kind, duration_ms: durationMs, entries: entries.filter(Boolean).slice(0, limit), truncated: entries.length >= limit };
+  } catch (error) {
+    return { ok: false, tab_id: tabId, kind, entries: [], error: String(error?.message || error) };
+  } finally {
+    try { chrome.debugger.onEvent.removeListener(onEvent); } catch {}
+    if (attached) await debuggerDetach(target);
   }
 }
 
@@ -1160,6 +1255,7 @@ async function heartbeatDeviceClient() {
     const deviceId = await getStableDeviceId();
     const sessionId = await getStableSessionId();
     const sessionAdvertisement = await currentBrowserSessionAdvertisement();
+    const fileAccess = await allowedFileSchemeAccess(chrome);
     await callGateway(cfg, "/v1/device-clients/heartbeat", {
       body: {
         device_id: deviceId,
@@ -1172,6 +1268,7 @@ async function heartbeatDeviceClient() {
           extension_id: chrome.runtime.id,
           context_descriptor: sessionAdvertisement.context_descriptor,
           execution_adapters: sessionAdvertisement.execution_adapters,
+          permissions: { file_scheme_access: fileAccess.allowed, file_scheme_access_supported: fileAccess.supported },
         },
       },
     });
@@ -1972,6 +2069,15 @@ async function updateBrowserAgentPresentation(patch = {}) {
       Object.hasOwn(patch, "response_text") ? patch.response_text : sameCue ? activeBrowserAgentPresentation?.response_text : "",
     ),
     status: String(patch.status || (sameCue ? activeBrowserAgentPresentation?.status : "running") || "running"),
+    // Derived revisions (corrected / writing-skill rewrites) travel with the
+    // turn when a producer supplies them. No gateway route emits them yet, so
+    // these stay undefined and the overlay's copy rail falls back to literal.
+    user_variants: Object.hasOwn(patch, "user_variants")
+      ? patch.user_variants
+      : sameCue ? activeBrowserAgentPresentation?.user_variants : undefined,
+    response_variants: Object.hasOwn(patch, "response_variants")
+      ? patch.response_variants
+      : sameCue ? activeBrowserAgentPresentation?.response_variants : undefined,
     updated_at: new Date().toISOString(),
   };
   const owner = await getActiveBrowserAgentOwner().catch(() => null);
@@ -4482,9 +4588,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         owner,
         isOwner: owner?.tab_id === sender.tab?.id && owner?.status !== "cleared",
+        // A newly built overlay hydrates the active turn's visible text from
+        // the worker, so a navigation does not blank the ribbons mid-turn.
+        presentation: activeBrowserAgentPresentation,
       }))
       .catch((error) => sendResponse({ ok: false, owner: null, error: String(error?.message || error) }));
     return true;
+  }
+  // Double-tapping a ribbon hands off to the history surface. The overlay is
+  // not a scrollback: the side panel renders the canonical gateway session
+  // projection. The open() call must stay synchronous to keep the user gesture.
+  if (msg.cmd === "openHistoryPanel") {
+    const opened = openAgentPanel(sender.tab);
+    sendResponse({ ok: opened });
+    return false;
   }
   if (msg.cmd === "devReloadExtension") {
     devReloadConfig()

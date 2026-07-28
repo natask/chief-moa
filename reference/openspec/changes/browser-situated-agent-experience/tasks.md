@@ -41,6 +41,18 @@ the fixture tab. Voice-policy tests prove the same final transcript is diverted
 to the browser run path. Ambiguous current-page and image-deictic searches do
 not execute locally.
 
+- [x] 0.7 Complete the first-party control facade with explicit tab focus,
+      bounded console/network diagnostics, and Chrome-mediated `file://`
+      navigation. Detect `isAllowedFileSchemeAccess()` for every local-file
+      request, report the exact Chrome toggle when disabled, advertise current
+      permission state, and retain gateway-bound local receipts without adding
+      a native host or host-filesystem reader.
+
+Acceptance: permission-off and permission-on unit tests prove file navigation
+fails with one actionable instruction or proceeds with the exact URL; the
+manifest declares only browser-visible file access; diagnostics cap observation
+time and returned entries; extension verify, smoke, and real-CDP smoke pass.
+
 Acceptance: the user's correction and unresolved surface choice are recorded
 durably rather than silently collapsed into an explanation-first roadmap.
 
@@ -272,6 +284,15 @@ change action authority; stop remains reachable from the workspace.
 
 Acceptance: listening/thinking/explaining/waiting/acting/done/error reactions
 use known packaged motions only and remain functional with custom appearance.
+
+- [x] 8.3 Keep one compact mascot root per top-level page, reduce the fresh
+      desktop mascot and its pointer-blocking hit target, and use a smaller
+      phone-width default without overriding a user-persisted scale.
+
+Acceptance: real-extension smoke reinjects the content script after adding a
+stale duplicate and still finds one `#agee-root`; desktop and 375px-wide
+fixtures measure the compact defaults; the existing pointer gesture checks
+continue to prove drag, hold-to-talk, toggle capture, and send-on-release.
 
 ## 9. Tutorial Workflow
 

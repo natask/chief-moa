@@ -42,8 +42,8 @@ if [ "$phase" = ack ] && [ "${FAKE_SSH_FAIL_ACK_BEFORE:-0}" = 1 ]; then
   exit 255
 fi
 if [ "$phase" = verify-public ]; then
-  [ "${FAKE_PUBLIC_VERIFY_FAIL:-0}" != 1 ] || exit 78
-  exit 0
+  /bin/bash -s -- "$@"
+  exit $?
 fi
 /bin/bash -s -- "$@"
 status=$?
@@ -110,6 +110,48 @@ if [ "${FAKE_RSYNC_CORRUPT:-0}" = 1 ] && [[ "$remote_path" == */release/ ]]; the
 fi
 FAKE_RSYNC
 
+cat > "$FAKE_BIN/docker" <<'FAKE_DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+canonical_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+worker_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+printf 'docker %s\n' "$*" >> "$FAKE_CALL_LOG"
+if [ "${1:-}" = ps ]; then
+  [ "${FAKE_DOCKER_MISLABELED_WORKER:-0}" = 1 ] && printf '%s\n' "$worker_id"
+  printf '%s\n' "$canonical_id"
+  exit 0
+fi
+if [ "${1:-}" = compose ]; then
+  expected=(-p chief-moa -f /opt/chief-moa/app/docker-compose.yml -f /opt/chief-moa/app/docker-compose.vps.yml --env-file /opt/chief-moa/gateway.env ps -q gateway)
+  shift
+  [ "$#" -eq "${#expected[@]}" ] || exit 81
+  for expected_arg in "${expected[@]}"; do
+    [ "$1" = "$expected_arg" ] || exit 82
+    shift
+  done
+  case "${FAKE_COMPOSE_GATEWAY_IDS:-one}" in
+    one) printf '%s\n' "$canonical_id" ;;
+    zero) ;;
+    multiple) printf '%s\n%s\n' "$canonical_id" cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc ;;
+    invalid) printf '%s\n' not-a-container-id ;;
+    *) exit 83 ;;
+  esac
+  exit 0
+fi
+if [ "${1:-}" = exec ]; then
+  shift
+  [ "${1:-}" = -i ] || exit 84
+  shift
+  printf 'docker-exec-container %s\n' "${1:-}" >> "$FAKE_CALL_LOG"
+  [ "${1:-}" = "$canonical_id" ] || exit 85
+  [ "${FAKE_PUBLIC_VERIFY_FAIL:-0}" != 1 ] || exit 78
+  # Consume the inline Node verifier without running it or exposing a token.
+  /bin/cat >/dev/null
+  exit 0
+fi
+exit 86
+FAKE_DOCKER
+
 # macOS lacks GNU mv -T. The fake remote needs only its replace-destination
 # semantics so the production script can be exercised without weakening it.
 cat > "$FAKE_BIN/mv" <<'FAKE_MV'
@@ -157,7 +199,23 @@ if [ "${1:-}" = -f ]; then shift; fi
 exit 0
 FAKE_SYNC
 
-chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/rsync" "$FAKE_BIN/mv" "$FAKE_BIN/sha256sum" "$FAKE_BIN/sync"
+# macOS lacks GNU `stat -c`. The production script requires GNU stat on the
+# real (Linux) VPS; this shim only lets the local fake-transport tests below
+# exercise the same `stat -c %Y` call cross-platform.
+cat > "$FAKE_BIN/stat" <<'FAKE_STAT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = -c ] && [ "${2:-}" = '%Y' ]; then
+  shift 2
+  if /usr/bin/stat -f '%m' "$1" >/dev/null 2>&1; then
+    exec /usr/bin/stat -f '%m' "$1"
+  fi
+  exec /usr/bin/stat -c '%Y' "$1"
+fi
+exec /usr/bin/stat "$@"
+FAKE_STAT
+
+chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/rsync" "$FAKE_BIN/docker" "$FAKE_BIN/mv" "$FAKE_BIN/sha256sum" "$FAKE_BIN/sync" "$FAKE_BIN/stat"
 
 publish_release() {
   local dir="$1"
@@ -214,6 +272,26 @@ run_sync() {
     qa-secret@example.invalid "$@"
 }
 
+# Manufacture a `.publish-lock` describing a publish of the release currently
+# live in $remote_dir, as if that publish had committed but its own cleanup
+# never ran. Used to test lock-reclaim without needing a real interrupted run.
+manufacture_abandoned_lock() {
+  local remote_dir="$1"
+  local operation="$2"
+  local release_id apk_sha size meta_sha latest_sha
+  release_id="$(readlink "$remote_dir/current")"
+  release_id="${release_id#releases/}"
+  apk_sha="$("$FAKE_BIN/sha256sum" "$remote_dir/moa-assistant.apk" | awk '{print $1}')"
+  size="$(wc -c < "$remote_dir/moa-assistant.apk" | tr -d '[:space:]')"
+  meta_sha="$("$FAKE_BIN/sha256sum" "$remote_dir/releases/$release_id/release.json" | awk '{print $1}')"
+  latest_sha="$("$FAKE_BIN/sha256sum" "$remote_dir/latest.json" | awk '{print $1}')"
+  mkdir "$remote_dir/.publish-lock"
+  printf '%s\n' "$operation" > "$remote_dir/.publish-lock/owner"
+  printf '%s %s %s %s %s %s\n' \
+    "$operation" "$release_id" "$apk_sha" "$size" "$meta_sha" "$latest_sha" \
+    > "$remote_dir/.publish-lock/published.receipt"
+}
+
 assert_no_target_leak() {
   local output="$1"
   local remote_dir="$2"
@@ -223,6 +301,50 @@ assert_no_target_leak() {
 
 file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+first_line_number_containing() {
+  local content="$1"
+  local needle="$2"
+  local line
+  local line_number=0
+  while IFS= read -r line; do
+    line_number=$((line_number + 1))
+    case "$line" in
+      *"$needle"*)
+        printf '%s\n' "$line_number"
+        return 0
+        ;;
+    esac
+  done <<< "$content"
+  return 1
+}
+
+contains_literal() {
+  local content="$1"
+  local needle="$2"
+  case "$content" in
+    *"$needle"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+first_snapshot_dir() {
+  local snapshots_root="$1"
+  local name_pattern="${2:-*}"
+  local candidate
+  local name
+  for candidate in "$snapshots_root"/*; do
+    [ -d "$candidate" ] || continue
+    name="${candidate##*/}"
+    case "$name" in
+      $name_pattern)
+        printf '%s\n' "$candidate"
+        return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 if grep -Eq 'rsync.*--delete' "$SYNC_SCRIPT"; then
@@ -236,13 +358,13 @@ fi
 publish_step="$(sed -n \
   '/- name: Publish through the existing VPS sync path/,/- name: Fetch and verify the published OTA/p' \
   "$WORKFLOW")"
-checksum_line="$(printf '%s\n' "$publish_step" | grep -n -m1 'sha256sum --check --status' | cut -d: -f1)"
-sync_line="$(printf '%s\n' "$publish_step" | grep -n -m1 'bash android_app/deploy/ota/sync-vps.sh' | cut -d: -f1)"
+checksum_line="$(first_line_number_containing "$publish_step" 'sha256sum --check --status' || true)"
+sync_line="$(first_line_number_containing "$publish_step" 'bash android_app/deploy/ota/sync-vps.sh' || true)"
 [ -n "$checksum_line" ] && [ -n "$sync_line" ] && [ "$checksum_line" -lt "$sync_line" ] || {
   echo "Android OTA workflow must verify the saved APK digest before VPS sync" >&2
   exit 1
 }
-printf '%s\n' "$publish_step" | grep -Fq 'MOA_OTA_SKIP_BUILD=1' || {
+contains_literal "$publish_step" 'MOA_OTA_SKIP_BUILD=1' || {
   echo "Android OTA workflow must disable rebuilding after stable-signer verification" >&2
   exit 1
 }
@@ -308,7 +430,7 @@ cmp -s "$local_dir/moa-assistant.apk" "$remote_dir/moa-assistant.apk"
 [ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10/moa-assistant.apk")" = 644 ]
 [ "$(file_mode "$remote_dir/releases/ai.moa.assistant-10/release.json")" = 644 ]
 [ "$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 6 ]
-snapshot="$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d -name '*ai.moa.assistant-10*' | head -n 1)"
+snapshot="$(first_snapshot_dir "$remote_dir/.publish-snapshots" '*ai.moa.assistant-10*')"
 [ -n "$snapshot" ]
 [ "$(cat "$snapshot/current.target")" = releases/ai.moa.assistant-9 ]
 (cd "$snapshot" && "$FAKE_BIN/sha256sum" -c checksums.sha256 >/dev/null)
@@ -354,6 +476,39 @@ run_sync "$local_dir" "$remote_dir" "$case_dir/retry-output"
 [ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-16 ]
 [ -f "$remote_dir/releases/ai.moa.assistant-16/moa-assistant.apk" ]
 assert_no_target_leak "$case_dir/retry-output" "$remote_dir"
+
+# Compose service resolution ignores a worker carrying spoofed broad labels and
+# executes the verifier only in the canonical gateway returned by `compose ps`.
+case_dir="$TMP_DIR/public-compose-canonical"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$local_dir" 134 '2026-07-03T00:00:00Z' local-134
+: > "$FAKE_CALL_LOG"
+run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+  FAKE_DOCKER_MISLABELED_WORKER=1
+grep -Fq 'docker compose -p chief-moa -f /opt/chief-moa/app/docker-compose.yml -f /opt/chief-moa/app/docker-compose.vps.yml --env-file /opt/chief-moa/gateway.env ps -q gateway' "$FAKE_CALL_LOG"
+grep -Fq 'docker-exec-container aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$FAKE_CALL_LOG"
+if grep -Fq 'docker ps ' "$FAKE_CALL_LOG"; then exit 1; fi
+[ ! -e "$remote_dir/.publish-lock" ]
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# Zero, multiple, and malformed Compose gateway results all fail closed after
+# commit, retaining the durable publication lock for exact retry.
+for compose_result in zero multiple invalid; do
+  case_dir="$TMP_DIR/public-compose-$compose_result"
+  local_dir="$case_dir/local"
+  remote_dir="$case_dir/remote"
+  mkdir -p "$local_dir" "$remote_dir"
+  publish_release "$local_dir" 135 '2026-07-04T00:00:00Z' "local-135-$compose_result"
+  : > "$FAKE_CALL_LOG"
+  if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+    FAKE_COMPOSE_GATEWAY_IDS="$compose_result"; then exit 1; fi
+  [ -f "$remote_dir/.publish-lock/published.receipt" ]
+  grep -Fq 'authenticated public manifest/APK verification failed' "$case_dir/output"
+  if grep -Fq 'docker-exec-container ' "$FAKE_CALL_LOG"; then exit 1; fi
+  assert_no_target_leak "$case_dir/output" "$remote_dir"
+done
 
 # Public verification happens after the atomic commit but before ACK cleanup.
 # A failure must prevent success and preserve the durable owner lock so an
@@ -418,7 +573,7 @@ publish_release "$local_dir" 15 '2026-07-03T00:00:00Z' initial-15
 run_sync "$local_dir" "$remote_dir" "$case_dir/output"
 [ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-15 ]
 [ -f "$remote_dir/releases/ai.moa.assistant-15/moa-assistant.apk" ]
-snapshot="$(find "$remote_dir/.publish-snapshots" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+snapshot="$(first_snapshot_dir "$remote_dir/.publish-snapshots")"
 [ "$(cat "$snapshot/state")" = empty ]
 [ -f "$snapshot/published.release" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"
@@ -589,13 +744,117 @@ if grep -q '^rsync$' "$FAKE_CALL_LOG"; then exit 1; fi
 [ ! -e "$remote_dir/releases/ai.moa.assistant-50" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
+# A lock whose receipt matches the release that is actually live is
+# completed-but-abandoned: only its own cleanup crashed. It must be
+# reclaimable even though this new publish is a DIFFERENT release than the
+# one the stuck lock describes -- an abandoned lock must not block every
+# future publish. The old lock is retained as recovery evidence, not deleted.
+case_dir="$TMP_DIR/abandoned-lock-reclaim"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$remote_dir" 200 '2026-07-01T00:00:00Z' remote-200
+publish_release "$local_dir" 201 '2026-07-02T00:00:00Z' new-201
+manufacture_abandoned_lock "$remote_dir" publish-abandoned-op
+: > "$FAKE_CALL_LOG"
+run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+  MOA_OTA_LOCK_RECLAIM_MIN_AGE_SECONDS=0
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-201 ]
+[ -f "$remote_dir/releases/ai.moa.assistant-200/moa-assistant.apk" ]
+[ ! -e "$remote_dir/.publish-lock" ]
+recovered="$(find "$remote_dir/.publish-locks-recovered" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+[ -n "$recovered" ]
+[ "$(cat "$recovered/owner")" = publish-abandoned-op ]
+[ -f "$recovered/published.receipt" ]
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# The same abandoned, receipt-matching lock must NOT be reclaimed while it is
+# younger than the reclaim age gate -- its owner may still be running its own
+# acknowledgement cleanup. The lock stays exactly as it was.
+case_dir="$TMP_DIR/abandoned-lock-too-recent"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$remote_dir" 210 '2026-07-01T00:00:00Z' remote-210
+publish_release "$local_dir" 211 '2026-07-02T00:00:00Z' new-211
+manufacture_abandoned_lock "$remote_dir" publish-abandoned-op-2
+: > "$FAKE_CALL_LOG"
+if run_sync "$local_dir" "$remote_dir" "$case_dir/output"; then exit 1; fi
+[ -d "$remote_dir/.publish-lock" ]
+[ "$(cat "$remote_dir/.publish-lock/owner")" = publish-abandoned-op-2 ]
+[ ! -d "$remote_dir/.publish-locks-recovered" ] \
+  || [ -z "$(find "$remote_dir/.publish-locks-recovered" -mindepth 1 -maxdepth 1)" ]
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-210 ]
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# A lock with NO receipt at all means a publish is still running or crashed
+# before finishing -- exactly what the lock protects. This must never be
+# reclaimed, regardless of how permissive the age gate is set.
+case_dir="$TMP_DIR/abandoned-lock-no-receipt"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$remote_dir" 220 '2026-07-01T00:00:00Z' remote-220
+publish_release "$local_dir" 221 '2026-07-02T00:00:00Z' new-221
+mkdir "$remote_dir/.publish-lock"
+printf '%s\n' publish-crashed-mid-publish > "$remote_dir/.publish-lock/owner"
+: > "$FAKE_CALL_LOG"
+if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+  MOA_OTA_LOCK_RECLAIM_MIN_AGE_SECONDS=0; then exit 1; fi
+[ -d "$remote_dir/.publish-lock" ]
+[ ! -f "$remote_dir/.publish-lock/published.receipt" ]
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-220 ]
+[ "$(grep -c '^ssh$' "$FAKE_CALL_LOG")" -eq 1 ]
+if grep -q '^rsync$' "$FAKE_CALL_LOG"; then exit 1; fi
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# A lock whose receipt does NOT match the live release (tampered or restored
+# out of band) must also never be reclaimed, regardless of the age gate.
+case_dir="$TMP_DIR/abandoned-lock-mismatch"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$remote_dir" 230 '2026-07-01T00:00:00Z' remote-230
+publish_release "$local_dir" 231 '2026-07-02T00:00:00Z' new-231
+release_id="$(readlink "$remote_dir/current")"; release_id="${release_id#releases/}"
+size="$(wc -c < "$remote_dir/moa-assistant.apk" | tr -d '[:space:]')"
+meta_sha="$("$FAKE_BIN/sha256sum" "$remote_dir/releases/$release_id/release.json" | awk '{print $1}')"
+latest_sha="$("$FAKE_BIN/sha256sum" "$remote_dir/latest.json" | awk '{print $1}')"
+bogus_sha="$(printf '0%.0s' $(seq 1 64))"
+mkdir "$remote_dir/.publish-lock"
+printf '%s\n' publish-mismatch-op > "$remote_dir/.publish-lock/owner"
+printf '%s %s %s %s %s %s\n' \
+  publish-mismatch-op "$release_id" "$bogus_sha" "$size" "$meta_sha" "$latest_sha" \
+  > "$remote_dir/.publish-lock/published.receipt"
+: > "$FAKE_CALL_LOG"
+if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
+  MOA_OTA_LOCK_RECLAIM_MIN_AGE_SECONDS=0; then exit 1; fi
+[ -d "$remote_dir/.publish-lock" ]
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-230 ]
+[ "$(grep -c '^ssh$' "$FAKE_CALL_LOG")" -eq 1 ]
+if grep -q '^rsync$' "$FAKE_CALL_LOG"; then exit 1; fi
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
 grep -Fq "docker exec -i \"\$gateway_container\" node -" "$SYNC_SCRIPT" || {
   echo "Public OTA verification must use the running gateway container token" >&2
   exit 1
 }
+if ! grep -Fq 'docker compose -p chief-moa' "$SYNC_SCRIPT" \
+  || ! grep -Fq 'compose_root=/opt/chief-moa/app' "$SYNC_SCRIPT" \
+  || ! grep -Fq 'compose_env=/opt/chief-moa/gateway.env' "$SYNC_SCRIPT" \
+  || ! grep -Fq "\"\$compose_root/docker-compose.yml\"" "$SYNC_SCRIPT" \
+  || ! grep -Fq "\"\$compose_root/docker-compose.vps.yml\"" "$SYNC_SCRIPT" \
+  || ! grep -Fq -- "--env-file \"\$compose_env\" ps -q gateway" "$SYNC_SCRIPT"; then
+  echo "Public OTA verification must resolve the canonical gateway through the active Compose model" >&2
+  exit 1
+fi
+if grep -Fq 'docker ps ' "$SYNC_SCRIPT"; then
+  echo "Public OTA verification must not select containers through broad labels" >&2
+  exit 1
+fi
 grep -Fq 'process.env.MOA_GATEWAY_TOKEN' "$SYNC_SCRIPT" || {
   echo "Public OTA verification must read auth only inside the gateway container" >&2
   exit 1
 }
 
-echo "Android OTA VPS publication safety smoke passed (19 fake transport cases + workflow contract)."
+echo "Android OTA VPS publication safety smoke passed (27 fake transport cases + workflow contract)."

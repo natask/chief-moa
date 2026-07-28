@@ -69,3 +69,22 @@ test("runtime bounds screenshots and ignores tools owned by the legacy broker", 
   assert.equal(receipt.ok, false);
   assert.equal(receipt.result.screenshot.encoding, "omitted");
 });
+
+test("runtime reports file-scheme permission denial without navigating", async () => {
+  const { runtime } = runtimeFixture();
+  const denied = createBrowserAutomationRuntime({
+    chromeApi: { tabs: { update: async () => assert.fail("navigation must not run") } },
+    authorizeUrl: async () => ({
+      ok: false,
+      error: "file_scheme_access_disabled",
+      instruction: "Enable Allow access to file URLs.",
+      file_access: { allowed: false },
+    }),
+    activeTab: async () => ({ id: 3 }),
+  });
+  const receipt = await denied.execute({ tool: "browser.navigate", input: { url: "file:///tmp/readme.md" } });
+  assert.equal(receipt.ok, false);
+  assert.equal(receipt.error, "file_scheme_access_disabled");
+  assert.equal(receipt.summary, "Enable Allow access to file URLs.");
+  assert.deepEqual(receipt.result.file_access, { allowed: false });
+});

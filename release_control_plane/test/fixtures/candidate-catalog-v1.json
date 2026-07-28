@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "candidate_order": ["bundle-composed", "bundle-sibling-b", "bundle-sibling-a"],
+  "lineage": {
+    "bundle-sibling-a": { "kind": "series", "series_parent_bundle_id": "stable-1", "parallel_parent_bundle_ids": [] },
+    "bundle-sibling-b": { "kind": "series", "series_parent_bundle_id": "stable-1", "parallel_parent_bundle_ids": [] },
+    "bundle-composed": { "kind": "composed", "series_parent_bundle_id": null, "parallel_parent_bundle_ids": ["bundle-sibling-a", "bundle-sibling-b"] }
+  }
+}

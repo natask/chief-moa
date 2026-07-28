@@ -1,0 +1,30 @@
+{
+  "capture": "Robolectric 4.14.1 native-graphics production-View render; not a device screenshot or browser mock",
+  "requested_model_alias": "opus",
+  "returned_model": "claude-opus-4-8",
+  "claude_code_version": "2.1.212",
+  "session_id": "9a98a59b-25fb-4f0e-8de5-3bc07e8d9f57",
+  "cost_usd": 0.2376305,
+  "permission_mode": "dontAsk",
+  "allowed_tools": ["Read"],
+  "screenshots": {
+    "collapsed_sha256": "0ae6f0962847a638913ee81276b05264c3a34add5a0977c1f2dfb1224f0b7ca7",
+    "expanded_sha256": "e689f1f42ec3a5ed9e1188738b562620c952108d5d942d6a00ed78c6c0c53673",
+    "retention": "Intermediate round-one inputs were superseded by the final captures; their hashes are retained here."
+  },
+  "prompt": "Round 1 durable Android visual critique. Inspect only the two hash-bound Robolectric native-graphics production-View renders. Target: compact bubble matching browser direction, newest tail visible, small companion, tap-expanded current turn, copy plus explicit full-app/history handoff. Respond with model, verdict, findings, refinements, and objective assertions. Do not edit or spawn subagents.",
+  "result": {
+    "verdict": "Pass with refinements",
+    "findings": [
+      "Collapsed shows a clipped newest-tail line and a small companion.",
+      "Expanded shows the full current turn, copy, and a clock history affordance.",
+      "The plate needed visual centering over the companion.",
+      "The history-only clock was too ambiguous without a label."
+    ],
+    "refinements_applied": [
+      "Center the painted plate within its fixed viewport.",
+      "Label the expanded full-app handoff History.",
+      "Keep the collapsed left fade and bounded fixed viewport."
+    ]
+  }
+}

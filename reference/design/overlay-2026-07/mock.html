@@ -1,0 +1,1221 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Moa overlay — companion + ribbons</title>
+<style>
+/* ============================================================================
+   MOCK CHROME — this is the fake "page" the overlay floats on. None of this
+   ships. It exists so the transparency story is testable against real content.
+   ========================================================================= */
+:root {
+  --page-bg: #0a0b0d;
+  --page-fg: #e8e8ec;
+  --page-dim: #7c7d88;
+  --page-line: rgba(255,255,255,0.08);
+  --page-card: rgba(255,255,255,0.035);
+  --page-accent: #ffd76a;
+}
+html[data-theme="light"] {
+  --page-bg: #fbfbfc;
+  --page-fg: #16171b;
+  --page-dim: #6d6e78;
+  --page-line: rgba(0,0,0,0.09);
+  --page-card: rgba(0,0,0,0.028);
+  --page-accent: #b87400;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--page-bg);
+  color: var(--page-fg);
+  font: 15px/1.62 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Noto Sans Ethiopic", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background 240ms ease, color 240ms ease;
+  overflow-x: hidden;
+}
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 72px 28px 200px;
+}
+.page h1 {
+  font-size: 30px; line-height: 1.2; letter-spacing: -0.022em;
+  font-weight: 620; margin: 0 0 6px;
+}
+.page .kicker {
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--page-accent); font-weight: 640; margin: 0 0 22px;
+}
+.page p { margin: 0 0 18px; color: var(--page-fg); }
+.page p.dim { color: var(--page-dim); }
+.page hr { border: 0; border-top: 1px solid var(--page-line); margin: 34px 0; }
+.page .swatch {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px; margin: 24px 0;
+}
+.page .swatch div {
+  height: 70px; border-radius: 10px; border: 1px solid var(--page-line);
+  display: flex; align-items: flex-end; padding: 8px; font-size: 10px;
+  letter-spacing: 0.05em; text-transform: uppercase;
+}
+.page .photo {
+  height: 210px; border-radius: 14px; margin: 26px 0;
+  background:
+    radial-gradient(120% 120% at 12% 18%, #ff8a3d 0%, transparent 55%),
+    radial-gradient(100% 120% at 88% 12%, #7c5cff 0%, transparent 52%),
+    radial-gradient(140% 140% at 50% 110%, #ffd76a 0%, transparent 58%),
+    #1a1b21;
+  border: 1px solid var(--page-line);
+}
+.page code {
+  font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--page-card); padding: 1px 5px; border-radius: 5px;
+}
+
+/* Mock control bar */
+.controls {
+  position: fixed; left: 0; right: 0; top: 0; z-index: 10;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--page-bg) 82%, transparent);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--page-line);
+  font-size: 12px;
+}
+.controls .brand {
+  font-weight: 640; letter-spacing: -0.01em; margin-right: 6px;
+  display: flex; align-items: center; gap: 7px;
+}
+.controls .brand i {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: linear-gradient(140deg, #ffd76a, #ff8a3d);
+  display: block;
+}
+.controls button {
+  appearance: none; font: inherit; font-weight: 550;
+  color: var(--page-fg); background: var(--page-card);
+  border: 1px solid var(--page-line); border-radius: 8px;
+  padding: 6px 11px; cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 90ms ease;
+}
+.controls button:hover { background: color-mix(in srgb, var(--page-fg) 9%, transparent); }
+.controls button:active { transform: translateY(1px); }
+.controls button.primary {
+  background: linear-gradient(140deg, #ffd76a, #f5a623);
+  border-color: transparent; color: #17130a;
+}
+.controls .spacer { flex: 1; }
+.controls .hint { color: var(--page-dim); font-size: 11px; }
+.controls .state {
+  font: 11px/1 ui-monospace, Menlo, monospace; color: var(--page-dim);
+  border: 1px solid var(--page-line); border-radius: 6px; padding: 5px 8px;
+}
+
+/* ============================================================================
+   THE OVERLAY. Everything below this line is the actual design.
+   Tokens mirror spec.md §9 exactly.
+   ========================================================================= */
+#moa-layer {
+  position: fixed; inset: 0; z-index: 2147483000;
+  pointer-events: none;
+
+  /* — colour: dark — */
+  --moa-ink: #F4F4F6;
+  --moa-ink-ambient: rgba(244,244,246,0.88);
+  --moa-muted: #9B9BA4;
+  --moa-accent: #FFD76A;
+  --moa-you: #7C5CFF;
+  --moa-agent: #F5A623;
+  --moa-ok: #35C759;
+  --moa-warn: #FF8A3D;
+  --moa-plate: rgba(14,15,18,0.72);
+  --moa-plate-drag: rgba(14,15,18,0.50);
+  --moa-hairline: rgba(255,255,255,0.14);
+  --moa-scrim: rgba(9,10,12,0.42);
+  --moa-halo: 0 1px 2px rgba(0,0,0,0.72), 0 0 8px rgba(0,0,0,0.45);
+  --moa-shadow: 0 8px 28px rgba(0,0,0,0.46), 0 1px 2px rgba(0,0,0,0.34);
+  --moa-menu-bg: rgba(18,19,23,0.86);
+  --moa-menu-row-hover: rgba(255,255,255,0.08);
+
+  /* — geometry — */
+  --moa-ribbon-w: clamp(232px, 44vw, 340px);
+  --moa-ribbon-h: 28px;
+  --moa-ribbon-pad-x: 10px;
+  --moa-gap: 8px;
+  --moa-dot-size: 5px;
+  --moa-dot-offset: 10px;
+  --moa-edge-margin: 16px;
+  --moa-companion: 62px;
+
+  /* — radius / blur — */
+  --moa-radius-ribbon: 9px;
+  --moa-radius-scrim: 4px;
+  --moa-radius-menu: 12px;
+  --moa-radius-rail: 6px;
+  --moa-blur: 18px;
+  --moa-blur-menu: 24px;
+
+  /* — type — */
+  --moa-font: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Noto Sans Ethiopic", sans-serif;
+
+  /* — motion — */
+  --moa-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --moa-ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --moa-ease-settle: cubic-bezier(0.16, 1.02, 0.3, 1);
+  --moa-dur-fast: 120ms;
+  --moa-dur-solidify: 140ms;
+  --moa-dur-soften: 260ms;
+  --moa-dur-slow: 420ms;
+  --moa-dur-slide: 90ms;
+  --moa-dur-settle: 320ms;
+  --moa-dur-menu: 160ms;
+}
+html[data-theme="light"] #moa-layer {
+  --moa-ink: #141519;
+  --moa-ink-ambient: rgba(20,21,25,0.90);
+  --moa-muted: #6B6C76;
+  --moa-accent: #B87400;
+  --moa-you: #5B3FE0;
+  --moa-agent: #C06B00;
+  --moa-ok: #1F8F3D;
+  --moa-warn: #C24A00;
+  --moa-plate: rgba(252,252,253,0.76);
+  --moa-plate-drag: rgba(252,252,253,0.54);
+  --moa-hairline: rgba(0,0,0,0.10);
+  --moa-scrim: rgba(255,255,255,0.52);
+  --moa-halo: 0 1px 2px rgba(255,255,255,0.88), 0 0 8px rgba(255,255,255,0.62);
+  --moa-shadow: 0 8px 28px rgba(16,18,24,0.14), 0 1px 2px rgba(16,18,24,0.10);
+  --moa-menu-bg: rgba(252,252,253,0.88);
+  --moa-menu-row-hover: rgba(0,0,0,0.05);
+}
+#moa-layer, #moa-layer * { box-sizing: border-box; font-family: var(--moa-font); }
+
+/* ---- the unit -------------------------------------------------------- */
+#moa-unit {
+  position: absolute;
+  width: var(--moa-ribbon-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--moa-gap);
+  pointer-events: none;
+  touch-action: none;
+  transition: transform var(--moa-dur-settle) var(--moa-ease-settle);
+}
+#moa-unit.moa-dragging { transition: none; }
+/* Flip: both ribbons move below the companion, reading order preserved. */
+#moa-unit.moa-flipped #moa-companion { order: 0; }
+#moa-unit.moa-flipped #moa-ribbon-you { order: 1; }
+#moa-unit.moa-flipped #moa-ribbon-reply { order: 2; }
+
+/* ---- companion ------------------------------------------------------- */
+#moa-companion {
+  position: relative;
+  width: var(--moa-companion);
+  height: var(--moa-companion);
+  display: grid; place-items: center;
+  pointer-events: auto;
+  cursor: grab;
+  border: 0; padding: 0; background: none;
+  opacity: 0.34;
+  transition: opacity var(--moa-dur-slow) var(--moa-ease-out),
+              transform var(--moa-dur-solidify) var(--moa-ease-out);
+}
+#moa-companion:active { cursor: grabbing; }
+#moa-companion:focus-visible { outline: 2px solid var(--moa-accent); outline-offset: 2px; border-radius: 50%; }
+#moa-unit[data-state="near"]     #moa-companion { opacity: 0.70; }
+#moa-unit[data-state="ambient"]  #moa-companion { opacity: 0.92; }
+#moa-unit[data-state="engaged"]  #moa-companion { opacity: 1; }
+#moa-unit[data-state="dragging"] #moa-companion { opacity: 1; transform: scale(1.04); }
+
+#moa-companion .mark {
+  width: 100%; height: 100%;
+  animation: moa-breathe 6s ease-in-out infinite;
+  filter: drop-shadow(0 3px 7px rgba(0,0,0,0.42));
+}
+@keyframes moa-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50%      { transform: translateY(-2.5px) scale(1.02); }
+}
+/* Listening: the mark leans in and the aura wakes. */
+#moa-unit[data-voice="listening"] #moa-companion .mark { animation: moa-listen-bob 1.15s ease-in-out infinite; }
+@keyframes moa-listen-bob {
+  0%,100% { transform: translateY(0) scale(1.02); }
+  50%     { transform: translateY(-4px) scale(1.05); }
+}
+#moa-companion .aura {
+  position: absolute; inset: -8%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(255,215,106,0.30), transparent 72%);
+  opacity: 0; transition: opacity var(--moa-dur-soften) var(--moa-ease-out);
+  pointer-events: none;
+}
+#moa-unit[data-voice="listening"] #moa-companion .aura { opacity: 1; animation: moa-aura 1.6s ease-in-out infinite; }
+#moa-unit[data-voice="speaking"]  #moa-companion .aura { opacity: 0.7; animation: moa-aura 2.6s ease-in-out infinite; }
+@keyframes moa-aura {
+  0%,100% { transform: scale(1);    opacity: 0.55; }
+  50%     { transform: scale(1.14); opacity: 1; }
+}
+#moa-companion .ground {
+  position: absolute; bottom: 3px; left: 50%; translate: -50% 0;
+  width: 46%; height: 6px; border-radius: 999px;
+  background: rgba(0,0,0,0.26); filter: blur(3px);
+  opacity: 0.7;
+}
+html[data-theme="light"] #moa-companion .ground { background: rgba(0,0,0,0.16); }
+
+/* ---- ribbon ---------------------------------------------------------- */
+.moa-ribbon {
+  position: relative;
+  width: 100%;
+  height: var(--moa-ribbon-h);
+  border-radius: var(--moa-radius-ribbon);
+  display: flex; align-items: center;
+  padding: 0 var(--moa-ribbon-pad-x);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    opacity var(--moa-dur-slow) var(--moa-ease-in),
+    visibility 0s linear var(--moa-dur-slow),
+    background-color var(--moa-dur-soften) var(--moa-ease-out),
+    box-shadow var(--moa-dur-soften) var(--moa-ease-out),
+    backdrop-filter var(--moa-dur-soften) var(--moa-ease-out),
+    transform var(--moa-dur-solidify) var(--moa-ease-out);
+}
+.moa-ribbon.moa-live {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--moa-dur-solidify) var(--moa-ease-out),
+    visibility 0s,
+    background-color var(--moa-dur-solidify) var(--moa-ease-out),
+    box-shadow var(--moa-dur-solidify) var(--moa-ease-out),
+    backdrop-filter var(--moa-dur-solidify) var(--moa-ease-out),
+    transform var(--moa-dur-solidify) var(--moa-ease-out);
+  animation: moa-ribbon-in var(--moa-dur-solidify) var(--moa-ease-out);
+}
+@keyframes moa-ribbon-in {
+  from { opacity: 0; transform: translateY(4px); filter: blur(3px); }
+  to   { opacity: 1; transform: translateY(0);   filter: blur(0); }
+}
+/* Engaged / dragging: the plate materialises INSIDE the existing box.
+   Hairline is an inset shadow so it costs no layout. */
+#moa-unit[data-state="engaged"] .moa-ribbon.moa-live,
+#moa-unit[data-state="dragging"] .moa-ribbon.moa-live {
+  pointer-events: auto;
+  background: var(--moa-plate);
+  backdrop-filter: blur(var(--moa-blur)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--moa-blur)) saturate(1.3);
+  box-shadow: inset 0 0 0 1px var(--moa-hairline), var(--moa-shadow);
+}
+#moa-unit[data-state="dragging"] .moa-ribbon.moa-live { background: var(--moa-plate-drag); }
+#moa-unit[data-state="engaged"] .moa-ribbon.moa-live.moa-held { transform: translateY(-4px); }
+
+/* speaker dot — the only always-on ribbon chrome */
+.moa-ribbon .dot {
+  position: absolute;
+  left: calc(-1 * var(--moa-dot-offset));
+  top: 50%; translate: 0 -50%;
+  width: var(--moa-dot-size); height: var(--moa-dot-size);
+  border-radius: 50%;
+  transition: transform var(--moa-dur-fast) var(--moa-ease-out);
+}
+#moa-ribbon-you   .dot { background: var(--moa-you); }
+#moa-ribbon-reply .dot { background: var(--moa-agent); }
+#moa-unit[data-voice="listening"] #moa-ribbon-you .dot { animation: moa-dot-pulse 1.2s ease-in-out infinite; }
+#moa-unit[data-voice="speaking"] #moa-ribbon-reply .dot { animation: moa-dot-pulse 1.2s ease-in-out infinite; }
+@keyframes moa-dot-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.35); } }
+
+/* viewport: the anti-reflow guarantee */
+.moa-ribbon .viewport {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+  display: flex; align-items: center;
+  pointer-events: none;
+}
+.moa-ribbon.moa-clipped .viewport {
+  mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+}
+.moa-ribbon .line {
+  white-space: pre;
+  will-change: transform;
+  transition: transform var(--moa-dur-slide) linear;
+  font-size: 13px; line-height: 18px; font-weight: 450;
+  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
+  color: var(--moa-ink-ambient);
+  text-shadow: var(--moa-halo);
+  pointer-events: none;
+}
+/* The glyph run is the ONLY hit region in the ambient state. An empty ribbon
+   has a zero-area hit box, so a click lands on the page underneath. This is the
+   browser equivalent of Android's FLAG_NOT_TOUCHABLE + glyph-bounds hit test.
+   Events still bubble to .moa-ribbon, which owns the gesture listeners. */
+.moa-ribbon .line > span {
+  pointer-events: auto;
+  background: var(--moa-scrim);
+  padding: 1px 4px;
+  border-radius: var(--moa-radius-scrim);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background-color var(--moa-dur-solidify) var(--moa-ease-out);
+}
+#moa-unit[data-state="engaged"] .moa-ribbon .line,
+#moa-unit[data-state="dragging"] .moa-ribbon .line {
+  color: var(--moa-ink);
+  text-shadow: none;
+}
+#moa-unit[data-state="engaged"] .moa-ribbon .line > span,
+#moa-unit[data-state="dragging"] .moa-ribbon .line > span {
+  background: transparent;
+}
+.moa-ribbon.moa-warn .line { color: var(--moa-warn); }
+.moa-ribbon.moa-mute .line { color: var(--moa-muted); }
+
+/* caret */
+.moa-ribbon .caret {
+  display: inline-block;
+  width: 1.5px; height: 14px;
+  background: var(--moa-accent);
+  margin-left: 2px;
+  vertical-align: -2px;
+  opacity: 0;
+}
+.moa-ribbon.moa-streaming .caret { opacity: 1; animation: moa-caret 1060ms cubic-bezier(0.4,0,0.6,1) infinite; }
+@keyframes moa-caret { 0%,100% { opacity: 1; } 50% { opacity: 0.15; } }
+
+/* copy rail — only in engaged */
+.moa-ribbon .rail {
+  flex: 0 0 auto;
+  width: 24px; height: 24px;
+  margin-left: 6px; margin-right: -4px;
+  display: grid; place-items: center;
+  border: 0; padding: 0;
+  border-radius: var(--moa-radius-rail);
+  background: transparent;
+  color: var(--moa-muted);
+  cursor: pointer;
+  opacity: 0; transform: scale(0.8);
+  pointer-events: none;
+  transition: opacity var(--moa-dur-fast) var(--moa-ease-out),
+              transform var(--moa-dur-fast) var(--moa-ease-out),
+              color var(--moa-dur-fast) linear;
+}
+#moa-unit[data-state="engaged"] .moa-ribbon.moa-live .rail { opacity: 1; transform: scale(1); pointer-events: auto; }
+.moa-ribbon .rail:hover { color: var(--moa-ink); background: var(--moa-menu-row-hover); }
+.moa-ribbon .rail:focus-visible { outline: 2px solid var(--moa-accent); outline-offset: 1px; }
+.moa-ribbon .rail svg { width: 15px; height: 15px; }
+.moa-ribbon .rail .check { display: none; }
+.moa-ribbon.moa-copied .rail { color: var(--moa-ok); }
+.moa-ribbon.moa-copied .rail .copy { display: none; }
+.moa-ribbon.moa-copied .rail .check { display: block; }
+.moa-ribbon.moa-copied { animation: moa-copied 520ms var(--moa-ease-out); }
+@keyframes moa-copied {
+  0%   { box-shadow: inset 0 0 0 1px var(--moa-ok), var(--moa-shadow); }
+  100% { box-shadow: inset 0 0 0 1px var(--moa-hairline), var(--moa-shadow); }
+}
+
+/* double-tap acknowledgement */
+.moa-ribbon.moa-flash::after {
+  content: ""; position: absolute; inset: 0;
+  border-radius: inherit;
+  background: var(--moa-accent);
+  opacity: 0.12;
+  animation: moa-flash 180ms var(--moa-ease-in) forwards;
+  pointer-events: none;
+}
+@keyframes moa-flash { to { opacity: 0; } }
+
+/* caption (copied toast) — absolutely positioned so it can never reflow */
+.moa-ribbon .caption {
+  position: absolute;
+  left: var(--moa-ribbon-pad-x); top: calc(100% + 4px);
+  font-size: 11px; line-height: 14px; font-weight: 500; letter-spacing: 0.01em;
+  color: var(--moa-ok);
+  text-shadow: var(--moa-halo);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--moa-dur-fast) linear;
+}
+.moa-ribbon.moa-copied .caption { opacity: 1; }
+
+/* ---- hold menu ------------------------------------------------------- */
+#moa-menu {
+  position: absolute;
+  width: 176px;
+  padding: 5px;
+  border-radius: var(--moa-radius-menu);
+  background: var(--moa-menu-bg);
+  backdrop-filter: blur(var(--moa-blur-menu)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--moa-blur-menu)) saturate(1.4);
+  box-shadow: inset 0 0 0 1px var(--moa-hairline), var(--moa-shadow);
+  opacity: 0; transform: scale(0.94) translateY(4px);
+  transform-origin: top center;
+  pointer-events: none;
+  transition: opacity var(--moa-dur-menu) var(--moa-ease-settle),
+              transform var(--moa-dur-menu) var(--moa-ease-settle);
+}
+#moa-menu.open { opacity: 1; transform: none; pointer-events: auto; }
+#moa-menu button {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; height: 36px;
+  padding: 0 9px;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  color: var(--moa-ink);
+  font-size: 13px; line-height: 18px; font-weight: 500;
+  text-align: left; cursor: pointer;
+}
+#moa-menu button:hover:not(:disabled) { background: var(--moa-menu-row-hover); }
+#moa-menu button:disabled { color: var(--moa-muted); cursor: default; }
+#moa-menu button svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: 0.8; }
+
+/* ---- history handoff (a DIFFERENT surface, not the overlay) ---------- */
+#moa-history {
+  position: fixed; inset: 0;
+  z-index: 2147483100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms var(--moa-ease-out);
+}
+#moa-history.open { pointer-events: auto; opacity: 1; }
+#moa-history .scrim {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.42);
+  backdrop-filter: blur(2px);
+}
+#moa-history .sheet {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  width: min(420px, 100%);
+  background: var(--moa-menu-bg);
+  backdrop-filter: blur(28px) saturate(1.4);
+  box-shadow: inset 1px 0 0 var(--moa-hairline), -20px 0 60px rgba(0,0,0,0.4);
+  transform: translateX(16px);
+  transition: transform 240ms var(--moa-ease-settle);
+  display: flex; flex-direction: column;
+  color: var(--moa-ink);
+}
+#moa-history.open .sheet { transform: none; }
+#moa-history header {
+  padding: 16px 18px 12px;
+  display: flex; align-items: baseline; gap: 10px;
+  box-shadow: inset 0 -1px 0 var(--moa-hairline);
+}
+#moa-history header h2 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: -0.01em; }
+#moa-history header .sub { font-size: 11px; color: var(--moa-muted); }
+#moa-history header button {
+  margin-left: auto; border: 0; background: transparent; cursor: pointer;
+  color: var(--moa-muted); font-size: 18px; line-height: 1; padding: 2px 4px;
+}
+#moa-history .body { overflow: auto; padding: 14px 18px 28px; }
+#moa-history .turn { padding: 12px 0; box-shadow: inset 0 -1px 0 var(--moa-hairline); }
+#moa-history .turn:last-child { box-shadow: none; }
+#moa-history .who {
+  font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+  font-weight: 640; margin-bottom: 4px;
+}
+#moa-history .turn .who.you { color: var(--moa-you); }
+#moa-history .turn .who.ag  { color: var(--moa-agent); }
+#moa-history .turn p { margin: 0 0 8px; font-size: 13px; line-height: 1.55; }
+#moa-history .turn .meta { font-size: 10.5px; color: var(--moa-muted); }
+#moa-history .note {
+  margin: 6px 18px 14px; padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--moa-menu-row-hover);
+  font-size: 11px; line-height: 1.5; color: var(--moa-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #moa-layer *, #moa-history * { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+  .moa-ribbon .line { transition-duration: 0ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <span class="brand"><i></i> Moa overlay — companion + ribbons</span>
+  <button class="primary" id="btn-play">▶ Play turn</button>
+  <button id="btn-play2">Play error turn</button>
+  <button id="btn-theme">Light / dark</button>
+  <button id="btn-reset">Reset</button>
+  <span class="spacer"></span>
+  <span class="state" id="state-readout">state: dormant</span>
+  <span class="hint">tap a ribbon = copy rail · hold = menu · double-tap = history · drag anything = move the unit</span>
+</div>
+
+<div class="page">
+  <p class="kicker">Design mock — reference/design/overlay-2026-07</p>
+  <h1>The overlay is a companion between two ribbons.</h1>
+  <p class="dim">This grey text is the fake page underneath. It is here so you can judge the one
+  thing that matters: whether the overlay stays out of the way. In its resting state the companion
+  sits at 34% opacity and the ribbons paint nothing at all — no plate, no border, no shadow. Press
+  and hold a ribbon and it solidifies under your finger, then softens back when you let go.</p>
+
+  <div class="photo"></div>
+
+  <p>Press <strong>Play turn</strong>. Text streams into the top ribbon character by character, the
+  way a real transcript arrives. Watch what happens when the line runs past the right edge: the
+  window does not grow and the text does not wrap. The line slides left so the newest character
+  stays pinned at the right, and the left edge dissolves into a 16px fade. That is the whole
+  sliding-window rule. Nothing in the unit ever changes size.</p>
+
+  <p class="dim">Then the reply streams into the bottom ribbon while your own words stay readable
+  above the companion. Two streams, one unit, one line each.</p>
+
+  <hr />
+
+  <p><strong>Gestures.</strong> Every element is a drag handle — grab the companion, grab either
+  ribbon, the whole unit moves together and stays exactly where you put it. A single tap on a
+  ribbon solidifies it and reveals the copy button. A hold opens a four-row menu. A double-tap
+  hands off to History, which is a separate surface: the browser side panel or the Android history
+  screen. The overlay never becomes a scrollback.</p>
+
+  <div class="swatch">
+    <div style="background:#FFD76A;color:#17130a">accent</div>
+    <div style="background:#F5A623;color:#17130a">agent</div>
+    <div style="background:#7C5CFF;color:#fff">you</div>
+    <div style="background:#FF8A3D;color:#17130a">warn</div>
+    <div style="background:#35C759;color:#0a1a0e">ok</div>
+  </div>
+
+  <p class="dim">Toggle <code>Light / dark</code> to check the ambient legibility story from both
+  sides. There is no plate in the ambient state, so the glyphs rely on a halo shadow plus a scrim
+  that hugs the text run and nothing else. An empty ribbon paints zero pixels.</p>
+
+  <hr />
+
+  <p>Everything the design reuses already exists: the mascot and its avatar-behaviour motion, the
+  group drag, the always-above anchoring maths, the streaming transcript plumbing, the canonical
+  session projection behind History. What changes is the presentation contract — a card becomes a
+  ribbon, and a ribbon has no background.</p>
+</div>
+
+<!-- ======================= OVERLAY ======================= -->
+<div id="moa-layer">
+  <div id="moa-unit" data-state="dormant" data-voice="idle">
+
+    <div class="moa-ribbon" id="moa-ribbon-you" role="button" tabindex="0"
+         aria-label="What you said. Tap to copy, hold for options, double tap for history.">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="viewport"><div class="line" aria-live="polite"><span></span><i class="caret" aria-hidden="true"></i></div></div>
+      <button class="rail" tabindex="-1" aria-label="Copy what you said">
+        <svg class="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+        <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
+      </button>
+      <span class="caption">Copied</span>
+    </div>
+
+    <button id="moa-companion" aria-label="A.G. companion. Tap to talk, hold to push to talk, drag to move.">
+      <span class="aura" aria-hidden="true"></span>
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <radialGradient id="moaBody" cx="34%" cy="26%" r="78%">
+            <stop offset="0%"  stop-color="#FFE9A8"/>
+            <stop offset="42%" stop-color="#FFD76A"/>
+            <stop offset="78%" stop-color="#F5A623"/>
+            <stop offset="100%" stop-color="#D9691A"/>
+          </radialGradient>
+          <linearGradient id="moaMane" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"  stop-color="#FF8A3D"/>
+            <stop offset="100%" stop-color="#C9520E"/>
+          </linearGradient>
+        </defs>
+        <!-- Mane: irregular overlapping tufts. Deliberately NOT evenly spaced —
+             even spacing reads as a flower, not a lion. -->
+        <g fill="url(#moaMane)">
+          <ellipse cx="32"   cy="10.5" rx="8.2" ry="7.0" transform="rotate(-6 32 32)"/>
+          <ellipse cx="32"   cy="10.5" rx="6.4" ry="6.2" transform="rotate(34 32 32)"/>
+          <ellipse cx="32"   cy="11.5" rx="7.6" ry="6.6" transform="rotate(68 32 32)"/>
+          <ellipse cx="32"   cy="10.0" rx="6.0" ry="6.4" transform="rotate(104 32 32)"/>
+          <ellipse cx="32"   cy="11.0" rx="7.8" ry="6.8" transform="rotate(140 32 32)"/>
+          <ellipse cx="32"   cy="10.5" rx="6.6" ry="6.0" transform="rotate(176 32 32)"/>
+          <ellipse cx="32"   cy="11.5" rx="7.4" ry="6.6" transform="rotate(212 32 32)"/>
+          <ellipse cx="32"   cy="10.0" rx="6.2" ry="6.4" transform="rotate(248 32 32)"/>
+          <ellipse cx="32"   cy="11.0" rx="7.9" ry="6.9" transform="rotate(284 32 32)"/>
+          <ellipse cx="32"   cy="10.8" rx="6.3" ry="6.1" transform="rotate(320 32 32)"/>
+        </g>
+        <!-- Ears, tucked into the mane at 10 and 2 o'clock -->
+        <circle cx="21.4" cy="21.8" r="4.6" fill="#E9720F"/>
+        <circle cx="42.6" cy="21.8" r="4.6" fill="#E9720F"/>
+        <circle cx="21.4" cy="22.2" r="2.3" fill="#8C3A05" opacity="0.5"/>
+        <circle cx="42.6" cy="22.2" r="2.3" fill="#8C3A05" opacity="0.5"/>
+        <!-- Head -->
+        <circle cx="32" cy="33" r="17.4" fill="url(#moaBody)"/>
+        <circle cx="32" cy="33" r="17.4" fill="none" stroke="rgba(120,50,0,0.18)" stroke-width="0.9"/>
+        <!-- Muzzle: a wide soft lobe, the thing that says "cat" not "flower" -->
+        <ellipse cx="32" cy="39.6" rx="9.4" ry="6.6" fill="#FFEFC4" opacity="0.55"/>
+        <!-- Face -->
+        <ellipse cx="25.6" cy="31.4" rx="2.0" ry="2.5" fill="#3A1D05"/>
+        <ellipse cx="38.4" cy="31.4" rx="2.0" ry="2.5" fill="#3A1D05"/>
+        <circle cx="26.3" cy="30.4" r="0.72" fill="#fff" opacity="0.92"/>
+        <circle cx="39.1" cy="30.4" r="0.72" fill="#fff" opacity="0.92"/>
+        <path d="M28.8 27.2c1.5-1.0 3.1-1.0 4.4-0.2" stroke="#8C3A05" stroke-width="1.1" stroke-linecap="round" fill="none" opacity="0.5"/>
+        <path d="M35.2 27.0c1.3-0.8 2.9-0.8 4.4 0.2" stroke="#8C3A05" stroke-width="1.1" stroke-linecap="round" fill="none" opacity="0.5"/>
+        <path d="M32 37.4l-2.5-1.9h5z" fill="#3A1D05"/>
+        <path d="M32 37.4v2.1M32 39.5c-1.3 1.5-3.4 1.2-4.2-0.3M32 39.5c1.3 1.5 3.4 1.2 4.2-0.3"
+              stroke="#3A1D05" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <!-- Whisker hints -->
+        <g stroke="#8C3A05" stroke-width="0.8" stroke-linecap="round" opacity="0.32">
+          <path d="M22.6 38.4h4.2M22.9 41.2l4.0-0.9M41.4 38.4h-4.2M41.1 41.2l-4.0-0.9"/>
+        </g>
+      </svg>
+      <span class="ground" aria-hidden="true"></span>
+    </button>
+
+    <div class="moa-ribbon" id="moa-ribbon-reply" role="button" tabindex="0"
+         aria-label="A.G.'s reply. Tap to copy, hold for options, double tap for history.">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="viewport"><div class="line" aria-live="polite"><span></span><i class="caret" aria-hidden="true"></i></div></div>
+      <button class="rail" tabindex="-1" aria-label="Copy the reply">
+        <svg class="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+        <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.2 5.2L20 7"/></svg>
+      </button>
+      <span class="caption">Copied</span>
+    </div>
+
+  </div>
+
+  <div id="moa-menu" role="menu"></div>
+</div>
+
+<div id="moa-history" aria-hidden="true">
+  <div class="scrim" data-close></div>
+  <div class="sheet" role="dialog" aria-label="History">
+    <header>
+      <h2>History</h2>
+      <span class="sub">canonical session projection</span>
+      <button data-close aria-label="Close history">×</button>
+    </header>
+    <div class="note">This is a <strong>different surface</strong> — the browser side panel or the
+    Android history screen. It reads <code>GET /v1/sessions/:id/messages</code>. The overlay itself
+    holds no history and does not become a scrollback.</div>
+    <div class="body" id="moa-history-body"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ===========================================================================
+  // Constants — these are the spec values, not mock inventions.
+  // ===========================================================================
+  const WINDOW_CHARS = 140;
+  const BUFFER_MAX_CHARS = 8000;
+  const HOLD_MS = 340;
+  const MULTITAP_MS = 260;
+  const TAP_SLOP = 6;
+  const LATCH_MS = 6000;
+  const LINGER_YOU = 4500;
+  const LINGER_REPLY = 9000;
+  const LINGER_ERROR = 14000;
+  const EDGE = 16;
+  const PROXIMITY = 72;
+
+  const layer = document.getElementById("moa-layer");
+  const unit = document.getElementById("moa-unit");
+  const companion = document.getElementById("moa-companion");
+  const menuEl = document.getElementById("moa-menu");
+  const historyEl = document.getElementById("moa-history");
+  const readout = document.getElementById("state-readout");
+
+  const segmenter = typeof Intl !== "undefined" && Intl.Segmenter
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+  // Last WINDOW_CHARS grapheme clusters — never split a cluster.
+  function tailGraphemes(text, n) {
+    if (!segmenter) return text.slice(-n);
+    const parts = [...segmenter.segment(text)].map((s) => s.segment);
+    return parts.length <= n ? text : parts.slice(-n).join("");
+  }
+
+  // ===========================================================================
+  // Ribbon — one buffer, one window, one translateX. Never resizes.
+  // ===========================================================================
+  class Ribbon {
+    constructor(id, lingerMs) {
+      this.el = document.getElementById(id);
+      this.viewport = this.el.querySelector(".viewport");
+      this.line = this.el.querySelector(".line");
+      this.span = this.line.querySelector("span");
+      this.rail = this.el.querySelector(".rail");
+      this.lingerMs = lingerMs;
+      this.buffer = "";
+      this.truncated = false;
+      this.lingerTimer = null;
+      this.rafPending = false;
+      this.rail.addEventListener("pointerdown", (e) => e.stopPropagation());
+      this.rail.addEventListener("click", (e) => { e.stopPropagation(); this.copy(); });
+    }
+    clear() {
+      this.buffer = "";
+      this.truncated = false;
+      this.span.textContent = "";
+      this.line.style.transform = "translateX(0px)";
+      this.el.classList.remove("moa-clipped", "moa-warn", "moa-mute", "moa-copied");
+    }
+    open() {
+      clearTimeout(this.lingerTimer);
+      this.el.classList.add("moa-live");
+    }
+    push(delta) {
+      this.open();
+      this.buffer += delta;
+      if (this.buffer.length > BUFFER_MAX_CHARS) {
+        this.buffer = this.buffer.slice(this.buffer.length - BUFFER_MAX_CHARS);
+        this.truncated = true;
+      }
+      this.render();
+    }
+    set(text, { tone } = {}) {
+      this.open();
+      this.buffer = text;
+      this.el.classList.toggle("moa-warn", tone === "warn");
+      this.el.classList.toggle("moa-mute", tone === "mute");
+      this.render();
+    }
+    // One write per frame — mirrors MoaFrameCoalescer on Android.
+    render() {
+      if (this.rafPending) return;
+      this.rafPending = true;
+      requestAnimationFrame(() => {
+        this.rafPending = false;
+        this.span.textContent = tailGraphemes(this.buffer, WINDOW_CHARS);
+        const inner = this.viewport.clientWidth;
+        const lineW = this.line.scrollWidth;
+        const overflow = Math.min(0, inner - lineW);
+        this.line.style.transform = `translateX(${overflow}px)`;
+        this.el.classList.toggle("moa-clipped", overflow < 0);
+      });
+    }
+    streaming(on) { this.el.classList.toggle("moa-streaming", !!on); }
+    startLinger(ms) {
+      clearTimeout(this.lingerTimer);
+      const wait = ms || this.lingerMs;
+      this.lingerTimer = setTimeout(() => {
+        if (unit.dataset.state === "engaged" || unit.dataset.state === "dragging") {
+          this.startLinger(1200);
+          return;
+        }
+        this.el.classList.remove("moa-live");
+        setTimeout(() => { if (!this.el.classList.contains("moa-live")) this.clear(); }, 460);
+        settle();
+      }, wait);
+    }
+    holdLinger() { clearTimeout(this.lingerTimer); }
+    async copy() {
+      const text = this.buffer;
+      try { await navigator.clipboard.writeText(text); }
+      catch { /* mock: clipboard may be blocked in file:// — the affordance still demos */ }
+      this.el.classList.add("moa-copied");
+      setTimeout(() => this.el.classList.remove("moa-copied"), 1400);
+    }
+    get live() { return this.el.classList.contains("moa-live"); }
+  }
+
+  const you = new Ribbon("moa-ribbon-you", LINGER_YOU);
+  const reply = new Ribbon("moa-ribbon-reply", LINGER_REPLY);
+
+  // ===========================================================================
+  // Unit state machine: dormant / near / ambient / engaged / dragging
+  // ===========================================================================
+  let latchTimer = null;
+  let latched = false;
+  let pointerNear = false;
+
+  function setState(s) {
+    unit.dataset.state = s;
+    readout.textContent = "state: " + s;
+  }
+  function settle() {
+    if (unit.dataset.state === "dragging") return;
+    if (latched) return setState("engaged");
+    if (you.live || reply.live) return setState("ambient");
+    setState(pointerNear ? "near" : "dormant");
+  }
+  function engage(latch) {
+    clearTimeout(latchTimer);
+    setState("engaged");
+    you.holdLinger(); reply.holdLinger();
+    if (latch) {
+      latched = true;
+      latchTimer = setTimeout(() => { latched = false; releaseEngage(); }, LATCH_MS);
+    }
+  }
+  function releaseEngage() {
+    if (latched) return;
+    settle();
+    if (you.live) you.startLinger(you.lingerMs);
+    if (reply.live) reply.startLinger(reply.lingerMs);
+  }
+  function unlatch() {
+    latched = false;
+    clearTimeout(latchTimer);
+    closeMenu();
+    releaseEngage();
+  }
+
+  // Proximity pre-light — browser only. Android has no hover (see parity.md).
+  window.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const r = unit.getBoundingClientRect();
+    const dx = Math.max(r.left - e.clientX, 0, e.clientX - r.right);
+    const dy = Math.max(r.top - e.clientY, 0, e.clientY - r.bottom);
+    const near = Math.hypot(dx, dy) < PROXIMITY;
+    if (near !== pointerNear) { pointerNear = near; settle(); }
+    if (near) { you.holdLinger(); reply.holdLinger(); if (latched) engage(true); }
+  }, { passive: true });
+
+  // ===========================================================================
+  // Placement — the anchor is the COMPANION CENTRE. Ribbons follow it.
+  // ===========================================================================
+  let anchor = { x: 0, y: 0 };
+
+  function placeDefault() {
+    anchor = {
+      x: window.innerWidth - 150,
+      y: window.innerHeight - 190
+    };
+    applyPlacement(true);
+  }
+
+  function applyPlacement(runFlipTest) {
+    const unitW = unit.offsetWidth || 320;
+    const compH = companion.offsetHeight || 62;
+    const ribbonH = 28, gap = 8;
+    const stackAbove = ribbonH + gap;             // one ribbon above the companion
+    const bothAbove = (ribbonH + gap) * 2;
+
+    if (runFlipTest) {
+      const topIfNormal = anchor.y - compH / 2 - stackAbove;
+      const bottomIfNormal = anchor.y + compH / 2 + stackAbove;
+      if (topIfNormal < EDGE) unit.classList.add("moa-flipped");
+      else if (bottomIfNormal + ribbonH + gap > window.innerHeight - EDGE) unit.classList.remove("moa-flipped");
+      else if (topIfNormal > EDGE + 24) unit.classList.remove("moa-flipped");
+    }
+
+    const flipped = unit.classList.contains("moa-flipped");
+    // Distance from the unit's top edge down to the companion centre.
+    const headroom = flipped ? compH / 2 : stackAbove + compH / 2;
+    const unitH = compH + bothAbove;
+
+    let left = anchor.x - unitW / 2;
+    let top = anchor.y - headroom;
+    left = Math.min(Math.max(left, EDGE), window.innerWidth - unitW - EDGE);
+    top = Math.min(Math.max(top, EDGE), window.innerHeight - unitH - EDGE);
+    unit.style.left = left + "px";
+    unit.style.top = top + "px";
+    // Keep the anchor consistent with the clamp so the next drag starts true.
+    anchor.x = left + unitW / 2;
+    anchor.y = top + headroom;
+  }
+
+  window.addEventListener("resize", () => applyPlacement(true));
+
+  // ===========================================================================
+  // Gestures. Shared slop / hold / multitap across all three elements so the
+  // unit behaves like one object.
+  // ===========================================================================
+  function attachGestures(el, kind, ribbon) {
+    let downX = 0, downY = 0, startAnchor = null;
+    let holdTimer = null, dragging = false, held = false;
+    let tapCount = 0, tapTimer = null, activeId = null;
+
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (ribbon && !ribbon.live) return;
+      activeId = e.pointerId;
+      el.setPointerCapture(e.pointerId);
+      downX = e.clientX; downY = e.clientY;
+      startAnchor = { ...anchor };
+      dragging = false; held = false;
+      engage(false);
+      you.holdLinger(); reply.holdLinger();
+      holdTimer = setTimeout(() => {
+        if (dragging) return;
+        held = true;
+        if (ribbon) {
+          ribbon.el.classList.add("moa-held");
+          openMenu(ribbon, kind);
+        } else {
+          unit.dataset.voice = "listening";           // companion: push-to-talk
+          you.open(); you.clear(); you.streaming(true);
+          you.set("Listening…", { tone: "mute" });
+        }
+      }, HOLD_MS);
+      e.preventDefault();
+    });
+
+    el.addEventListener("pointermove", (e) => {
+      if (e.pointerId !== activeId) return;
+      const dx = e.clientX - downX, dy = e.clientY - downY;
+      if (!dragging && Math.hypot(dx, dy) > TAP_SLOP) {
+        dragging = true;
+        clearTimeout(holdTimer);
+        closeMenu();
+        if (held && !ribbon) { unit.dataset.voice = "idle"; you.clear(); }  // escape into drag
+        held = false;
+        if (ribbon) ribbon.el.classList.remove("moa-held");
+        unit.classList.add("moa-dragging");
+        setState("dragging");
+      }
+      if (!dragging) return;
+      anchor.x = startAnchor.x + dx;
+      anchor.y = startAnchor.y + dy;
+      applyPlacement(false);
+    });
+
+    function end(e) {
+      if (e.pointerId !== activeId) return;
+      activeId = null;
+      clearTimeout(holdTimer);
+      try { el.releasePointerCapture(e.pointerId); } catch {}
+      if (dragging) {
+        dragging = false;
+        unit.classList.remove("moa-dragging");
+        applyPlacement(true);                     // flip test deferred to drag end
+        latched = false;
+        settle();
+        return;
+      }
+      if (held) {
+        held = false;
+        if (ribbon) { ribbon.el.classList.remove("moa-held"); return; }  // menu stays open
+        // companion push-to-talk release commits the turn
+        unit.dataset.voice = "idle";
+        you.streaming(false);
+        you.clear();
+        settle();
+        return;
+      }
+      // tap (or multi-tap)
+      tapCount += 1;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(() => {
+        const n = tapCount; tapCount = 0;
+        if (ribbon) {
+          if (n === 1) {
+            if (latched) unlatch(); else engage(true);
+          } else if (n >= 2) {
+            ribbon.el.classList.remove("moa-flash");
+            void ribbon.el.offsetWidth;
+            ribbon.el.classList.add("moa-flash");
+            setTimeout(() => ribbon.el.classList.remove("moa-flash"), 200);
+            openHistory();
+          }
+        } else {
+          // Companion gestures are the EXISTING voice-first contract, unchanged.
+          if (n === 1) playTurn();
+          else if (n === 2) playTurn(true);
+          else unlatch();
+        }
+      }, MULTITAP_MS);
+    }
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); ribbon ? engage(true) : playTurn(); }
+      if (e.key === "Escape") { e.preventDefault(); unlatch(); }
+      if (e.key === " " && ribbon) { e.preventDefault(); engage(false); openMenu(ribbon, kind); }
+    });
+  }
+
+  attachGestures(companion, "companion", null);
+  attachGestures(you.el, "you", you);
+  attachGestures(reply.el, "reply", reply);
+
+  document.addEventListener("pointerdown", (e) => {
+    if (unit.contains(e.target) || menuEl.contains(e.target)) return;
+    unlatch();
+  });
+
+  // ===========================================================================
+  // Hold menu — max 4 rows, no submenus, nothing that takes a model action.
+  // ===========================================================================
+  const ICONS = {
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
+    note: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16l-5-3-4 3-5-3z"/></svg>',
+    history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+    hide: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 6.3A9 9 0 0 1 21 12a15 15 0 0 1-3 3.6M6.2 6.9A15 15 0 0 0 3 12a9 9 0 0 0 12.3 4.2"/></svg>',
+    replay: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 1 2.6 5.9"/><path d="M4 6v5h5"/></svg>'
+  };
+
+  function menuRows(kind) {
+    if (kind === "you") return [
+      { icon: "copy", label: "Copy", run: () => you.copy() },
+      { icon: "note", label: "Copy as note", run: () => you.copy() },
+      { icon: "history", label: "Open history", run: openHistory },
+      { icon: "hide", label: "Hide overlay", run: hideOverlay }
+    ];
+    return [
+      { icon: "copy", label: "Copy", run: () => reply.copy() },
+      { icon: "replay", label: "Replay", run: () => {}, disabled: unit.dataset.voice !== "idle" ? false : false },
+      { icon: "history", label: "Open history", run: openHistory },
+      { icon: "hide", label: "Hide overlay", run: hideOverlay }
+    ];
+  }
+
+  function openMenu(ribbon, kind) {
+    menuEl.innerHTML = "";
+    menuRows(kind).forEach((row) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.innerHTML = ICONS[row.icon] + "<span>" + row.label + "</span>";
+      if (row.disabled) b.disabled = true;
+      b.addEventListener("click", () => { row.run(); closeMenu(); });
+      menuEl.appendChild(b);
+    });
+    const r = ribbon.el.getBoundingClientRect();
+    const w = 176, h = menuRows(kind).length * 36 + 10;
+    let left = Math.min(Math.max(r.left, EDGE), window.innerWidth - w - EDGE);
+    let top = r.bottom + 6;
+    if (top + h > window.innerHeight - EDGE) top = r.top - h - 6;
+    menuEl.style.left = left + "px";
+    menuEl.style.top = Math.max(EDGE, top) + "px";
+    menuEl.classList.add("open");
+    engage(true);
+  }
+  function closeMenu() { menuEl.classList.remove("open"); }
+
+  function hideOverlay() {
+    layer.style.transition = "opacity 240ms ease";
+    layer.style.opacity = "0";
+    setTimeout(() => { layer.style.opacity = ""; layer.style.transition = ""; }, 1400);
+  }
+
+  // ===========================================================================
+  // History handoff — a different surface, opened by double-tap.
+  // ===========================================================================
+  const HISTORY = [
+    { who: "you", text: "How much is the flight to Addis Ababa in early November if I leave from JFK and come back before the twenty second?", meta: "voice · 14:02 · en-US" },
+    { who: "ag",  text: "Around 780 dollars round trip if you leave on the fourth and come back on the nineteenth. Ethiopian Airlines is the only nonstop and it runs about a hundred and forty more than the one-stop through Frankfurt.", meta: "spoken · gemini-3.1-flash-tts · 14:02" },
+    { who: "you", text: "የአዲስ አበባ የአየር ሁኔታ ምን ይመስላል?", meta: "voice · 13:41 · am-ET" },
+    { who: "ag",  text: "አሁን አዲስ አበባ ውስጥ 21 ዲግሪ ሴልሺየስ ነው፣ ከሰዓት በኋላ ዝናብ ሊኖር ይችላል።", meta: "spoken · 13:41" },
+    { who: "you", text: "Take a note: the droplet auto-update timer needs a restore check before it touches the service.", meta: "note · 11:18" },
+    { who: "ag",  text: "Saved as an audio note. Nothing was sent to a model.", meta: "text only · 11:18" }
+  ];
+  const historyBody = document.getElementById("moa-history-body");
+  HISTORY.forEach((t) => {
+    const d = document.createElement("div");
+    d.className = "turn";
+    d.innerHTML =
+      '<div class="who ' + (t.who === "you" ? "you" : "ag") + '">' + (t.who === "you" ? "You" : "A.G.") + "</div>" +
+      "<p>" + t.text + "</p><div class=\"meta\">" + t.meta + "</div>";
+    historyBody.appendChild(d);
+  });
+  function openHistory() { historyEl.classList.add("open"); historyEl.setAttribute("aria-hidden", "false"); }
+  function closeHistory() { historyEl.classList.remove("open"); historyEl.setAttribute("aria-hidden", "true"); }
+  historyEl.querySelectorAll("[data-close]").forEach((n) => n.addEventListener("click", closeHistory));
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeHistory(); unlatch(); } });
+
+  // ===========================================================================
+  // Scripted turn — fake streaming so the mock plays with no backend.
+  // ===========================================================================
+  const USER_LINE = "How much is the flight to Addis Ababa in early November if I leave from JFK and come back before the twenty second?";
+  const REPLY_LINE = "Around 780 dollars round trip if you leave on the fourth and come back on the nineteenth. Ethiopian is the only nonstop and runs about a hundred and forty more than the one-stop through Frankfurt.";
+  const ERROR_REPLY = "I lost the connection to the provider partway through that answer. Say it again and I'll pick it back up.";
+
+  let timers = [];
+  function clearScript() { timers.forEach(clearTimeout); timers = []; }
+  function at(ms, fn) { timers.push(setTimeout(fn, ms)); }
+
+  // Stream a string into a ribbon in word-ish chunks, like real token deltas.
+  function stream(ribbon, text, startMs, msPerChunk, done) {
+    const chunks = text.match(/\S+\s*/g) || [text];
+    let t = startMs;
+    chunks.forEach((c, i) => {
+      const jitter = msPerChunk * (0.65 + Math.random() * 0.8);
+      t += jitter;
+      at(t, () => ribbon.push(c));
+    });
+    at(t + msPerChunk, () => done && done());
+    return t + msPerChunk;
+  }
+
+  function playTurn(fresh) {
+    clearScript();
+    closeMenu();
+    latched = false;
+    you.clear(); reply.clear();
+    you.el.classList.remove("moa-live");
+    reply.el.classList.remove("moa-live");
+
+    at(60, () => {
+      unit.dataset.voice = "listening";
+      you.open(); you.streaming(true);
+      settle();
+    });
+    let t = stream(you, USER_LINE, 320, 62, () => {
+      you.streaming(false);
+      unit.dataset.voice = "thinking";
+    });
+    at(t + 420, () => {
+      unit.dataset.voice = "speaking";
+      reply.open(); reply.streaming(true);
+      settle();
+    });
+    let t2 = stream(reply, REPLY_LINE, t + 620, 46, () => {
+      reply.streaming(false);
+      unit.dataset.voice = "idle";
+      you.startLinger(LINGER_YOU);
+      reply.startLinger(LINGER_REPLY);
+    });
+  }
+
+  function playErrorTurn() {
+    clearScript();
+    closeMenu();
+    latched = false;
+    you.clear(); reply.clear();
+    at(60, () => { unit.dataset.voice = "listening"; you.open(); you.streaming(true); settle(); });
+    let t = stream(you, "What's the status of the droplet deploy?", 300, 66, () => {
+      you.streaming(false); unit.dataset.voice = "thinking";
+    });
+    at(t + 900, () => {
+      reply.open();
+      reply.set(ERROR_REPLY + "  (not spoken)", { tone: "warn" });
+      unit.dataset.voice = "idle";
+      you.startLinger(LINGER_YOU);
+      reply.startLinger(LINGER_ERROR);   // errors linger longer: you must read them
+      settle();
+    });
+  }
+
+  // ===========================================================================
+  // Mock controls
+  // ===========================================================================
+  document.getElementById("btn-play").addEventListener("click", () => playTurn());
+  document.getElementById("btn-play2").addEventListener("click", () => playErrorTurn());
+  document.getElementById("btn-theme").addEventListener("click", () => {
+    const el = document.documentElement;
+    el.dataset.theme = el.dataset.theme === "dark" ? "light" : "dark";
+  });
+  document.getElementById("btn-reset").addEventListener("click", () => {
+    clearScript(); closeMenu(); closeHistory();
+    latched = false; unit.dataset.voice = "idle";
+    you.el.classList.remove("moa-live"); reply.el.classList.remove("moa-live");
+    you.clear(); reply.clear();
+    unit.classList.remove("moa-flipped");
+    placeDefault(); settle();
+  });
+
+  placeDefault();
+  settle();
+  // Autoplay one turn so the page is alive on open.
+  setTimeout(() => playTurn(), 900);
+})();
+</script>
+</body>
+</html>

@@ -48,11 +48,10 @@ public final class MainActivity extends Activity {
     static final String EXTRA_GATEWAY_TOKEN = "ai.moa.assistant.extra.GATEWAY_TOKEN";
     static final String EXTRA_START_OVERLAY = "ai.moa.assistant.extra.START_OVERLAY";
     static final String EXTRA_REVIEW_UPDATE = "ai.moa.assistant.extra.REVIEW_UPDATE";
-
-    // Overlay contract: the overlay agent handles this action to re-read the
-    // stored orb scale. Kept as a literal so the main app builds even before the
-    // overlay side lands its OverlayService.ACTION_REFRESH_ORB_SCALE constant.
-    private static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
+    // Double-tapping an overlay ribbon opens history here, as a real window. The
+    // overlay stays alive behind it and never becomes a scrollback itself.
+    static final String EXTRA_SHOW_HISTORY = "ai.moa.assistant.extra.SHOW_HISTORY";
+    static final String EXTRA_RELEASE_BUNDLE_ID = "ai.moa.assistant.extra.RELEASE_BUNDLE_ID";
 
     private static final int REQUEST_AUDIO = 4101;
     private static final int REQUEST_CONTACTS = 4102;
@@ -66,6 +65,7 @@ public final class MainActivity extends Activity {
     private TextView updateStatus;
     private TextView requirementsSummary;
     private TextView sessionsStatus;
+    private ScrollView contentScroll;
     private TextView sessionHistoryStatus;
     private LinearLayout sessionHistoryColumn;
     private TextView runsStatus;
@@ -99,10 +99,17 @@ public final class MainActivity extends Activity {
     private long updateDialogVersionCode;
     private boolean reviewUpdateOnNextCheck;
     private MoaReleaseCardController releaseController;
+    private int releasePollGeneration;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (MoaAssistantLaunchCoordinator.isAssistAction(getIntent().getAction())) {
+            startActivity(MoaAssistantLaunchCoordinator.assistActivityIntent(
+                    this, "main_activity_assist_redirect"));
+            finish();
+            return;
+        }
 
         Window window = getWindow();
         window.setStatusBarColor(MoaColors.SURFACE_0);
@@ -112,6 +119,8 @@ public final class MainActivity extends Activity {
         releaseController = createReleaseController();
         setContentView(createContent());
         maybeRequestMicPermission();
+        scrollToHistoryIfRequested(getIntent());
+        openReleaseCandidateIfRequested(getIntent());
     }
 
     @Override
@@ -127,6 +136,8 @@ public final class MainActivity extends Activity {
         }
         updatePermissionState();
         maybeRequestMicPermission();
+        scrollToHistoryIfRequested(intent);
+        openReleaseCandidateIfRequested(intent);
         if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
             collapseOverlaySurfaces();
         }
@@ -148,6 +159,13 @@ public final class MainActivity extends Activity {
             startOverlay();
             intent.removeExtra(EXTRA_START_OVERLAY);
         }
+        startBoundedReleasePolling();
+    }
+
+    @Override
+    protected void onPause() {
+        releasePollGeneration++;
+        super.onPause();
     }
 
     @Override
@@ -165,8 +183,48 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void scrollToHistoryIfRequested(Intent intent) {
+        if (intent == null || !intent.getBooleanExtra(EXTRA_SHOW_HISTORY, false)) {
+            return;
+        }
+        intent.removeExtra(EXTRA_SHOW_HISTORY);
+        if (contentScroll == null || sessionHistoryStatus == null) {
+            return;
+        }
+        final ScrollView scroll = contentScroll;
+        final View anchor = sessionHistoryStatus;
+        scroll.post(() -> scroll.smoothScrollTo(0, anchor.getTop()));
+        refreshControlCenter();
+    }
+
+    private void openReleaseCandidateIfRequested(Intent intent) {
+        if (intent == null) return;
+        String bundleId = MoaReleaseSelectionPolicy.exactDeepLinkBundleId(
+                intent.getStringExtra(EXTRA_RELEASE_BUNDLE_ID));
+        if (bundleId.isEmpty()) return;
+        intent.removeExtra(EXTRA_RELEASE_BUNDLE_ID);
+        releaseController.openCandidate(bundleId);
+        if (contentScroll != null && releaseController.anchor() != null) {
+            contentScroll.post(() -> contentScroll.smoothScrollTo(0, releaseController.anchor().getTop()));
+        }
+        releaseController.refresh();
+    }
+
+    private void startBoundedReleasePolling() {
+        int generation = ++releasePollGeneration;
+        for (int pass = 0; pass < 3; pass++) {
+            long delay = pass * 30_000L;
+            mainHandler.postDelayed(() -> {
+                if (generation != releasePollGeneration || isFinishing()) return;
+                MoaReleaseCandidateNotifier.checkAsync(this, MoaPrefs.gatewayUrl(this),
+                        MoaPrefs.gatewayToken(this), androidDeviceId());
+            }, delay);
+        }
+    }
+
     private View createContent() {
         ScrollView scrollView = new ScrollView(this);
+        contentScroll = scrollView;
         scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(MoaColors.SURFACE_0);
 
@@ -214,7 +272,7 @@ public final class MainActivity extends Activity {
         eyebrow.setLetterSpacing(0.14f);
         text.addView(eyebrow);
 
-        TextView title = label("A.G.", MoaColors.PAPER, 30, true);
+        TextView title = label("AG", MoaColors.PAPER, 30, true);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         text.addView(title);
 
@@ -344,7 +402,7 @@ public final class MainActivity extends Activity {
 
     private View actionCard() {
         LinearLayout card = card();
-        addCardTitle(card, "Launch A.G.");
+        addCardTitle(card, "Launch AG");
         addHint(card, "Grant overlay and screen access, then start the orb.");
 
         overlayButton = primaryButton("Enable overlay permission");
@@ -360,7 +418,7 @@ public final class MainActivity extends Activity {
                 MoaMediaNotificationListenerService.accessSettingsIntent()));
         card.addView(mediaAccessButton);
 
-        appInfoButton = secondaryButton("Open A.G. app info");
+        appInfoButton = secondaryButton("Open AG app info");
         appInfoButton.setOnClickListener(v -> openAppInfoSettings());
         card.addView(appInfoButton);
 
@@ -394,7 +452,7 @@ public final class MainActivity extends Activity {
 
         TextView detail = label(
                 "Overlay draws the floating orb. Screen access reads the current screen for context and controlled actions. "
-                        + "If Android blocks the toggle, open A.G. app info, tap the three-dot menu, allow restricted settings, then enable screen access. "
+                        + "If Android blocks the toggle, open AG app info, tap the three-dot menu, allow restricted settings, then enable screen access. "
                         + "Microphone is asked directly; voice starts only after an orb gesture.",
                 MoaColors.MUTED, 13, false);
         detail.setLineSpacing(dp(2), 1f);
@@ -460,7 +518,7 @@ public final class MainActivity extends Activity {
                 }
                 try {
                     startService(new Intent(MainActivity.this, OverlayService.class)
-                            .setAction(ACTION_REFRESH_ORB_SCALE));
+                            .setAction(OverlayService.ACTION_REFRESH_ORB_SCALE));
                 } catch (Exception ignored) {
                 }
             }
@@ -801,7 +859,7 @@ public final class MainActivity extends Activity {
                 new AlertDialog.Builder(this)
                         .setTitle("A recovery build is required")
                         .setMessage("Android cannot safely install this older release over the current app. "
-                                + "A.G. will not uninstall itself because that could remove local settings "
+                                + "AG will not uninstall itself because that could remove local settings "
                                 + "and strand recovery. Ask for a signed, forward-moving stable recovery build.")
                         .setPositiveButton("OK", null)
                         .show();
@@ -814,7 +872,7 @@ public final class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("Review release install")
-                .setMessage("A.G. will download and verify " + candidate.label()
+                .setMessage("AG will download and verify " + candidate.label()
                         + ". Android will then ask you to confirm installation. "
                         + "Selecting this release did not install it.")
                 .setNegativeButton("Cancel", null)
@@ -1113,7 +1171,7 @@ public final class MainActivity extends Activity {
             container.addView(historySpeakerText("YOU", turn.userText, 0xFFBFA9FF));
         }
         if (!turn.assistantText.isEmpty()) {
-            container.addView(historySpeakerText("A.G.", turn.assistantText, MoaColors.GOLD));
+            container.addView(historySpeakerText("AG", turn.assistantText, MoaColors.GOLD));
         } else {
             TextView unavailable = label("No retained assistant text.", MoaColors.MUTED, 13, false);
             unavailable.setPadding(0, dp(8), 0, 0);
@@ -1347,7 +1405,7 @@ public final class MainActivity extends Activity {
         MoaPrefs.markUpdateNotified(this, decision.versionCode);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("New A.G. version available")
+                .setTitle("New AG version available")
                 .setMessage(MoaUpdatePolicy.decisionMessage(decision))
                 .setNegativeButton("Not now", (ignored, which) -> {
                     MoaPrefs.deferUpdate(this, decision.versionCode);

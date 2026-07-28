@@ -111,6 +111,31 @@ test("empty sidecar transcript records fallback and clears stream", async () => 
   assert.deepEqual(records, [["transcript_sidecar_fallback", { provider: "chirp", reason: "empty_transcript" }]]);
 });
 
+test("quality-rejected sidecar cannot resurrect the native fallback", async () => {
+  const turn = { sttStreamRole: "transcript_sidecar", sttStream: {} };
+  const records = [];
+  const quality = {
+    accepted: false,
+    reason: "wrong_script",
+    status: "rejected_after_retry",
+    attempts: 2,
+  };
+  const result = await mergeTranscriptSidecar({
+    turn,
+    providerResult: { transcript: "native wrong fallback", assistant_text: "reasoned from it" },
+    provider: "chirp",
+    finalize: async () => ({ text: "", transcript_quality: quality }),
+    record: async (...args) => records.push(args),
+    cleanError: String,
+  });
+  assert.equal(result.transcript, "");
+  assert.equal(result.assistant_text, "");
+  assert.equal(result.transcript_language_rejected, true);
+  assert.deepEqual(result.transcript_quality, quality);
+  assert.equal(records[0][0], "transcript_sidecar_rejected");
+  assert.equal(records.some(([type]) => type === "transcript_sidecar_fallback"), false);
+});
+
 test("final sidecar transcript replaces native text while preserving evidence", async () => {
   const turn = { sttStreamRole: "transcript_sidecar", sttStream: {} };
   const records = [];
@@ -144,4 +169,29 @@ test("sidecar errors clear ownership and record bounded failure evidence", async
   assert.deepEqual(records[0], ["transcript_sidecar_fallback", {
     provider: "chirp", reason: "sidecar_error", error_summary: "clean:socket closed",
   }]);
+});
+
+test("wrong-script retry timeout fails closed instead of restoring native reasoning", async () => {
+  const turn = { sttStreamRole: "transcript_sidecar", sttStream: {} };
+  const records = [];
+  const timeout = new Error("transcript quality retry failed: recognize timed out");
+  timeout.transcript_quality = {
+    accepted: false,
+    reason: "retry_failed",
+    status: "rejected_after_retry_error",
+    attempts: 2,
+  };
+  const result = await mergeTranscriptSidecar({
+    turn,
+    providerResult: { transcript: "native wrong script", assistant_text: "already reasoned text" },
+    provider: "chirp",
+    finalize: async () => { throw timeout; },
+    record: async (...args) => records.push(args),
+    cleanError: (error) => error.message,
+  });
+  assert.equal(result.transcript, "");
+  assert.equal(result.assistant_text, "");
+  assert.equal(result.transcript_quality.status, "rejected_after_retry_error");
+  assert.equal(records[0][0], "transcript_sidecar_rejected");
+  assert.equal(records.some(([type]) => type === "transcript_sidecar_fallback"), false);
 });

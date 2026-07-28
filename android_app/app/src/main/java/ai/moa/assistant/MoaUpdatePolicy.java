@@ -184,7 +184,7 @@ final class MoaUpdatePolicy {
                 ? "A signed recovery release is available if this version does not work well."
                 : "A one-tap rollback is not available for this release. Android normally blocks installing a lower version over a newer one.";
         return "Version " + decision.versionName + " is available.\n\n"
-                + "A.G. will not download or install it unless you choose Install. "
+                + "AG will not download or install it unless you choose Install. "
                 + "Android will ask you to confirm again before installation.\n\n"
                 + rollback;
     }
@@ -199,17 +199,17 @@ final class MoaUpdatePolicy {
             return "";
         }
         String base = "Restore version " + rollback.versionName + "?\n\n"
-                + "A.G. will not download or install anything unless you confirm each step. "
+                + "AG will not download or install anything unless you confirm each step. "
                 + "Android will ask you again before installation.\n\n";
         if (rollback.requiresReinstall) {
             return base
                     + "Because this is an older version, Android will not install it over the "
                     + "current one. You'll be sent to the system screen to uninstall the current "
-                    + "version first, then A.G. can download and install version "
+                    + "version first, then AG can download and install version "
                     + rollback.versionName + ". Uninstalling can remove this app's local settings and data.";
         }
         return base
-                + "A.G. will download the signed version " + rollback.versionName
+                + "AG will download the signed version " + rollback.versionName
                 + " and hand it to Android's installer for you to confirm.";
     }
 

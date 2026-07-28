@@ -21,11 +21,16 @@ final class MoaActionReceiptStore {
     }
 
     static JSONObject record(Context context, String tool, String risk, String approval, String target, boolean success, String result) {
+        return record(context, tool, risk, approval, target, success, result, "");
+    }
+
+    static JSONObject record(Context context, String tool, String risk, String approval,
+            String target, boolean success, String result, String outcome) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String previousHash = prefs.getString(KEY_LAST_HASH, "");
         JSONObject receipt = createReceipt(
                 tool, risk, approval, target, success, result,
-                System.currentTimeMillis(), previousHash);
+                System.currentTimeMillis(), previousHash, outcome);
 
         JSONArray receipts = receipts(context);
         receipts.put(receipt);
@@ -49,6 +54,14 @@ final class MoaActionReceiptStore {
             long timestampMs,
             String previousHash
     ) {
+        return createReceipt(tool, risk, approval, target, success, result,
+                timestampMs, previousHash, "");
+    }
+
+    static JSONObject createReceipt(
+            String tool, String risk, String approval, String target, boolean success,
+            String result, long timestampMs, String previousHash, String outcome
+    ) {
         JSONObject receipt = new JSONObject();
         try {
             receipt.put("tool", safe(tool));
@@ -57,6 +70,7 @@ final class MoaActionReceiptStore {
             receipt.put("target", safe(target));
             receipt.put("success", success);
             receipt.put("result", safe(result));
+            if (!safe(outcome).isEmpty()) receipt.put("outcome", safe(outcome));
             receipt.put("timestamp_ms", timestampMs);
             receipt.put("previous_hash", safe(previousHash));
             receipt.put("hash", hash(receipt.toString()));

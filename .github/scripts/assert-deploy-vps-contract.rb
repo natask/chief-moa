@@ -65,8 +65,17 @@ PUBLISH_SCRIPT = <<~'BASH'
 BASH
 OBSERVE_SCRIPT = <<~'BASH'
   set -euo pipefail
-  deadline="$(( $(date +%s) + 1200 ))"
+  # 2400s (40 min): observed worst case is ~24 minutes end to end
+  # (run 30328408716, 2026-07-28) and typical successful runs already
+  # ran ~19-20 minutes against the old 1200s deadline, i.e. almost no
+  # headroom. 40 minutes gives ~67% headroom over the worst observed
+  # case and ~2x over the typical case.
+  deadline_seconds=2400
+  deadline="$(( $(date +%s) + deadline_seconds ))"
   live_sha="unavailable"
+  starting_sha=""
+  had_response=0
+  saw_connection_drop=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
     health="$(curl -fsS --connect-timeout 5 --max-time 10 \
       -H 'Cache-Control: no-cache' "$HEALTH_URL" || true)"
@@ -77,16 +86,51 @@ OBSERVE_SCRIPT = <<~'BASH'
       print sha.downcase
     ' <<<"$health" 2>/dev/null || true)"
     if [ -n "$observed" ]; then
+      [ -n "$starting_sha" ] || starting_sha="$observed"
+      had_response=1
       live_sha="$observed"
+    elif [ "$had_response" -eq 1 ]; then
+      # A response we previously got now fails to connect/parse. The
+      # promotion script recreates the gateway container in place
+      # (compose up -d --no-deps gateway), which causes exactly this
+      # kind of transient drop -- a real, externally observable sign
+      # the droplet is actively promoting, not a guess.
+      saw_connection_drop=1
     fi
+
     if [ "$live_sha" = "$EXPECTED_GIT_SHA" ]; then
       echo "active gateway serves exact commit $EXPECTED_GIT_SHA"
       exit 0
     fi
+
+    if [ -n "$starting_sha" ] && [ "$live_sha" != "unavailable" ] \
+      && [ "$live_sha" != "$EXPECTED_GIT_SHA" ] && [ "$live_sha" != "$starting_sha" ]; then
+      # The gateway is now serving a THIRD commit: neither the
+      # pre-deploy build nor the one we expected. update.sh's own
+      # rollback only ever restores the pre-deploy commit, so this
+      # is not explainable by "still promoting" or "safely rolled
+      # back" -- treat it as a real regression, not a timeout.
+      echo "::error::active gateway now serves an unexpected commit ($live_sha) that is neither the pre-deploy commit ($starting_sha) nor the expected commit ($EXPECTED_GIT_SHA) -- this looks like a real regression, not a slow promotion" >&2
+      exit 1
+    fi
+
     echo "waiting for active gateway: expected=$EXPECTED_GIT_SHA observed=$live_sha"
     sleep 15
   done
-  echo "active gateway stayed stale: expected=$EXPECTED_GIT_SHA observed=$live_sha" >&2
+
+  # The window elapsed without reaching the expected commit. This is
+  # NOT the same as a confirmed failure: /health does not expose any
+  # in-progress/update-status signal, so a slow-but-succeeding
+  # promotion and a stuck one look identical from here except for
+  # connection drops during container recreation. Report distinctly
+  # from a hard failure and say how to check manually; the run still
+  # exits non-zero because the gate must not pass without evidence.
+  if [ "$saw_connection_drop" -eq 1 ]; then
+    echo "::warning::verification window elapsed without reaching $EXPECTED_GIT_SHA, but health checks intermittently failed to connect during the wait -- consistent with the gateway container being actively recreated by the promotion script. INCONCLUSIVE, not a confirmed failure: the deploy may still be finishing. Re-check manually: curl -s $HEALTH_URL | ruby -rjson -e 'puts JSON.parse(STDIN.read).dig(\"build\",\"git_sha\")'" >&2
+  else
+    echo "::warning::verification window elapsed without reaching $EXPECTED_GIT_SHA and no connection activity was observed. INCONCLUSIVE, not a confirmed failure: this can mean the droplet's auto-update timer has not picked up the candidate yet, or an earlier attempt failed and update.sh's built-in rollback safely restored the previous commit ($starting_sha). No in-progress signal is exposed over HTTP, so this script cannot tell 'still working' from 'stuck and already rolled back' without droplet access. Re-check manually: curl -s $HEALTH_URL | ruby -rjson -e 'puts JSON.parse(STDIN.read).dig(\"build\",\"git_sha\")', or ssh into the droplet and check journalctl -u chief-moa-auto-update / docker compose logs gateway." >&2
+  fi
+  echo "active gateway stayed at $live_sha, expected $EXPECTED_GIT_SHA (timeout after $(( deadline_seconds / 60 ))m)" >&2
   exit 1
 BASH
 
@@ -227,7 +271,7 @@ def validate_workflow!(workflow)
                     "needs" => "publish",
                     "if" => "${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}",
                     "runs-on" => "ubuntu-latest",
-                    "timeout-minutes" => 25,
+                    "timeout-minutes" => 45,
                     "permissions" => { "contents" => "read" },
                     "steps" => [
                       {
@@ -385,7 +429,7 @@ def assert_observe_behavior!(observe_script, observe_env)
                     "live observation environment executed inherited BASH_ENV")
 
     fast_failure_script = observe_script
-                          .sub(" + 1200 ", " + 1 ")
+                          .sub("deadline_seconds=2400", "deadline_seconds=1")
                           .sub("sleep 15", "sleep 0.05")
     mismatch_env = process_env.merge(
       "MOCK_HEALTH" => JSON.generate({ "build" => { "git_sha" => other_sha } })

@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
@@ -31,6 +30,8 @@ public final class MoaAssistActivity extends Activity {
         boolean microphonePermissionGranted = hasMicrophonePermission();
         MoaAssistLaunchDecision.Action action = MoaAssistLaunchDecision.decide(overlayPermissionGranted, microphonePermissionGranted);
         Log.i(TAG, "handleAssistLaunch action=" + action
+                + " intent=" + getIntent().getAction()
+                + " source=" + getIntent().getStringExtra(MoaAssistantLaunchCoordinator.EXTRA_SOURCE)
                 + " overlay=" + overlayPermissionGranted
                 + " microphone=" + microphonePermissionGranted);
         if (action == MoaAssistLaunchDecision.Action.SHOW_PERMISSION_HINT) {
@@ -48,15 +49,12 @@ public final class MoaAssistActivity extends Activity {
     }
 
     private void startVoiceService() {
-        Intent service = new Intent(this, OverlayService.class);
-        service.setAction(OverlayService.ACTION_ASSIST_BUTTON);
-        service.putExtra(OverlayService.EXTRA_START_VOICE, true);
-        Log.i(TAG, "startVoiceService action=" + service.getAction());
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(service);
-        } else {
-            startService(service);
+        String source = getIntent().getStringExtra(MoaAssistantLaunchCoordinator.EXTRA_SOURCE);
+        if (source == null || source.trim().isEmpty()) {
+            source = getIntent().getAction();
         }
+        Log.i(TAG, "startVoiceService source=" + source);
+        MoaAssistantLaunchCoordinator.startVoiceService(this, source);
     }
 
     private void finishAndSuppressAnimation() {

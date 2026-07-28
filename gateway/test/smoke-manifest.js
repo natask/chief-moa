@@ -52,6 +52,8 @@ const SYNTAX_CHECK_FILES = [
   "lib/intent-runtime.js",
   "lib/intent-runtime-router.js",
   "lib/intent-runtime-rehydration.js",
+  "lib/intent-plane.js",
+  "lib/intent-plane-handlers.js",
   "lib/semantic-telemetry.js",
   "lib/semantic-telemetry-store.js",
   "lib/preview-resource-plan.js",

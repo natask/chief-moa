@@ -105,6 +105,7 @@ export function createReleaseBundlePublisher({
       application_id: manifest.application_id,
       bundle_id: manifest.bundle_id,
       compatibility_version: manifest.compatibility_version,
+      lineage: manifest.lineage,
       artifacts,
       created_at: manifest.created_at,
     });
@@ -202,6 +203,7 @@ export function normalizePublicationManifest(input) {
     "version", "tenant_id", "application_id", "bundle_id", "channel",
     "expected_head_sequence", "source_ref", "git_sha", "tracked_paths",
     "compatibility_version", "created_at", "artifacts",
+    "lineage",
   ], "manifest");
   if (input.version !== PUBLICATION_VERSION) throw new Error("manifest.version is invalid");
   const channel = cleanId(input.channel, "manifest.channel");
@@ -252,8 +254,21 @@ export function normalizePublicationManifest(input) {
     git_sha: gitSha,
     tracked_paths: Object.freeze(trackedPaths),
     compatibility_version: cleanInteger(input.compatibility_version ?? 1, "manifest.compatibility_version", 1),
+    lineage: input.lineage == null ? undefined : normalizeManifestLineage(input.lineage),
     created_at: cleanString(input.created_at, "manifest.created_at", 80),
     artifacts: Object.freeze(normalizedArtifacts),
+  });
+}
+
+function normalizeManifestLineage(value) {
+  exactObject(value, ["kind", "series_parent_bundle_id", "parallel_parent_bundle_ids"], "manifest.lineage");
+  if (value.parallel_parent_bundle_ids != null && !Array.isArray(value.parallel_parent_bundle_ids)) {
+    throw new Error("manifest.lineage.parallel_parent_bundle_ids is invalid");
+  }
+  return Object.freeze({
+    kind: value.kind == null ? undefined : cleanId(value.kind, "manifest.lineage.kind"),
+    series_parent_bundle_id: value.series_parent_bundle_id == null ? null : cleanId(value.series_parent_bundle_id, "manifest.lineage.series_parent_bundle_id"),
+    parallel_parent_bundle_ids: Object.freeze((value.parallel_parent_bundle_ids || []).map((item) => cleanId(item, "manifest.lineage.parallel_parent_bundle_ids"))),
   });
 }
 

@@ -230,6 +230,33 @@ export function createPostgresReleaseAdapter(pool) {
 
   return Object.freeze({
     listBundles: (tenantId, applicationId) => list("release_bundles", tenantId, applicationId),
+    async listPublishedBundles(tenantId, applicationId) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await setTenant(client, tenantId);
+        const result = await client.query(
+          `select b.record
+             from release_bundles b
+            where b.tenant_id = $1 and b.application_id = $2
+              and exists (
+                select 1 from release_publication_receipts p
+                 where p.tenant_id = b.tenant_id
+                   and p.application_id = b.application_id
+                   and p.record->>'bundle_id' = b.bundle_id
+              )
+            order by b.created_at desc, b.bundle_id desc`,
+          [tenantId, applicationId],
+        );
+        await client.query("commit");
+        return result.rows.map((row) => row.record);
+      } catch (error) {
+        try { await client.query("rollback"); } catch {}
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
     listChannelHeads: (tenantId, applicationId) => list("release_channel_head_events", tenantId, applicationId),
     listAssignmentEvents: (tenantId, applicationId) => list("release_assignment_events", tenantId, applicationId),
     appendAssignmentEvent,

@@ -9,8 +9,6 @@ import android.view.WindowManager;
 /** Moves the orb and its anchored overlay surfaces from a shared surface header. */
 final class MoaOverlayGroupDragListener implements View.OnTouchListener {
     private final Context context;
-    private final WindowManager windowManager;
-    private final View orb;
     private final WindowManager.LayoutParams orbParams;
     private final int fallbackOrbSize;
     private final int edgeMargin;
@@ -25,8 +23,6 @@ final class MoaOverlayGroupDragListener implements View.OnTouchListener {
 
     MoaOverlayGroupDragListener(
             Context context,
-            WindowManager windowManager,
-            View orb,
             WindowManager.LayoutParams orbParams,
             int fallbackOrbSize,
             int edgeMargin,
@@ -34,8 +30,6 @@ final class MoaOverlayGroupDragListener implements View.OnTouchListener {
             Runnable onMoved
     ) {
         this.context = context;
-        this.windowManager = windowManager;
-        this.orb = orb;
         this.orbParams = orbParams;
         this.fallbackOrbSize = fallbackOrbSize;
         this.edgeMargin = edgeMargin;
@@ -67,12 +61,9 @@ final class MoaOverlayGroupDragListener implements View.OnTouchListener {
                 int screenHeight = context.getResources().getDisplayMetrics().heightPixels;
                 orbParams.x = clamp(startX + dx, edgeMargin, screenWidth - size - edgeMargin);
                 orbParams.y = clamp(startY + dy, edgeMargin, screenHeight - size - edgeMargin);
-                try {
-                    windowManager.updateViewLayout(orb, orbParams);
-                    onMoved.run();
-                } catch (IllegalArgumentException ignored) {
-                    return false;
-                }
+                // Record only the latest anchor. The shared display-frame
+                // coalescer submits the orb and every anchored surface once.
+                onMoved.run();
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:

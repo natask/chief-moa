@@ -29,6 +29,26 @@ fresh branch and set it active.
 - **WHEN** a client switches threads and later calls `GET /v1/threads/active`
 - **THEN** the response returns the branch it switched to with its kind and label
 
+### Requirement: Mobile follow-ups retain explicit thread and intent scope
+After a mobile client creates a fresh thread, later current-thread taps SHALL
+reuse that resolved branch across chat, HTTP voice, streaming voice, reconnect,
+and service restart. A client SHALL bind an automatic agent-run follow-up only
+when an active run belongs to the exact session and branch. If multiple active
+intents have runs in that scope, the client SHALL treat the target as ambiguous
+and SHALL route the turn through normal intent resolution instead of selecting
+an unrelated or globally recent run.
+
+#### Scenario: Single tap continues the double-tap thread
+- **WHEN** a double tap resolves a new branch and a later single tap starts a turn
+- **THEN** the later turn carries the resolved branch on every transport
+- **AND** a reconnect does not reset the branch to `default`
+
+#### Scenario: Concurrent runs do not capture each other's follow-ups
+- **WHEN** active runs exist in another branch or multiple active intents exist
+  in the current branch
+- **THEN** no globally recent run is selected
+- **AND** an unambiguous same-intent run may still receive the follow-up
+
 ### Requirement: The context_management decision
 The gateway SHALL decide where a user turn belongs (continue, new, fork, or
 incognito) before answering, on the text-chat path and the cascaded voice
