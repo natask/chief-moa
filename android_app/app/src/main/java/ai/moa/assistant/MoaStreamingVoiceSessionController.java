@@ -1015,11 +1015,20 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantAudioSegment(String audioTurnId, JSONObject segment) {
+            String streamedText;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
                 }
                 assistantAudioProgress.onAssistantAudioSegment(segment);
+                streamedText = assistantAudioProgress.streamedText();
+            }
+            // Segment metadata arrives immediately before its PCM frame. Mirror
+            // the accumulated spoken text into the compact response now; the
+            // later assistant_text event still replaces it with the complete
+            // response retained by expanded history.
+            if (!streamedText.isEmpty()) {
+                post(() -> callback.onAssistantText(audioTurnId, streamedText));
             }
         }
 

@@ -56,6 +56,26 @@ public final class MoaAssistantAudioProgressTrackerTest {
     }
 
     @Test
+    public void accumulatesSpokenSegmentTextAndResetsPerTurn() throws Exception {
+        MoaAssistantAudioProgressTracker tracker = new MoaAssistantAudioProgressTracker();
+        tracker.onAssistantAudioSegment(new JSONObject()
+                .put("segment_index", 0)
+                .put("text_start", 0)
+                .put("text_end", 6)
+                .put("text", "Hello "));
+        tracker.onAssistantAudioSegment(new JSONObject()
+                .put("segment_index", 1)
+                .put("text_start", 6)
+                .put("text_end", 12)
+                .put("text", "world."));
+
+        assertEquals("Hello world.", tracker.streamedText());
+
+        tracker.reset();
+        assertEquals("", tracker.streamedText());
+    }
+
+    @Test
     public void legacyFramesStillClampProgressWithoutTextEstimate() {
         MoaAssistantAudioProgressTracker tracker = new MoaAssistantAudioProgressTracker();
         tracker.onAssistantAudioFrame(new byte[3200]);

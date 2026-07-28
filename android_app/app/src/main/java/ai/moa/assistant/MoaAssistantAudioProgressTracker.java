@@ -10,15 +10,32 @@ final class MoaAssistantAudioProgressTracker {
 
     private SegmentMetadata pendingSegment;
     private long emittedPcmBytes;
+    private String streamedText = "";
 
     void reset() {
         segments.clear();
         pendingSegment = null;
         emittedPcmBytes = 0L;
+        streamedText = "";
     }
 
     void onAssistantAudioSegment(JSONObject event) {
         pendingSegment = parseSegmentMetadata(event);
+        String text = event == null ? "" : event.optString("text", "");
+        if (!trim(text).isEmpty()) {
+            int start = pendingSegment == null ? -1 : pendingSegment.textStart;
+            if (start >= 0 && start <= streamedText.length()) {
+                streamedText = streamedText.substring(0, start) + text;
+            } else if (streamedText.isEmpty()) {
+                streamedText = text;
+            } else {
+                streamedText = streamedText + " " + text;
+            }
+        }
+    }
+
+    String streamedText() {
+        return streamedText;
     }
 
     void onAssistantAudioFrame(byte[] pcm) {

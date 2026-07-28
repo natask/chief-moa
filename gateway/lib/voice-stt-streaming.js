@@ -28,7 +28,11 @@
 // batch path — a broken stream must never fail the turn.
 
 const DEFAULT_ROTATE_AFTER_MS = 240000; // 4 min, safely under the ~5-min server cap
-const DEFAULT_DRAIN_TIMEOUT_MS = 4000; // wait this long for a closing stream to flush finals
+// A live interim transcript is already useful at commit. Keep the final-result
+// drain short so releasing push-to-talk does not add a multi-second silent gap
+// before reasoning starts. If the stream has no usable text, the provider still
+// falls back to the stored-PCM batch path.
+const DEFAULT_DRAIN_TIMEOUT_MS = 800;
 // A single session tolerates this many consecutive unexpected stream errors
 // (each triggers a reopen). Past it, the session gives up and finalize() falls
 // back to batch. A clean rotation does not count against this budget.
