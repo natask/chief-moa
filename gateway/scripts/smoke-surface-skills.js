@@ -15,6 +15,8 @@
 //   5. browser-local media.open/media.bookmark route only to the browser client.
 //   6. media calls do not create background browser agent/CDP tasks.
 //   7. the existing browser_agent_task capability still works when explicit.
+//   8. code mode exposes browser_cdp_execute, queues a profile-bound command
+//      batch under the current delegation, and resolves the browser receipt.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -64,6 +66,30 @@ async function main() {
     await step("resolveTurnSurface canonicalizes sources", () => assertSurfaceResolution());
     await step("android client heartbeats with phone tools", () => heartbeatAndroid(baseUrl));
     await step("browser client heartbeats with local media tools", () => heartbeatBrowser(baseUrl));
+    await step("cross-surface browser tab list queues and receipts on the advertised browser", () => assertSimpleDeviceCapability(baseUrl, deps, {
+      call: { ...phoneCall, transcript: "Show my browser tabs" }, capability: "browser_list_tabs",
+      args: {}, tool: "browser.tab.list", deviceId: "browser_surface_smoke", surface: "browser_extension",
+    }));
+    const cdpIntent = "Use browser automation to inspect the agent-owned background tab";
+    const cdpEnvelope = confirmedEnvelope(cdpIntent, url);
+    await step("QuickJS catalog CDP capability queues bounded commands and resolves the browser receipt", () => assertSimpleDeviceCapability(baseUrl, deps, {
+      call: { ...phoneCall, transcript: cdpIntent, delegation_envelope: cdpEnvelope }, capability: "browser_cdp_execute",
+      args: { tab_id: 17, authority_profile: "automation", commands: [{ method: "Runtime.evaluate", params: { expression: "document.title", returnByValue: true } }] },
+      expectedInput: { tab_id: 17, authority_profile: "automation", cdp_actions: [{ method: "Runtime.evaluate", params: { expression: "document.title", returnByValue: true } }], delegation_envelope: cdpEnvelope },
+      tool: "browser.cdp.execute", deviceId: "browser_surface_smoke", surface: "browser_extension",
+    }));
+    await step("cross-surface Android screen summary queues and receipts on the advertised phone", () => assertSimpleDeviceCapability(baseUrl, deps, {
+      call: { ...call, transcript: "Tell me what is on the phone screen" }, capability: "phone_screen_summary",
+      args: {}, tool: "screen.summary", deviceId: "android_surface_smoke", surface: "android",
+    }));
+    await step("Android semantic text entry receives gateway-owned package/window bindings", () => assertSimpleDeviceCapability(baseUrl, deps, {
+      call: { ...call, transcript: "Enter weather in Search on the phone" }, capability: "phone_set_text",
+      args: { label: "Search", text: "weather" },
+      expectedInput: { label: "Search", text: "weather", expected_package: "com.example.fixture", expected_window_id: 42 },
+      tool: "screen.set_text", deviceId: "android_surface_smoke", surface: "android",
+    }));
+    await step("ambiguous browser manifests reject a model-facing action", () => assertAmbiguousBrowserTargets(baseUrl, deps, phoneCall));
+    await step("stale browser manifests reject a model-facing action", () => assertStaleBrowserTarget(baseUrl, dataDir, deps, phoneCall));
     await step("browser-local media.open targets only the browser client", () => assertBrowserMediaCapability(baseUrl, deps, call, {
       capability: "media_open",
       tool: "media.open",
@@ -128,8 +154,9 @@ async function main() {
         "the single classic phone_action schema supports media tools without adding top-level classic tools",
         "invalid media input is rejected before a tool_request is created",
         "media requests create no browser agent/CDP tasks",
-        "browser_agent_task creates a browser agent-loop task and returns task_id + agent_run_id",
-        "a brokered action with no claiming device returns { queued: true, request_id }",
+      "browser_agent_task creates a browser agent-loop task and returns task_id + agent_run_id",
+      "browser_cdp_execute is present in code mode and resolves a profile-bound browser receipt",
+      "a brokered action with no claiming device returns { queued: true, request_id }",
       ],
     }, null, 2));
   } finally {
@@ -164,7 +191,19 @@ async function heartbeatAndroid(baseUrl) {
       { tool: "media.control", risk: "media_control", approval: "implicit_user_command" },
       { tool: "media.bookmark", risk: "local_state", approval: "implicit_user_command" },
       { tool: "media.playlist", risk: "external_side_effect", approval: "local_confirmation" },
+      { tool: "screen.summary", risk: "read_only", approval: "none" },
+      { tool: "screen.tap_text", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "screen.set_text", risk: "external_side_effect", approval: "local_confirmation" },
+      { tool: "screen.scroll", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "system.back", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "system.home", risk: "navigation", approval: "implicit_user_command" },
     ],
+    metadata: {
+      context_descriptor: {
+        availability: "available", fresh: true,
+        package_name: "com.example.fixture", window_id: 42,
+      },
+    },
   });
   assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
 }
@@ -177,9 +216,70 @@ async function heartbeatBrowser(baseUrl) {
     local_tool_manifest: [
       { tool: "media.open", risk: "navigation", approval: "implicit_user_command" },
       { tool: "media.bookmark", risk: "local_state", approval: "implicit_user_command" },
+      { tool: "browser.tab.list", risk: "read_only", approval: "none" },
+      { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "browser.tab.activate", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "browser.tab.close", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "browser.tab.reload", risk: "navigation", approval: "implicit_user_command" },
+      { tool: "browser.cdp.execute", risk: "browser_local_debugger", approval: "implicit_user_command", authority_profiles: ["automation", "debug"] },
     ],
   });
   assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
+}
+
+async function assertSimpleDeviceCapability(baseUrl, deps, testCase) {
+  const capability = surfaceExecuteCapabilities(testCase.call, deps)[testCase.capability];
+  assert.ok(capability, `${testCase.capability} must be model-facing`);
+  const resultPromise = capability.run(testCase.args);
+  const request = await waitForPendingToolRequest(baseUrl, testCase.tool);
+  assert.equal(request.target_surface_type, testCase.surface);
+  assert.equal(request.target_device_id, testCase.deviceId);
+  const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: testCase.deviceId });
+  assert.equal(claim.status, 200, JSON.stringify(claim.json));
+  assert.deepEqual(claim.json.request.input, testCase.expectedInput || testCase.args);
+  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
+    device_id: testCase.deviceId,
+    claim_id: claim.json.request.claim_id,
+    receipt_id: `surface_${request.id}`,
+    ok: true,
+    summary: `Completed ${testCase.tool}.`,
+  });
+  assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
+  const result = await resultPromise;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.receipt.device_id, testCase.deviceId);
+}
+
+async function assertAmbiguousBrowserTargets(baseUrl, deps, call) {
+  const heartbeat = await postJson(`${baseUrl}/v1/device-clients/heartbeat`, {
+    device_id: "browser_surface_smoke_second",
+    surface_type: "browser_extension",
+    local_tool_manifest: [{ tool: "browser.tab.list", risk: "read_only", approval: "none" }],
+  });
+  assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.json));
+  const result = await surfaceExecuteCapabilities({ ...call, transcript: "Show my browser tabs" }, deps)
+    .browser_list_tabs.run({});
+  assert.equal(result.ok, false);
+  assert.match(result.error, /target device is ambiguous/);
+  const offline = await postJson(`${baseUrl}/v1/device-clients/heartbeat`, {
+    device_id: "browser_surface_smoke_second",
+    surface_type: "browser_extension",
+    online: false,
+    local_tool_manifest: [{ tool: "browser.tab.list", risk: "read_only", approval: "none" }],
+  });
+  assert.equal(offline.status, 200, JSON.stringify(offline.json));
+}
+
+async function assertStaleBrowserTarget(baseUrl, dataDir, deps, call) {
+  const clientsPath = path.join(dataDir, "device-clients.json");
+  const clients = JSON.parse(fs.readFileSync(clientsPath, "utf8"));
+  clients.browser_surface_smoke.last_heartbeat_at = "2000-01-01T00:00:00.000Z";
+  fs.writeFileSync(clientsPath, JSON.stringify(clients, null, 2));
+  const result = await surfaceExecuteCapabilities({ ...call, transcript: "Show my browser tabs" }, deps)
+    .browser_list_tabs.run({});
+  assert.equal(result.ok, false);
+  assert.match(result.error, /no compatible online target device/);
+  await heartbeatBrowser(baseUrl);
 }
 
 async function assertPhoneOpenApp(baseUrl, deps, call) {

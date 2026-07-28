@@ -1,8 +1,9 @@
 "use strict";
 
-// Per-surface skills. The skills offered to the model depend on the surface a
-// turn came from, while chat history stays shared (one default session). Phone
-// actions are never exposed to a browser-sourced model call. Every executable
+const { validateBrowserDelegationEnvelope } = require("./browser-delegation-envelope");
+
+// Per-surface skills. Explicit user requests may target another connected
+// surface, while chat history stays shared (one default session). Every executable
 // action is brokered as a bounded tool_request the target client must claim,
 // validate against its own local manifest, execute, and receipt. The gateway
 // only queues and polls; it never presses a phone button or opens a tab itself.
@@ -94,6 +95,111 @@ const PHONE_CAPABILITIES = {
       /\b(?:open|show|visit|go to|follow)\b/, /\b(?:tab|browser|url|link|site|page|website|it|that)\b/,
       "the current user turn did not explicitly ask to open a browser tab"),
   },
+  browser_list_tabs: {
+    tool: "browser.tab.list",
+    surface: "browser_extension",
+    args: "{} (read-only bounded tab descriptors)",
+    label: "list open browser tabs",
+    prepare: prepareNoInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:list|show|which|what)\b/, /\b(?:browser )?tabs?\b/,
+      "the current user turn did not explicitly ask to list browser tabs"),
+  },
+  browser_activate_tab: {
+    tool: "browser.tab.activate",
+    surface: "browser_extension",
+    args: "{ tab_id: integer }",
+    label: "activate a browser tab",
+    prepare: prepareTabIdInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:activate|switch|focus|select|go to|show)\b/, /\btab\b/,
+      "the current user turn did not explicitly ask to activate a browser tab"),
+  },
+  browser_close_tab: {
+    tool: "browser.tab.close",
+    surface: "browser_extension",
+    args: "{ tab_id: integer }",
+    label: "close a browser tab",
+    prepare: prepareTabIdInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:close|remove|dismiss)\b/, /\btab\b/,
+      "the current user turn did not explicitly ask to close a browser tab"),
+  },
+  browser_reload_tab: {
+    tool: "browser.tab.reload",
+    surface: "browser_extension",
+    args: "{ tab_id: integer }",
+    label: "reload a browser tab",
+    prepare: prepareTabIdInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:reload|refresh)\b/, /\b(?:tab|page|browser)\b/,
+      "the current user turn did not explicitly ask to reload a browser tab"),
+  },
+  browser_cdp_execute: {
+    tool: "browser.cdp.execute",
+    surface: "browser_extension",
+    args: "{ tab_id: integer, authority_profile: 'automation'|'debug', commands: Array<{ method: string, params?: object }> } (agent-owned inactive tab only; browser classifies every command and redacts results)",
+    label: "execute bounded CDP commands in an agent-owned background tab",
+    safety: "Do not request cookies, authorization data, passwords, credentials, or browser storage. Those outputs are unavailable.",
+    prepare: prepareBrowserCdpInput,
+    warrant: browserCdpWarrant,
+  },
+  phone_screen_summary: {
+    tool: "screen.summary",
+    surface: "android",
+    args: "{} (read-only bounded accessibility summary)",
+    label: "summarize the current phone screen",
+    prepare: prepareNoInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:read|show|summarize|describe|tell|what)\b/, /\b(?:phone |android )?screen\b|\bwhat(?:'s| is) (?:on|shown)\b/,
+      "the current user turn did not explicitly ask to inspect the phone screen"),
+  },
+  phone_tap_text: {
+    tool: "screen.tap_text",
+    surface: "android",
+    args: "{ text: string } (visible text named by the user)",
+    label: "tap visible text on the phone screen",
+    field: "text",
+    aliases: ["text", "label", "name"],
+    max: 200,
+    warrant: tapTextWarrant,
+  },
+  phone_set_text: {
+    tool: "screen.set_text",
+    surface: "android",
+    args: "{ label: string, text: string } (visible editable-field label and bounded replacement text)",
+    label: "enter text in a visible phone field",
+    prepare: prepareSetTextInput,
+    warrant: setTextWarrant,
+  },
+  phone_scroll: {
+    tool: "screen.scroll",
+    surface: "android",
+    args: "{ label: string, direction: 'forward'|'backward' } (visible scroll-container label)",
+    label: "scroll a visible phone container",
+    prepare: prepareScrollInput,
+    warrant: scrollWarrant,
+  },
+  phone_system_back: {
+    tool: "system.back",
+    surface: "android",
+    args: "{}",
+    label: "press Android Back",
+    prepare: prepareNoInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:press|tap|go|navigate)\b/, /\bback\b/,
+      "the current user turn did not explicitly ask to press Android Back"),
+  },
+  phone_system_home: {
+    tool: "system.home",
+    surface: "android",
+    args: "{}",
+    label: "go to Android Home",
+    prepare: prepareNoInput,
+    warrant: (call) => transcriptWarrant(call,
+      /\b(?:press|tap|go|navigate|return)\b/, /\b(?:phone |android )?home(?: screen)?\b/,
+      "the current user turn did not explicitly ask to go to Android Home"),
+  },
   phone_media_open: {
     tool: "media.open",
     surface: "android",
@@ -140,9 +246,28 @@ const CLASSIC_PHONE_TOOLS = {
   "media.control": "phone_media_control",
   "media.bookmark": "phone_media_bookmark",
   "media.playlist": "phone_media_playlist",
+  "screen.summary": "phone_screen_summary",
+  "screen.tap_text": "phone_tap_text",
+  "screen.set_text": "phone_set_text",
+  "screen.scroll": "phone_scroll",
+  "system.back": "phone_system_back",
+  "system.home": "phone_system_home",
 };
 
+const CLASSIC_BROWSER_TOOLS = Object.freeze({
+  "browser.tab.list": "browser_list_tabs",
+  "browser.tab.open": "browser_open_tab",
+  "browser.tab.activate": "browser_activate_tab",
+  "browser.tab.close": "browser_close_tab",
+  "browser.tab.reload": "browser_reload_tab",
+  "browser.cdp.execute": "browser_cdp_execute",
+});
+
 const MAX_MEDIA_POSITION_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_CDP_COMMANDS = Object.freeze({ automation: 40, debug: 80 });
+const MAX_CDP_METHOD_CHARS = 160;
+const MAX_CDP_PARAMS_CHARS = 32000;
+const MAX_CDP_TOTAL_CHARS = 128000;
 const PHONE_TOOL_NAMES = Object.freeze(Object.keys(CLASSIC_PHONE_TOOLS));
 const RAW_APP_SELECTOR_KEYS = Object.freeze([
   "package", "package_name", "packageName", "preferred_package", "preferredPackage",
@@ -199,6 +324,76 @@ function boundedInteger(source, key, min, max) {
 
 function compactInput(input) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== "" && value != null));
+}
+
+function prepareNoInput(args) {
+  const source = actionInput(args);
+  return Object.keys(source).length ? { error: "this action does not accept input" } : { input: {} };
+}
+
+function prepareTabIdInput(args) {
+  const source = actionInput(args);
+  const tabId = boundedInteger(source, "tab_id", 0, Number.MAX_SAFE_INTEGER);
+  if (!tabId.present) return { error: "tab_id is required" };
+  if (tabId.error) return { error: tabId.error };
+  return { input: { tab_id: tabId.value } };
+}
+
+function prepareBrowserCdpInput(args) {
+  const source = actionInput(args);
+  const tabId = boundedInteger(source, "tab_id", 0, Number.MAX_SAFE_INTEGER);
+  if (!tabId.present) return { error: "tab_id is required" };
+  if (tabId.error) return { error: tabId.error };
+  const authorityProfile = boundedText(source, "authority_profile", 20).toLowerCase();
+  if (!Object.hasOwn(MAX_CDP_COMMANDS, authorityProfile)) {
+    return { error: "authority_profile must be automation or debug" };
+  }
+  const commands = Array.isArray(source.commands)
+    ? source.commands
+    : (Array.isArray(source.cdp_actions) ? source.cdp_actions : null);
+  if (!commands || commands.length < 1 || commands.length > MAX_CDP_COMMANDS[authorityProfile]) {
+    return { error: `commands must contain 1 through ${MAX_CDP_COMMANDS[authorityProfile]} CDP commands for the ${authorityProfile} profile` };
+  }
+  let totalChars = 0;
+  const normalized = [];
+  for (const command of commands) {
+    const raw = plainObject(command);
+    const method = String(raw.method || "").trim();
+    if (!method || method.length > MAX_CDP_METHOD_CHARS || !/^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/.test(method)) {
+      return { error: `each CDP command method must be a Domain.method string of at most ${MAX_CDP_METHOD_CHARS} characters` };
+    }
+    const params = raw.params == null ? {} : raw.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
+      return { error: "each CDP command params value must be an object" };
+    }
+    let serialized;
+    try { serialized = JSON.stringify(params); } catch { return { error: "CDP command params must be JSON serializable" }; }
+    if (serialized.length > MAX_CDP_PARAMS_CHARS) {
+      return { error: `each CDP command params value must be at most ${MAX_CDP_PARAMS_CHARS} characters` };
+    }
+    totalChars += method.length + serialized.length;
+    if (totalChars > MAX_CDP_TOTAL_CHARS) return { error: `CDP commands must be at most ${MAX_CDP_TOTAL_CHARS} characters total` };
+    normalized.push({ method, params });
+  }
+  return { input: { tab_id: tabId.value, authority_profile: authorityProfile, cdp_actions: normalized } };
+}
+
+function prepareSetTextInput(args) {
+  const source = actionInput(args);
+  const label = boundedText(source, "label", 160) || boundedText(source, "target", 160);
+  const value = source.text == null ? source.value : source.text;
+  if (!label) return { error: "label is required" };
+  if (value == null || String(value).length > 4096) return { error: "text is required and must be at most 4096 characters" };
+  return { input: { label, text: String(value) } };
+}
+
+function prepareScrollInput(args) {
+  const source = actionInput(args);
+  const label = boundedText(source, "label", 160) || boundedText(source, "target", 160);
+  const direction = boundedText(source, "direction", 20).toLowerCase();
+  if (!label) return { error: "label is required" };
+  if (!["forward", "backward"].includes(direction)) return { error: "direction must be forward or backward" };
+  return { input: { label, direction } };
 }
 
 function hasRawAppSelector(source) {
@@ -272,6 +467,59 @@ function appListWarrant(call) {
     && /\b(?:installed |launcher )?(?:apps|applications)\b/.test(transcript)
     ? ""
     : "the current user turn did not explicitly ask to list installed apps";
+}
+
+function tapTextWarrant(call, input) {
+  const transcript = userTranscript(call);
+  if (!transcript || !/\b(?:tap|press|click|select|choose)\b/.test(transcript)) {
+    return "the current user turn did not explicitly ask to tap visible phone text";
+  }
+  const targetWords = normalizedWords(input.text).split(/\s+/).filter(Boolean);
+  const transcriptWords = new Set(transcript.split(/\s+/).filter(Boolean));
+  return targetWords.some((word) => transcriptWords.has(word))
+    ? ""
+    : "the requested visible text is not grounded in the current user turn";
+}
+
+function setTextWarrant(call, input) {
+  const transcript = userTranscript(call);
+  if (!transcript || !/\b(?:type|enter|fill|write|set)\b/.test(transcript)) {
+    return "the current user turn did not explicitly ask to enter text on the phone";
+  }
+  return groundedVisibleLabel(transcript, input.label)
+    ? ""
+    : "the requested field label is not grounded in the current user turn";
+}
+
+function scrollWarrant(call, input) {
+  const transcript = userTranscript(call);
+  if (!transcript || !/\bscroll\b/.test(transcript)) {
+    return "the current user turn did not explicitly ask to scroll the phone";
+  }
+  return groundedVisibleLabel(transcript, input.label)
+    ? ""
+    : "the requested scroll-container label is not grounded in the current user turn";
+}
+
+function groundedVisibleLabel(transcript, label) {
+  const targetWords = normalizedWords(label).split(/\s+/).filter(Boolean);
+  const transcriptWords = new Set(transcript.split(/\s+/).filter(Boolean));
+  return targetWords.some((word) => transcriptWords.has(word));
+}
+
+function browserCdpWarrant(call, input) {
+  const transcript = String(call && call.transcript || "").trim();
+  if (!transcript) return "browser CDP execution requires an explicit current user turn";
+  const validation = validateBrowserDelegationEnvelope(call && call.delegation_envelope, {
+    turnText: transcript,
+  });
+  if (!validation.ok) {
+    return `browser CDP execution requires a confirmed current-user delegation envelope: ${validation.errors.join("; ")}`;
+  }
+  // Preserve the canonical, current-turn warrant in the request delivered to
+  // the browser. It is evidence for local policy, never authority by itself.
+  input.delegation_envelope = validation.envelope;
+  return "";
 }
 
 function mediaOpenWarrant(call) {
@@ -460,7 +708,10 @@ function prepareCapability(call, spec, args) {
 }
 
 function phoneToolsAllowed(call) {
-  return resolveTurnSurface(call) !== "browser";
+  // The transcript warrant and the target device's fresh manifest carry
+  // authority. The surface that captured the request is routing evidence, not
+  // a blanket denial of an explicit cross-surface command.
+  return true;
 }
 
 function phoneActionToolSchema(call) {
@@ -545,7 +796,7 @@ async function awaitToolReceipt(deps, requestId, options = {}) {
 // request_id } instead of failing.
 async function brokerToolRequest(call, deps, spec, input, options = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
-      !Object.values(input).some((value) => value !== "" && value != null)) {
+      (!spec.prepare && !Object.values(input).some((value) => value !== "" && value != null))) {
     return { ok: false, error: spec.field ? `${spec.field} is required to ${spec.label}` : `input is required to ${spec.label}` };
   }
   const trustedSourceSurface = trustedTurnSurface(call);
@@ -629,9 +880,8 @@ async function launchBrowserAgentTask(call, deps, args) {
 function surfaceExecuteCapabilities(call, deps) {
   const capabilities = {};
   for (const [name, spec] of Object.entries(PHONE_CAPABILITIES)) {
-    if (spec.surface === "android" && !phoneToolsAllowed(call)) continue;
     capabilities[name] = {
-      description: `Ask the connected device to ${spec.label}. Args: ${spec.args || `{ ${spec.field}: string }`}. Brokered only as a ${spec.tool} tool_request the ${spec.surface} client claims, validates, executes, and receipts; returns { queued: true } if no device claims it within ~10s.`,
+      description: `Ask the connected device to ${spec.label}. Args: ${spec.args || `{ ${spec.field}: string }`}. ${spec.safety || ""} Brokered only as a ${spec.tool} tool_request the ${spec.surface} client claims, validates, executes, and receipts; returns { queued: true } if no device claims it within ~10s.`,
       run: (args) => {
         const prepared = prepareCapability(call, spec, args);
         if (prepared.error) return Promise.resolve({ ok: false, tool: spec.tool, error: prepared.error });
@@ -669,6 +919,7 @@ function surfaceClassicTools(call, deps) {
   const tools = [];
   const phoneTool = surfacePhoneActionTool(call, deps);
   if (phoneTool) tools.push(phoneTool);
+  tools.push(surfaceBrowserActionTool(call, deps));
   tools.push({
       name: "launch_background_browser_task",
       description: "Start a background browser agent that opens tabs the user does not see and works a multi-step task (research, navigation, extraction). It runs in the browser and its result appears in session context; confirm it started, do not claim the work is done. Args: { instruction, url? }.",
@@ -710,6 +961,31 @@ function surfaceClassicTools(call, deps) {
     });
   }
   return tools;
+}
+
+function surfaceBrowserActionTool(call, deps) {
+  return {
+    name: "browser_tab_action",
+    description: "Ask a connected browser to list, open, activate, close, or reload tabs, or to execute bounded CDP commands on an agent-owned inactive tab. CDP requires an explicit automation/debug authority profile and a confirmed current-user delegation. The browser classifies every CDP method, refuses credential/cookie/auth/storage access, redacts results, and returns a local receipt.",
+    parameters: {
+      type: "object",
+      properties: {
+        tool: { type: "string", enum: Object.keys(CLASSIC_BROWSER_TOOLS) },
+        input: { type: "object", description: "browser.tab.open takes url; activate/close/reload take tab_id; list takes no input. browser.cdp.execute takes tab_id, authority_profile automation|debug, and bounded commands [{method, params?}]. Do not request cookies, authorization data, passwords, credentials, or browser storage." },
+      },
+      required: ["tool"],
+    },
+    handler: (args) => runBrowserAction(call, deps, args),
+  };
+}
+
+function runBrowserAction(call, deps, args) {
+  const capabilityName = CLASSIC_BROWSER_TOOLS[String((args && args.tool) || "").trim()];
+  const spec = capabilityName ? PHONE_CAPABILITIES[capabilityName] : null;
+  if (!spec) return Promise.resolve({ ok: false, error: `tool must be one of ${Object.keys(CLASSIC_BROWSER_TOOLS).join(", ")}` });
+  const prepared = prepareCapability(call, spec, args);
+  if (prepared.error) return Promise.resolve({ ok: false, tool: spec.tool, error: prepared.error });
+  return brokerToolRequest(call, deps, spec, prepared.input);
 }
 
 function surfacePhoneActionTool(call, deps) {
@@ -775,4 +1051,6 @@ module.exports = {
   surfacePhoneActionTool,
   browserMediaProposalTool,
   runPhoneAction,
+  runBrowserAction,
+  surfaceBrowserActionTool,
 };
