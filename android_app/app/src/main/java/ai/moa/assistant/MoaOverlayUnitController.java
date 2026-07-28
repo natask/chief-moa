@@ -227,6 +227,12 @@ final class MoaOverlayUnitController {
      * only the line's translation moves inside the fixed viewport.
      */
     void render(String youText, String replyText, boolean listening, boolean answering, int tone) {
+        render(youText, replyText, replyText, listening, answering, false, false, -1, tone);
+    }
+
+    void render(String youText, String replyText, String replyFullText,
+            boolean listening, boolean answering, boolean youPlaceholder,
+            boolean replyPlaceholder, int youHighlightStart, int tone) {
         if (youView == null || replyView == null) {
             return;
         }
@@ -236,10 +242,14 @@ final class MoaOverlayUnitController {
         youVariants.setLiteral(flatten(youText));
         push(youView, youBuffer, youPresence, youVariants.defaultText());
         push(replyView, replyBuffer, replyPresence, flatten(replyText));
+        replyView.setFullText(flatten(replyFullText));
+        youView.setHighlightStart(youHighlightStart);
 
         youView.setListening(listening);
-        youView.setCaretVisible(listening && !youBuffer.isEmpty());
-        replyView.setCaretVisible(answering && !replyBuffer.isEmpty());
+        youView.setCaretVisible(listening);
+        replyView.setCaretVisible(answering);
+        youPresence.setHasText(youPlaceholder || !youBuffer.isEmpty());
+        replyPresence.setHasText(replyPlaceholder || !replyBuffer.isEmpty());
         youPresence.setStreaming(listening);
         replyPresence.setStreaming(answering);
         replyView.setTone(toneColor);

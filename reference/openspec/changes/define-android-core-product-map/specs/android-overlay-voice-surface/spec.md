@@ -250,6 +250,26 @@ of resizing the card for each partial or completed turn.
   anchored to that centerline when space permits
 - **AND** either bubble clamps inward rather than painting through a display edge
 
+#### Scenario: Listening is visible before recognition
+- **WHEN** a system assistant invocation starts a valid microphone turn
+- **THEN** the user bubble appears immediately with a blinking caret
+- **AND** provider partials replace text in that same bubble
+- **AND** only the newest unstable token is accented until final recognition
+- **AND** an empty placeholder is neither copyable nor admitted to history
+
+#### Scenario: Spoken response follows device playback
+- **WHEN** hosted assistant audio is enabled for a response
+- **THEN** an empty assistant bubble with a blinking caret appears after user commit
+- **AND** its collapsed text advances from the PCM/text segment ledger according to the AudioTrack playback head, coalesced to display frames
+- **AND** network receipt and provider `audio_done` do not claim that text was heard
+- **AND** expanded view retains the complete display response independently of the shorter spoken response
+- **AND** cancellation, replacement, barge-in, or a stale turn cannot advance the current bubble
+
+#### Scenario: Empty or failed turn removes placeholders
+- **WHEN** a turn ends with no speech, fails, or is intentionally cancelled before text exists
+- **THEN** Android removes its empty live placeholders
+- **AND** does not create transcript-history entries for them
+
 #### Scenario: Bubble text remains bounded and readable
 - **WHEN** current-turn text exceeds five wrapped lines
 - **THEN** the collapsed bubble shows at most the newest five lines

@@ -5,6 +5,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.Choreographer;
 
 import org.json.JSONObject;
 
@@ -64,6 +65,9 @@ final class MoaStreamingVoiceSessionController {
         // inactivity watchdog so a mid-stream audio stall is caught, not held
         // open until the gateway's own backstop.
         void onAssistantAudioChunk(String turnId);
+
+        /** Frame-coalesced text position derived from AudioTrack's playback head. */
+        void onAssistantPlaybackProgress(String turnId, String text, int spokenChars);
 
         void onAssistantAudioDone(String turnId);
 
@@ -134,6 +138,33 @@ final class MoaStreamingVoiceSessionController {
     private boolean pendingLifecycleTtsExpected;
     private boolean pendingLifecycleAudioReceived;
     private String pendingDeviceAudioDoneTurnId = "";
+    private boolean playbackFrameScheduled;
+
+    private final Choreographer.FrameCallback playbackFrameCallback = this::onPlaybackFrame;
+
+    private void onPlaybackFrame(long frameTimeNanos) {
+        MoaAudioPlaybackController playback;
+        String currentTurnId;
+        String text;
+        int chars;
+        boolean keepGoing;
+        synchronized (lock) {
+            playbackFrameScheduled = false;
+            playback = playbackController;
+            currentTurnId = turnId;
+            keepGoing = assistantAudioStarted
+                    && assistantOutputState.allowsSpeech(currentTurnId)
+                    && playbackEnabled && playback != null && callback != null;
+            MoaAssistantAudioProgressTracker.PlaybackProgress progress =
+                    assistantAudioProgress.snapshot(playback == null ? 0L : playback.playedPcmFrames());
+            text = assistantAudioProgress.streamedText();
+            chars = progress.assistantTextChars;
+        }
+        if (keepGoing) {
+            callback.onAssistantPlaybackProgress(currentTurnId, text, chars);
+            schedulePlaybackFrame();
+        }
+    }
 
     MoaStreamingVoiceSessionController(Callback callback) {
         this(MoaVoiceGatewaySocket.DEFAULT_URL, "", true, "", "default", false, callback, null);
@@ -249,6 +280,18 @@ final class MoaStreamingVoiceSessionController {
         }
         post(() -> callback.onSessionStarted(sessionId(), turnId()));
         startCaptureIfNeeded();
+    }
+
+    private void schedulePlaybackFrame() {
+        if (playbackFrameScheduled) return;
+        playbackFrameScheduled = true;
+        Choreographer.getInstance().postFrameCallback(playbackFrameCallback);
+    }
+
+    private void cancelPlaybackFrames() {
+        if (!playbackFrameScheduled) return;
+        Choreographer.getInstance().removeFrameCallback(playbackFrameCallback);
+        playbackFrameScheduled = false;
     }
 
     void commitTurn() {
@@ -887,6 +930,7 @@ final class MoaStreamingVoiceSessionController {
                     }
                 }
             }
+            post(MoaStreamingVoiceSessionController.this::cancelPlaybackFrames);
             if (!drainedTurnId.isEmpty()) {
                 finishDeviceAudioDone(drainedTurnId, playbackController);
             }
@@ -1044,25 +1088,19 @@ final class MoaStreamingVoiceSessionController {
                 }
             }
             post(() -> callback.onAssistantAudioStarted(audioTurnId));
+            post(MoaStreamingVoiceSessionController.this::schedulePlaybackFrame);
         }
 
         @Override
         public void onAssistantAudioSegment(String audioTurnId, JSONObject segment) {
-            String streamedText;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
                 }
                 assistantAudioProgress.onAssistantAudioSegment(segment);
-                streamedText = assistantAudioProgress.streamedText();
             }
-            // Segment metadata arrives immediately before its PCM frame. Mirror
-            // the accumulated spoken text into the compact response now; the
-            // later assistant_text event still replaces it with the complete
-            // response retained by expanded history.
-            if (!streamedText.isEmpty()) {
-                post(() -> callback.onAssistantText(audioTurnId, streamedText));
-            }
+            // Text is retained now, but visibility is admitted only by the
+            // AudioTrack playback-head frame callback above.
         }
 
         @Override

@@ -128,6 +128,7 @@ public final class OverlayService extends Service {
     private String voiceUserTranscript = "";
     private String voiceAssistantTranscript = "";
     private boolean voiceUserTranscriptFinal;
+    private final MoaLiveConversationState liveConversation = new MoaLiveConversationState();
     private boolean currentStreamingAssistantRecorded;
     private String sessionSpeakLanguage = "";
     private String sessionHearLanguages = "";
@@ -1311,12 +1312,21 @@ public final class OverlayService extends Service {
                 reply = reply + " · interrupted";
             }
         }
+        boolean live = liveConversation.userListening()
+                || liveConversation.userPlaceholder()
+                || liveConversation.assistantCaret()
+                || !liveConversation.assistantFullText().isEmpty();
         overlayUnit.render(
-                voiceLog.currentUserText(),
-                reply,
-                voiceRuntimeState == VoiceRuntimeState.LISTENING,
-                voiceRuntimeState == VoiceRuntimeState.THINKING
-                        || voiceRuntimeState == VoiceRuntimeState.SPEAKING,
+                live ? liveConversation.userText() : voiceLog.currentUserText(),
+                live ? liveConversation.assistantCollapsedText() : reply,
+                live ? liveConversation.assistantFullText() : reply,
+                live ? liveConversation.userListening() : voiceRuntimeState == VoiceRuntimeState.LISTENING,
+                live ? liveConversation.assistantCaret()
+                        : voiceRuntimeState == VoiceRuntimeState.THINKING
+                                || voiceRuntimeState == VoiceRuntimeState.SPEAKING,
+                live && liveConversation.userPlaceholder(),
+                live && liveConversation.assistantPlaceholder(),
+                live ? liveConversation.userUnstableStart() : -1,
                 replyToneColor());
     }
 
@@ -2572,6 +2582,7 @@ public final class OverlayService extends Service {
     // sampler. A fresh session opens immediately after.
     private void stopAssistantAudioForBargeIn() {
         cancelContinuousVoiceRestart();
+        liveConversation.clear();
         voiceLog.markSteeringBoundary();
         renderVoiceTranscriptRows();
         if (streamingVoiceActive()) {
@@ -3109,6 +3120,7 @@ public final class OverlayService extends Service {
     }
 
     private void cancelStreamingVoice() {
+        liveConversation.clear();
         pushToTalkVoiceTurn = false;
         setContinuousVoiceLoop(false);
         suppressFirstTapTurnEmptyCue = false;
@@ -3287,7 +3299,9 @@ public final class OverlayService extends Service {
                     return;
                 }
                 updateConversationId(sessionId);
+                liveConversation.begin(turnId);
                 showTranscriptOverlay("");
+                renderVoiceTranscriptRows();
                 setVoiceRuntimeState(VoiceRuntimeState.LISTENING);
                 updateMicState();
             }
@@ -3324,6 +3338,9 @@ public final class OverlayService extends Service {
                     return;
                 }
                 currentStreamingTurnCommitRequested = true;
+                liveConversation.awaitAssistant(streamingVoiceController == null
+                        ? "" : streamingVoiceController.turnId());
+                renderVoiceTranscriptRows();
                 if (shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);
                     return;
@@ -3340,6 +3357,7 @@ public final class OverlayService extends Service {
                 markStreamingTurnProgressing();
                 String transcript = streamingTranscriptAccumulator.update(text);
                 currentStreamingTranscript = safe(transcript);
+                liveConversation.updateUserPartial(turnId, currentStreamingTranscript);
                 updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
                 setVoiceRuntimeState(currentStreamingTurnCommitRequested ? VoiceRuntimeState.THINKING : VoiceRuntimeState.LISTENING);
                 if (currentStreamingTurnCommitRequested && shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
@@ -3355,6 +3373,8 @@ public final class OverlayService extends Service {
                 String transcript = safe(streamingTranscriptAccumulator.update(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
+                    liveConversation.finalizeUser(turnId, transcript);
+                    renderVoiceTranscriptRows();
                     if (!nextStreamingVoiceFollowUpRunId.isEmpty()) {
                         String followUpRunId = nextStreamingVoiceFollowUpRunId;
                         currentStreamingTurnRouted = true;
@@ -3380,6 +3400,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if (!safe(text).isEmpty()) {
+                    liveConversation.setAssistantFullText(turnId, text);
                     // Streamed assistant text is the reply arriving: show the agent
                     // responding on the orb even for a text-only turn (no audio),
                     // rather than leaving it stuck on THINKING.
@@ -3401,6 +3422,8 @@ public final class OverlayService extends Service {
                     return;
                 }
                 streamingAssistantAudioPlaying = true;
+                liveConversation.startAssistantPlayback(turnId);
+                renderVoiceTranscriptRows();
                 setVoiceRuntimeState(VoiceRuntimeState.SPEAKING);
                 updateMicState();
             }
@@ -3416,6 +3439,13 @@ public final class OverlayService extends Service {
                 // watchdog after the turn has already finished.
                 if (streamingAssistantAudioPlaying) {
                     resetStreamingTurnWatchdog();
+                }
+            }
+            @Override
+            public void onAssistantPlaybackProgress(String turnId, String text, int spokenChars) {
+                if (!isCurrentStreamingGeneration(generation) || currentStreamingTurnRouted) return;
+                if (liveConversation.advanceAssistantPlayback(turnId, text, spokenChars)) {
+                    renderVoiceTranscriptRows();
                 }
             }
             @Override
@@ -3439,6 +3469,8 @@ public final class OverlayService extends Service {
                     return;
                 }
                 streamingAssistantAudioPlaying = false;
+                liveConversation.finishAssistantPlayback(turnId, "");
+                renderVoiceTranscriptRows();
                 MoaTtsRecoveryQueue.Request recovery = ttsRecoveryQueue.onPlaybackDrained(turnId);
                 if (recovery != null) {
                     startQueuedTtsRecovery(recovery, generation);
@@ -3458,6 +3490,10 @@ public final class OverlayService extends Service {
                 }
                 voiceInvocationLatched = false;
                 cancelStreamingTurnWatchdog();
+                if (!streamingAssistantAudioPlaying && !currentStreamingTurnAudioReceived) {
+                    liveConversation.finishAssistantPlayback(turnId, "");
+                    renderVoiceTranscriptRows();
+                }
                 // turn_done carries the language the assistant actually replied in.
                 // Persist it for the session so the header's "Speaks" segment stays
                 // live even after the turn; falls back to the profile when absent.
@@ -3523,6 +3559,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 if ("no_speech".equals(turnStatus)) {
+                    liveConversation.clear();
                     if (suppressFirstTapTurnEmptyCue
                             && !currentStreamingTurnRouted
                             && currentStreamingTranscript.isEmpty()
@@ -3538,6 +3575,7 @@ public final class OverlayService extends Service {
                         return;
                     }
                     String notice = "I didn't catch that.";
+                    liveConversation.clear();
                     updateVoiceAssistantTranscript(notice);
                     speakOverlayNotice(notice);
                     setVoiceRuntimeState(VoiceRuntimeState.READY);
@@ -3681,6 +3719,7 @@ public final class OverlayService extends Service {
         }
         setContinuousVoiceLoop(false);
         voiceFailureRetry.arm(generation);
+        liveConversation.clear();
         updateVoiceAssistantTranscript(notice);
         speakOverlayNotice(notice);
         setVoiceRuntimeState(VoiceRuntimeState.ERROR);

@@ -8,8 +8,10 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.Layout;
+import android.text.SpannableString;
 import android.text.StaticLayout;
 import android.text.TextPaint;
+import android.text.style.ForegroundColorSpan;
 import android.view.View;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -65,6 +67,7 @@ final class MoaRibbonView extends View {
     private float dotScale = 1f;
     private boolean caretVisible;
     private boolean listening;
+    private int highlightStart = -1;
     private ValueAnimator plateAnimator;
     private ValueAnimator caretAnimator;
     private ValueAnimator dotAnimator;
@@ -197,6 +200,14 @@ final class MoaRibbonView extends View {
         sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
     }
 
+    void setHighlightStart(int value) {
+        int next = value < 0 || value >= fullText.length() ? -1 : value;
+        if (highlightStart == next) return;
+        highlightStart = next;
+        textLayout = null;
+        invalidate();
+    }
+
     /**
      * Click-to-expand. Collapsed is a bounded few-line window on the newest
      * text; expanding is how the user reads the rest without the overlay ever
@@ -242,8 +253,15 @@ final class MoaRibbonView extends View {
         if (textLayout == null || textLayout.getWidth() != width) {
             TextPaint paint = new TextPaint(textPaint);
             paint.setColor(toneColor != 0 ? toneColor : palette.ink);
+            CharSequence display = fullText;
+            if (highlightStart >= 0) {
+                SpannableString highlighted = new SpannableString(fullText);
+                highlighted.setSpan(new ForegroundColorSpan(palette.accent),
+                        highlightStart, fullText.length(), SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
+                display = highlighted;
+            }
             textLayout = StaticLayout.Builder
-                    .obtain(fullText, 0, fullText.length(), paint, width)
+                    .obtain(display, 0, display.length(), paint, width)
                     .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                     .setIncludePad(false)
                     .build();
@@ -511,6 +529,15 @@ final class MoaRibbonView extends View {
     private void drawText(Canvas canvas) {
         StaticLayout layout = textLayout();
         if (layout == null) {
+            if (caretVisible && caretAlpha > 0.01f) {
+                fillPaint.setShader(null);
+                fillPaint.setColor(withAlpha(palette.accent, caretAlpha));
+                float x = viewportLeft();
+                float mid = ribbonHeightPx / 2f;
+                scratch.set(x, mid - caretHeightPx / 2f,
+                        x + caretWidthPx, mid + caretHeightPx / 2f);
+                canvas.drawRoundRect(scratch, caretWidthPx / 2f, caretWidthPx / 2f, fillPaint);
+            }
             return;
         }
         float top = padYPx;
