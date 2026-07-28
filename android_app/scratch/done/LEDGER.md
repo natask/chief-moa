@@ -1,3 +1,4 @@
+- Added searchable paginated Android release candidates with lineage/readiness state, exact sequence-bound selection, stable fallback, and exact notification deep links without installing — agent: Codex/GPT-5 — 233be056
 - Kept single-tap turns on the branch created by double tap across HTTP, streaming, reconnect, and restart; blocked failed fresh-thread fallbacks; and bound automatic follow-ups only to an unambiguous run in that session, branch, and intent — agent: Codex/GPT-5 — fix/session-continuity-scoped-20260726
 - Extracted focused overlay support types so OverlayService returns to its guarded source-size ceiling without changing runtime behavior — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Bound OTA public verification to the Compose-owned gateway container so worker labels cannot make exact publication retries ambiguous — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
