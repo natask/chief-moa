@@ -4,7 +4,7 @@ final class ChatMessage {
     final boolean assistant;
     final String text;
     // A notice is a status/error line (for example a dropped voice turn). It
-    // renders as a distinct muted-ember inline strip, never a fake A.G. bubble.
+    // renders as a distinct muted-ember inline strip, never a fake AG bubble.
     final boolean notice;
 
     ChatMessage(boolean assistant, String text) {

@@ -48,15 +48,15 @@ public final class MoaAssistLaunchDecisionTest {
     @Test
     public void permissionHintsNameTheMissingPermission() {
         assertEquals(
-                "Long-press A.G., open Settings, then grant overlay and microphone permissions.",
+                "Long-press AG, open Settings, then grant overlay and microphone permissions.",
                 MoaAssistLaunchDecision.permissionHint(false, false)
         );
         assertEquals(
-                "Long-press A.G., open Settings, then grant overlay permission.",
+                "Long-press AG, open Settings, then grant overlay permission.",
                 MoaAssistLaunchDecision.permissionHint(false, true)
         );
         assertEquals(
-                "Long-press A.G., open Settings, then grant microphone permission.",
+                "Long-press AG, open Settings, then grant microphone permission.",
                 MoaAssistLaunchDecision.permissionHint(true, false)
         );
     }

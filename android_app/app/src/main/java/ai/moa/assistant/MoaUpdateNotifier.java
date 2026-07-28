@@ -56,10 +56,10 @@ final class MoaUpdateNotifier {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "A.G. app updates",
+                    "AG app updates",
                     NotificationManager.IMPORTANCE_DEFAULT
             );
-            channel.setDescription("Announces available A.G. versions. Updates are never installed automatically.");
+            channel.setDescription("Announces available AG versions. Updates are never installed automatically.");
             manager.createNotificationChannel(channel);
         }
 
@@ -76,7 +76,7 @@ final class MoaUpdateNotifier {
                 ? new Notification.Builder(context, CHANNEL_ID)
                 : new Notification.Builder(context);
         builder.setSmallIcon(R.drawable.ic_moa_orb)
-                .setContentTitle("A new A.G. version is available")
+                .setContentTitle("A new AG version is available")
                 .setContentText("Version " + decision.versionName + " — tap to review. Nothing installs automatically.")
                 .setStyle(new Notification.BigTextStyle().bigText(
                         "Version " + decision.versionName

@@ -71,7 +71,7 @@ final class MoaActionBroker {
         if (lower.equals("/screen")) {
             Capability capability = CAPABILITIES.get("screen.summary");
             if (!MoaAccessibilityService.isRunning()) {
-                return LocalActionResult.handled("Screen access is not running. Open A.G. and enable screen access in Android accessibility settings.");
+                return LocalActionResult.handled("Screen access is not running. Open AG and enable screen access in Android accessibility settings.");
             }
             String summary = MoaAccessibilityService.currentScreenSummary();
             if (summary.isEmpty()) {
@@ -150,11 +150,11 @@ final class MoaActionBroker {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             context.startActivity(intent);
-            recordReceipt(capability, "control_center", true, "Opened A.G. control center.");
-            return LocalActionResult.handled("Opened the A.G. control center.");
+            recordReceipt(capability, "control_center", true, "Opened AG control center.");
+            return LocalActionResult.handled("Opened the AG control center.");
         } catch (RuntimeException error) {
             recordReceipt(capability, "control_center", false, "Control center launch failed.");
-            return LocalActionResult.handled("I could not open the A.G. control center.");
+            return LocalActionResult.handled("I could not open the AG control center.");
         }
     }
 
@@ -1028,7 +1028,7 @@ final class MoaActionBroker {
 
     static String playlistDisclosure(
             String operation, String playlist, String replacement, String packageName) {
-        return "Allow A.G. to " + safe(operation)
+        return "Allow AG to " + safe(operation)
                 + (safe(playlist).isEmpty() ? " this playlist" : " playlist \"" + safe(playlist) + "\"")
                 + ("rename".equals(safe(operation)) ? " to \"" + safe(replacement) + "\"" : "")
                 + " in " + safe(packageName) + "?";
@@ -1744,7 +1744,7 @@ final class MoaActionBroker {
     }
 
     static final String CONTACTS_PERMISSION_MISSING =
-            "Contacts permission not granted. Open the A.G. app to grant it.";
+            "Contacts permission not granted. Open the AG app to grant it.";
 
     static String openUrlTarget(JSONObject input) {
         JSONObject args = input == null ? new JSONObject() : input;

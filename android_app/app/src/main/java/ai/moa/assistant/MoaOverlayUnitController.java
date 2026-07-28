@@ -599,7 +599,7 @@ final class MoaOverlayUnitController {
         if (value.isEmpty()) {
             return;
         }
-        clipboard.setPrimaryClip(ClipData.newPlainText("A.G. voice transcript", value));
+        clipboard.setPrimaryClip(ClipData.newPlainText("AG voice transcript", value));
         // Android 13+ shows its own copy confirmation; a second one would be
         // noise. The announcement exists so a truncated copy is still honest.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && youView != null) {

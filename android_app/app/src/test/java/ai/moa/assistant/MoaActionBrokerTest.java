@@ -311,7 +311,7 @@ public final class MoaActionBrokerTest {
     @Test
     public void reportsContactPermissionAndMissMessages() {
         assertEquals(
-                "Contacts permission not granted. Open the A.G. app to grant it.",
+                "Contacts permission not granted. Open the AG app to grant it.",
                 MoaActionBroker.CONTACTS_PERMISSION_MISSING
         );
         assertEquals("No contact found matching \"Mom\".", MoaActionBroker.contactNotFoundReply("Mom"));

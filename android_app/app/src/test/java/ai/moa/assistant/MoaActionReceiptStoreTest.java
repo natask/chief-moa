@@ -15,7 +15,7 @@ public final class MoaActionReceiptStoreTest {
                 "implicit_user_command",
                 "ai.moa.assistant",
                 true,
-                "Opened A.G. settings.",
+                "Opened AG settings.",
                 1234L,
                 "previous"
         );
@@ -25,7 +25,7 @@ public final class MoaActionReceiptStoreTest {
         assertEquals("implicit_user_command", receipt.optString("approval"));
         assertEquals("ai.moa.assistant", receipt.optString("target"));
         assertEquals(true, receipt.optBoolean("success"));
-        assertEquals("Opened A.G. settings.", receipt.optString("result"));
+        assertEquals("Opened AG settings.", receipt.optString("result"));
         assertEquals(1234L, receipt.optLong("timestamp_ms"));
         assertEquals("previous", receipt.optString("previous_hash"));
         assertFalse(receipt.optString("hash").isEmpty());

@@ -17,11 +17,11 @@ final class MoaAssistLaunchDecision {
 
     static String permissionHint(boolean overlayPermissionGranted, boolean microphonePermissionGranted) {
         if (!overlayPermissionGranted && !microphonePermissionGranted) {
-            return "Long-press A.G., open Settings, then grant overlay and microphone permissions.";
+            return "Long-press AG, open Settings, then grant overlay and microphone permissions.";
         }
         if (!overlayPermissionGranted) {
-            return "Long-press A.G., open Settings, then grant overlay permission.";
+            return "Long-press AG, open Settings, then grant overlay permission.";
         }
-        return "Long-press A.G., open Settings, then grant microphone permission.";
+        return "Long-press AG, open Settings, then grant microphone permission.";
     }
 }
