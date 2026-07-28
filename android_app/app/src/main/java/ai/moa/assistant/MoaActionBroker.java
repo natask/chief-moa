@@ -406,6 +406,8 @@ final class MoaActionBroker {
     private ToolExecutionResult openMediaForTool(
             String requestId, JSONObject args, ToolResultCallback callback) {
         Capability capability = CAPABILITIES.get("media.open");
+        String requestedApp = safe(args.optString("app_name", args.optString("appName", "")));
+        if (MoaVlcOpenPolicy.isVlcLabel(requestedApp)) return openVlcSource(capability, args);
         String packageName = resolveMediaOpenYoutubePackage(args);
         if (packageName.isEmpty()) {
             return mediaFailure(capability, "youtube", "The preferred YouTube app is not installed.");
@@ -460,6 +462,20 @@ final class MoaActionBroker {
                 "selection_unverified");
     }
 
+    private ToolExecutionResult openVlcSource(Capability capability, JSONObject args) {
+        MoaVlcOpenPolicy.Result result = MoaVlcOpenPolicy.resolve(args, context.getPackageManager());
+        switch (result.status) {
+            case NEEDS_SOURCE: return mediaFailure(capability, "vlc", "VLC needs an explicit HTTPS or content URI. A title alone cannot be played without a media catalog or source connector (needs_source).");
+            case NOT_FOUND: return mediaFailure(capability, "vlc", "No installed VLC handler was found for this source.");
+            case AMBIGUOUS: return mediaFailure(capability, "vlc", "Multiple VLC handlers matched this source; choose one locally before retrying.");
+            case REJECTED: return mediaFailure(capability, "vlc", "VLC request rejected: " + result.reason + ".");
+            case MATCH: return startMediaIntent(capability, result.packageName, result.intent,
+                    "Opened the explicit media source in VLC; playback was not verified.",
+                    "selection_unverified", false);
+            default: return mediaFailure(capability, "vlc", "VLC request could not be resolved.");
+        }
+    }
+
     private void startYoutubeSearchSelection(
             String operationId, String packageName, String title, String channel,
             ToolResultCallback callback) {
@@ -511,13 +527,13 @@ final class MoaActionBroker {
             Capability capability, String packageName, Intent intent, String successReply,
             String outcome, boolean success) {
         if (intent.resolveActivity(context.getPackageManager()) == null) {
-            return mediaFailure(capability, packageName, "The selected YouTube app cannot handle this request.");
+            return mediaFailure(capability, packageName, "The selected media app cannot handle this request.");
         }
         try {
             context.startActivity(intent);
             return mediaOutcome(capability, packageName, success, successReply, outcome);
         } catch (RuntimeException error) {
-            return mediaFailure(capability, packageName, "The selected YouTube app could not be opened.");
+            return mediaFailure(capability, packageName, "The selected media app could not be opened.");
         }
     }
 
