@@ -68,6 +68,8 @@ final class MoaRibbonView extends View {
     private boolean caretVisible;
     private boolean listening;
     private int highlightStart = -1;
+    private String collapsedSpokenText = "";
+    private boolean collapsedSpokenActive;
     private ValueAnimator plateAnimator;
     private ValueAnimator caretAnimator;
     private ValueAnimator dotAnimator;
@@ -201,11 +203,34 @@ final class MoaRibbonView extends View {
     }
 
     void setHighlightStart(int value) {
-        int next = value < 0 || value >= fullText.length() ? -1 : value;
+        int next = value < 0 || value >= displayedText().length() ? -1 : value;
         if (highlightStart == next) return;
         highlightStart = next;
         textLayout = null;
         invalidate();
+    }
+
+    /**
+     * Collapsed paint-time override for a spoken reply: the collapsed bubble
+     * shows only the text the AudioTrack playback head has actually crossed,
+     * while {@link #setFullText} retains the complete response for expansion
+     * and Copy. Never active outside a live hosted-audio reply.
+     */
+    void setCollapsedSpoken(String text, boolean active) {
+        String next = text == null ? "" : text;
+        if (collapsedSpokenActive == active && next.equals(collapsedSpokenText)) {
+            return;
+        }
+        collapsedSpokenText = next;
+        collapsedSpokenActive = active;
+        textLayout = null;
+        requestLayout();
+        invalidate();
+    }
+
+    /** What the bounded viewport wraps right now. Copy never reads this. */
+    private String displayedText() {
+        return !expanded && collapsedSpokenActive ? collapsedSpokenText : fullText;
     }
 
     /**
@@ -247,17 +272,18 @@ final class MoaRibbonView extends View {
 
     private StaticLayout textLayout() {
         int width = Math.round(viewportRight() - viewportLeft());
-        if (width <= 0 || fullText.isEmpty()) {
+        String shown = displayedText();
+        if (width <= 0 || shown.isEmpty()) {
             return null;
         }
         if (textLayout == null || textLayout.getWidth() != width) {
             TextPaint paint = new TextPaint(textPaint);
             paint.setColor(toneColor != 0 ? toneColor : palette.ink);
-            CharSequence display = fullText;
-            if (highlightStart >= 0) {
-                SpannableString highlighted = new SpannableString(fullText);
+            CharSequence display = shown;
+            if (highlightStart >= 0 && highlightStart < shown.length()) {
+                SpannableString highlighted = new SpannableString(shown);
                 highlighted.setSpan(new ForegroundColorSpan(palette.accent),
-                        highlightStart, fullText.length(), SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
+                        highlightStart, shown.length(), SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
                 display = highlighted;
             }
             textLayout = StaticLayout.Builder

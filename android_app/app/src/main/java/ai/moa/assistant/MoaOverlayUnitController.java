@@ -241,8 +241,14 @@ final class MoaOverlayUnitController {
         // polished variants are derived text and are never written here.
         youVariants.setLiteral(flatten(youText));
         push(youView, youBuffer, youPresence, youVariants.defaultText());
-        push(replyView, replyBuffer, replyPresence, flatten(replyText));
-        replyView.setFullText(flatten(replyFullText));
+        // The retained buffer (Copy and expansion) always owns the COMPLETE
+        // reply. The collapsed spoken window is a paint-time override that only
+        // reveals text the AudioTrack playback head has crossed; it never
+        // becomes the retained text, so Copy cannot take a half-spoken reply.
+        String replyFull = flatten(replyFullText);
+        String replyCollapsed = flatten(replyText);
+        push(replyView, replyBuffer, replyPresence, replyFull);
+        replyView.setCollapsedSpoken(replyCollapsed, !replyCollapsed.equals(replyFull));
         youView.setHighlightStart(youHighlightStart);
 
         youView.setListening(listening);

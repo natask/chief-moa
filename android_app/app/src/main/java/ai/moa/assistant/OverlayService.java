@@ -1398,6 +1398,9 @@ public final class OverlayService extends Service {
 
     private void removeTranscriptOverlay() {
         cancelAutoDismiss();
+        // The live turn dies with its surface: a later showTranscriptOverlay
+        // must not resurrect a stale placeholder or spoken-progress override.
+        liveConversation.clear();
         overlayUnit.hide();
     }
 
@@ -3880,6 +3883,9 @@ public final class OverlayService extends Service {
 
     private void showReadyForNextVoiceTurn(int generation, long dismissDelayMs) {
         cancelStreamingTurnWatchdog();
+        // The turn is over: voiceLog owns its rows now, so later writes (a
+        // notice, a "(not spoken)" marker) are not shadowed by live state.
+        liveConversation.clear();
         setVoiceRuntimeState(VoiceRuntimeState.READY);
         updateMicState();
         if (continuousVoiceLoop && generation == streamingVoiceGeneration) {
@@ -3896,12 +3902,14 @@ public final class OverlayService extends Service {
         if (text.isEmpty() || text.endsWith(NOT_SPOKEN_SUFFIX)) {
             return;
         }
+        liveConversation.clear();
         updateVoiceAssistantTranscript(text + NOT_SPOKEN_SUFFIX);
     }
 
     private void markCurrentReplyNotSaved() {
         String marked = MoaContextControlState.appendNotSaved(voiceAssistantTranscript);
         if (!marked.equals(safe(voiceAssistantTranscript))) {
+            liveConversation.clear();
             updateVoiceAssistantTranscript(marked);
         }
     }
