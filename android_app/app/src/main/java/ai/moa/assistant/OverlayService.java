@@ -372,10 +372,10 @@ public final class OverlayService extends Service {
         }
         NotificationChannel channel = new NotificationChannel(
                 OVERLAY_CHANNEL_ID,
-                "A.G. overlay",
+                "AG overlay",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("Keeps the A.G. overlay available above other apps.");
+        channel.setDescription("Keeps the AG overlay available above other apps.");
         channel.setShowBadge(false);
         channel.setSound(null, null);
         channel.enableVibration(false);
@@ -401,7 +401,7 @@ public final class OverlayService extends Service {
             builder = new Notification.Builder(this);
         }
         builder.setSmallIcon(R.drawable.ic_moa_orb)
-                .setContentTitle("A.G. overlay")
+                .setContentTitle("AG overlay")
                 .setContentText("Ready for commands on the current screen.")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -1123,7 +1123,7 @@ public final class OverlayService extends Service {
 
     private void showCurrentScreenContext() {
         if (!actionBroker.isScreenAccessRunning()) {
-            updateVoiceAssistantTranscript("Screen access is off. Enable it in A.G. settings.");
+            updateVoiceAssistantTranscript("Screen access is off. Enable it in AG settings.");
             return;
         }
         String summary = actionBroker.currentScreenSummary();
@@ -1417,7 +1417,7 @@ public final class OverlayService extends Service {
         header.addView(dot, dotParams);
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        TextView label = text("A.G.", MoaColors.PAPER, 17, true);
+        TextView label = text("AG", MoaColors.PAPER, 17, true);
         label.setLetterSpacing(0.02f);
         copy.addView(label);
         runStatusView = text(overlayHeaderStatusText(), MoaColors.MUTED, 11, false);
@@ -1428,7 +1428,7 @@ public final class OverlayService extends Service {
         refreshRecordModePill();
         header.addView(recordModePill);
         TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
-        hide.setContentDescription("Hide the A.G. orb");
+        hide.setContentDescription("Hide the AG orb");
         hide.setOnClickListener(v -> stopSelf());
         header.addView(hide);
         TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
@@ -1517,7 +1517,7 @@ public final class OverlayService extends Service {
         rowParams.topMargin = dp(12);
         row.setLayoutParams(rowParams);
         composer = new EditText(this);
-        composer.setHint("Message A.G.");
+        composer.setHint("Message AG");
         composer.setHintTextColor(MoaColors.MUTED);
         composer.setTextColor(MoaColors.PAPER);
         composer.setTextSize(15);
@@ -1582,7 +1582,7 @@ public final class OverlayService extends Service {
     private View messageBubble(ChatMessage message) {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
-        TextView label = text(message.assistant ? "A.G." : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
+        TextView label = text(message.assistant ? "AG" : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
         label.setLetterSpacing(0.08f);
         label.setPadding(dp(4), 0, dp(4), dp(3));
         LinearLayout bubble = new LinearLayout(this);
@@ -1668,7 +1668,7 @@ public final class OverlayService extends Service {
             return;
         }
         if (gatewayUrl.isEmpty()) {
-            deliverReply("The gateway isn't connected yet. Open the Moa app to set it up.", fromVoice);
+            deliverReply("The gateway isn't connected yet. Open the AG app to set it up.", fromVoice);
             return;
         }
         requestGatewayReply(text, fromVoice);
@@ -1894,7 +1894,7 @@ public final class OverlayService extends Service {
 
     private void requestAgentRun(String prompt, boolean fromVoice) {
         if (gatewayUrl.isEmpty()) {
-            deliverReply("Agent actions need the A.G. gateway. Set the home-machine URL first.", fromVoice);
+            deliverReply("Agent actions need the AG gateway. Set the home-machine URL first.", fromVoice);
             return;
         }
         JSONObject requestBody;
@@ -2326,7 +2326,7 @@ public final class OverlayService extends Service {
     }
 
     private String spokenAgentPrompt(String text) {
-        return "The user spoke this from the A.G. Android overlay and expects forward progress, not a chat-only answer.\n\n"
+        return "The user spoke this from the AG Android overlay and expects forward progress, not a chat-only answer.\n\n"
                 + "User request:\n"
                 + safe(text)
                 + "\n\nWork in the configured repository. Inspect the current state, make the smallest useful code changes, run the relevant verification, and report the result plainly. Ask for clarification only if the task is genuinely blocked.";
@@ -3529,12 +3529,12 @@ public final class OverlayService extends Service {
     private String shortVoiceFailureNotice(String message) {
         String normalized = safe(message).toLowerCase(Locale.US);
         if (normalized.contains("token was rejected")) {
-            return "Voice can't connect: the gateway rejected this device's token. Re-pair in the Moa app.";
+            return "Voice can't connect: the gateway rejected this device's token. Re-pair in the AG app.";
         }
         if (normalized.contains("url issue")
                 || normalized.contains("not deployed")
                 || normalized.contains("could not resolve")) {
-            return "Voice can't connect. Check the gateway URL in the Moa app.";
+            return "Voice can't connect. Check the gateway URL in the AG app.";
         }
         return "Voice failed.";
     }

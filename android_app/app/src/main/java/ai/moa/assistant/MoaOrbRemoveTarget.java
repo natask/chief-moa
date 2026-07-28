@@ -79,7 +79,7 @@ final class MoaOrbRemoveTarget {
         chip.setTextSize(13);
         chip.setTypeface(Typeface.DEFAULT_BOLD);
         chip.setGravity(Gravity.CENTER);
-        chip.setContentDescription("Undo removing the A.G. overlay");
+        chip.setContentDescription("Undo removing the AG overlay");
         chip.setBackground(MoaDrawables.rounded(
                 0xF01B1C20, dp(context, 24), MoaColors.PANEL_BORDER, dp(context, 1)));
         chip.setOnClickListener(v -> onUndo.run());

@@ -587,7 +587,7 @@ final class MoaRibbonView extends View {
     }
 
     private String accessibilityLabel() {
-        String speaker = reply ? "A.G. reply" : "You said";
+        String speaker = reply ? "AG reply" : "You said";
         String body = line.isEmpty() ? "nothing yet" : line;
         // A screen-reader user cannot discover a long press on a floating window,
         // so the gestures are named. The hold menu rows are also exposed as

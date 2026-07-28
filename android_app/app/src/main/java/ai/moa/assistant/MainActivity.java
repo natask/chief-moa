@@ -230,7 +230,7 @@ public final class MainActivity extends Activity {
         eyebrow.setLetterSpacing(0.14f);
         text.addView(eyebrow);
 
-        TextView title = label("A.G.", MoaColors.PAPER, 30, true);
+        TextView title = label("AG", MoaColors.PAPER, 30, true);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         text.addView(title);
 
@@ -360,7 +360,7 @@ public final class MainActivity extends Activity {
 
     private View actionCard() {
         LinearLayout card = card();
-        addCardTitle(card, "Launch A.G.");
+        addCardTitle(card, "Launch AG");
         addHint(card, "Grant overlay and screen access, then start the orb.");
 
         overlayButton = primaryButton("Enable overlay permission");
@@ -376,7 +376,7 @@ public final class MainActivity extends Activity {
                 MoaMediaNotificationListenerService.accessSettingsIntent()));
         card.addView(mediaAccessButton);
 
-        appInfoButton = secondaryButton("Open A.G. app info");
+        appInfoButton = secondaryButton("Open AG app info");
         appInfoButton.setOnClickListener(v -> openAppInfoSettings());
         card.addView(appInfoButton);
 
@@ -410,7 +410,7 @@ public final class MainActivity extends Activity {
 
         TextView detail = label(
                 "Overlay draws the floating orb. Screen access reads the current screen for context and controlled actions. "
-                        + "If Android blocks the toggle, open A.G. app info, tap the three-dot menu, allow restricted settings, then enable screen access. "
+                        + "If Android blocks the toggle, open AG app info, tap the three-dot menu, allow restricted settings, then enable screen access. "
                         + "Microphone is asked directly; voice starts only after an orb gesture.",
                 MoaColors.MUTED, 13, false);
         detail.setLineSpacing(dp(2), 1f);
@@ -817,7 +817,7 @@ public final class MainActivity extends Activity {
                 new AlertDialog.Builder(this)
                         .setTitle("A recovery build is required")
                         .setMessage("Android cannot safely install this older release over the current app. "
-                                + "A.G. will not uninstall itself because that could remove local settings "
+                                + "AG will not uninstall itself because that could remove local settings "
                                 + "and strand recovery. Ask for a signed, forward-moving stable recovery build.")
                         .setPositiveButton("OK", null)
                         .show();
@@ -830,7 +830,7 @@ public final class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("Review release install")
-                .setMessage("A.G. will download and verify " + candidate.label()
+                .setMessage("AG will download and verify " + candidate.label()
                         + ". Android will then ask you to confirm installation. "
                         + "Selecting this release did not install it.")
                 .setNegativeButton("Cancel", null)
@@ -1129,7 +1129,7 @@ public final class MainActivity extends Activity {
             container.addView(historySpeakerText("YOU", turn.userText, 0xFFBFA9FF));
         }
         if (!turn.assistantText.isEmpty()) {
-            container.addView(historySpeakerText("A.G.", turn.assistantText, MoaColors.GOLD));
+            container.addView(historySpeakerText("AG", turn.assistantText, MoaColors.GOLD));
         } else {
             TextView unavailable = label("No retained assistant text.", MoaColors.MUTED, 13, false);
             unavailable.setPadding(0, dp(8), 0, 0);
@@ -1363,7 +1363,7 @@ public final class MainActivity extends Activity {
         MoaPrefs.markUpdateNotified(this, decision.versionCode);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("New A.G. version available")
+                .setTitle("New AG version available")
                 .setMessage(MoaUpdatePolicy.decisionMessage(decision))
                 .setNegativeButton("Not now", (ignored, which) -> {
                     MoaPrefs.deferUpdate(this, decision.versionCode);

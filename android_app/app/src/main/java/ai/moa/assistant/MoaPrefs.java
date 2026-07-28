@@ -287,7 +287,7 @@ final class MoaPrefs {
         return firstNonEmpty(
                 activeCompanion(context).optString("name", ""),
                 agentProfile(context).optString("assistant_name", ""),
-                "A.G."
+                "AG"
         );
     }
 

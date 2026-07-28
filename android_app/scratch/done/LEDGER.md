@@ -1,5 +1,6 @@
 - Coalesced Android ribbon and panel-drag window updates so streaming paint stays out of WindowManager and move bursts submit once per frame — agent: Codex/GPT-5 — a7a11d45
 - Refined the Android overlay into a compact streaming bubble with bounded expansion, copy and labeled History handoff, plus deterministic production-View screenshots and two Opus QA rounds — agent: Codex/GPT-5 — feat/android-visual-qa-20260727
+- Renamed every Android presentation surface from A.G. to AG while preserving package, signer, update, service, and protocol identity — agent: Codex/GPT-5 — this commit
 - Kept single-tap turns on the branch created by double tap across HTTP, streaming, reconnect, and restart; blocked failed fresh-thread fallbacks; and bound automatic follow-ups only to an unambiguous run in that session, branch, and intent — agent: Codex/GPT-5 — fix/session-continuity-scoped-20260726
 - Extracted focused overlay support types so OverlayService returns to its guarded source-size ceiling without changing runtime behavior — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
 - Bound OTA public verification to the Compose-owned gateway container so worker labels cannot make exact publication retries ambiguous — agent: Codex/GPT-5 — release/converge-chief-moa-20260725

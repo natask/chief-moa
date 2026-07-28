@@ -231,3 +231,16 @@ the installed CLI cannot import its `commander` dependency.
 - [ ] 16.6 Establish the real-phone benchmark with repeated audible success,
       playback-disabled, cancel/replacement, connection-loss, and drain-timeout
       trials against the exact installed APK.
+
+## 17. Android App Display Name
+
+- [x] 17.1 Present the Android app name as exactly `AG`, without dots, across
+      the launcher, Assistant chooser, Quick Settings, accessibility and media
+      service settings, overlay/chat UI, notifications, shortcuts, clipboard
+      labels, and user-facing setup/update copy.
+- [x] 17.2 Preserve the existing application id, package and service class
+      names, signer continuity, update authority, protocol source identifiers,
+      gateway headers, and routing vocabulary.
+- [x] 17.3 Verify the focused naming assertions plus Android unit tests, lint,
+      and debug assembly, then build a local candidate without publishing or
+      installing it.
