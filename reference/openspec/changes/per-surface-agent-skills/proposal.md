@@ -25,7 +25,8 @@ should vary by origin.
   task links a non-blocking `agent_run` for observability. The gateway
   proposes exactly one bounded declarative action per step from a fixed
   vocabulary (click, type, clear, select, scroll, navigate, key, wait,
-  screenshot, finish); it never emits CSS/JS/code strings. A deterministic
+  screenshot, finish); that fixed-action endpoint does not carry CSS/JS/code
+  strings. The surface-program endpoint handles granted code separately. A deterministic
   keyless fallback (wait then finish) keeps the loop smoke-able with no model
   key configured.
 - Add a per-surface skill registry (`gateway/lib/surface-skills.js`) that
@@ -72,8 +73,8 @@ distribution becomes an explicit product goal.
 ## Non-Goals
 
 - No change to the shipped page Q&A path beyond verification.
-- No new browser action vocabulary beyond the fixed kind list in `design.md`;
-  no CSS/JS/code string ever crosses the wire.
+- No implicit code authority from the fixed action vocabulary. Broader browser
+  JS/TS or CDP execution uses the separately granted surface-program contract.
 - No Android two-app split (see decision record above).
 - No change to `phone.dial` that would place a call without the user pressing
   call, and no `CALL_PHONE` permission.
@@ -82,8 +83,8 @@ distribution becomes an explicit product goal.
 
 ## Boundaries
 
-- The gateway proposes bounded declarative actions only; it never emits code
-  strings, and provider keys stay gateway-side.
+- The gateway proposes typed actions or hash-bound surface programs. Provider
+  keys stay gateway-side, and the owning surface validates every proposal.
 - The browser extension validates every proposed action against its own
   local allowlist before executing it, and never activates the task's
   background tab.

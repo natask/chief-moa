@@ -43,6 +43,84 @@ and execution policy into an inspectable per-request agent launch plan.
 - Silent failover between accounts, projects, or devices for side effects.
 - macOS/Windows implementation before the browser/Android contracts are proven.
 
+## Delivery Decision: Surface programs before the generic catalog
+
+The first executable slice does not wait for the generic service catalog and
+`execute_capability` resolver. It exposes checked-in browser and Android tools,
+plus the surface-program envelope defined by `define-surface-program-runtime`.
+The fixed tools remain useful convenience APIs, not a ceiling on an agent's
+granted authority:
+
+```text
+browser_open_tab({url})
+browser_close_tab({tab_handle})
+browser_background_task({instruction, url?, max_steps?})
+android_open_app({package_name})
+android_open_url({url, expected_package?})
+android_semantic_action({expected_package, expected_window_id,
+                         observation_id, action, target_ref, value?})
+```
+
+These product tools are not a claim that the eventual catalog is implemented.
+Their JSON schemas are closed and length-bounded. In parallel, a browser
+execution profile may grant hash-bound JavaScript/TypeScript and named CDP
+domains, including raw `Runtime.evaluate`; Android accepts a versioned,
+declarative Java/Kotlin-decoded IR rather than mobile code strings. All paths
+use proposals, leases, local revalidation, cancellation, and canonical
+receipts. The gateway may propose a program, but never inherits local authority.
+
+The gateway turns a valid tool call into a proposal. Browser and Android remain
+the only executors of their local effects and return receipts through the
+existing device-tool path. A later implementation replaces these permanent
+surface-specific model schemas with catalog descriptors plus
+`execute_capability`; the proposal, approval, local revalidation, idempotency,
+and receipt contracts stay compatible across that migration.
+
+Implementation status must remain explicit. This decision and its schemas are
+specified here; a checked task or passing acceptance command is required before
+any surface is described as implemented. A package, reload signal, uploaded APK,
+or OTA publication is not evidence that the matching action was installed and
+smoke-tested on a real browser or phone.
+
+### Browser-owned background tab lifecycle
+
+A background browser task owns only tabs it created. On claim, the extension
+creates one inactive tab and records a task-bound opaque `tab_handle`, Chrome
+tab ID, creation receipt, lease expiry, and `created_by_moa=true`. It must never
+activate or focus that tab. Each observe/act step renews the lease and verifies
+that the tab is still the task-owned tab. User-created, pre-existing, active,
+pinned, grouped, audible, or otherwise unowned tabs cannot be closed by the
+task.
+
+`browser_close_tab` accepts only an opaque handle from the same authenticated
+surface and is idempotent. Task completion, failure, cancellation, lease expiry,
+extension restart recovery, and user closure all produce a terminal lifecycle
+receipt. Cleanup closes only a still-owned tab. If ownership is missing or
+ambiguous, cleanup reports `ownership_lost` and does not close anything.
+
+Browser actions may use typed semantic references or an authorized surface
+program. Navigation accepts only normalized HTTP(S) URLs. Code/CDP programs are
+allowed only when the effective execution profile names those grants and scope;
+they do not silently inherit credentials, unrestricted origins, extension
+privileges, filesystem access, or gateway authority.
+
+### Android semantic accessibility lifecycle
+
+An Android screen-dependent proposal binds the target device, exact foreground
+package, accessibility window ID, observation ID/digest, expiry, action enum,
+and short-lived semantic target reference. Immediately before execution the
+accessibility service resolves the reference inside the same current window and
+package, confirms the action is supported by that node/window, applies local
+approval policy, then performs at most one semantic action.
+
+Package, window, observation, target, permission, or freshness mismatch fails
+closed with a reason-coded receipt. Android program proposals use the shared
+envelope and Android IR. The native adapter decodes, validates, and executes IR
+through Accessibility and platform APIs; it does not evaluate Java/Kotlin
+source. Profile grants may cover semantic queries, gestures, intents, and
+bounded control flow, while local sensitivity, foreground-state, approval, and
+cancellation policy remain authoritative. Sensitive text is redacted.
+
 ## 1. Canonical Observation
 
 Every surface emits a bounded `observation.v1` envelope:

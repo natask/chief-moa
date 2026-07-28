@@ -3,6 +3,52 @@
 Each implementation unit has one observable acceptance check. Browser,
 Android, gateway, workflow/docs, and verification/deploy are separate lanes.
 
+## 0. Cross-Surface Execution V1 (delivery bridge; implement before catalog)
+
+- [ ] 0.1 Freeze and validate the six convenience schemas:
+      `browser_open_tab`, `browser_close_tab`, `browser_background_task`,
+      `android_open_app`, `android_open_url`, and `android_semantic_action`.
+  - Acceptance: golden invalid-input cases reject oversized values, unknown
+    action enums, and stale target references without enqueueing a proposal;
+    code and IR use the separate surface-program envelope rather than hiding in
+    convenience-tool fields.
+- [ ] 0.1a Implement the `define-surface-program-runtime` envelope and profile
+      registry: browser JS/TS plus granted CDP domains; Android versioned IR.
+  - Acceptance: allowed programs execute only inside the bound surface scope,
+    denied grants fail before effect, and cancel/expiry converge on one terminal
+    receipt.
+- [ ] 0.2 Route each accepted call to a typed device-hub proposal and preserve
+      proposal/approval/idempotency/receipt bindings needed by the later generic
+      catalog seam.
+  - Acceptance: a deterministic cross-device smoke proves one browser and one
+    Android proposal can be claimed only by the bound fresh device and that a
+    second claim returns the same result without a duplicate effect.
+- [ ] 0.3 Implement task-owned browser background tabs with inactive creation,
+      opaque handles, renewable leases, restart reconciliation, and idempotent
+      cleanup on finish/failure/cancel/expiry.
+  - Acceptance: fixture QA proves the tab never becomes active; only the
+    task-created tab is modified/closed; a forged handle and a user-created tab
+    return `not_owned`/`ownership_lost` and remain open.
+- [ ] 0.4 Implement Android package/window-bound semantic accessibility
+      actions using short-lived observation target references and the local
+      accessibility action allowlist.
+  - Acceptance: phone QA performs one allowed semantic action; package change,
+    window change, expired observation, missing target, password target, and
+    unsupported action each produce the expected receipt with no effect.
+- [ ] 0.5 Add the V1 evaluation matrix and exact-artifact evidence capture.
+  - Acceptance: the report records contract tests, gateway smoke, browser
+    fixture smoke, Android build/tests, exact extension version/package digest,
+    exact APK digest/signer, reload/install confirmation, and post-activation
+    smoke as distinct fields.
+- Verification: `cd gateway && npm run check`; `cd browser_extension && npm run
+  verify && npm run smoke`; `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk"
+  ./gradlew test assembleDebug`; then the new browser/background-tab and real
+  phone semantic-action smoke commands added by the implementation lanes.
+- Delivery: commit each lane separately. Package and attempt safe promotion only
+  after its verification gate. Report `packaged`, `published_not_installed`,
+  `reload_unverified`, `installed_not_smoked`, or `active_smoke_passed`
+  truthfully; never collapse them into "deployed."
+
 ## 1. Shared Contract And Deterministic Resolver (gateway lane)
 
 - [ ] 1.1 Add bounded schemas and validators for `observation.v1`, catalog
@@ -19,8 +65,9 @@ Android, gateway, workflow/docs, and verification/deploy are separate lanes.
   - Acceptance: a golden table proves explicit target, match strength,
     project/account binding, readiness, least privilege, executor policy,
     freshness, and stable-ID tie-breaking in order.
-- [ ] 1.4 Expose one bounded resolve endpoint and one generic
-      `execute_capability` seam without registering per-service model tools.
+- [ ] 1.4 After V1 is green, expose one bounded resolve endpoint and migrate the
+      V1 surface tools behind one generic `execute_capability` seam without
+      registering per-service model tools.
   - Acceptance: adding a fixture catalog service changes resolution data but
     does not change the model tool schema.
 - Verification: deterministic resolver smoke plus `cd gateway && npm run check`.
