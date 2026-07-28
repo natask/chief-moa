@@ -13,7 +13,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
-import android.graphics.Color;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Handler;
@@ -21,18 +20,11 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
-import android.text.InputType;
 import android.util.Log;
 import android.view.ActionMode;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.WindowManager;
-import android.view.inputmethod.InputMethodManager;
-import android.widget.EditText;
-import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
@@ -88,7 +80,6 @@ public final class OverlayService extends Service {
     private OrbView orbView;
     private WindowManager.LayoutParams orbParams;
     private MoaCompactOverlayRoot compactOverlayRoot;
-    private WindowManager.LayoutParams panelParams;
     private MoaFrameCoalescer orbDragFrameCoalescer;
     private final MoaOverlayDragMode overlayDragMode = new MoaOverlayDragMode();
     private final MoaWindowLayoutState orbDragLayoutState = new MoaWindowLayoutState();
@@ -103,11 +94,10 @@ public final class OverlayService extends Service {
     private boolean orbRemoveTargetActive;
     private int orbDragScreenWidth;
     private int orbDragScreenHeight;
-    private View panelView;
-    private LinearLayout messageColumn;
-    private ScrollView messageScroll;
-    private EditText composer;
-    private TextView runStatusView;
+    // The composer panel — the typed-chat surface — is its own window and its own
+    // controller. It is deliberately not part of the overlay unit.
+    private final MoaComposerPanelController composerPanel =
+            new MoaComposerPanelController(composerPanelHost());
     // The overlay unit: companion between two ribbons, owned by its own
     // controller inside one bounded WindowManager root.
     private final MoaOverlayUnitController overlayUnit =
@@ -144,7 +134,6 @@ public final class OverlayService extends Service {
     private String pendingReplacementTurnId = "";
     private boolean nextVoiceCaptureFreshThread;
     private MoaVoiceSamplePlayer voiceSamplePlayer;
-    private boolean panelOpen;
     private boolean nextVoiceRunsAgent;
     private static volatile boolean running;
     private String gatewayUrl = "";
@@ -175,11 +164,7 @@ public final class OverlayService extends Service {
     private MoaAudioCaptureController audioNoteCapture;
     private ByteArrayOutputStream audioNoteBuffer;
     private MoaAudioCaptureController warmMic;
-    private TextView recordModePill;
     private final MoaContextControlState contextControls = new MoaContextControlState();
-    private TextView newThreadPill;
-    private TextView incognitoPill;
-    private LinearLayout contextControlsRow;
     private boolean streamingTurnIncognito;
     private int streamingSwitchToken;
     private boolean streamingBranchSwitchPending;
@@ -612,7 +597,7 @@ public final class OverlayService extends Service {
         MoaOverlayWindowLayout.positionAnchored(
                 windowManager, surface, params, screenWidth, screenHeight, margin, dp(12),
                 orbView, orbParams, orbSize, surfaceWidth,
-                surface == panelView ? dp(430) : dp(180));
+                surface == composerPanel.view() ? dp(430) : dp(180));
     }
 
     // The card is always wholly above the orb, so a card that grows (streamed
@@ -625,15 +610,141 @@ public final class OverlayService extends Service {
                 return;
             }
             mainHandler.post(() -> {
-                if (v == panelView) {
+                if (v == composerPanel.view()) {
                     if (overlayDragMode.isDragging()) {
                         return;
                     }
-                    positionSurfaceNearOrb(panelView, panelParams);
+                    positionSurfaceNearOrb(composerPanel.view(), composerPanel.params());
                 }
             });
         });
     }
+    private MoaComposerPanelController.Host composerPanelHost() {
+        return new MoaComposerPanelController.Host() {
+            @Override
+            public android.content.Context context() {
+                return OverlayService.this;
+            }
+
+            @Override
+            public WindowManager windowManager() {
+                return windowManager;
+            }
+
+            @Override
+            public int overlayType() {
+                return MoaOverlayWindowType.resolve();
+            }
+
+            @Override
+            public void positionNearCompanion(View surface, WindowManager.LayoutParams params) {
+                positionSurfaceNearOrb(surface, params);
+            }
+
+            @Override
+            public void keepAnchoredOnRemeasure(View surface) {
+                keepSurfaceAnchoredOnRemeasure(surface);
+            }
+
+            @Override
+            public void attachHeaderDrag(View header) {
+                attachSurfaceHeaderDrag(header);
+            }
+
+            @Override
+            public void onOutsideTouch() {
+                dismissOverlayUi();
+            }
+
+            @Override
+            public void onHideOverlay() {
+                stopSelf();
+            }
+
+            @Override
+            public void onClosePanel() {
+                dismissOverlayUi();
+            }
+
+            @Override
+            public void onSend(String text) {
+                sendUserMessage(text, false);
+            }
+
+            @Override
+            public void onToggleRecordMode() {
+                toggleRecordMode();
+            }
+
+            @Override
+            public boolean recordModeEnabled() {
+                return recordModeEnabled;
+            }
+
+            @Override
+            public MoaContextControlState contextControls() {
+                return contextControls;
+            }
+
+            @Override
+            public void onContextControlsChanged() {
+                refreshContextControls();
+            }
+
+            @Override
+            public String headerStatusText() {
+                return overlayHeaderStatusText();
+            }
+
+            @Override
+            public String gestureHint() {
+                return orbGestureHint();
+            }
+
+            @Override
+            public List<ChatMessage> messages() {
+                return messages;
+            }
+        };
+    }
+
+    private void togglePanel() {
+        composerPanel.toggle();
+    }
+
+    private void showPanel() {
+        if (!Settings.canDrawOverlays(this) || composerPanel.isOpen()) {
+            return;
+        }
+        removeTranscriptOverlay();
+        loadSettings();
+        composerPanel.show();
+    }
+
+    private void removePanel() {
+        composerPanel.remove();
+    }
+
+    private void hideKeyboard() {
+        composerPanel.hideKeyboard();
+    }
+
+    private void renderMessages() {
+        composerPanel.renderMessages();
+    }
+
+    private void refreshContextControls() {
+        composerPanel.refreshContextControls();
+    }
+
+    private void refreshRecordModePill() {
+        composerPanel.refreshRecordModePill();
+    }
+
+    private void setComposerText(String text) {
+        composerPanel.setComposerText(text);
+    }
+
     private void updateAnchoredSurfacePositions() {
         applyLatestOrbDragFrame();
     }
@@ -705,8 +816,8 @@ public final class OverlayService extends Service {
         // and the draft controls and orb window below must lay out from that
         // settled position so the whole ensemble moves as one frame. The ribbons
         // never move the companion; they flip instead.
-        if (panelView != null) {
-            positionSurfaceNearOrb(panelView, panelParams);
+        if (composerPanel.view() != null) {
+            positionSurfaceNearOrb(composerPanel.view(), composerPanel.params());
         }
         prepareVoiceDraftControlPositions();
         syncOrbSlot();
@@ -768,16 +879,7 @@ public final class OverlayService extends Service {
     }
 
     private void setDragDependentControlsHidden(boolean hidden) {
-        float alpha = hidden ? 0f : 1f;
-        int accessibility = hidden
-                ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-                : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO;
-        for (View dependent : new View[]{panelView}) {
-            if (dependent == null) continue;
-            dependent.animate().cancel();
-            dependent.setAlpha(alpha);
-            dependent.setImportantForAccessibility(accessibility);
-        }
+        composerPanel.setHidden(hidden);
     }
 
     // Removal is reversible. Every window still detaches in this same call — no
@@ -834,19 +936,7 @@ public final class OverlayService extends Service {
 
     private void removeAllOverlayWindowsNow() {
         hideKeyboard();
-        View panel = panelView;
-        panelView = null;
-        panelParams = null;
-        panelOpen = false;
-        messageColumn = null;
-        messageScroll = null;
-        composer = null;
-        runStatusView = null;
-        recordModePill = null;
-        newThreadPill = null;
-        incognitoPill = null;
-        contextControlsRow = null;
-        MoaOverlayWindowLayout.detach(windowManager, panel);
+        composerPanel.detachNow();
         cancelAutoDismiss();
         overlayUnit.detachNow();
         removeVoiceDraftControls();
@@ -862,98 +952,6 @@ public final class OverlayService extends Service {
         View target = orbRemoveTarget;
         orbRemoveTarget = null;
         MoaOverlayWindowLayout.detach(windowManager, target);
-    }
-
-    private void togglePanel() {
-        if (panelOpen) {
-            removePanel();
-        } else {
-            showPanel();
-        }
-    }
-
-    private void showPanel() {
-        if (!Settings.canDrawOverlays(this) || panelView != null) {
-            return;
-        }
-        removeTranscriptOverlay();
-        loadSettings();
-        panelView = createPanel();
-        int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(20), dp(380));
-        panelParams = new WindowManager.LayoutParams(
-                width,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                MoaOverlayWindowType.resolve(),
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                android.graphics.PixelFormat.TRANSLUCENT
-        );
-        // The surface follows the orb and stays wholly above it; when there is
-        // not enough room the ORB is pushed down, never the card below. The IME
-        // does not resize overlay windows, so positioning is kept independent
-        // from keyboard animation.
-        panelParams.gravity = Gravity.TOP | Gravity.START;
-        panelParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-        panelView.setOnTouchListener((view, event) -> {
-            if (event.getActionMasked() == android.view.MotionEvent.ACTION_OUTSIDE) {
-                dismissOverlayUi();
-                return true;
-            }
-            return false;
-        });
-        positionSurfaceNearOrb(panelView, panelParams);
-        keepSurfaceAnchoredOnRemeasure(panelView);
-        windowManager.addView(panelView, panelParams);
-        panelOpen = true;
-        panelView.post(() -> positionSurfaceNearOrb(panelView, panelParams));
-        renderMessages();
-        MoaOverlayWindowLayout.animateIn(panelView, dp(18));
-        mainHandler.postDelayed(() -> {
-            if (composer == null) {
-                return;
-            }
-            composer.requestFocus();
-            InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-            if (inputMethodManager != null) {
-                inputMethodManager.showSoftInput(composer, InputMethodManager.SHOW_IMPLICIT);
-            }
-        }, 180);
-    }
-
-    private void removePanel() {
-        if (panelView == null) {
-            return;
-        }
-        hideKeyboard();
-        final View dying = panelView;
-        panelView = null;
-        panelParams = null;
-        panelOpen = false;
-        messageColumn = null;
-        messageScroll = null;
-        composer = null;
-        runStatusView = null;
-        recordModePill = null;
-        newThreadPill = null;
-        incognitoPill = null;
-        contextControlsRow = null;
-        dying.animate()
-                .alpha(0f)
-                .translationY(dp(14))
-                .scaleX(0.97f)
-                .scaleY(0.97f)
-                .setDuration(130)
-                .setInterpolator(new android.view.animation.AccelerateInterpolator())
-                .withEndAction(() -> MoaOverlayWindowLayout.detach(windowManager, dying))
-                .start();
-    }
-
-    private void hideKeyboard() {
-        InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (inputMethodManager != null && composer != null) {
-            inputMethodManager.hideSoftInputFromWindow(composer.getWindowToken(), 0);
-        }
     }
 
     // The overlay unit — the companion between two ribbons — is owned by
@@ -1509,190 +1507,6 @@ public final class OverlayService extends Service {
         pendingContinuousVoiceRestartAfterAudio = false;
     }
 
-    private View createPanel() {
-        FrameLayout shell = new FrameLayout(this);
-        shell.setBackground(MoaDrawables.roundedGradient(MoaColors.RAISED, MoaColors.PANEL_BG, dp(26), MoaColors.PANEL_BORDER, dp(1)));
-        shell.setElevation(dp(28));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            shell.setOutlineSpotShadowColor(0xFF000000);
-            shell.setOutlineAmbientShadowColor(0xFF000000);
-        }
-        shell.setClipToOutline(true);
-        shell.setOutlineProvider(new android.view.ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, android.graphics.Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(26));
-            }
-        });
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(16), dp(15), dp(16), dp(15));
-        shell.addView(panel, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-        panel.addView(createHeader());
-        panel.addView(createContextControlsRow());
-        messageScroll = new ScrollView(this);
-        messageScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        messageScroll.setVerticalScrollBarEnabled(false);
-        messageScroll.setClipToPadding(false);
-        messageScroll.setPadding(0, dp(2), 0, dp(2));
-        messageColumn = new LinearLayout(this);
-        messageColumn.setOrientation(LinearLayout.VERTICAL);
-        messageScroll.addView(messageColumn, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(260)
-        );
-        scrollParams.topMargin = dp(10);
-        panel.addView(messageScroll, scrollParams);
-        panel.addView(createComposer());
-        return shell;
-    }
-
-    private View createHeader() {
-        LinearLayout header = new LinearLayout(this);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setPadding(0, 0, 0, dp(4));
-        PulseDot dot = new PulseDot(this);
-        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(10), dp(10));
-        dotParams.rightMargin = dp(10);
-        dotParams.gravity = Gravity.CENTER_VERTICAL;
-        header.addView(dot, dotParams);
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        TextView label = text("AG", MoaColors.PAPER, 17, true);
-        label.setLetterSpacing(0.02f);
-        copy.addView(label);
-        runStatusView = text(overlayHeaderStatusText(), MoaColors.MUTED, 11, false);
-        copy.addView(runStatusView);
-        header.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        recordModePill = pill("Record", 0x16FFFFFF, MoaColors.MUTED);
-        recordModePill.setOnClickListener(v -> toggleRecordMode());
-        refreshRecordModePill();
-        header.addView(recordModePill);
-        TextView hide = pill("Hide", 0x16FF453A, 0xFFFFAAA4);
-        hide.setContentDescription("Hide the AG orb");
-        hide.setOnClickListener(v -> stopSelf());
-        header.addView(hide);
-        TextView close = pill("×", 0x16FFFFFF, MoaColors.MUTED);
-        close.setContentDescription("Close chat");
-        close.setOnClickListener(v -> dismissOverlayUi());
-        header.addView(close);
-        attachSurfaceHeaderDrag(header);
-        return header;
-    }
-
-    private View createContextControlsRow() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(6), dp(5), dp(6), dp(5));
-        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        rowParams.topMargin = dp(8);
-        row.setLayoutParams(rowParams);
-        contextControlsRow = row;
-        newThreadPill = pill("New thread", 0x16FFFFFF, MoaColors.MUTED);
-        newThreadPill.setOnClickListener(v -> toggleNewThreadArmed());
-        row.addView(newThreadPill);
-        incognitoPill = pill("Incognito", 0x16FFFFFF, MoaColors.MUTED);
-        incognitoPill.setOnClickListener(v -> toggleIncognito());
-        row.addView(incognitoPill);
-        // Flexible spacer keeps the pills left-aligned; the row tint fills behind.
-        row.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
-        refreshContextControls();
-        return row;
-    }
-
-    private void toggleNewThreadArmed() {
-        contextControls.toggleNewThread();
-        refreshContextControls();
-    }
-
-    private void toggleIncognito() {
-        contextControls.toggleIncognito();
-        refreshContextControls();
-    }
-
-    private void refreshContextControls() {
-        if (newThreadPill != null) {
-            boolean armed = contextControls.isNewThreadArmed();
-            newThreadPill.setText(armed ? "New thread armed" : "New thread");
-            newThreadPill.setTextColor(armed ? MoaColors.INK : MoaColors.MUTED);
-            newThreadPill.setBackground(MoaDrawables.rounded(
-                    armed ? MoaColors.GOLD : 0x16FFFFFF,
-                    dp(999),
-                    armed ? 0x33FFFFFF : 0x10FFFFFF,
-                    dp(1)
-            ));
-        }
-        if (incognitoPill != null) {
-            boolean on = contextControls.isIncognitoEnabled();
-            incognitoPill.setText(on ? "Incognito on" : "Incognito");
-            incognitoPill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
-            incognitoPill.setBackground(MoaDrawables.rounded(
-                    on ? MoaColors.EMBER : 0x16FFFFFF,
-                    dp(999),
-                    on ? 0x40FFFFFF : 0x10FFFFFF,
-                    dp(1)
-            ));
-        }
-        if (contextControlsRow != null) {
-            // Persistent tinted status row while incognito is on.
-            contextControlsRow.setBackground(contextControls.isIncognitoEnabled()
-                    ? MoaDrawables.rounded(0x22FF8A3D, dp(14), 0x40FF8A3D, dp(1))
-                    : null);
-        }
-    }
-
-    private View createComposer() {
-        LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(dp(6), dp(6), dp(6), dp(6));
-        row.setBackground(MoaDrawables.rounded(MoaColors.COMPOSER_BG, dp(26), MoaColors.COMPOSER_BORDER, dp(1)));
-        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        rowParams.topMargin = dp(12);
-        row.setLayoutParams(rowParams);
-        composer = new EditText(this);
-        composer.setHint("Message AG");
-        composer.setHintTextColor(MoaColors.MUTED);
-        composer.setTextColor(MoaColors.PAPER);
-        composer.setTextSize(15);
-        composer.setMinLines(1);
-        composer.setMaxLines(4);
-        composer.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        composer.setSingleLine(false);
-        composer.setBackgroundColor(Color.TRANSPARENT);
-        composer.setPadding(dp(12), dp(9), dp(8), dp(9));
-        row.addView(composer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        // Round gold send button. 46dp target, gold brand accent.
-        TextView send = new TextView(this);
-        send.setText("↑");
-        send.setTextColor(MoaColors.INK);
-        send.setTextSize(20);
-        send.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        send.setGravity(Gravity.CENTER);
-        send.setBackground(MoaDrawables.circle(MoaColors.GOLD, 0x33FFFFFF, dp(1)));
-        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(46), dp(46));
-        sendParams.leftMargin = dp(4);
-        send.setLayoutParams(sendParams);
-        send.setOnClickListener(v -> sendComposer(false));
-        row.addView(send);
-        return row;
-    }
-
     private String orbGestureHint() {
         if (MoaPrefs.voiceFirstGestures(this)) {
             return recordModeEnabled
@@ -1702,82 +1516,6 @@ public final class OverlayService extends Service {
         return recordModeEnabled
                 ? "Record mode: double-click and hold to record a note."
                 : "Tap for chat. Double-click and hold to talk.";
-    }
-
-    private void renderMessages() {
-        if (messageColumn == null) {
-            return;
-        }
-        messageColumn.removeAllViews();
-        if (messages.isEmpty()) {
-            TextView empty = text(orbGestureHint(), MoaColors.MUTED, 13, false);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(dp(8), dp(28), dp(8), dp(28));
-            messageColumn.addView(empty);
-            return;
-        }
-        for (ChatMessage message : messages) {
-            messageColumn.addView(messageBubble(message));
-        }
-        if (messageScroll != null) {
-            mainHandler.postDelayed(() -> {
-                if (messageScroll != null) {
-                    messageScroll.fullScroll(View.FOCUS_DOWN);
-                }
-            }, 40);
-        }
-    }
-
-    private View messageBubble(ChatMessage message) {
-        LinearLayout wrap = new LinearLayout(this);
-        wrap.setOrientation(LinearLayout.VERTICAL);
-        TextView label = text(message.assistant ? "AG" : "You", message.assistant ? MoaColors.GOLD : 0xFFBFA9FF, 10, true);
-        label.setLetterSpacing(0.08f);
-        label.setPadding(dp(4), 0, dp(4), dp(3));
-        LinearLayout bubble = new LinearLayout(this);
-        bubble.setOrientation(LinearLayout.VERTICAL);
-        bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
-        int r = dp(20);
-        int tuck = dp(6);
-        float[] radii = message.assistant
-                // tl, tr, br, bl  -> tuck bottom-left
-                ? new float[]{r, r, r, r, r, r, tuck, tuck}
-                // tuck bottom-right
-                : new float[]{r, r, r, r, tuck, tuck, r, r};
-        int fill = message.assistant ? MoaColors.RAISED : MoaColors.USER_BG;
-        int stroke = message.assistant ? MoaColors.RAISED_BORDER : MoaColors.USER_BORDER;
-        bubble.setBackground(MoaDrawables.roundedCorners(fill, radii, stroke, dp(1)));
-        // Cap the text width so a bubble never spans edge to edge (~80%).
-        int maxBubbleText = (int) (getResources().getDisplayMetrics().widthPixels * 0.80f) - dp(28) - dp(36);
-        TextView body = text(message.text, MoaColors.PAPER, 15, false);
-        body.setLineSpacing(dp(4), 1f);
-        body.setMaxWidth(maxBubbleText);
-        bubble.addView(body);
-        wrap.addView(label);
-        wrap.addView(bubble);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        params.gravity = message.assistant ? Gravity.START : Gravity.END;
-        params.topMargin = dp(9);
-        params.leftMargin = message.assistant ? 0 : dp(36);
-        params.rightMargin = message.assistant ? dp(36) : 0;
-        wrap.setLayoutParams(params);
-        wrap.setGravity(message.assistant ? Gravity.START : Gravity.END);
-        return wrap;
-    }
-
-    private void sendComposer(boolean fromVoice) {
-        if (composer == null) {
-            return;
-        }
-        String text = composer.getText().toString().trim();
-        if (text.isEmpty()) {
-            return;
-        }
-        composer.setText("");
-        sendUserMessage(text, fromVoice);
     }
 
     private void sendUserMessage(String text, boolean fromVoice) {
@@ -2428,9 +2166,7 @@ public final class OverlayService extends Service {
     }
 
     private void updateAgentRunStatus() {
-        if (runStatusView != null) {
-            runStatusView.setText(overlayHeaderStatusText());
-        }
+        composerPanel.setHeaderStatus(overlayHeaderStatusText());
         updateVoiceHeaderState();
     }
 
@@ -2877,21 +2613,6 @@ public final class OverlayService extends Service {
         renderMessages();
     }
 
-    private void refreshRecordModePill() {
-        if (recordModePill == null) {
-            return;
-        }
-        boolean on = recordModeEnabled;
-        recordModePill.setText(on ? "Record on" : "Record");
-        recordModePill.setTextColor(on ? MoaColors.INK : MoaColors.MUTED);
-        recordModePill.setBackground(MoaDrawables.rounded(
-                on ? MoaColors.GOLD : 0x16FFFFFF,
-                dp(999),
-                on ? 0x33FFFFFF : 0x10FFFFFF,
-                dp(1)
-        ));
-    }
-
     private void startAudioNoteCapture() {
         if (audioNoteActive) {
             return;
@@ -3151,14 +2872,6 @@ public final class OverlayService extends Service {
             voiceSamplePlayer.destroy();
             voiceSamplePlayer = null;
         }
-    }
-
-    private void setComposerText(String text) {
-        if (composer == null) {
-            return;
-        }
-        composer.setText(text);
-        composer.setSelection(composer.getText().length());
     }
 
     private void startStreamingVoiceTurn(boolean autoCommitOnSilence) {
