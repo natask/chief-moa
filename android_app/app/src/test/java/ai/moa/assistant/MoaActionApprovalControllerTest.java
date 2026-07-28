@@ -221,6 +221,11 @@ public final class MoaActionApprovalControllerTest {
     @Test
     public void readOnlyPlaylistIsImplicitButUnknownToolsFailClosed() throws Exception {
         assertEquals(
+                MoaActionApprovalController.ApprovalRequirement.CONFIRMATION_REQUIRED,
+                MoaActionApprovalController.approvalRequirement(
+                        "screen.set_text", new JSONObject().put("label", "Message"))
+        );
+        assertEquals(
                 MoaActionApprovalController.ApprovalRequirement.IMPLICIT,
                 MoaActionApprovalController.approvalRequirement(
                         "media.playlist",

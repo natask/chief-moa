@@ -7,7 +7,7 @@ const PAGE_TOOLS = new Set([
 
 function createBrowserAutomationRuntime({
   chromeApi, allowedUrl, authorizeUrl, activeTab, snapshot, captureScreenshot, act, screenFromSnapshot,
-  maxScreenshotChars, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  maxScreenshotChars, tabOwnership = null, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   async function execute(request) {
     const tool = String(request?.tool || "");
@@ -30,6 +30,8 @@ function createBrowserAutomationRuntime({
     let tab;
     if (input.new_tab === true || input.newTab === true) {
       tab = await chromeApi.tabs.create({ url, active: input.active !== false });
+      const ownership = await tabOwnership?.remember({ ...tab, url }, input.request_id || null);
+      tab.ownership = ownership;
     } else {
       const target = Number.isInteger(requestedTabId) && requestedTabId >= 0
         ? await chromeApi.tabs.get(requestedTabId)
@@ -37,14 +39,16 @@ function createBrowserAutomationRuntime({
       if (!target?.id) return failure(tool, "no target tab", "No browser tab was available for navigation.");
       tab = await chromeApi.tabs.update(target.id, { url });
     }
-    return success(tool, `Navigated browser to ${url}.`, { tab_id: tab?.id || null, url: tab?.url || url, active: tab?.active === true });
+    return success(tool, `Navigated browser to ${url}.`, { tab_id: tab?.id || null, url: tab?.url || url, active: tab?.active === true, ...(tab?.ownership ? { ownership_nonce: tab.ownership.ownership_nonce, ownership_expires_at_ms: tab.ownership.expires_at_ms } : {}) });
   }
 
   async function openSearch(tool, input) {
     const search = normalizeSearchRequest(input);
     const tab = await chromeApi.tabs.create({ url: search.url, active: search.active });
+    const ownership = await tabOwnership?.remember({ ...tab, url: search.url }, input.request_id || null);
     return success(tool, `Opened ${search.provider} results for ${search.query}.`, {
       tab_id: tab?.id || null, url: tab?.url || search.url, provider: search.provider, query: search.query,
+      ...(ownership ? { ownership_nonce: ownership.ownership_nonce, ownership_expires_at_ms: ownership.expires_at_ms } : {}),
     });
   }
 
@@ -114,7 +118,8 @@ function createBrowserAutomationRuntime({
         tab_id: tab.id, retryable: true,
       });
     }
-    const response = await act(tab.id, { action: normalized.action, index: target.i, text: normalized.text });
+    const background = await tabOwnership?.isOwned(tab.id) === true && tab.active !== true;
+    const response = await act(tab.id, { action: normalized.action, index: target.i, text: normalized.text, background });
     const result = String(response?.result || "");
     const ok = !/^error:|^no element|^user cancelled/i.test(result);
     return ok

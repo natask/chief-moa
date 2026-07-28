@@ -46,7 +46,7 @@ test("runtime resolves semantic actions locally and returns retryable misses", a
   const { runtime, actions } = runtimeFixture();
   const clicked = await runtime.execute({ tool: "browser.page.click", input: { role: "button", testId: "checkout" } });
   assert.equal(clicked.ok, true);
-  assert.deepEqual(actions, [{ tabId: 3, request: { action: "click", index: 4, text: undefined } }]);
+  assert.deepEqual(actions, [{ tabId: 3, request: { action: "click", index: 4, text: undefined, background: false } }]);
 
   const missing = await runtime.execute({ tool: "browser.page.click", input: { role: "link", name: "Missing" } });
   assert.equal(missing.ok, false);

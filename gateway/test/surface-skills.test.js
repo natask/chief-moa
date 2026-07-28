@@ -10,7 +10,9 @@ const {
   markTrustedTurnSurface,
   runPhoneAction,
   surfaceClassicTools,
+  surfaceBrowserActionTool,
   surfaceExecuteCapabilities,
+  runBrowserAction,
 } = require("../lib/surface-skills");
 
 function harness(call = {}) {
@@ -31,9 +33,26 @@ function harness(call = {}) {
   return { deps, created };
 }
 
+function delegationEnvelope(userIntent) {
+  return {
+    version: "moa.browser-delegation.v1",
+    confirmation: { confirmed: true, user_intent: userIntent },
+    goal: userIntent,
+    scope: { page_url: "https://example.test/work", allowed_origins: ["https://example.test"] },
+    allowed_action_classes: ["navigate", "click", "type", "wait"],
+    approval_policy: { preauthorized: ["navigate", "click", "type", "wait"], always_ask: [] },
+    checkpoints: ["stop before destructive or credential-adjacent effects"],
+    stop_conditions: ["stop when the requested work is complete"],
+    max_steps: 40,
+    completion_evidence: ["return the browser-local receipt"],
+  };
+}
+
 const REQUIRED_PHONE_TOOLS = [
   "app.launch", "app.list", "url.open", "phone.dial", "contact.open",
   "media.open", "media.control", "media.bookmark", "media.playlist",
+  "screen.summary", "screen.tap_text", "screen.set_text", "screen.scroll",
+  "system.back", "system.home",
 ];
 
 test("canonical phone schema retains app and media tools and has a Gemini-derived shape", () => {
@@ -198,15 +217,15 @@ test("media.bookmark accepts explicit spot preferences and rejects generic video
   assert.equal(genericState.created.length, 0);
 });
 
-test("browser calls receive browser media proposals but no Android phone route", async () => {
+test("browser calls receive browser media proposals and explicit cross-surface Android routes", async () => {
   const call = { source: "agee-extension", transcript: "Play this YouTube video" };
   const state = harness(call);
-  assert.equal(phoneActionToolSchema(call), null);
-  assert.equal(phoneActionGeminiDeclaration(call), null);
-  assert.equal(surfaceClassicTools(call, state.deps).some((tool) => tool.name === "phone_action"), false);
+  assert.ok(phoneActionToolSchema(call));
+  assert.ok(phoneActionGeminiDeclaration(call));
+  assert.equal(surfaceClassicTools(call, state.deps).some((tool) => tool.name === "phone_action"), true);
   const capabilities = surfaceExecuteCapabilities(call, state.deps);
-  assert.equal(Object.hasOwn(capabilities, "phone_open_app"), false);
-  assert.equal(Object.hasOwn(capabilities, "phone_media_open"), false);
+  assert.equal(Object.hasOwn(capabilities, "phone_open_app"), true);
+  assert.equal(Object.hasOwn(capabilities, "phone_media_open"), true);
 
   const proposal = browserMediaProposalTool(call).handler({
     tool: "media.open",
@@ -223,6 +242,148 @@ test("browser calls receive browser media proposals but no Android phone route",
     input: { video_id: "dQw4w9WgXcQ", position_ms: 42000 },
   });
   assert.equal(state.created.length, 0, "an inert browser proposal must not create a device tool request");
+});
+
+test("model-facing browser tab tools queue the exact fresh-manifest target", async () => {
+  const cases = [
+    ["browser.tab.list", {}, "Show my browser tabs"],
+    ["browser.tab.open", { url: "https://example.test/path" }, "Open this URL in a browser tab"],
+    ["browser.tab.activate", { tab_id: 12 }, "Switch to that tab"],
+    ["browser.tab.close", { tab_id: 12 }, "Close that tab"],
+    ["browser.tab.reload", { tab_id: 12 }, "Reload that browser tab"],
+  ];
+  for (const [tool, input, transcript] of cases) {
+    const call = markTrustedTurnSurface({
+      source: "android-overlay", device_id: "android_origin", transcript,
+    }, "android");
+    const state = harness(call);
+    const result = await runBrowserAction(call, state.deps, { tool, input });
+    assert.equal(result.ok, true, `${tool}: ${JSON.stringify(result)}`);
+    assert.equal(state.created[0].tool, tool);
+    assert.equal(state.created[0].target_surface_type, "browser_extension");
+    assert.equal("target_device_id" in state.created[0], false, "cross-surface routing must resolve from fresh manifests");
+    assert.equal(state.created[0].source_device_id, "android_origin");
+    assert.deepEqual(state.created[0].input, input);
+  }
+  assert.deepEqual(
+    surfaceBrowserActionTool({}, harness().deps).parameters.properties.tool.enum,
+    [...cases.map(([tool]) => tool), "browser.cdp.execute"],
+  );
+});
+
+test("code mode exposes bounded browser CDP with explicit profile, delegation, and receipt polling", async () => {
+  const transcript = "Use browser automation to inspect the background tab";
+  const call = markTrustedTurnSurface({
+    source: "android-overlay",
+    device_id: "android_origin",
+    transcript,
+    delegation_envelope: delegationEnvelope(transcript),
+  }, "android");
+  const state = harness(call);
+  const capabilities = surfaceExecuteCapabilities(call, state.deps);
+  assert.ok(capabilities.browser_cdp_execute, "QuickJS capability catalog must include browser_cdp_execute");
+  assert.match(capabilities.browser_cdp_execute.description, /Do not request cookies.*browser storage.*unavailable/i);
+
+  const result = await capabilities.browser_cdp_execute.run({
+    tab_id: 27,
+    authority_profile: "automation",
+    commands: [
+      { method: "Runtime.evaluate", params: { expression: "document.title", returnByValue: true } },
+      { method: "Page.getNavigationHistory", params: {} },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.type, "tool_request_receipt", "the capability must poll through the terminal receipt path");
+  assert.equal(state.created[0].tool, "browser.cdp.execute");
+  assert.equal(state.created[0].target_surface_type, "browser_extension");
+  assert.deepEqual(state.created[0].input, {
+    tab_id: 27,
+    authority_profile: "automation",
+    cdp_actions: [
+      { method: "Runtime.evaluate", params: { expression: "document.title", returnByValue: true } },
+      { method: "Page.getNavigationHistory", params: {} },
+    ],
+    delegation_envelope: delegationEnvelope(transcript),
+  });
+});
+
+test("browser CDP bridge rejects implicit authority and gateway-bounds commands without classifying methods", async () => {
+  const transcript = "Debug the agent-owned background tab";
+  const noDelegation = harness();
+  const denied = await runBrowserAction(
+    { source: "agee-extension", transcript }, noDelegation.deps,
+    { tool: "browser.cdp.execute", input: { tab_id: 3, authority_profile: "debug", commands: [{ method: "Runtime.evaluate", params: {} }] } },
+  );
+  assert.equal(denied.ok, false);
+  assert.match(denied.error, /confirmed current-user delegation/);
+  assert.equal(noDelegation.created.length, 0);
+
+  const call = { source: "agee-extension", transcript, delegation_envelope: delegationEnvelope(transcript) };
+  const state = harness(call);
+  const unknownMethod = await runBrowserAction(call, state.deps, {
+    tool: "browser.cdp.execute",
+    input: { tab_id: 3, authority_profile: "debug", commands: [{ method: "FutureDomain.doAnything", params: {} }] },
+  });
+  assert.equal(unknownMethod.ok, true, "gateway must leave CDP method classification to the extension");
+  assert.equal(state.created.length, 1);
+
+  const tooMany = await runBrowserAction(call, state.deps, {
+    tool: "browser.cdp.execute",
+    input: { tab_id: 3, authority_profile: "automation", commands: Array.from({ length: 41 }, () => ({ method: "Page.enable", params: {} })) },
+  });
+  assert.equal(tooMany.ok, false);
+  assert.match(tooMany.error, /1 through 40/);
+  assert.equal(state.created.length, 1);
+});
+
+test("Android accessibility and navigation tools are bounded and warranted", async () => {
+  const cases = [
+    ["screen.summary", {}, "Tell me what is on the phone screen"],
+    ["screen.tap_text", { text: "Continue" }, "Tap Continue on the phone"],
+    ["screen.set_text", { label: "Search", text: "weather" }, "Enter weather in Search on the phone"],
+    ["screen.scroll", { label: "Results", direction: "forward" }, "Scroll Results on the phone"],
+    ["system.back", {}, "Press back on the phone"],
+    ["system.home", {}, "Go to the Android home screen"],
+  ];
+  for (const [tool, input, transcript] of cases) {
+    const call = { source: "agee-extension", transcript };
+    const state = harness(call);
+    const result = await runPhoneAction(call, state.deps, { tool, input });
+    assert.equal(result.ok, true, `${tool}: ${JSON.stringify(result)}`);
+    assert.equal(state.created[0].tool, tool);
+    assert.equal(state.created[0].target_surface_type, "android");
+    assert.deepEqual(state.created[0].input, input);
+  }
+});
+
+test("surface actions reject unwarranted, ambiguous, and stale targets before execution", async () => {
+  const unwarranted = harness();
+  const denied = await runPhoneAction(
+    { source: "agee-extension", transcript: "What does Continue mean?" },
+    unwarranted.deps,
+    { tool: "screen.tap_text", input: { text: "Continue" } },
+  );
+  assert.equal(denied.ok, false);
+  assert.equal(unwarranted.created.length, 0);
+
+  for (const message of [
+    "target device is ambiguous; choose a device through an authenticated device principal",
+    "no compatible online target device is available",
+  ]) {
+    const created = [];
+    const deps = {
+      ...harness().deps,
+      createToolRequest: async (request) => { created.push(request); throw new Error(message); },
+    };
+    const result = await runBrowserAction(
+      { source: "android-overlay", transcript: "Show my browser tabs" },
+      deps,
+      { tool: "browser.tab.list", input: {} },
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.error, new RegExp(message.split(";")[0]));
+    assert.equal(created.length, 1);
+  }
 });
 
 test("page evidence cannot independently authorize a browser media proposal", () => {

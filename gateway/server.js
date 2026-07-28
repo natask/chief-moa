@@ -11537,11 +11537,16 @@ function createToolRequest(body) {
     throw new Error("target_device_id or target_surface_type is required");
   }
 
+  const targetDevice = targetDeviceId
+    ? listDeviceClients().find((device) => device.device_id === targetDeviceId)
+    : null;
+  const input = bindLocalObservationInput(tool, body.input || body.arguments || {}, targetDevice);
+
   const requestRecord = {
     id: randomId("treq"),
     status: "pending",
     tool,
-    input: sanitizeToolJson(body.input || body.arguments || {}),
+    input,
     source: String(body.source || "api").slice(0, 120),
     source_device_id: sourceDeviceId,
     source_surface_type: body.source_surface_type || body.sourceSurfaceType
@@ -11563,6 +11568,27 @@ function createToolRequest(body) {
   };
   writeToolRequest(requestRecord);
   return requestRecord;
+}
+
+function bindLocalObservationInput(tool, rawInput, targetDevice) {
+  const input = sanitizeToolJson(rawInput || {});
+  if (!targetDevice || targetDevice.surface_type !== "android") return input;
+  if (!["screen.tap_text", "screen.set_text", "screen.scroll"].includes(tool)) return input;
+  const descriptor = targetDevice.metadata && targetDevice.metadata.context_descriptor;
+  if (!descriptor || descriptor.availability !== "available" || descriptor.fresh !== true) {
+    throw new Error("fresh Android screen context is required");
+  }
+  const expectedPackage = String(descriptor.package_name || descriptor.application_id || "").trim();
+  if (!expectedPackage) throw new Error("fresh Android package binding is required");
+  input.expected_package = expectedPackage;
+  if (["screen.set_text", "screen.scroll"].includes(tool)) {
+    const windowId = Number(descriptor.window_id);
+    if (!Number.isSafeInteger(windowId) || windowId < 0) {
+      throw new Error("fresh Android window binding is required");
+    }
+    input.expected_window_id = windowId;
+  }
+  return input;
 }
 
 function deviceClientsForTool({ surfaceType, tool }) {

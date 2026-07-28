@@ -15,7 +15,8 @@ drift — update both together.
 - Let the model reach phone and browser tools by name, with the offered set
   depending on which surface the turn came from, without forking chat
   history per surface.
-- Keep the no-eval boundary intact: the gateway proposes data, never code.
+- Keep the proposal boundary intact: fixed skills remain declarative; code and
+  CDP use the separately versioned, profile-granted surface-program envelope.
 
 **Non-Goals:**
 
@@ -183,9 +184,10 @@ if the new agent-loop poll or surface-skills wiring breaks it.
 
 ## Trust Boundaries
 
-- Bounded declarative actions only. The gateway's action vocabulary (browser)
+- Fixed-tool actions are bounded and declarative. The gateway's action vocabulary (browser)
   and tool_request kinds (phone/browser) are closed enumerations with typed,
-  length-capped params. No field ever carries a CSS/JS/code string.
+  length-capped params. These fixed-action fields do not carry CSS/JS/code;
+  granted code uses the surface-program envelope.
 - The extension validates locally. Every proposed browser action is checked
   against the extension's own local allowlist before any DOM interaction;
   unknown kind is a hard reject (finish status=failed), never a best-effort
@@ -197,7 +199,8 @@ if the new agent-loop poll or surface-skills wiring breaks it.
 - Keys stay on the gateway. Raw provider (OpenAI/Anthropic/Gemini) credentials
   never reach Android or the browser extension; only `tool_request` records
   and `browser_agent_task` records cross the wire, both bounded and
-  declarative.
+  declarative. Browser programs use the separate surface-program profile and
+  do not smuggle source or CDP commands through these fields.
 
 ## Two-App Split — Recorded Decision
 

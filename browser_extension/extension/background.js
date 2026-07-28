@@ -16,6 +16,8 @@ import { browserContextDescriptor, browserSessionExecutionAdapters } from "./bro
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
 import { browserLocalToolManifest as browserAutomationLocalToolManifest } from "./browser-automation-contract.js";
 import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
+import { createBrowserTabRuntime } from "./browser-tab-runtime.js";
+import { authorizeCdpCommand, compactCdpOutput, normalizeCdpProfile } from "./browser-cdp-policy.js";
 import { allowedFileSchemeAccess, authorizeBrowserUrl } from "./browser-file-access-runtime.js";
 import { compactDiagnosticEntry, normalizeDiagnosticRequest } from "./browser-diagnostics-contract.js";
 import { createBrowserCommandRuntime } from "./browser-command-runtime.js";
@@ -66,6 +68,7 @@ function browserLocalToolManifest() {
 }
 
 const mediaConfirmation = createMediaConfirmationRuntime({ chromeApi: chrome }), browserMedia = createBrowserMediaRuntime({ ask, callGateway, confirmMedia: mediaConfirmation.confirm, getConfig, storage: chrome.storage.local, tabs: chrome.tabs });
+const browserTabs = createBrowserTabRuntime({ chromeApi: chrome, storage: chrome.storage.session });
 const toolReceipts = createToolReceiptRuntime({ callGateway, execute: executeBrowserToolRequest, storage: chrome.storage.local });
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
@@ -738,12 +741,13 @@ async function executeBrowserToolRequest(request) {
         };
       }
       const url = authorization.url;
-      const tab = await chrome.tabs.create({ url, active: true });
+      const background = input.background === true || input.active === false;
+      const { tab, ownership } = await browserTabs.open({ url, background, requestId: request?.id || input.request_id || null });
       return {
         ok: true,
         summary: `Browser opened ${tab.url || url}.`,
-        result: { tab_id: tab.id || null, url: tab.url || url },
-        local_receipt: { tool, success: true },
+        result: { tab_id: tab.id || null, url: tab.url || url, active: tab.active === true, agent_owned: true, ownership_nonce: ownership.ownership_nonce, ownership_expires_at_ms: ownership.expires_at_ms },
+        local_receipt: { schema: "moa.browser-action-receipt.v1", tool, success: true, tab_id: tab.id || null, request_id: ownership.request_id, ownership_nonce: ownership.ownership_nonce, ownership_expires_at_ms: ownership.expires_at_ms, background, focus_changed: !background },
       };
     }
     if (tool === "browser.tab.activate" || tool === "browser.tab.focus") {
@@ -792,18 +796,17 @@ async function executeBrowserToolRequest(request) {
       };
     }
     if (tool === "browser.tab.close") {
-      const tabIds = Array.isArray(input.tab_ids)
-        ? input.tab_ids.map((value) => Number(value)).filter((value) => Number.isFinite(value))
-        : [Number(input.tab_id ?? input.tabId)].filter((value) => Number.isFinite(value));
-      if (!tabIds.length) {
+      const tabId = Number(input.tab_id ?? input.tabId);
+      if (!Number.isInteger(tabId)) {
         return { ok: false, error: "browser.tab.close requires tab_id", summary: "Browser tab close request was missing a tab id." };
       }
-      await chrome.tabs.remove(tabIds);
+      const closed = await browserTabs.close(tabId, input.ownership_nonce || input.ownershipNonce || null);
+      if (!closed.ok) return { ok: false, error: closed.error, summary: "Browser refused to close a tab without a current matching ownership lease.", local_receipt: { schema: "moa.browser-action-receipt.v1", tool, success: false, tab_id: tabId, policy_code: closed.code } };
       return {
         ok: true,
-        summary: `Closed ${tabIds.length} browser tab${tabIds.length === 1 ? "" : "s"}.`,
-        result: { tab_ids: tabIds },
-        local_receipt: { tool, success: true },
+        summary: `Closed agent-owned browser tab ${tabId}.`,
+        result: { tab_id: tabId },
+        local_receipt: { schema: "moa.browser-action-receipt.v1", tool, success: true, tab_id: tabId },
       };
     }
     if (tool === "browser.tab.reload") {
@@ -841,13 +844,21 @@ async function executeBrowserToolRequest(request) {
       if (!tab?.id) {
         return { ok: false, error: "no target tab", summary: "No browser tab was available for CDP execution." };
       }
+      const profile = normalizeCdpProfile(input.authority_profile || input.profile);
+      if (!profile) return { ok: false, error: "unknown CDP authority profile", summary: "Browser rejected the CDP authority profile." };
+      const ownershipNonce = input.ownership_nonce || input.ownershipNonce || null;
+      if (!ownershipNonce) return { ok: false, error: "browser.cdp.execute requires the ownership nonce", summary: "Browser refused CDP access without a tab ownership identity.", local_receipt: { schema: "moa.browser-cdp-receipt.v1", tool, success: false, tab_id: tab.id, policy_code: "identity_required" } };
+      const ownership = await browserTabs.validate(tab.id, ownershipNonce);
+      if (!ownership.ok || tab.active === true) {
+        return { ok: false, error: ownership.ok ? "browser.cdp.execute requires an inactive tab" : ownership.error, summary: "Browser refused CDP access without a current matching ownership lease on a background tab.", local_receipt: { schema: "moa.browser-cdp-receipt.v1", tool, success: false, tab_id: tab.id, policy_code: ownership.ok ? "tab_active" : ownership.code } };
+      }
       const actions = Array.isArray(input.cdp_actions) ? input.cdp_actions : Array.isArray(input.actions) ? input.actions : [];
-      const result = await executeCdpActionsOnTab(tab.id, actions);
+      const result = await executeCdpActionsOnTab(tab.id, actions, { profile, tabUrl: tab.url || "" });
       return {
         ok: result.ok,
         summary: `Executed ${result.action_results.length} CDP browser action${result.action_results.length === 1 ? "" : "s"} on ${tab.title || "active tab"}.`,
         result,
-        local_receipt: { tool, success: result.ok },
+        local_receipt: { schema: "moa.browser-cdp-receipt.v1", tool, success: result.ok, tab_id: tab.id, authority_profile: profile, attached: result.attached, detached: true, command_count: result.action_results.length },
       };
     }
     if (tool === "browser.task.claim") {
@@ -874,7 +885,8 @@ const browserAutomationRuntime = createBrowserAutomationRuntime({
   captureScreenshot: captureScreenshotViaDebugger,
   activeTab: async () => (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0] || null,
   snapshot: async (tabId) => (await ensureContent(tabId), normalizeBrowserSnapshot(await ask(tabId, { cmd: "snapshot" }))),
-  act: (tabId, request) => ask(tabId, { cmd: "act", ...request, background: false }),
+  act: (tabId, request) => ask(tabId, { cmd: "act", ...request }),
+  tabOwnership: browserTabs,
   screenFromSnapshot: snapToScreen, maxScreenshotChars: MAX_SCREENSHOT_BASE64_CHARS,
 });
 const browserCommandRuntime = createBrowserCommandRuntime({ automation: browserAutomationRuntime, send, saveTaskState, throwIfAborted });
@@ -886,9 +898,12 @@ async function executeGatewayBrowserTask(task) {
   const actionResults = [];
   let screenshot = null;
   let pageState = null;
+  let ownership = null;
   try {
     const startUrl = await browserTaskStartUrl(task);
-    const bgTab = await chrome.tabs.create({ url: "about:blank", active: false });
+    const opened = await browserTabs.open({ url: "about:blank", background: true, requestId: task.id || null });
+    const bgTab = opened.tab;
+    ownership = opened.ownership;
     bgTabId = bgTab.id;
     target.tabId = bgTabId;
     await debuggerAttach(target);
@@ -899,6 +914,8 @@ async function executeGatewayBrowserTask(task) {
     if (startUrl) {
       await debuggerSend(target, "Page.navigate", { url: startUrl });
       await waitForBackgroundTabLoad(bgTabId);
+      const live = await chrome.tabs.get(bgTabId);
+      await browserTabs.updateBinding(bgTabId, ownership.ownership_nonce, live.url || startUrl);
     }
 
     const actions = Array.isArray(task.cdp_actions) && task.cdp_actions.length
@@ -908,8 +925,9 @@ async function executeGatewayBrowserTask(task) {
     for (const action of actions) {
       const method = String(action?.method || "");
       const params = action?.params && typeof action.params === "object" ? { ...action.params } : {};
-      if (!isAllowedQueuedCdpMethod(method)) {
-        actionResults.push({ method, ok: false, error: "blocked CDP method" });
+      const authorization = authorizeCdpCommand({ method, params, profile: task.authority_profile || "automation", tabUrl: startUrl, commandIndex: actionResults.length });
+      if (!authorization.ok) {
+        actionResults.push({ method, ok: false, policy_code: authorization.code, error: authorization.error });
         continue;
       }
       if (method === "Page.navigate") {
@@ -928,7 +946,7 @@ async function executeGatewayBrowserTask(task) {
         if (method === "Page.captureScreenshot") {
           screenshot = { format: params.format || "png", bytes: result?.data ? result.data.length : 0 };
         }
-        actionResults.push({ method, ok: true, value: compactCdpResult(result) });
+        actionResults.push({ method, ok: true, authority_profile: authorization.profile, ...compactCdpOutput(result, authorization.maxOutputChars) });
       } catch (error) {
         actionResults.push({ method, ok: false, error: String(error?.message || error) });
       }
@@ -961,7 +979,14 @@ async function executeGatewayBrowserTask(task) {
     if (attached) await debuggerDetach(target);
     if (bgTabId != null) {
       try {
-        await chrome.tabs.remove(bgTabId);
+        const closed = ownership
+          ? await browserTabs.close(bgTabId, ownership.ownership_nonce)
+          : { ok: false };
+        // This tab handle was created and retained inside this execution. If a
+        // page changed its own URL after the last binding update, the durable
+        // lease correctly fails closed, while the still-live in-memory owner may
+        // dispose its exact run-local handle.
+        if (!closed.ok) await chrome.tabs.remove(bgTabId);
       } catch {
         // already gone
       }
@@ -969,7 +994,7 @@ async function executeGatewayBrowserTask(task) {
   }
 }
 
-async function executeCdpActionsOnTab(tabId, actions) {
+async function executeCdpActionsOnTab(tabId, actions, { profile = "semantic", tabUrl = "" } = {}) {
   let attached = false;
   const target = { tabId };
   const actionResults = [];
@@ -984,8 +1009,9 @@ async function executeCdpActionsOnTab(tabId, actions) {
     for (const action of cdpActions) {
       const method = String(action?.method || "");
       const params = action?.params && typeof action.params === "object" ? { ...action.params } : {};
-      if (!isAllowedQueuedCdpMethod(method)) {
-        actionResults.push({ method, ok: false, error: "blocked CDP method" });
+      const authorization = authorizeCdpCommand({ method, params, profile, tabUrl, commandIndex: actionResults.length });
+      if (!authorization.ok) {
+        actionResults.push({ method, ok: false, policy_code: authorization.code, error: authorization.error });
         continue;
       }
       if (method === "Page.navigate") {
@@ -1007,7 +1033,7 @@ async function executeCdpActionsOnTab(tabId, actions) {
         if (method === "Page.captureScreenshot") {
           screenshot = { format: params.format || "png", bytes: result?.data ? result.data.length : 0 };
         }
-        actionResults.push({ method, ok: true, value: compactCdpResult(result) });
+        actionResults.push({ method, ok: true, authority_profile: authorization.profile, ...compactCdpOutput(result, authorization.maxOutputChars) });
       } catch (error) {
         actionResults.push({ method, ok: false, error: String(error?.message || error) });
       }
@@ -1018,7 +1044,7 @@ async function executeCdpActionsOnTab(tabId, actions) {
       tab_id: tabId,
       action_results: actionResults,
       page_state: pageState,
-      screenshot,
+      screenshot, attached: true,
     };
   } catch (error) {
     return {
@@ -1027,7 +1053,7 @@ async function executeCdpActionsOnTab(tabId, actions) {
       tab_id: tabId,
       action_results: actionResults,
       page_state: pageState,
-      screenshot,
+      screenshot, attached,
     };
   } finally {
     if (attached) await debuggerDetach(target);
@@ -1104,28 +1130,8 @@ async function collectCdpDiagnostics(tabId, kind, { durationMs, limit }) {
 
 function defaultBrowserTaskActions() {
   return [
-    { method: "Runtime.evaluate", params: { expression: "JSON.stringify({ title: document.title, url: location.href, ready: document.readyState })", returnByValue: true } },
     { method: "Page.captureScreenshot", params: { format: "jpeg", quality: 40 } },
   ];
-}
-
-function isAllowedQueuedCdpMethod(method) {
-  return method === "Page.navigate" ||
-    method === "Runtime.evaluate" ||
-    method === "Input.dispatchKeyEvent" ||
-    method === "Input.insertText" ||
-    method === "Page.captureScreenshot";
-}
-
-function compactCdpResult(result) {
-  if (!result || typeof result !== "object") return null;
-  if (result.data) {
-    return { data_bytes: String(result.data).length };
-  }
-  if (result.result?.value != null) {
-    return result.result.value;
-  }
-  return JSON.stringify(result).slice(0, 1000);
 }
 
 async function readCdpPageState(target) {

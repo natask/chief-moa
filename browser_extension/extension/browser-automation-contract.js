@@ -30,7 +30,7 @@ function browserLocalToolManifest() {
     { tool: "browser.tab.focus", risk: "navigation", approval: "implicit_user_command" },
     { tool: "browser.tab.close", risk: "destructive_browser_local", approval: "implicit_user_command" },
     { tool: "browser.tab.reload", risk: "navigation", approval: "implicit_user_command" },
-    { tool: "browser.cdp.execute", risk: "browser_local_debugger", approval: "implicit_user_command" },
+    { tool: "browser.cdp.execute", risk: "browser_local_debugger", approval: "implicit_user_command", authority_profiles: ["semantic", "automation", "debug"], target_scope: "agent_owned_inactive_tab" },
     { tool: "browser.permissions.status", risk: "read_only", approval: "none" },
     { tool: "browser.task.claim", risk: "browser_local", approval: "none" },
     { tool: "page.snapshot", risk: "read_only", approval: "none" },

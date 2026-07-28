@@ -328,6 +328,10 @@ async function main() {
     // the real gateway tool-request broker. This description becomes an Amazon
     // search URL inside the extension; no Tweeks MCP/native host is involved.
     const browserDevice = await waitForBrowserDevice(gateway.baseUrl);
+    const browserDeviceId = String(browserDevice.device_id || browserDevice.id || "");
+    if (!browserDeviceId) {
+      throw new Error(`browser heartbeat did not expose an authenticated device identity: ${JSON.stringify(browserDevice)}`);
+    }
     if (!(browserDevice.local_tool_manifest || []).some((entry) => entry.tool === "browser.search.open")) {
       throw new Error(`browser.search.open missing from heartbeat manifest: ${JSON.stringify(browserDevice.local_tool_manifest)}`);
     }
@@ -338,6 +342,7 @@ async function main() {
         source: "smoke-cdp",
         source_surface_type: "browser_extension",
         target_surface_type: "browser_extension",
+        target_device_id: browserDeviceId,
         tool: "browser.search.open",
         input: { query: "ergonomic red chair", provider: "amazon", active: false },
         session_id: "browser_facade_smoke",
@@ -350,22 +355,91 @@ async function main() {
       throw new Error(`browser.search.open did not complete: ${JSON.stringify(searchRequest)}`);
     }
     const searchTabId = Number(searchRequest.latest_receipt?.result?.tab_id);
+    const searchOwnershipNonce = String(searchRequest.latest_receipt?.result?.ownership_nonce || "");
     const searchTab = Number.isInteger(searchTabId)
       ? await waitForEval(workerCdp, `chrome.tabs.get(${searchTabId}).catch(() => null)`, 10000)
       : null;
     const requestedSearchUrl = String(searchRequest.latest_receipt?.result?.url || "");
     if (
       !searchTab?.id ||
+      !searchOwnershipNonce ||
       searchTab.active ||
       !requestedSearchUrl.startsWith("https://www.amazon.com/s?k=ergonomic+red+chair")
     ) {
       throw new Error(`Amazon search tab missing, malformed, or stole focus: ${JSON.stringify({ searchTab, requestedSearchUrl })}`);
     }
-    await evaluate(workerCdp, `chrome.tabs.remove(${Number(searchTab.id)}).then(() => true)`);
+    await evaluate(workerCdp, `chrome.tabs.remove(${searchTabId}).then(() => true)`);
+
+    const ownedQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", target_device_id: browserDeviceId, tool: "browser.tab.open", input: { url: branchUrl, background: true }, session_id: "browser_facade_smoke", branch_id: "raw_cdp_owned_tab" }),
+    }).then((resp) => resp.json());
+    const ownedRequest = await waitForToolRequest(gateway.baseUrl, ownedQueued?.request?.id);
+    const rawTabId = Number(ownedRequest.latest_receipt?.result?.tab_id);
+    const rawOwnershipNonce = String(ownedRequest.latest_receipt?.result?.ownership_nonce || "");
+    if (!Number.isInteger(rawTabId) || !rawOwnershipNonce) throw new Error(`owned raw-CDP tab lease missing: ${JSON.stringify(ownedRequest)}`);
+    const cdpQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        source: "smoke-cdp",
+        source_surface_type: "browser_extension",
+        target_surface_type: "browser_extension",
+        target_device_id: browserDeviceId,
+        tool: "browser.cdp.execute",
+        input: {
+          tab_id: rawTabId, ownership_nonce: rawOwnershipNonce,
+          authority_profile: "automation",
+          cdp_actions: [
+            { method: "Runtime.evaluate", params: { expression: "document.body.dataset.moaCdpSmoke = 'passed'; document.body.dataset.moaCdpSmoke", returnByValue: true } },
+            { method: "Page.captureScreenshot", params: { format: "jpeg", quality: 30 } },
+          ],
+        },
+        session_id: "browser_facade_smoke",
+        branch_id: "raw_cdp",
+      }),
+    }).then((resp) => resp.json());
+    const cdpRequest = await waitForToolRequest(gateway.baseUrl, cdpQueued?.request?.id);
+    const cdpActions = cdpRequest?.latest_receipt?.result?.action_results || [];
+    if (
+      cdpRequest.status !== "completed" ||
+      !cdpRequest.latest_receipt?.ok ||
+      cdpActions[0]?.value !== "passed" ||
+      !(cdpRequest.latest_receipt?.result?.screenshot?.bytes > 0) ||
+      cdpRequest.latest_receipt?.local_receipt?.detached !== true
+    ) throw new Error(`owned background raw CDP did not evaluate, screenshot, and detach: ${JSON.stringify(cdpRequest)}`);
+    const stillInactive = await evaluate(workerCdp, `chrome.tabs.get(${rawTabId}).then(tab => tab.active === false).catch(() => false)`);
+    if (!stillInactive) throw new Error("raw CDP activated or removed its owned background tab");
+
+    const deniedQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", target_device_id: browserDeviceId,
+        tool: "browser.cdp.execute",
+        input: { tab_id: rawTabId, ownership_nonce: rawOwnershipNonce, authority_profile: "debug", cdp_actions: [{ method: "Network.getAllCookies", params: {} }] },
+        session_id: "browser_facade_smoke", branch_id: "raw_cdp_secret_denial",
+      }),
+    }).then((resp) => resp.json());
+    const deniedRequest = await waitForToolRequest(gateway.baseUrl, deniedQueued?.request?.id);
+    if (deniedRequest.latest_receipt?.result?.action_results?.[0]?.policy_code !== "secret_method_denied") {
+      throw new Error(`secret CDP method was not explicitly denied: ${JSON.stringify(deniedRequest)}`);
+    }
+
+    const closeQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", target_device_id: browserDeviceId, tool: "browser.tab.close", input: { tab_id: rawTabId, ownership_nonce: rawOwnershipNonce }, session_id: "browser_facade_smoke", branch_id: "cleanup" }),
+    }).then((resp) => resp.json());
+    const closeRequest = await waitForToolRequest(gateway.baseUrl, closeQueued?.request?.id);
+    if (!closeRequest.latest_receipt?.ok) throw new Error(`owned tab cleanup failed: ${JSON.stringify(closeRequest)}`);
+    await waitForEval(workerCdp, `Promise.all([${searchTabId}, ${rawTabId}].map(id => chrome.tabs.get(id).then(() => false).catch(() => true))).then(values => values.every(Boolean))`, 10000);
 
     // Count page targets before the queued task so we can prove a NEW
     // background tab is created by the task agent.
     const pagesBefore = (await targets(devToolsPort)).filter((t) => t.type === "page").length;
+    const liveTabsBefore = await evaluate(workerCdp, "chrome.tabs.query({}).then(tabs => tabs.length)");
 
     const queued = await fetch(`${gateway.baseUrl}/v1/browser/tasks`, {
       method: "POST",
@@ -379,10 +453,12 @@ async function main() {
         url: branchUrl,
         cdp_actions: [
           {
-            method: "Runtime.evaluate",
+            method: "Input.dispatchKeyEvent",
             params: {
-              expression: "document.title",
-              returnByValue: true,
+              type: "keyDown",
+              key: "Tab",
+              code: "Tab",
+              windowsVirtualKeyCode: 9,
             },
           },
           {
@@ -417,6 +493,8 @@ async function main() {
       if (pagesAfter === pagesBefore) break;
       await delay(150);
     }
+    const liveTabsAfter = await evaluate(workerCdp, "chrome.tabs.query({}).then(tabs => tabs.length)");
+    if (liveTabsAfter !== liveTabsBefore) throw new Error(`disposable CDP tab cleanup failed: live tabs baseline=${liveTabsBefore} after=${liveTabsAfter}`);
     const overlayUrl = await evaluate(pageCdp, "location.href");
     if (overlayUrl.includes("branch=1")) {
       throw new Error("overlay tab was navigated by the queued task agent (focus/ownership violation)");
@@ -424,10 +502,10 @@ async function main() {
 
     console.log(
       "CDP task-agent smoke passed (REAL extension, headless Chrome for Testing): " +
-        `service worker id=${extensionId}; first-party browser.search.open produced a background Amazon search tab and receipt; ` +
+        `service worker id=${extensionId}; first-party browser.search.open produced an owned background Amazon tab; raw Runtime.evaluate and screenshot succeeded, secret CDP was denied, and owned cleanup succeeded; ` +
         "background task agent opened its own tab, captured a screenshot, " +
         "dispatched 1 input event, stayed in background, then disposed the tab; " +
-        `queued gateway task ${queuedId} completed with a receipt; pages baseline=${pagesBefore} after=${pagesAfter}; ` +
+        `queued gateway task ${queuedId} completed with a receipt; live tabs baseline=${liveTabsBefore} after=${liveTabsAfter}; CDP page targets baseline=${pagesBefore} after=${pagesAfter}; ` +
         "no window shown, no focus taken.",
     );
   } finally {

@@ -1,11 +1,22 @@
 package ai.moa.assistant;
 
 import android.media.session.PlaybackState;
+import android.text.InputType;
 import org.junit.Test;
 import java.util.Collections;
 import static org.junit.Assert.assertEquals;
 
 public final class MoaAccessibilityServiceTest {
+    @Test public void sensitiveEditableTypesFailClosed() {
+        assertEquals(true, MoaAccessibilityService.isSensitiveTextInput(
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, false));
+        assertEquals(true, MoaAccessibilityService.isSensitiveTextInput(
+                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD, false));
+        assertEquals(true, MoaAccessibilityService.isSensitiveTextInput(
+                InputType.TYPE_CLASS_TEXT, true));
+        assertEquals(false, MoaAccessibilityService.isSensitiveTextInput(
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, false));
+    }
     @Test public void realSnapshotProjectionCarriesOnlyMatchingStrongSessionIdentity() {
         String pkg = MoaYoutubeUiPolicy.REVANCED_PACKAGE;
         MoaMediaSessionController.Snapshot media = new MoaMediaSessionController.Snapshot(

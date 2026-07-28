@@ -79,8 +79,9 @@ capability references through one stable execution seam.
 - No catalog covering every SaaS product in the first implementation.
 - No extraction or synchronization of browser cookies, passwords, local
   storage, or bearer tokens into the gateway.
-- No model-generated connector code, matchers, OAuth scopes, or executable
-  scripts.
+- No model-generated connector definitions, matchers, or OAuth scopes. Surface
+  programs are governed separately by `define-surface-program-runtime`; they do
+  not become connectors or gain connector credentials.
 - No macOS or Windows app executor in this change. Their future clients consume
   the same observation, resolver, proposal, and receipt contracts.
 - No autonomous send, publish, purchase, payment, account-security, or

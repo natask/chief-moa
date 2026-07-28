@@ -2,6 +2,93 @@
 
 ## ADDED Requirements
 
+### Requirement: V1 exposes fixed tools and profile-granted surface programs
+
+Before the generic catalog seam is implemented, V1 SHALL expose checked-in typed
+browser and Android operations and the versioned surface-program envelope.
+Browser profiles MAY grant JavaScript/TypeScript and named raw CDP domains,
+including `Runtime.evaluate`. Android profiles MAY grant versioned declarative
+IR operations decoded by the native app. Inputs, grants, scope, limits, lease,
+and source/IR digests SHALL be validated before execution.
+
+#### Scenario: Browser code lacks a matching grant
+
+- **WHEN** a program requests JavaScript or `Runtime.evaluate` outside its
+  effective execution profile, origin, tab, document, world, or CDP-domain grant
+- **THEN** the extension rejects it and records a reason-coded receipt
+
+#### Scenario: Android IR contains an unknown operation
+
+- **WHEN** Android receives an IR version or operation its native adapter does
+  not implement or its profile does not grant
+- **THEN** Android rejects it and returns a reason-coded receipt without effect
+
+### Requirement: Background tabs have explicit ownership and lifecycle
+
+The extension SHALL create task tabs inactive and SHALL bind each one to an
+opaque task-scoped handle and renewable lease. It SHALL never activate the tab.
+Close and cleanup operations SHALL affect only a still-owned tab created by the
+same task/surface. Completion, failure, cancellation, expiry, extension restart,
+and user closure SHALL converge to an idempotent terminal receipt. Ambiguous or
+lost ownership SHALL fail closed without closing a tab.
+
+#### Scenario: Task completes in a background tab
+
+- **WHEN** a claimed task finishes after operating its task-created tab
+- **THEN** the tab was never activated, only that tab is closed, and creation,
+  action, and terminal cleanup receipts bind the same task and tab handle
+
+#### Scenario: Close targets a user tab
+
+- **WHEN** a close request names a tab that lacks matching task ownership
+- **THEN** the extension returns `ownership_lost` or `not_owned` and leaves the
+  tab open
+
+### Requirement: Android accessibility actions are package/window bound
+
+Android SHALL execute at most one locally supported semantic action per
+proposal. The proposal SHALL bind the exact target device, expected foreground
+package, accessibility window ID, fresh observation ID/digest, expiry, action
+enum, and a short-lived semantic target reference. Android SHALL resolve and
+revalidate all bindings immediately before the effect. Raw accessibility text,
+password values, unrestricted node identifiers, and executable instructions
+SHALL NOT appear in a proposal or receipt.
+
+#### Scenario: Accessibility window changes before execution
+
+- **WHEN** the current package still matches but the accessibility window no
+  longer matches the proposal
+- **THEN** Android returns `stale_state`, performs no action, and does not search
+  another window for a similar target
+
+#### Scenario: Semantic target does not support the action
+
+- **WHEN** the referenced target is fresh but does not advertise the requested
+  semantic action
+- **THEN** Android returns `unsupported_action` and performs no fallback gesture
+
+### Requirement: Evaluation and deployment states remain truthful
+
+V1 acceptance SHALL include deterministic contract tests, browser fixture QA,
+Android unit/instrumentation checks, and real-surface smoke evidence bound to the
+exact extension version or APK digest. Reports SHALL distinguish verified
+source, packaged artifact, published artifact, reload/install confirmation, and
+post-activation smoke. No earlier state SHALL be reported as a later state.
+
+#### Scenario: OTA artifact is published but not installed
+
+- **WHEN** an APK is built and published without a matching phone install and
+  post-relaunch action smoke
+- **THEN** the release state is `published_not_installed`, not deployed or
+  complete
+
+#### Scenario: Extension reload cannot be confirmed
+
+- **WHEN** an extension package exists and a reload signal is sent but the
+  loaded version and background-tab smoke cannot be observed
+- **THEN** promotion is reported as `reload_unverified` with the artifact path
+  and no active-success claim
+
 ### Requirement: Observations are canonical, bounded evidence
 
 Every supported surface SHALL encode current app/page/document context in a
