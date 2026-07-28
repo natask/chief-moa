@@ -9,22 +9,24 @@ import android.view.View;
 import android.view.ViewConfiguration;
 
 /**
- * Ribbon gestures, sharing slop, hold and multi-tap thresholds with the
- * companion so the three windows feel like one object.
+ * Ribbon gestures, sharing slop and hold thresholds with the companion so the
+ * unit feels like one object.
  *
  * <pre>
- *   tap          solidify + latch engaged, reveal the copy rail
- *   tap on rail  copy the FULL buffer
- *   hold         open the ribbon menu
- *   double tap   open History, which is a separate surface
- *   drag         move the whole unit; the anchor is always the companion
+ *   tap             expand or collapse the bubble (fires on UP, no multi-tap wait)
+ *   tap on Copy     copy the FULL buffer — the one copy affordance
+ *   tap on History  open History, which is a separate surface
+ *   hold            open the ribbon menu (reply-side utilities only)
+ *   vertical drag   inside an overflowing expanded bubble: scroll the content
+ *   drag            otherwise: move the whole unit; the anchor is the companion
  * </pre>
  *
- * A drag past slop cancels the pending tap and hold, matching the companion's
- * existing "large movement escapes into drag" rule.
+ * A drag past slop cancels the pending hold, matching the companion's existing
+ * "large movement escapes into drag" rule. There is deliberately no double-tap:
+ * a second action must be a second visible button, never a hidden gesture.
  *
- * Touches that do not land on the painted glyph run are not taken at all
- * ({@link MoaRibbonView#hitsInteractive}), so an idle ribbon is inert.
+ * Touches that do not land on the bubble are not taken at all
+ * ({@link MoaRibbonView#hitsInteractive}), so an empty ribbon is inert.
  */
 final class MoaRibbonTouchListener implements View.OnTouchListener {
     interface Callbacks {
@@ -37,8 +39,6 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
         void onHistory();
 
         void onHold();
-
-        void onDoubleTap();
 
         void onDragStart();
 
@@ -54,14 +54,14 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
 
     private float downX;
     private float downY;
+    private float lastY;
     private boolean dragging;
+    private boolean scrolling;
     private boolean holdFired;
     private boolean railPress;
     private boolean historyPress;
     private boolean owned;
-    private int pendingTaps;
     private Runnable pendingHold;
-    private Runnable pendingTapResolve;
 
     MoaRibbonTouchListener(Context context, MoaRibbonView ribbon, Callbacks callbacks) {
         this.ribbon = ribbon;
@@ -80,7 +80,9 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
                 owned = true;
                 downX = event.getRawX();
                 downY = event.getRawY();
+                lastY = event.getRawY();
                 dragging = false;
+                scrolling = false;
                 holdFired = false;
                 railPress = ribbon.hitsRail(event.getX(), event.getY());
                 historyPress = ribbon.hitsHistory(event.getX(), event.getY());
@@ -93,16 +95,24 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
                 }
                 int dx = Math.round(event.getRawX() - downX);
                 int dy = Math.round(event.getRawY() - downY);
-                if (!dragging && (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop)) {
-                    dragging = true;
+                if (!dragging && !scrolling
+                        && (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop)) {
                     cancelHold();
-                    cancelTapResolve();
-                    pendingTaps = 0;
-                    callbacks.onDragStart();
+                    // A mostly-vertical pull inside an overflowing expanded
+                    // bubble reads the text; anything else moves the unit.
+                    if (ribbon.canScrollExpanded() && Math.abs(dy) > Math.abs(dx)) {
+                        scrolling = true;
+                    } else {
+                        dragging = true;
+                        callbacks.onDragStart();
+                    }
                 }
-                if (dragging) {
+                if (scrolling) {
+                    ribbon.scrollExpandedBy(event.getRawY() - lastY);
+                } else if (dragging) {
                     callbacks.onDragMove(dx, dy);
                 }
+                lastY = event.getRawY();
                 return true;
             }
             case MotionEvent.ACTION_UP:
@@ -119,21 +129,31 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
                     callbacks.onDragEnd(committed);
                     return true;
                 }
+                if (scrolling) {
+                    scrolling = false;
+                    return true;
+                }
                 if (holdFired || !committed) {
                     return true;
                 }
-                if (historyPress) {
+                if (historyPress && ribbon.hitsHistory(event.getX(), event.getY())) {
                     historyPress = false;
                     callbacks.onHistory();
                     return true;
                 }
-                if (railPress) {
+                if (railPress && ribbon.hitsRail(event.getX(), event.getY())) {
                     railPress = false;
                     callbacks.onCopy();
                     return true;
                 }
-                pendingTaps++;
-                scheduleTapResolve();
+                // A button press released outside its button is canceled; it
+                // must not fall through and expand the bubble instead.
+                if (historyPress || railPress) {
+                    historyPress = false;
+                    railPress = false;
+                    return true;
+                }
+                callbacks.onTap();
                 return true;
             }
             default:
@@ -145,12 +165,10 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
         cancelHold();
         pendingHold = () -> {
             pendingHold = null;
-            if (dragging) {
+            if (dragging || scrolling) {
                 return;
             }
             holdFired = true;
-            cancelTapResolve();
-            pendingTaps = 0;
             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
             callbacks.onHold();
         };
@@ -164,31 +182,7 @@ final class MoaRibbonTouchListener implements View.OnTouchListener {
         }
     }
 
-    private void scheduleTapResolve() {
-        cancelTapResolve();
-        pendingTapResolve = () -> {
-            pendingTapResolve = null;
-            int taps = pendingTaps;
-            pendingTaps = 0;
-            if (taps == 1) {
-                callbacks.onTap();
-            } else if (taps == 2) {
-                callbacks.onDoubleTap();
-            }
-            // A third tap is absorbed on purpose; the ribbon has no triple action.
-        };
-        handler.postDelayed(pendingTapResolve, MoaRibbonTokens.MULTITAP_MS);
-    }
-
-    private void cancelTapResolve() {
-        if (pendingTapResolve != null) {
-            handler.removeCallbacks(pendingTapResolve);
-            pendingTapResolve = null;
-        }
-    }
-
     void release() {
         cancelHold();
-        cancelTapResolve();
     }
 }

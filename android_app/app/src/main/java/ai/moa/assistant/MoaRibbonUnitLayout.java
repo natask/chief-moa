@@ -27,7 +27,10 @@ final class MoaRibbonUnitLayout {
     static final class Placement {
         final int companionX;
         final int companionY;
-        final int ribbonX;
+        /** You-bubble left edge: the companion centerline, clamped inward. */
+        final int youX;
+        /** Reply-bubble left edge: right edge at the centerline, clamped inward. */
+        final int replyX;
         final int youY;
         final int replyY;
         /** True when both ribbons sit below the companion. */
@@ -35,11 +38,12 @@ final class MoaRibbonUnitLayout {
         /** True when both ribbons sit above the companion. */
         final boolean flippedUp;
 
-        Placement(int companionX, int companionY, int ribbonX, int youY, int replyY,
+        Placement(int companionX, int companionY, int youX, int replyX, int youY, int replyY,
                   boolean flippedDown, boolean flippedUp) {
             this.companionX = companionX;
             this.companionY = companionY;
-            this.ribbonX = ribbonX;
+            this.youX = youX;
+            this.replyX = replyX;
             this.youY = youY;
             this.replyY = replyY;
             this.flippedDown = flippedDown;
@@ -98,7 +102,12 @@ final class MoaRibbonUnitLayout {
         int companionCenterX = companionX + companionSize / 2;
         int minX = ribbonWidth + margin * 2 <= screenWidth ? margin : 0;
         int maxX = Math.max(minX, screenWidth - ribbonWidth - minX);
-        int ribbonX = clamp(companionCenterX - ribbonWidth / 2, minX, maxX);
+        // Chat-style diagonal: the you-bubble hangs to the RIGHT of the
+        // centerline (left edge on it), the reply-bubble hangs to the LEFT
+        // (right edge on it). Narrow screens clamp both inward rather than
+        // letting either bubble paint past the edge margin.
+        int youX = clamp(companionCenterX, minX, maxX);
+        int replyX = clamp(companionCenterX - ribbonWidth, minX, maxX);
 
         int top = margin + Math.max(0, safeTop);
         int bottom = screenHeight - margin - Math.max(0, safeBottom);
@@ -126,7 +135,8 @@ final class MoaRibbonUnitLayout {
         youY = clamp(youY, top, Math.max(top, bottom - youHeight));
         replyY = clamp(replyY, top, Math.max(top, bottom - replyHeight));
 
-        return new Placement(companionX, companionY, ribbonX, youY, replyY, flippedDown, flippedUp);
+        return new Placement(
+                companionX, companionY, youX, replyX, youY, replyY, flippedDown, flippedUp);
     }
 
     /**
@@ -153,6 +163,24 @@ final class MoaRibbonUnitLayout {
      */
     static int expandedHeight(int contentHeight, int collapsedHeight, int maxHeight) {
         return clamp(contentHeight, collapsedHeight, Math.max(collapsedHeight, maxHeight));
+    }
+
+    /**
+     * A collapsed bubble wraps its turn up to {@link MoaRibbonTokens#COLLAPSED_MAX_LINES}
+     * lines and then stops growing; a longer turn shows its tail until expanded.
+     */
+    static int collapsedHeight(int contentHeight, int minHeight, int lineHeight, int padY) {
+        int maxHeight = Math.max(minHeight,
+                MoaRibbonTokens.COLLAPSED_MAX_LINES * lineHeight + padY * 2);
+        return clamp(contentHeight, minHeight, maxHeight);
+    }
+
+    /**
+     * Vertical scroll offset inside an expanded bubble, in pixels from the top of
+     * the content. Never past the tail, never before the head.
+     */
+    static int clampScroll(int scrollY, int contentHeight, int viewportHeight) {
+        return clamp(scrollY, 0, Math.max(0, contentHeight - viewportHeight));
     }
 
     private static int clamp(int value, int min, int max) {

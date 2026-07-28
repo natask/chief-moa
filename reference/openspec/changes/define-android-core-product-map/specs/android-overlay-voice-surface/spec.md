@@ -242,6 +242,27 @@ current app.
 The Android overlay SHALL give the voice transcript a stable viewport instead
 of resizing the card for each partial or completed turn.
 
+#### Scenario: Current turn reads as a conversation
+- **WHEN** the current user and assistant bubbles are visible around the companion
+- **THEN** the user bubble sits above and to the right with its left edge anchored
+  to the companion centerline when space permits
+- **AND** the assistant bubble sits below and to the left with its right edge
+  anchored to that centerline when space permits
+- **AND** either bubble clamps inward rather than painting through a display edge
+
+#### Scenario: Bubble text remains bounded and readable
+- **WHEN** current-turn text exceeds five wrapped lines
+- **THEN** the collapsed bubble shows at most the newest five lines
+- **AND** tapping expands a bounded reading viewport that scrolls vertically
+
+#### Scenario: User transcript actions stay explicit
+- **WHEN** the user bubble contains transcript text
+- **THEN** exactly one Copy action remains visible without expanding or holding it
+- **AND** a separate History action opens the full history surface
+- **AND** double-tap does not reveal duplicate copy controls or trigger history
+- **AND** Android accessibility exposes Expand, Copy, and History as independently
+  invokable actions on API 26 and later
+
 #### Scenario: Transcript content grows
 - **WHEN** transcript rows exceed the fixed transcript viewport
 - **THEN** the card keeps the same measured height

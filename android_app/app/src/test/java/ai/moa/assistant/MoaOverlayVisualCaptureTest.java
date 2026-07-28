@@ -10,6 +10,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.os.Looper;
 import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -22,6 +23,7 @@ import org.robolectric.annotation.GraphicsMode;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Deterministic visual evidence rendered by the production Android views. */
 @RunWith(RobolectricTestRunner.class)
@@ -66,6 +68,41 @@ public final class MoaOverlayVisualCaptureTest {
         assertTrue(ribbon.desiredHeightPx() <= dp(context, MoaRibbonTokens.EXPANDED_MAX_H_DP));
         assertTrue(ribbon.hitsHistory(width - dp(context, 60), ribbon.ribbonHeightPx() / 2f));
         assertTrue(ribbon.hitsRail(width - dp(context, 8), ribbon.ribbonHeightPx() / 2f));
+    }
+
+    @Test
+    @Config(sdk = 26)
+    public void api26ExposesIndependentCopyAndHistoryActions() {
+        Application context = RuntimeEnvironment.getApplication();
+        MoaRibbonView ribbon = new MoaRibbonView(context, false);
+        AtomicInteger taps = new AtomicInteger();
+        AtomicInteger copies = new AtomicInteger();
+        AtomicInteger histories = new AtomicInteger();
+        ribbon.setAccessibilityActions(taps::incrementAndGet,
+                copies::incrementAndGet, histories::incrementAndGet);
+        ribbon.setFullText("A retained user message");
+
+        AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain();
+        ribbon.onInitializeAccessibilityNodeInfo(info);
+        int copyAction = actionId(info, "Copy");
+        int historyAction = actionId(info, "History");
+
+        assertTrue(copyAction != 0);
+        assertTrue(historyAction != 0);
+        assertTrue(ribbon.performAccessibilityAction(copyAction, null));
+        assertTrue(ribbon.performAccessibilityAction(historyAction, null));
+        assertTrue(ribbon.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null));
+        assertEquals(1, copies.get());
+        assertEquals(1, histories.get());
+        assertEquals(1, taps.get());
+        info.recycle();
+    }
+
+    private static int actionId(AccessibilityNodeInfo info, String label) {
+        for (AccessibilityNodeInfo.AccessibilityAction action : info.getActionList()) {
+            if (label.contentEquals(action.getLabel())) return action.getId();
+        }
+        return 0;
     }
 
     private Bitmap render(boolean expanded) {

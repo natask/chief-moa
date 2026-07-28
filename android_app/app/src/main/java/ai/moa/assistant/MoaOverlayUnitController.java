@@ -61,7 +61,7 @@ final class MoaOverlayUnitController {
 
         void onDragEnd(boolean committed);
 
-        /** Double-tap: history is a separate surface, never a scrollback here. */
+        /** The History button: a separate surface, never a scrollback here. */
         void openHistory();
 
         void hideOverlay();
@@ -125,6 +125,8 @@ final class MoaOverlayUnitController {
         }
 
         int width = ribbonWidthPx();
+        youView.setContentWidth(width);
+        replyView.setContentWidth(width);
         youParams = windowParams(width, youView.ribbonHeightPx());
         replyParams = windowParams(width, replyView.ribbonHeightPx());
         youTouch = attachGestures(youView, youPresence, youVariants, youBuffer, false);
@@ -266,13 +268,13 @@ final class MoaOverlayUnitController {
         presence.setHasText(!buffer.isEmpty());
     }
 
-    /** A ribbon is one line by contract, so newlines separate rather than wrap. */
+    /** Bubbles wrap up to five lines now, so newlines survive; blank runs collapse. */
     private static String flatten(String text) {
         String value = text == null ? "" : text.trim();
         if (value.isEmpty()) {
             return "";
         }
-        return value.replaceAll("\\s*\\n+\\s*", " · ").replaceAll("\\s{2,}", " ").trim();
+        return value.replaceAll("[ \\t]*\\n+[ \\t]*", "\n").replaceAll("[ \\t]{2,}", " ").trim();
     }
 
     /** The turn ended: freeze the buffers and start each ribbon's linger. */
@@ -321,9 +323,9 @@ final class MoaOverlayUnitController {
                 youParams.width,
                 youParams.height,
                 replyParams.height);
-        youParams.x = placement.ribbonX;
+        youParams.x = placement.youX;
         youParams.y = placement.youY;
-        replyParams.x = placement.ribbonX;
+        replyParams.x = placement.replyX;
         replyParams.y = placement.replyY;
         boolean changed = updateLayoutIfChanged(youView, youParams, youLayoutState);
         changed |= updateLayoutIfChanged(replyView, replyParams, replyLayoutState);
@@ -567,8 +569,7 @@ final class MoaOverlayUnitController {
             final MoaTranscriptVariants variants,
             final MoaRibbonBuffer buffer,
             final boolean reply) {
-        MoaRibbonTouchListener listener = new MoaRibbonTouchListener(
-                host.context(), ribbon, new MoaRibbonTouchListener.Callbacks() {
+        MoaRibbonTouchListener.Callbacks callbacks = new MoaRibbonTouchListener.Callbacks() {
             @Override
             public void onPressChanged(boolean down) {
                 presence.setPointerDown(down);
@@ -577,8 +578,9 @@ final class MoaOverlayUnitController {
 
             @Override
             public void onTap() {
-                // Tap opens the bounded ribbon to its full text AND surfaces the
-                // copy affordance in that expanded state; tapping again closes it.
+                // Tap opens the bounded bubble to its full scrollable text;
+                // tapping again closes it. Copy and History are their own
+                // buttons, never a tap consequence.
                 boolean opening = !presence.expanded();
                 presence.setExpanded(opening);
                 if (opening) {
@@ -591,6 +593,7 @@ final class MoaOverlayUnitController {
 
             @Override
             public void onCopy() {
+                ribbon.flash();
                 copy(variants, buffer, null);
             }
 
@@ -602,13 +605,12 @@ final class MoaOverlayUnitController {
 
             @Override
             public void onHold() {
-                openMenu(ribbon, presence, variants, buffer, reply);
-            }
-
-            @Override
-            public void onDoubleTap() {
-                ribbon.flash();
-                host.openHistory();
+                // Only the reply side has a menu, and it carries no Copy row:
+                // the visible Copy button is the one copy affordance. The
+                // you-bubble's actions are all on its rails already.
+                if (reply) {
+                    openMenu(ribbon, presence, buffer);
+                }
             }
 
             @Override
@@ -627,8 +629,12 @@ final class MoaOverlayUnitController {
                 presence.setPointerDown(false);
                 host.onDragEnd(committed);
             }
-        });
+        };
+        MoaRibbonTouchListener listener = new MoaRibbonTouchListener(
+                host.context(), ribbon, callbacks);
         ribbon.setOnTouchListener(listener);
+        ribbon.setAccessibilityActions(
+                callbacks::onTap, callbacks::onCopy, callbacks::onHistory);
         return listener;
     }
 
@@ -663,13 +669,9 @@ final class MoaOverlayUnitController {
     }
 
     private void openMenu(
-            MoaRibbonView ribbon,
-            MoaRibbonPresence presence,
-            MoaTranscriptVariants variants,
-            MoaRibbonBuffer buffer,
-            boolean reply) {
+            MoaRibbonView ribbon, MoaRibbonPresence presence, MoaRibbonBuffer buffer) {
         closeMenu();
-        WindowManager.LayoutParams params = reply ? replyParams : youParams;
+        WindowManager.LayoutParams params = replyParams;
         if (params == null || buffer.isEmpty()) {
             return;
         }
@@ -677,39 +679,18 @@ final class MoaOverlayUnitController {
         applyPresence();
         menuView = MoaRibbonMenu.show(
                 host.context(), host.windowManager(), host.overlayType(), palette(),
-                reply ? replyRows(buffer) : youRows(variants, buffer),
+                replyRows(),
                 params.x, params.y, ribbon.ribbonHeightPx(), this::closeMenu);
         pendingMenuIdleDismiss = this::closeMenu;
         mainHandler.postDelayed(pendingMenuIdleDismiss, MoaRibbonTokens.MENU_IDLE_DISMISS_MS);
     }
 
     /**
-     * The you-ribbon's menu is the variant picker: literal, corrected, polished.
-     * Only the forms that have backing data are offered; the rest are shown
-     * disabled rather than fabricated.
+     * The reply menu carries only playback and surface utilities. Copy lives on
+     * the visible rail and NOWHERE else, so there is exactly one copy behavior.
      */
-    private List<MoaRibbonMenu.Row> youRows(
-            final MoaTranscriptVariants variants, final MoaRibbonBuffer buffer) {
+    private List<MoaRibbonMenu.Row> replyRows() {
         List<MoaRibbonMenu.Row> rows = new ArrayList<>();
-        for (final MoaTranscriptVariants.Variant variant : new MoaTranscriptVariants.Variant[]{
-                MoaTranscriptVariants.Variant.POLISHED,
-                MoaTranscriptVariants.Variant.CORRECTED,
-                MoaTranscriptVariants.Variant.LITERAL}) {
-            String label = MoaTranscriptVariants.label(variant);
-            if (variants.defaultVariant() == variant) {
-                label = label + "  ·  default";
-            }
-            rows.add(variants.has(variant)
-                    ? MoaRibbonMenu.Row.of(label, () -> copy(variants, buffer, variant))
-                    : MoaRibbonMenu.Row.disabled(label));
-        }
-        rows.add(MoaRibbonMenu.Row.of("Open history", host::openHistory));
-        return rows;
-    }
-
-    private List<MoaRibbonMenu.Row> replyRows(final MoaRibbonBuffer buffer) {
-        List<MoaRibbonMenu.Row> rows = new ArrayList<>();
-        rows.add(MoaRibbonMenu.Row.of("Copy", () -> copy(null, buffer, null)));
         if (host.assistantSpeaking()) {
             rows.add(MoaRibbonMenu.Row.of("Stop speaking", host::stopSpeaking));
         } else if (host.retryAvailable()) {

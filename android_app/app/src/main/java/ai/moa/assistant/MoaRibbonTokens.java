@@ -52,6 +52,8 @@ final class MoaRibbonTokens {
     static final int RIBBON_MAX_W_DP = 280;
     /** Bounded ceiling for a tap-expanded ribbon. It reads; it is not a panel. */
     static final int EXPANDED_MAX_H_DP = 240;
+    /** A collapsed bubble wraps up to this many lines, then shows the tail. */
+    static final int COLLAPSED_MAX_LINES = 5;
     static final int EXPANDED_PAD_Y_DP = 9;
     static final int RIBBON_PAD_X_DP = 12;
     static final int GAP_DP = 6;

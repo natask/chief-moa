@@ -180,6 +180,12 @@ signal completed without a client acknowledgement.
 - [x] 13.7 Make every Android overlay launch path reuse one process owner and
       one orb window; apply the existing 70% default size and live size refresh,
       use 30% idle opacity, and preserve hold-drag and drag-to-remove geometry.
+- [x] 13.8 Present the current turn as diagonal conversation bubbles anchored
+      to the companion centerline: user above/right, assistant below/left, with
+      inward edge clamps. Bound collapsed text to five lines, make expansion
+      vertically scrollable, and expose one persistent user Copy action plus a
+      separate History action without a hidden double-tap duplicate. Verify the
+      actions through Android 8 accessibility as well as touch.
 
 Release evidence: commit `b99379b0` built candidate
 `ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256
