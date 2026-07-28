@@ -132,6 +132,12 @@ Verified 2026-07-16: Android JVM tests and `assembleDebug` passed; strict
 OpenSpec validation passed. Real-device frame pacing and drop-target feel remain
 the manual QA check.
 
+- [x] 11.11 Replace the physically laggy companion-only drag optimization with
+      one bounded compact root containing the companion, current-turn ribbons,
+      and draft controls. Prove that a coalesced moving frame makes exactly one
+      WindowManager layout submission while preserving touch pass-through
+      outside the root, streaming state, removal, and Undo.
+
 Release note: commit `5106d52` produced Android artifact
 `android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact
 `agee-chrome-0.1.35-5106d52d7fcc527ee05b0c2197c1b8b38124eb52`.

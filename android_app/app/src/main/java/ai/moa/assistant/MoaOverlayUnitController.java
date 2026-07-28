@@ -5,6 +5,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,10 +28,10 @@ import java.util.List;
  * persistent transcript line. A ribbon is one line in a viewport that content
  * never resizes.
  *
- * On Android the unit is three separate bounded WindowManager windows. Every
- * resting position derives from the companion anchor. During a deliberate drag
- * the ribbons stay attached (so the active gesture view is never detached),
- * retain incoming content, and soft-hide while only the companion moves.
+ * On Android the unit's companion, ribbons, and draft controls share one
+ * bounded WindowManager root. Every resting position derives from the companion
+ * anchor, and a deliberate drag moves that root once per display frame without
+ * detaching gesture views or losing incoming content.
  *
  * {@link OverlayService} keeps the voice session, the composer, and the
  * companion's own gestures; it drives this class with the current turn's text
@@ -42,6 +43,8 @@ final class MoaOverlayUnitController {
         Context context();
 
         WindowManager windowManager();
+
+        MoaCompactOverlayRoot compactRoot();
 
         int overlayType();
 
@@ -127,8 +130,6 @@ final class MoaOverlayUnitController {
         youTouch = attachGestures(youView, youPresence, youVariants, youBuffer, false);
         replyTouch = attachGestures(replyView, replyPresence, null, replyBuffer, true);
 
-        host.windowManager().addView(youView, youParams);
-        host.windowManager().addView(replyView, replyParams);
         youLayoutState.reset();
         replyLayoutState.reset();
         position();
@@ -190,7 +191,7 @@ final class MoaOverlayUnitController {
             return;
         }
         ribbon.release();
-        MoaOverlayWindowLayout.detach(host.windowManager(), ribbon);
+        host.compactRoot().removeSlot(ribbon);
     }
 
     private void detachState() {
@@ -287,6 +288,14 @@ final class MoaOverlayUnitController {
     // --- Geometry ---------------------------------------------------------
 
     void position() {
+        position(true);
+    }
+
+    void preparePosition() {
+        position(false);
+    }
+
+    private void position(boolean commit) {
         if (dragMode) {
             return;
         }
@@ -316,8 +325,9 @@ final class MoaOverlayUnitController {
         youParams.y = placement.youY;
         replyParams.x = placement.ribbonX;
         replyParams.y = placement.replyY;
-        updateLayoutIfChanged(youView, youParams, youLayoutState);
-        updateLayoutIfChanged(replyView, replyParams, replyLayoutState);
+        boolean changed = updateLayoutIfChanged(youView, youParams, youLayoutState);
+        changed |= updateLayoutIfChanged(replyView, replyParams, replyLayoutState);
+        if (commit && changed) host.compactRoot().commitFrame();
     }
 
     void onConfigurationChanged() {
@@ -449,20 +459,10 @@ final class MoaOverlayUnitController {
             companion.setScaleX(scale);
             companion.setScaleY(scale);
         }
-        if (dragMode) {
-            softHideForDrag(youView);
-            softHideForDrag(replyView);
-        } else {
+        if (!dragMode) {
             position();
         }
         schedulePresenceTick(now);
-    }
-
-    private static void softHideForDrag(View view) {
-        if (view == null) return;
-        view.animate().cancel();
-        view.setAlpha(0f);
-        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
     }
 
     /**
@@ -486,13 +486,17 @@ final class MoaOverlayUnitController {
         // change. Paint-only stream deltas never cross into WindowManager.
     }
 
-    private void updateLayoutIfChanged(
+    private boolean updateLayoutIfChanged(
             MoaRibbonView ribbon,
             WindowManager.LayoutParams params,
             MoaWindowLayoutState state) {
         if (ribbon != null && params != null && state.changed(params)) {
-            MoaOverlayWindowLayout.update(host.windowManager(), ribbon, params);
+            host.compactRoot().put(ribbon,
+                    new Rect(params.x, params.y, params.x + params.width, params.y + params.height),
+                    (params.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0);
+            return true;
         }
+        return false;
     }
 
     // Latch and linger are deadlines, not events, so the unit re-evaluates itself
@@ -556,7 +560,7 @@ final class MoaOverlayUnitController {
 
     // Every element of the unit is a drag handle, and the anchor is always the
     // companion. A ribbon remains attached through ACTION_UP while the bounded
-    // drag mode moves only the companion window.
+    // root moves as one window.
     private MoaRibbonTouchListener attachGestures(
             final MoaRibbonView ribbon,
             final MoaRibbonPresence presence,

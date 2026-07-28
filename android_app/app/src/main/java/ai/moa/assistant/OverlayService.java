@@ -14,6 +14,7 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -86,6 +87,7 @@ public final class OverlayService extends Service {
     private WindowManager windowManager;
     private OrbView orbView;
     private WindowManager.LayoutParams orbParams;
+    private MoaCompactOverlayRoot compactOverlayRoot;
     private WindowManager.LayoutParams panelParams;
     private MoaFrameCoalescer orbDragFrameCoalescer;
     private final MoaOverlayDragMode overlayDragMode = new MoaOverlayDragMode();
@@ -96,6 +98,8 @@ public final class OverlayService extends Service {
     private Runnable pendingOrbRemovalCommit;
     private int orbDragStartX;
     private int orbDragStartY;
+    private int orbDragCommittedX;
+    private int orbDragCommittedY;
     private boolean orbRemoveTargetActive;
     private int orbDragScreenWidth;
     private int orbDragScreenHeight;
@@ -105,7 +109,7 @@ public final class OverlayService extends Service {
     private EditText composer;
     private TextView runStatusView;
     // The overlay unit: companion between two ribbons, owned by its own
-    // controller. Three WindowManager windows positioned from one anchor.
+    // controller inside one bounded WindowManager root.
     private final MoaOverlayUnitController overlayUnit =
             new MoaOverlayUnitController(overlayUnitHost());
     private TextView voiceCancelControl;
@@ -520,6 +524,8 @@ public final class OverlayService extends Service {
         applyCachedPetVisualState();
         orbParams = MoaOrbWindowSizing.initialParams(
                 this, size, MoaOverlayWindowType.resolve(), ORB_EDGE_MARGIN_DP);
+        compactOverlayRoot = new MoaCompactOverlayRoot(
+                this, windowManager, MoaOverlayWindowType.resolve());
         orbDragFrameCoalescer = new MoaFrameCoalescer(
                 new MoaViewFrameScheduler(orbView), this::applyLatestOrbDragFrame);
         orbView.setOnTouchListener(new MoaOrbTouchListener(
@@ -540,11 +546,27 @@ public final class OverlayService extends Service {
                 this::finishOrbDrag
         ));
         orbView.setAlpha(MoaOrbPresentation.IDLE_ALPHA);
-        windowManager.addView(orbView, orbParams);
+        compactOverlayRoot.put(orbView, orbScreenBounds(), true);
+        compactOverlayRoot.attach();
+        compactOverlayRoot.commitFrame();
     }
 
     private int scaledOrbSizePx() {
         return dp(MoaOrbPresentation.scaledWindowDp(MoaPrefs.orbScalePercent(this)));
+    }
+
+    private Rect orbScreenBounds() {
+        int size = orbParams != null && orbParams.width > 0
+                ? orbParams.width : scaledOrbSizePx();
+        int x = orbParams == null ? 0 : orbParams.x;
+        int y = orbParams == null ? 0 : orbParams.y;
+        return new Rect(x, y, x + size, y + size);
+    }
+
+    private void syncOrbSlot() {
+        if (compactOverlayRoot != null && orbView != null) {
+            compactOverlayRoot.put(orbView, orbScreenBounds(), true);
+        }
     }
 
     private void applyOrbScale() {
@@ -553,15 +575,26 @@ public final class OverlayService extends Service {
             return;
         }
         int size = scaledOrbSizePx();
-        MoaOrbWindowSizing.resize(
-                this, windowManager, orbView, orbParams, size, ORB_EDGE_MARGIN_DP);
+        orbParams.width = size;
+        orbParams.height = size;
+        int margin = dp(ORB_EDGE_MARGIN_DP);
+        orbParams.x = MoaOrbPresentation.clampWindowPosition(
+                orbParams.x, getResources().getDisplayMetrics().widthPixels, size, margin);
+        orbParams.y = MoaOrbPresentation.clampWindowPosition(
+                orbParams.y, getResources().getDisplayMetrics().heightPixels, size, margin);
+        syncOrbSlot();
+        compactOverlayRoot.commitFrame();
         updateAnchoredSurfacePositions();
     }
 
     private void removeOrb() {
         if (orbView != null) {
-            windowManager.removeView(orbView);
+            if (compactOverlayRoot != null) compactOverlayRoot.removeSlot(orbView);
             orbView = null;
+        }
+        if (compactOverlayRoot != null) {
+            compactOverlayRoot.detach();
+            compactOverlayRoot = null;
         }
         OVERLAY_OWNER.release(this);
     }
@@ -614,6 +647,8 @@ public final class OverlayService extends Service {
     private void showOrbRemoveTarget() {
         orbDragStartX = orbParams == null ? 0 : orbParams.x;
         orbDragStartY = orbParams == null ? 0 : orbParams.y;
+        orbDragCommittedX = orbDragStartX;
+        orbDragCommittedY = orbDragStartY;
         boolean beganDrag = overlayDragMode.begin();
         overlayUnit.setDragging(true);
         if (beganDrag) {
@@ -641,7 +676,13 @@ public final class OverlayService extends Service {
         MoaOverlayDragMode.FramePlan plan = overlayDragMode.movingFrame();
         if (!plan.submitDependents) {
             if (orbDragLayoutState.changed(orbParams)) {
-                MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+                compactOverlayRoot.translateSlots(
+                        orbParams.x - orbDragCommittedX,
+                        orbParams.y - orbDragCommittedY);
+                orbDragCommittedX = orbParams.x;
+                orbDragCommittedY = orbParams.y;
+                syncOrbSlot();
+                compactOverlayRoot.commitFrame();
             }
             updateOrbRemoveTargetState();
             return;
@@ -654,9 +695,10 @@ public final class OverlayService extends Service {
             positionSurfaceNearOrb(panelView, panelParams);
         }
         prepareVoiceDraftControlPositions();
-        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
-        overlayUnit.position();
-        updatePreparedVoiceDraftControlLayouts();
+        syncOrbSlot();
+        overlayUnit.preparePosition();
+        prepareVoiceDraftControlSlots();
+        compactOverlayRoot.commitFrame();
         updateOrbRemoveTargetState();
     }
 
@@ -716,7 +758,7 @@ public final class OverlayService extends Service {
         int accessibility = hidden
                 ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO;
-        for (View dependent : new View[]{panelView, voiceCancelControl, voiceSendControl}) {
+        for (View dependent : new View[]{panelView}) {
             if (dependent == null) continue;
             dependent.animate().cancel();
             dependent.setAlpha(alpha);
@@ -770,7 +812,8 @@ public final class OverlayService extends Service {
         if (orbParams != null) {
             orbParams.x = orbRemovalUndo.restoreX();
             orbParams.y = orbRemovalUndo.restoreY();
-            MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
+            syncOrbSlot();
+            compactOverlayRoot.commitFrame();
         }
         updateMicState();
     }
@@ -936,6 +979,11 @@ public final class OverlayService extends Service {
             }
 
             @Override
+            public MoaCompactOverlayRoot compactRoot() {
+                return compactOverlayRoot;
+            }
+
+            @Override
             public int overlayType() {
                 return MoaOverlayWindowType.resolve();
             }
@@ -1073,7 +1121,7 @@ public final class OverlayService extends Service {
             voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
             voiceCancelControlParams = MoaVoiceDraftControls.windowParams(
                     size, MoaOverlayWindowType.resolve());
-            windowManager.addView(voiceCancelControl, voiceCancelControlParams);
+            compactOverlayRoot.put(voiceCancelControl, new Rect(0, 0, size, size), true);
         }
         if (voiceSendControl == null) {
             voiceSendControl = MoaVoiceDraftControls.create(
@@ -1081,14 +1129,15 @@ public final class OverlayService extends Service {
             voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
             voiceSendControlParams = MoaVoiceDraftControls.windowParams(
                     size, MoaOverlayWindowType.resolve());
-            windowManager.addView(voiceSendControl, voiceSendControlParams);
+            compactOverlayRoot.put(voiceSendControl, new Rect(0, 0, size, size), true);
         }
     }
 
     private void updateVoiceDraftControlPositions() {
         prepareVoiceDraftControlPositions();
-        MoaOverlayWindowLayout.update(windowManager, orbView, orbParams);
-        updatePreparedVoiceDraftControlLayouts();
+        syncOrbSlot();
+        prepareVoiceDraftControlSlots();
+        compactOverlayRoot.commitFrame();
     }
 
     private void prepareVoiceDraftControlPositions() {
@@ -1116,13 +1165,32 @@ public final class OverlayService extends Service {
     }
 
     private void updatePreparedVoiceDraftControlLayouts() {
-        MoaOverlayWindowLayout.update(windowManager, voiceCancelControl, voiceCancelControlParams);
-        MoaOverlayWindowLayout.update(windowManager, voiceSendControl, voiceSendControlParams);
+        prepareVoiceDraftControlSlots();
+        compactOverlayRoot.commitFrame();
+    }
+
+    private void prepareVoiceDraftControlSlots() {
+        if (compactOverlayRoot == null) return;
+        if (voiceCancelControl != null && voiceCancelControlParams != null) {
+            compactOverlayRoot.put(voiceCancelControl, new Rect(
+                    voiceCancelControlParams.x, voiceCancelControlParams.y,
+                    voiceCancelControlParams.x + voiceCancelControlParams.width,
+                    voiceCancelControlParams.y + voiceCancelControlParams.height), true);
+        }
+        if (voiceSendControl != null && voiceSendControlParams != null) {
+            compactOverlayRoot.put(voiceSendControl, new Rect(
+                    voiceSendControlParams.x, voiceSendControlParams.y,
+                    voiceSendControlParams.x + voiceSendControlParams.width,
+                    voiceSendControlParams.y + voiceSendControlParams.height), true);
+        }
     }
 
     private void removeVoiceDraftControls() {
-        MoaOverlayWindowLayout.detach(windowManager, voiceCancelControl);
-        MoaOverlayWindowLayout.detach(windowManager, voiceSendControl);
+        if (compactOverlayRoot != null) {
+            if (voiceCancelControl != null) compactOverlayRoot.removeSlot(voiceCancelControl);
+            if (voiceSendControl != null) compactOverlayRoot.removeSlot(voiceSendControl);
+            compactOverlayRoot.commitFrame();
+        }
         voiceCancelControl = null;
         voiceSendControl = null;
         voiceCancelControlParams = null;
