@@ -38,6 +38,13 @@ supported version range, bounded selectors/state transitions, and fixtures. An
 unknown version, signature change, missing selector, ambiguous state, or UI drift
 disables that adapter and returns a receipt rather than guessing.
 
+VLC is resolved separately and only on-device from the visible `VLC` label among
+exported handlers for the validated source. `media.open` may hand VLC an explicit
+HTTPS or `content://` URI with read permission; it rejects file paths, `file://`,
+intent URIs, model-authored packages, missing or ambiguous handlers, and weak
+title-only identity. A title-only request returns `needs_source` until a catalog
+or source connector supplies a concrete URI, and never claims playback.
+
 ## Saved spots and cross-surface recall
 
 Bookmark admission requires a real syntactically valid YouTube `video_id` parsed

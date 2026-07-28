@@ -27,6 +27,9 @@
       override for installed stock/ReVanced-compatible variants.
 - [x] Add validated YouTube open/search/play behavior and versioned,
       package/signature-bound, fail-closed app-specific adapters where needed.
+- [x] Add visible-label-only VLC resolution for installed exported handlers and
+      explicit HTTPS/content URI handoff; reject package selectors, file/intent
+      URIs, ambiguity, and title-only playback without a source connector.
 - [x] Add the private named media-spot cache; require a valid real video id and
       explicit approval before bounded gateway sync.
 - [x] Resolve saved spots by normalized exact/phrase/token text with ambiguity
