@@ -3,6 +3,7 @@ package ai.moa.assistant;
 import static org.junit.Assert.assertEquals;
 
 import android.graphics.Rect;
+import android.os.Looper;
 import android.view.View;
 import android.view.WindowManager;
 
@@ -10,12 +11,28 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @RunWith(RobolectricTestRunner.class)
 public class MoaCompactOverlayRootTest {
+    @Test
+    public void dragVisibilityChangesOnTheSingleComposedRoot() {
+        MoaCompactOverlayRoot root = new MoaCompactOverlayRoot(
+                RuntimeEnvironment.getApplication(), recordingManager(new AtomicInteger()),
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+
+        root.setDragHidden(true);
+        assertEquals(0f, root.getAlpha(), 0f);
+        root.setDragHidden(false);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));
+
+        assertEquals(1f, root.getAlpha(), 0f);
+    }
+
     @Test
     public void oneCommitSubmitsExactlyOneRootWindowLayout() {
         AtomicInteger updates = new AtomicInteger();

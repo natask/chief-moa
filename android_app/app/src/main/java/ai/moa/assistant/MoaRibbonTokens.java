@@ -44,17 +44,17 @@ final class MoaRibbonTokens {
     static final long MENU_IDLE_DISMISS_MS = 5000;
 
     // --- Geometry (dp) ----------------------------------------------------
-    static final int RIBBON_H_DP = 36;
+    static final int RIBBON_H_DP = 30;
     /** The single step the ribbon may grow by at very large system font scales. */
-    static final int RIBBON_H_LARGE_DP = 40;
+    static final int RIBBON_H_LARGE_DP = 34;
     static final float FONT_SCALE_CLAMP = 1.3f;
     /** Compact fixed viewport: stable while streaming, never a screen-wide banner. */
-    static final int RIBBON_MAX_W_DP = 280;
+    static final int RIBBON_MAX_W_DP = 248;
     /** Bounded ceiling for a tap-expanded ribbon. It reads; it is not a panel. */
-    static final int EXPANDED_MAX_H_DP = 240;
-    static final int EXPANDED_PAD_Y_DP = 9;
-    static final int RIBBON_PAD_X_DP = 12;
-    static final int GAP_DP = 6;
+    static final int EXPANDED_MAX_H_DP = 112;
+    static final int EXPANDED_PAD_Y_DP = 7;
+    static final int RIBBON_PAD_X_DP = 10;
+    static final int GAP_DP = 5;
     static final int DOT_SIZE_DP = 6;
     static final int DOT_OFFSET_DP = 10;
     static final int EDGE_MARGIN_DP = 16;

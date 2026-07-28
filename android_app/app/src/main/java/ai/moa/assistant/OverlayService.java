@@ -652,6 +652,7 @@ public final class OverlayService extends Service {
         boolean beganDrag = overlayDragMode.begin();
         overlayUnit.setDragging(true);
         if (beganDrag) {
+            compactOverlayRoot.setDragHidden(true);
             orbDragScreenWidth = getResources().getDisplayMetrics().widthPixels;
             orbDragScreenHeight = getResources().getDisplayMetrics().heightPixels;
             orbDragLayoutState.reset();
@@ -760,6 +761,7 @@ public final class OverlayService extends Service {
             overlayUnit.setDragging(false);
             // Restore and re-anchor the latest retained text/control state once.
             applyLatestOrbDragFrame();
+            compactOverlayRoot.setDragHidden(false);
         }
         if (remove) {
             beginReversibleOrbRemoval();

@@ -7,7 +7,7 @@ may change any element's width, height, or position.
 
 #### Scenario: A long reply streams in
 - **WHEN** assistant text arrives that is wider than the ribbon viewport
-- **THEN** the ribbon's viewport keeps its width and its 28dp height, the line
+- **THEN** the ribbon's viewport keeps its width and its 30dp height, the line
   slides left so the newest glyph stays at the right inner edge, and the
   companion does not move
 
@@ -18,7 +18,7 @@ may change any element's width, height, or position.
 
 #### Scenario: System font scale is very large
 - **WHEN** the system font scale exceeds 1.3
-- **THEN** the ribbon takes one step to 32dp, the text size clamps at 1.3, and
+- **THEN** the ribbon takes one step to 34dp, the text size clamps at 1.3, and
   the ribbon does not wrap or grow further
 
 ### Requirement: The rendered text is a grapheme-safe tail window
@@ -78,6 +78,17 @@ Expansion is the only thing that may change the unit's height.
 - **WHEN** the turn is far longer than the expanded ceiling
 - **THEN** the ribbon stops growing at that ceiling and shows the tail, and the
   unit does not become a panel
+
+#### Scenario: Compact native proportions
+- **WHEN** the current-turn overlay is collapsed
+- **THEN** each ribbon remains approximately 30dp tall and no wider than 248dp
+- **AND** explicit expansion is capped at 112dp
+
+#### Scenario: Move without redraw flashes
+- **WHEN** the user moves the compact overlay
+- **THEN** Android hides the composed unit while preserving its geometry
+- **AND** reveals it once from the final committed position without detaching and
+  reattaching its children
 
 #### Scenario: Streaming may still not resize anything
 - **WHEN** a delta arrives while the ribbon is collapsed

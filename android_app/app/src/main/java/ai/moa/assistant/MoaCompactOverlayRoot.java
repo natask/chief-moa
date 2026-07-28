@@ -27,6 +27,7 @@ import java.lang.reflect.Proxy;
  * region containing only visible interactive children.
  */
 final class MoaCompactOverlayRoot extends FrameLayout {
+    private static final long DRAG_REVEAL_MS = 140L;
     private static final class Slot {
         final Rect screen = new Rect();
         boolean touchable;
@@ -128,6 +129,17 @@ final class MoaCompactOverlayRoot extends FrameLayout {
         for (Slot slot : slots.values()) {
             slot.screen.offset(dx, dy);
         }
+    }
+
+    /** Hide during movement and reveal once from the final committed position. */
+    void setDragHidden(boolean hidden) {
+        animate().cancel();
+        if (hidden) {
+            setAlpha(0f);
+            return;
+        }
+        if (getAlpha() >= 1f) return;
+        animate().alpha(1f).setDuration(DRAG_REVEAL_MS).start();
     }
 
     /** The sole WindowManager layout submission for a compact-overlay frame. */
