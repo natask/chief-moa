@@ -9,6 +9,11 @@ import java.util.Set;
 final class MoaSemanticAccessibilityActions {
     private MoaSemanticAccessibilityActions() {}
 
+    static String expectedPackage(JSONObject input) {
+        JSONObject args = input == null ? new JSONObject() : input;
+        return safe(args.optString("expected_package", args.optString("expectedPackage", "")));
+    }
+
     static int expectedWindowId(JSONObject input) {
         JSONObject args = input == null ? new JSONObject() : input;
         return args.optInt("expected_window_id", args.optInt("expectedWindowId", -1));
@@ -46,7 +51,7 @@ final class MoaSemanticAccessibilityActions {
             String requestId, JSONObject args, MoaActionApprovalController approvals) {
         String label = label(args);
         String value = text(args);
-        String expectedPackage = MoaActionBroker.expectedPackage(args);
+        String expectedPackage = expectedPackage(args);
         int windowId = expectedWindowId(args);
         if (safe(requestId).isEmpty() || label.isEmpty() || value == null
                 || expectedPackage.isEmpty() || windowId < 0) {
@@ -80,13 +85,13 @@ final class MoaSemanticAccessibilityActions {
             return new Outcome(false, "Active window changed before approved text entry.");
         }
         MoaAccessibilityService.SemanticActionResult result = MoaAccessibilityService.setTextByLabel(
-                label, value, MoaActionBroker.expectedPackage(args), windowId);
+                label, value, expectedPackage(args), windowId);
         return outcome(result, "Entered text in the approved field.", "Text entry stopped");
     }
 
     static Outcome scroll(JSONObject args) {
         String label = label(args);
-        String expectedPackage = MoaActionBroker.expectedPackage(args);
+        String expectedPackage = expectedPackage(args);
         int windowId = expectedWindowId(args);
         Boolean forward = scrollForward(args);
         if (label.isEmpty() || expectedPackage.isEmpty() || windowId < 0 || forward == null) {

@@ -328,6 +328,10 @@ async function main() {
     // the real gateway tool-request broker. This description becomes an Amazon
     // search URL inside the extension; no Tweeks MCP/native host is involved.
     const browserDevice = await waitForBrowserDevice(gateway.baseUrl);
+    const browserDeviceId = String(browserDevice.device_id || browserDevice.id || "");
+    if (!browserDeviceId) {
+      throw new Error(`browser heartbeat did not expose an authenticated device identity: ${JSON.stringify(browserDevice)}`);
+    }
     if (!(browserDevice.local_tool_manifest || []).some((entry) => entry.tool === "browser.search.open")) {
       throw new Error(`browser.search.open missing from heartbeat manifest: ${JSON.stringify(browserDevice.local_tool_manifest)}`);
     }
@@ -338,6 +342,7 @@ async function main() {
         source: "smoke-cdp",
         source_surface_type: "browser_extension",
         target_surface_type: "browser_extension",
+        target_device_id: browserDeviceId,
         tool: "browser.search.open",
         input: { query: "ergonomic red chair", provider: "amazon", active: false },
         session_id: "browser_facade_smoke",
@@ -368,7 +373,7 @@ async function main() {
     const ownedQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", tool: "browser.tab.open", input: { url: branchUrl, background: true }, session_id: "browser_facade_smoke", branch_id: "raw_cdp_owned_tab" }),
+      body: JSON.stringify({ source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", target_device_id: browserDeviceId, tool: "browser.tab.open", input: { url: branchUrl, background: true }, session_id: "browser_facade_smoke", branch_id: "raw_cdp_owned_tab" }),
     }).then((resp) => resp.json());
     const ownedRequest = await waitForToolRequest(gateway.baseUrl, ownedQueued?.request?.id);
     const rawTabId = Number(ownedRequest.latest_receipt?.result?.tab_id);
@@ -381,6 +386,7 @@ async function main() {
         source: "smoke-cdp",
         source_surface_type: "browser_extension",
         target_surface_type: "browser_extension",
+        target_device_id: browserDeviceId,
         tool: "browser.cdp.execute",
         input: {
           tab_id: rawTabId, ownership_nonce: rawOwnershipNonce,
@@ -410,7 +416,7 @@ async function main() {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
       body: JSON.stringify({
-        source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension",
+        source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", target_device_id: browserDeviceId,
         tool: "browser.cdp.execute",
         input: { tab_id: rawTabId, ownership_nonce: rawOwnershipNonce, authority_profile: "debug", cdp_actions: [{ method: "Network.getAllCookies", params: {} }] },
         session_id: "browser_facade_smoke", branch_id: "raw_cdp_secret_denial",
@@ -424,7 +430,7 @@ async function main() {
     const closeQueued = await fetch(`${gateway.baseUrl}/v1/tool/requests`, {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", tool: "browser.tab.close", input: { tab_id: rawTabId, ownership_nonce: rawOwnershipNonce }, session_id: "browser_facade_smoke", branch_id: "cleanup" }),
+      body: JSON.stringify({ source: "smoke-cdp", source_surface_type: "browser_extension", target_surface_type: "browser_extension", target_device_id: browserDeviceId, tool: "browser.tab.close", input: { tab_id: rawTabId, ownership_nonce: rawOwnershipNonce }, session_id: "browser_facade_smoke", branch_id: "cleanup" }),
     }).then((resp) => resp.json());
     const closeRequest = await waitForToolRequest(gateway.baseUrl, closeQueued?.request?.id);
     if (!closeRequest.latest_receipt?.ok) throw new Error(`owned tab cleanup failed: ${JSON.stringify(closeRequest)}`);

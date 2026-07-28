@@ -291,98 +291,61 @@ final class MoaActionBroker {
 
         return ToolExecutionResult.done(false, "Unsupported local tool: " + name + ".", null);
     }
-    JSONObject screenSnapshot() {
-        return MoaAccessibilityService.currentScreenSnapshot();
-    }
-
-    JSONObject activeAppDescriptor() {
-        return MoaAccessibilityService.currentActiveAppDescriptor();
-    }
-
-    JSONArray executionAdapters() {
-        return MoaAccessibilityService.currentExecutionAdapters();
-    }
-
+    JSONObject screenSnapshot() { return MoaAccessibilityService.currentScreenSnapshot(); }
+    JSONObject activeAppDescriptor() { return MoaAccessibilityService.currentActiveAppDescriptor(); }
+    JSONArray executionAdapters() { return MoaAccessibilityService.currentExecutionAdapters(); }
     JSONObject mediaSessionDescriptor() {
-        MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(
-                MoaPrefs.preferredYoutubePackage(context));
+        MoaMediaSessionController.Snapshot snapshot = mediaSessions.currentSnapshot(MoaPrefs.preferredYoutubePackage(context));
         JSONObject descriptor = snapshot == null ? new JSONObject() : snapshot.toJson();
         try {
-            descriptor.put("notification_access", mediaSessions.hasNotificationAccess());
-            descriptor.put("preferred_package", MoaPrefs.preferredYoutubePackage(context));
-        } catch (JSONException ignored) {
-        }
+            descriptor.put("notification_access", mediaSessions.hasNotificationAccess())
+                    .put("preferred_package", MoaPrefs.preferredYoutubePackage(context));
+        } catch (JSONException ignored) {}
         return descriptor;
     }
 
-    String currentScreenSummary() {
-        return MoaAccessibilityService.currentScreenSummary();
-    }
+    String currentScreenSummary() { return MoaAccessibilityService.currentScreenSummary(); }
 
     void putScreenContext(JSONObject body) throws JSONException {
         JSONObject screen = screenSnapshot();
-        if (screen != null) {
-            body.put("screen", screen);
-        }
-    }
+        if (screen != null) body.put("screen", screen); }
 
-    static String expectedPackage(JSONObject input) {
-        JSONObject args = input == null ? new JSONObject() : input;
-        return safe(args.optString("expected_package", args.optString("expectedPackage", "")));
-    }
+    static String expectedPackage(JSONObject input) { return MoaSemanticAccessibilityActions.expectedPackage(input); }
     private ToolExecutionResult prepareSetText(String requestId, JSONObject args) {
-        Capability capability = CAPABILITIES.get("screen.set_text");
-        MoaSemanticAccessibilityActions.Outcome outcome = MoaSemanticAccessibilityActions.prepareSetText(requestId, args, approvals);
+        MoaSemanticAccessibilityActions.Outcome outcome =
+                MoaSemanticAccessibilityActions.prepareSetText(requestId, args, approvals);
         if (outcome.success) return ToolExecutionResult.confirmation(outcome.summary);
-        return ToolExecutionResult.done(false, outcome.summary,
-                recordReceipt(capability, MoaSemanticAccessibilityActions.label(args), false, outcome.summary));
-    }
+        return semanticResult("screen.set_text", MoaSemanticAccessibilityActions.label(args), outcome); }
     private ToolExecutionResult executeApprovedSetText(JSONObject args, String currentPackage) {
-        Capability capability = CAPABILITIES.get("screen.set_text");
         String label = MoaSemanticAccessibilityActions.label(args);
-        MoaSemanticAccessibilityActions.Outcome outcome = MoaSemanticAccessibilityActions.setText(args);
-        return ToolExecutionResult.done(outcome.success, outcome.summary,
-                recordReceipt(capability, currentPackage + ":" + label, outcome.success, outcome.summary));
-    }
+        return semanticResult("screen.set_text", currentPackage + ":" + label,
+                MoaSemanticAccessibilityActions.setText(args)); }
     private ToolExecutionResult executeSemanticScroll(JSONObject args) {
-        Capability capability = CAPABILITIES.get("screen.scroll");
         String label = MoaSemanticAccessibilityActions.label(args);
-        String expectedPackage = expectedPackage(args);
-        MoaSemanticAccessibilityActions.Outcome outcome = MoaSemanticAccessibilityActions.scroll(args);
+        return semanticResult("screen.scroll", expectedPackage(args) + ":" + label,
+                MoaSemanticAccessibilityActions.scroll(args)); }
+    private ToolExecutionResult semanticResult(String tool, String target, MoaSemanticAccessibilityActions.Outcome outcome) {
         return ToolExecutionResult.done(outcome.success, outcome.summary,
-                recordReceipt(capability, expectedPackage + ":" + label, outcome.success, outcome.summary));
-    }
-    private static String currentPackageName() {
-        return safe(MoaAccessibilityService.freshActivePackage());
-    }
+                recordReceipt(CAPABILITIES.get(tool), target, outcome.success, outcome.summary)); }
+    private static String currentPackageName() { return safe(MoaAccessibilityService.freshActivePackage()); }
 
     String promptWithScreenContext(String prompt) {
         String summary = MoaAccessibilityService.currentScreenSummary();
-        if (summary.isEmpty()) {
-            return prompt;
-        }
-        return prompt + "\n\nCurrent Android screen context:\n" + summary;
-    }
+        if (summary.isEmpty()) return prompt;
+        return prompt + "\n\nCurrent Android screen context:\n" + summary; }
 
-    boolean isScreenAccessEnabled() {
-        return MoaAccessibilityService.isEnabled(context);
-    }
-
-    boolean isScreenAccessRunning() {
-        return MoaAccessibilityService.isRunning();
-    }
+    boolean isScreenAccessEnabled() { return MoaAccessibilityService.isEnabled(context); }
+    boolean isScreenAccessRunning() { return MoaAccessibilityService.isRunning(); }
 
     JSONObject capabilityManifest() {
         JSONObject manifest = new JSONObject();
         for (Capability capability : CAPABILITIES.values()) {
             try {
-                JSONObject item = new JSONObject();
-                item.put("tool", capability.tool);
-                item.put("risk", capability.risk);
-                item.put("approval", capability.approval);
+                JSONObject item = new JSONObject()
+                        .put("tool", capability.tool).put("risk", capability.risk)
+                        .put("approval", capability.approval);
                 manifest.put(capability.tool, item);
-            } catch (JSONException ignored) {
-            }
+            } catch (JSONException ignored) {}
         }
         return manifest;
     }
