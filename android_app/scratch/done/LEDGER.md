@@ -31,3 +31,4 @@
 - Added fail-closed visible-label VLC source handoff with truthful title-only outcomes — agent: Codex/GPT-5 — Entire checkpoint
 - Migrated Android to the `ag.companion` identity, exact `Ag` branding, and truthful progressive onboarding without automatic permission prompts — agent: Codex/GPT-5 — 0c9f56b6
 - Connected Ag onboarding through single-use enrollment, locally generated scoped device credentials, and authenticated continuity verification without copying the gateway bearer token — agent: Codex/GPT-5 — 6534f91d
+- Extracted the Ag onboarding presentation from MainActivity and updated source-size debt paths for the ag.companion namespace without raising ceilings — agent: Codex/GPT-5 — 0403d579
