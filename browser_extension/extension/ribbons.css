@@ -172,15 +172,36 @@
   align-items: center;
   pointer-events: none;
 }
-/* Chat sides are geometry, not text alignment: ribbon-layout.js hangs the
-   you-box off the companion's centre line to the right and the reply-box off
-   the same line to the left. Both lines stay left-anchored inside their own box
-   so the sliding window can own the horizontal offset with translateX(); the
-   newest character is always at the box's right edge, which for the reply is
-   the seam next to the companion. */
+/* Chat sides are geometry: ribbon-layout.js hangs the you-box off the
+   companion's centre line to the right and the reply-box off the same line to
+   the left, mirroring near a viewport edge. Whichever side a box lands on, its
+   text is anchored to the edge touching the companion — otherwise a short line
+   sits at the far end of a 340px box and the unit reads as floating away from
+   the mark it belongs to.
+
+   Anchoring applies only while the line fits. Once it is clipped the line fills
+   the viewport and the sliding window owns the offset via translateX(), so a
+   flex-end box would fight it for the same pixels. */
 #agee-ribbon-you .agee-ribbon-viewport,
 #agee-ribbon-reply .agee-ribbon-viewport {
   justify-content: flex-start;
+}
+.agee-ribbon[data-agee-seam="right"] .agee-ribbon-viewport {
+  justify-content: flex-end;
+}
+.agee-ribbon[data-agee-seam="right"].agee-ribbon-clipped .agee-ribbon-viewport {
+  justify-content: flex-start;
+}
+.agee-ribbon[data-agee-seam="right"] .agee-ribbon-line {
+  text-align: right;
+}
+/* The speaker dot hangs off the edge AWAY from the companion. On the seam side
+   it would sit between the words and the mark, or collide with the mark itself.
+   The default left position is already the far edge for a box that ends on the
+   line; a box that starts on the line needs it flipped. */
+.agee-ribbon[data-agee-seam="left"] .agee-ribbon-dot {
+  left: auto;
+  right: calc(-1 * var(--agee-ribbon-dot-offset));
 }
 
 /* Text mode: the you-line IS the input. Same box, same window, same pixels —

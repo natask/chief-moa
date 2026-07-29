@@ -16,6 +16,7 @@
     "smoke:user-scripts": "node scripts/smoke-user-scripts.mjs",
     "smoke:gateway": "node scripts/smoke-gateway.mjs",
     "smoke:ambient": "node scripts/smoke-ambient.mjs",
+    "qa:seam": "node scripts/qa-unit-seam.mjs",
     "smoke:settings": "node scripts/smoke-settings.mjs",
     "smoke:voice": "node scripts/smoke-voice.mjs",
     "smoke:live-voice-main": "node scripts/smoke-live-voice-main.mjs",

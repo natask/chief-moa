@@ -57,6 +57,11 @@
     };
     const youLeft = onSeam(centerX, centerX - width);
     const replyLeft = onSeam(centerX - width, centerX);
+    // Which edge of each box actually landed on the line. The text inside is
+    // anchored to that edge, so the words always sit against the companion
+    // rather than at the far end of a 340px box — that gap is what made the
+    // unit read as "floating off to one side" (2026-07-29).
+    const seamSide = (left) => (Math.abs(left + width - centerX) < Math.abs(left - centerX) ? "right" : "left");
 
     const aboveTop = rect.top - gap - height;
     const belowSecondBottom = rect.bottom + gap * 2 + height * 2;
@@ -79,6 +84,8 @@
       stackAbove,
       youLeft,
       replyLeft,
+      youSeam: seamSide(youLeft),
+      replySeam: seamSide(replyLeft),
       youTop,
       replyTop,
       // Applied instead of youTop when not flipped, so the upper ribbon grows up.

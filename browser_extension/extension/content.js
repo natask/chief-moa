@@ -1724,11 +1724,11 @@
     launcher.style.setProperty("--agee-pet-color", colors[0]);
     launcher.style.setProperty("--agee-pet-dark", colors[1]);
     launcher.style.setProperty("--agee-pet-scale", String(activeCompanionPet.scale));
-    const label = `${activeCompanionPet.name} companion`;
-    const motionSummary = activeCompanionPet.motion.replace(/-/g, " ");
-    launcher.setAttribute("aria-label", `Ag, ${label}`);
-    launcher.setAttribute("title", `Ag - ${label}`);
-    launcher.dataset.ageeTip = `${label} - ${motionSummary}`;
+    // The pet's name and its current motion are not captions. They used to be
+    // painted twice on hover — our tooltip above the companion and the browser's
+    // own `title` below it — which is two labels for something the user can see.
+    // The name stays in the accessible name only, where nothing is drawn.
+    launcher.setAttribute("aria-label", `Ag, ${activeCompanionPet.name} companion`);
     if (image && activeCompanionPet.imageSrc) image.src = activeCompanionPet.imageSrc;
   }
 

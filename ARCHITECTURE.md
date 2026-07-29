@@ -648,7 +648,8 @@ reads in one line above the mark, what Ag replied in one line below it. The
 companion's centre line is the seam — the user box's left edge sits on it and
 the reply box's right edge sits on it, so the pair pivots on the companion and
 which side a line hangs tells you who is speaking. The reply is revealed at
-reading pace (~45 characters a second, always caught up within 2.5s) so a
+reading pace (~26 glyphs a second, counted in grapheme clusters so Amharic
+neither flashes past nor tears mid-cluster, always caught up within 2.5s) so a
 provider that answers in one block looks the same as one that streams, and a
 turn is not visually finished until the last character is on screen. Text mode
 is the same buffer: a click on the companion puts a caret in the user line, and

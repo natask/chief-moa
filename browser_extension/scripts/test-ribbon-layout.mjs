@@ -34,6 +34,20 @@ test("the boxes hang off the companion centre line in opposite directions", () =
 
 // Near an edge the preferred side does not fit, so the box mirrors to the other
 // side of the same line. It never slides off the companion.
+// Whichever side a box lands on, its text is anchored to the edge that touches
+// the companion, so the words hug the mark instead of sitting 340px away.
+test("each box reports which of its edges is on the seam", () => {
+  const rect = launcher(400);
+  const result = place(rect);
+  assert.equal(result.youSeam, "left", "you-box starts at the line");
+  assert.equal(result.replySeam, "right", "reply-box ends at the line");
+
+  const right = launcher(400, 900);
+  assert.equal(place(right).youSeam, "right", "a mirrored you-box ends at the line");
+  const left = launcher(400, 10);
+  assert.equal(place(left).replySeam, "left", "a mirrored reply-box starts at the line");
+});
+
 test("a box that cannot fit mirrors across the line instead of drifting", () => {
   const right = launcher(400, 900);
   const rightCentre = right.left + right.width / 2;
