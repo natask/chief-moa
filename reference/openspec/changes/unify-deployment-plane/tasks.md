@@ -20,22 +20,44 @@
 
 ## 1. Stop The Surfaces Sharing A Filesystem
 
-- [ ] 1.1 Give the Android OTA store its own Docker volume and mount it
-      read-only into the gateway. The publisher writes it; the gateway serves
-      from it and creates nothing in it.
-      Acceptance: `docker inspect` shows the OTA mount as read-only for the
-      gateway, and a publish still passes its public verification step.
-- [ ] 1.2 Exclude the OTA store from the gateway DATA_DIR backup once it has
-      its own volume, and back it up on its own schedule.
-      Acceptance: a gateway backup no longer contains `android-ota/`, and its
-      size drops accordingly; the OTA store still has a restorable copy.
-- [ ] 1.3 If 1.1 is deferred, make `android_app/deploy/ota/sync-vps.sh` chown
-      everything it creates to the gateway's uid.
-      Acceptance: after a publish, no path under the OTA store is unreadable
-      by the gateway user.
-- [ ] 1.4 Add a boot-time audit line reporting OTA store ownership drift.
+- [x] 1.1 Give the Android OTA store its own Docker volume
+      (`moa-ota-data` at `/srv/android-ota`) and resolve the serving directory
+      between it and the legacy path, so the copy, the publisher cutover, and a
+      gateway rollback are each reversible. `resolveStoreDir` in
+      `gateway/lib/android-ota.js`, wired in `gateway/server.js`; volume and
+      env in `docker-compose.yml` and `gateway/Dockerfile`.
+      Acceptance: an empty new volume still serves the legacy store; a
+      populated one takes over; neither strands the update endpoint. Covered in
+      `gateway/test/android-ota.test.js`.
+- [x] 1.3 Make `android_app/deploy/ota/sync-vps.sh` chown everything it creates
+      to the gateway's uid (`MOA_VPS_OTA_OWNER_UID`, default 1000).
+      Acceptance: after a publish, no path under the OTA store is unreadable by
+      the gateway user. Covered by `test-sync-vps.sh`'s finalize path.
+- [ ] 1.2 Execute the staged cutover on the droplet: copy the release bytes to
+      the new volume, confirm the gateway serves from it, point the publisher at
+      it, confirm one publish and one real phone install, then remove the legacy
+      store.
+      Acceptance: `/health` and the container log name the primary store, a
+      publish succeeds against it, and a phone reports the installed version
+      before anything legacy is removed.
+- [ ] 1.4 Exclude the OTA store from the gateway DATA_DIR backup once step 1.2
+      completes, and back it up on its own schedule.
+      Acceptance: a gateway backup no longer contains `android-ota/` and drops
+      by ~292 MB; the OTA store still has a restorable copy.
+- [ ] 1.5 Report OTA store ownership drift at `/health`.
       Acceptance: a store containing a path the gateway cannot read is visible
-      at `/health` without reading container logs.
+      without reading container logs.
+
+## 1b. Promotion Scheduling
+
+- [ ] 1b.1 Keep the promotion poll interval longer than the worst-case
+      promotion, and make a running promotion immune to its own trigger. A
+      120-second timer against a ~20-minute promotion re-triggered the unit
+      mid-flight and TERMed it; the droplet now carries a 1800s drop-in at
+      `/etc/systemd/system/chief-moa-auto-update.timer.d/interval.conf`.
+      Acceptance: the interval is tracked in the repo rather than living only
+      as a hand-applied drop-in, and a promotion that outruns the interval is
+      reported as a configuration fault, not a timeout.
 
 ## 2. Keep Deployment Identity Through Rollback
 
@@ -51,13 +73,20 @@
 
 ## 3. Retention
 
-- [ ] 3.1 Replace count-based backup retention in `scripts/vps/backup.sh` with
-      age-based retention: all for 7 days, daily for 30, monthly off-host.
-      Acceptance: a simulated day of failed promotions prunes no scheduled
-      backup.
-- [ ] 3.2 Tag backups with a reason (`promotion` or `scheduled`) and prune
+- [x] 3.2 Tag backups with a reason (`promotion` or `scheduled`) and prune
       promotion backups aggressively without letting them evict scheduled ones.
-      Acceptance: the manifest carries the reason and the prune honours it.
+      Order the promotion so the backup follows the preview build and precedes
+      the apply, and let `update.sh` reuse it against a checked restore receipt
+      instead of taking a second one.
+      Acceptance: a simulated day of failed promotions prunes no scheduled
+      backup; a promotion writes one backup, not two; an unverifiable receipt
+      falls back to a fresh backup. Covered in
+      `scripts/vps/test-backup-retention.sh`.
+- [ ] 3.1 Move scheduled backups from count-based to age-based retention: all
+      for 7 days, daily for 30, monthly off-host. Tagging (3.2) already stops
+      promotion churn from evicting history; this bounds the window by time
+      rather than by count.
+      Acceptance: a quiet week and a busy week retain the same span of history.
 - [ ] 3.3 Refuse to prune a backup that the off-host mirror has not taken.
       Acceptance: pruning with no mirror record leaves the backup in place and
       logs why.
@@ -69,9 +98,13 @@
       running version plus one predecessor after a successful promotion.
       Acceptance: after two promotions, at most two gateway images and one
       preview directory remain; evidence rows in Postgres are untouched.
-- [ ] 3.6 Prune Android releases and publish snapshots to `current` plus one.
-      Acceptance: `releases/` holds two entries after two publishes and the
-      rollback target still resolves.
+- [x] 3.6 Prune Android releases and publish snapshots to `current` plus one,
+      in the acknowledgement step that runs only after public verification has
+      passed, ordering releases by the same `published_at` the gateway uses.
+      Acceptance: `releases/` holds two entries after a publish, the rollback
+      target still resolves, unreadable metadata keeps a release, and the live
+      release and `current` pointer are re-checked afterwards. Covered in
+      `android_app/deploy/ota/test-sync-vps.sh`.
 
 ## 4. The Plane
 

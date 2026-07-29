@@ -408,8 +408,14 @@ if run_sync_with_host "$local_dir" "$remote_dir" "$case_dir/dot-output" 'qa@bad.
 [ ! -s "$FAKE_CALL_LOG" ]
 assert_no_target_leak "$case_dir/dot-output" "$remote_dir"
 
-# Happy path: historical releases survive, the prior state is snapshotted, and
-# current moves only to the fully uploaded release.
+# Happy path: the live release and its one predecessor survive, anything older
+# is pruned, the prior state is snapshotted, and current moves only to the fully
+# uploaded release.
+#
+# Retention changed deliberately: publication used to delete nothing, and the
+# production store had grown to 33 releases and 36 snapshots inside the
+# gateway's data volume. A release older than the predecessor is a rebuild from
+# its tagged commit, not a stored artifact.
 case_dir="$TMP_DIR/happy"
 local_dir="$case_dir/local"
 remote_dir="$case_dir/remote"
@@ -420,9 +426,12 @@ publish_release "$local_dir" 10 '2026-07-03T00:00:00Z' new-10
 for n in 1 2 3 4 5; do mkdir -p "$remote_dir/.publish-snapshots/2026010${n}T000000Z-old-$n"; done
 run_sync "$local_dir" "$remote_dir" "$case_dir/output"
 [ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-10 ]
-[ -f "$remote_dir/releases/ai.moa.assistant-8/moa-assistant.apk" ]
+# The live release and exactly one predecessor: the one-step rollback the client
+# offers is intact, and the release before it is gone.
+[ ! -e "$remote_dir/releases/ai.moa.assistant-8" ]
 [ -f "$remote_dir/releases/ai.moa.assistant-9/moa-assistant.apk" ]
 [ -f "$remote_dir/releases/ai.moa.assistant-10/moa-assistant.apk" ]
+[ "$(find "$remote_dir/releases" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 2 ]
 cmp -s "$local_dir/moa-assistant.apk" "$remote_dir/moa-assistant.apk"
 [ "$(file_mode "$remote_dir")" = 755 ]
 [ "$(file_mode "$remote_dir/releases")" = 755 ]
@@ -453,7 +462,7 @@ run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
   FAKE_CONCURRENT_MARKER="$case_dir/gateway-blocked"
 [ "$(cat "$case_dir/gateway-blocked")" = "gateway rollback blocked" ]
 [ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-72 ]
-[ -f "$remote_dir/releases/ai.moa.assistant-70/moa-assistant.apk" ]
+[ ! -e "$remote_dir/releases/ai.moa.assistant-70" ]
 [ -f "$remote_dir/releases/ai.moa.assistant-71/moa-assistant.apk" ]
 [ ! -e "$remote_dir/.publish-lock" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"

@@ -178,6 +178,52 @@ running.
 - THEN the active service reports that previous commit at its health endpoint
 - AND it does not report an unknown build.
 
+### Requirement: A promotion is never interrupted by its own trigger
+
+The system SHALL keep the promotion poll interval longer than the worst-case
+promotion duration, and a promotion already in progress SHALL NOT be terminated
+by a later trigger of the same schedule.
+
+#### Scenario: the schedule fires while a promotion is running
+
+- GIVEN a promotion in progress
+- WHEN the poll interval elapses
+- THEN the running promotion continues to completion
+- AND the new trigger is skipped rather than replacing it.
+
+#### Scenario: the promotion duration grows past the interval
+
+- WHEN a promotion regularly takes longer than the poll interval
+- THEN the mismatch is reported as a configuration fault
+- AND it is not reported as a promotion timeout.
+
+### Requirement: A failed promotion consumes no backup retention
+
+The system SHALL prove a candidate can build and boot before taking the backup
+for its apply, and SHALL take at most one backup per promotion attempt. A
+promotion that fails before the apply SHALL leave the scheduled backup history
+unchanged.
+
+#### Scenario: a candidate fails to build
+
+- WHEN a promotion dies during or before the image build
+- THEN no backup was written for that attempt
+- AND no existing backup was pruned.
+
+#### Scenario: a promotion reaches the apply
+
+- WHEN a promotion proceeds to the apply
+- THEN exactly one backup was written for that attempt
+- AND its restore was verified against that same candidate.
+
+#### Scenario: a reused backup cannot be verified
+
+- GIVEN a backup offered for reuse whose restore receipt is missing, names
+  another commit, or is stale
+- WHEN the apply begins
+- THEN a fresh backup is taken and restore-checked instead
+- AND the apply does not proceed on the unverified one.
+
 ### Requirement: The plane records outcomes without relaxing the promotion gate
 
 The system SHALL record deployment state in addition to, and never in place of,

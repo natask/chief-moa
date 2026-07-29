@@ -134,7 +134,7 @@ The app checks the manifest size and SHA-256. Android checks the package signer.
 The app also compares the downloaded signer with the installed signer before it
 opens the package installer. The user then approves the installer.
 
-### Rollback
+### Rollback and retention
 
 Every publish snapshots the prior `current` release (or the empty-store state)
 under `$REMOTE_OTA_DIR/.publish-snapshots/` before touching anything live, and
@@ -142,9 +142,52 @@ finalize failures already restore from that snapshot automatically. To roll
 back a release that finalized successfully but should not have, republish the
 desired older release's exact bytes (an idempotent retry of that release id is
 a byte-for-byte match, so it reuses the immutable release directory) or use
-the gateway's own rollback path if one is wired up for that store. Snapshot
-lifecycle (pruning old snapshots) is a separate, explicit maintenance step;
-publication itself never deletes rollback evidence.
+the gateway's own rollback path if one is wired up for that store.
+
+Publication keeps the live release plus exactly one predecessor
+(`MOA_OTA_RELEASE_RETENTION`, minimum 2) and the two most recent snapshots
+(`MOA_OTA_SNAPSHOT_RETENTION`). That is precisely the one-step rollback the
+Android client offers. **Going back further than one release is a rebuild**:
+check out that release's tagged commit and rebuild the APK with the continuity
+key described above. A rebuilt APK is byte-identical for a given commit only if
+the version code is pinned, so treat an older rollback as a fresh publication
+with a new version code, not as a restore.
+
+Pruning happens in the acknowledgement step, which runs only after the new
+release is live **and** its authenticated public manifest/APK verification has
+passed, so it can never remove a release the phone is about to be offered. It
+never touches the live release or the predecessor, keeps any release whose
+metadata it cannot read, and re-checks the live release and `current` pointer
+afterwards. Publication previously deleted nothing at all, which is how the
+production store reached 33 releases and 36 snapshots inside the gateway's own
+data volume.
+
+### Where the store lives
+
+The OTA store is moving out of the gateway's data volume onto its own volume
+(`chief-moa_moa-ota-data`, mounted at `/srv/android-ota`). A store written by
+the host publisher over SSH as root and read by the gateway as uid 1000 is what
+crash-looped production on 2026-07-29, and it is what makes `backup.sh` fail
+with `tar` exit 2 on a 0700 `.publish-staging`.
+
+The move is staged, and every stage is reversible:
+
+1. **Ship the resolver.** The gateway serves from `ANDROID_OTA_DIR` when that
+   path already holds a store, and from `ANDROID_OTA_LEGACY_DIR` otherwise. With
+   nothing copied yet this changes no behavior.
+2. **Copy the release bytes** to the new volume. The gateway switches to it on
+   its next boot; the legacy store is untouched, so removing the mount reverts
+   the move.
+3. **Point the publisher** at the new path (`MOA_VPS_OTA_DIR`, which now
+   defaults to it). New releases land there; the legacy store stays readable.
+4. **Remove the legacy store** only after a publish and a real phone install
+   have both been confirmed on the new one.
+
+Publishing now also chowns the store to the gateway's uid
+(`MOA_VPS_OTA_OWNER_UID`, default 1000) so publisher-created directories can
+never be unreadable by the process that has to serve them. Set it to 0 to leave
+ownership alone. Only a root publisher can do this; an unprivileged one already
+owns everything it creates.
 
 ### Recovering a stuck publish lock
 
@@ -228,6 +271,24 @@ git show HEAD:.github/workflows/<workflow>.yml
 Move `master` only through `scripts/release/push-master.sh`. Gateway CI moves the
 verified commit to `vps-deploy`. The VPS timer then runs preview, backup, restore,
 drain, compatibility, and smoke checks before it changes the active gateway.
+
+The candidate is built and smoked **before** the backup is taken. A promotion
+that dies in the build writes no backup at all, and the backup it does take sits
+immediately before the apply it protects. `update.sh` reuses that backup rather
+than taking a second one, but only after checking its restore receipt: complete,
+verified against this exact candidate, and recent. Anything that does not verify
+falls through to a fresh backup.
+
+Backups record why they were taken and prune only their own kind. Scheduled
+backups are the user's history and keep `MOA_BACKUP_RETENTION` (14); promotion
+backups keep `MOA_PROMOTION_BACKUP_RETENTION` (2). Promotion retries cannot evict
+history — before this, 66 prune events in five days had collapsed a fourteen-day
+window into about five hours. Backups are user data, not deployment artifacts;
+the retention rules above for OTA releases do not apply to them.
+
+The poll interval must stay longer than the worst-case promotion. A promotion
+takes roughly 20 minutes on this droplet; a 120-second timer re-triggered the
+unit mid-flight and TERMed it, which looked like a timeout and was not.
 The workflow now remains incomplete until public `/health` reports the exact
 published commit. A green ref-publication job alone is not a successful deploy.
 
