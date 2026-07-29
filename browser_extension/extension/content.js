@@ -548,9 +548,14 @@
   }
 
   function setVoiceRepliesEnabled(enabled) {
+    const wasEnabled = voiceRepliesEnabled;
     voiceRepliesEnabled = enabled !== false;
     for (const state of liveVoiceStates) { state.assistantSpeechSuppressed = !voiceRepliesEnabled; if (!voiceRepliesEnabled) state.pendingAssistantAudioSegments.length = 0; }
-    if (!voiceRepliesEnabled) stopSpeaking(); safeStorageLocalSet({ ageeVoiceRepliesEnabled: voiceRepliesEnabled }).catch(() => {});
+    if (!voiceRepliesEnabled) stopSpeaking();
+    // Voice back on speaks the reply being read, from the top. Newest turn only:
+    // replaying an older one would talk over the conversation the user is in.
+    else if (!wasEnabled) restartAssistantPlayback([...liveVoiceStates].at(-1));
+    safeStorageLocalSet({ ageeVoiceRepliesEnabled: voiceRepliesEnabled }).catch(() => {});
   }
 
   function restoreLauncherPosition() {
@@ -2603,6 +2608,9 @@
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
+    // Reacts to the microphone, not the transcriber.
+    ribbons?.setUserPending(next === "listening");
+    ribbons?.setReplyPending(next === "thinking");
     if (next === "idle") setTranscript("");
     // Every stop/error/teardown path lands here, so the talk-mode ring can
     // never outlive conversation mode.
@@ -2807,6 +2815,8 @@
       playedAssistantAudioSegments: [],
       playbackProgressSent: false,
       assistantText: "",
+      // Accumulated deltas: a preview. assistant_text replaces it and is the record.
+      assistantStreamText: "",
       transcript: "",
       gatewayRouted: false,
       incognito: context.action === "incognito",
@@ -2945,10 +2955,23 @@
       }
       return;
     }
+    // Render as the model writes. Only emitted when the reasoner streams, so
+    // non-streaming providers still land on assistant_text below with no gap.
+    if (msg.type === "assistant_text_delta") {
+      const delta = String(msg.delta || "");
+      if (!delta || state.assistantSpeechSuppressed) return;
+      state.assistantStreamText += delta;
+      if (isCurrentTurn) {
+        setAgentState("speaking");
+        setReplyRibbon(state.assistantStreamText, { streaming: true });
+      }
+      return;
+    }
     if (msg.type === "assistant_text") {
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.assistantText = text;
+      state.assistantStreamText = text;
       const displayText = state.assistantSpeechSuppressed
         ? AgeeSteeringUi.formatSteeredAssistantText(text, state.steeringBoundaryText)
         : text;
@@ -3041,9 +3064,10 @@
     }
   }
 
-  function playLiveAssistantPcm(state, buffer) {
+  function playLiveAssistantPcm(state, buffer, { replay = false } = {}) {
     if (!buffer || !buffer.byteLength) return;
     if (!isLiveVoiceStateActive(state)) return;
+    if (!replay) AgeeAssistantAudioReplay.retainFrame(state, buffer);
     if (state.assistantSpeechSuppressed || !voiceRepliesEnabled) return;
     primeAudio();
     if (!audioCtx) return;
@@ -3075,9 +3099,23 @@
       }
     };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
-    recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, rate);
+    // The segment ledger records the LIVE pass (it feeds the stored interruption
+    // cutoff), so a replay must not rewrite it.
+    if (!replay) recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, rate);
     source.start(startAt);
     state.playbackTime = startAt + audioBuffer.duration / rate;
+  }
+
+  function restartAssistantPlayback(state) {
+    primeAudio();
+    const restarted = AgeeAssistantAudioReplay.restart(state, {
+      isActive: isLiveVoiceStateActive,
+      stop: stopLivePlayback,
+      currentTime: () => audioCtx?.currentTime,
+      play: (target, frame) => playLiveAssistantPcm(target, frame, { replay: true }),
+    });
+    if (restarted) setAgentState("speaking");
+    return restarted;
   }
 
   async function commitLiveVoiceTurn(state = liveVoice) {

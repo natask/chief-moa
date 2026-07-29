@@ -176,7 +176,8 @@
       if (!ribbon) return;
       clearTimeout(ribbon.lingerTimer);
       ribbon.lingerTimer = null;
-      ribbon.el.classList.remove("agee-ribbon-live", "agee-ribbon-streaming");
+      ribbon.pending = false;
+      ribbon.el.classList.remove("agee-ribbon-live", "agee-ribbon-streaming", "agee-ribbon-pending");
       clear(ribbon);
       syncState();
     }
@@ -204,6 +205,20 @@
     }
 
     const setStreaming = (ribbon, on) => ribbon?.el?.classList.toggle("agee-ribbon-streaming", !!on);
+
+    // Pending: the ribbon is open and visibly waiting, with no text yet. This is
+    // what makes the unit appear the moment the microphone opens instead of at
+    // the first partial transcript — the gap between "I started talking" and
+    // "the first word came back" is where the overlay used to look dead.
+    // A pending ribbon paints its dots, not its (empty) glyph run, so it must
+    // stay live through setText's empty-string retire path.
+    function setPending(ribbon, on) {
+      if (!ribbon) return;
+      ribbon.pending = !!on;
+      ribbon.el.classList.toggle("agee-ribbon-pending", !!on);
+      if (on) open(ribbon);
+      else if (!ribbon.buffer) retire(ribbon);
+    }
 
     function startLinger(ribbon, ms) {
       if (!ribbon || !isLive(ribbon)) return;
@@ -646,6 +661,9 @@
       setUser(text, { interim = false } = {}) {
         const value = String(text || "");
         if (value) {
+          // First real text ends the pending state: the dots are replaced by
+          // the words, in the same ribbon, with no reflow.
+          setPending(you, false);
           setText(you, value);
           setStreaming(you, !!interim);
         } else {
@@ -653,10 +671,18 @@
         }
       },
 
+      // Open the you-ribbon before any transcript exists. Called when capture
+      // opens so the unit reacts to the microphone, not to the transcriber.
+      setUserPending: (on) => setPending(you, on),
+      // Same for the reply side: the gap between committing a turn and the
+      // first reply delta is where "is it thinking?" lives.
+      setReplyPending: (on) => setPending(reply, on),
+
       // The lower ribbon is the assistant response stream.
       setReply(text, { tone = "", streaming = false } = {}) {
         const value = String(text || "").trim();
         if (!value) return;
+        setPending(reply, false);
         setText(reply, value, { tone });
         setStreaming(reply, streaming);
       },

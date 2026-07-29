@@ -160,7 +160,12 @@ if (
   mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("quiet-companion-controls.js") < 0 ||
   mainContentScript.js.indexOf("quiet-companion-controls.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \[[^\]]*"quiet-companion-controls\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("assistant-audio-replay.js") < 0 ||
+  mainContentScript.js.indexOf("assistant-audio-replay.js") > mainContentScript.js.indexOf("content.js") ||
+  mainContentScript.js.at(-1) !== "content.js" ||
+  // content.js must be last on the hot-injection path too. Pinning the file
+  // immediately before it made every new runtime a two-file edit for no gain.
+  !/files: \[[^\]]*"content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("the manifest and hot-injection paths must load every content runtime before content.js");
 }

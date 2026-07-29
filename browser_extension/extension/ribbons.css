@@ -249,6 +249,39 @@
 .agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
 .agee-ribbon-mute .agee-ribbon-line { color: var(--agee-ribbon-muted); }
 
+/* Pending: the ribbon is live and waiting, with nothing to say yet. Three dots
+   on the same scrim the text will use, so when the first word lands the plate
+   is already there and only its contents change — no pop, no reflow. */
+.agee-ribbon-pending .agee-ribbon-line::before {
+  content: "";
+  display: inline-block;
+  width: 34px;
+  height: 6px;
+  vertical-align: 1px;
+  background:
+    radial-gradient(circle 3px at 5px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat,
+    radial-gradient(circle 3px at 17px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat,
+    radial-gradient(circle 3px at 29px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat;
+  animation: agee-ribbon-pending 1400ms ease-in-out infinite;
+}
+/* An empty glyph run has no box, so the pending ribbon supplies its own scrim.
+   Same colour and radius as .agee-ribbon-text: the plate does not change when
+   the dots become words. */
+.agee-ribbon-pending .agee-ribbon-text {
+  background: var(--agee-ribbon-scrim);
+  box-shadow: var(--agee-ribbon-scrim-shadow);
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--agee-ribbon-scrim-ink);
+}
+@keyframes agee-ribbon-pending {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agee-ribbon-pending .agee-ribbon-line::before { animation: none; opacity: 0.6; }
+}
+
 .agee-ribbon-caret {
   display: inline-block;
   width: 1.5px;

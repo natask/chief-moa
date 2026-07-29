@@ -630,6 +630,30 @@ class VoiceSessionConnection {
       }
     };
     const turnSuperseded = () => this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status);
+    // Shared emitter for the turn's text events. Deltas keep leading/trailing
+    // whitespace (it is content mid-sentence); whole-value events are trimmed.
+    const TEXT_EVENT_FIELDS = {
+      transcript_partial: { key: "text", stamp: (v) => { providerEvents.transcript = v; } },
+      transcript_final: { key: "text", stamp: (v) => { providerEvents.transcript = v; providerEvents.transcriptFinalSent = true; } },
+      assistant_text: { key: "text", stamp: (v) => { providerEvents.assistantText = v; providerEvents.assistantTextSent = true; } },
+      assistant_text_delta: { key: "delta", stamp: () => { providerEvents.assistantTextDeltaCount = (providerEvents.assistantTextDeltaCount || 0) + 1; } },
+    };
+    const sendTurnText = async (type, text, { revisions = false, record = true } = {}) => {
+      if (turnSuperseded()) return;
+      const spec = TEXT_EVENT_FIELDS[type];
+      const value = record ? String(text || "").trim() : String(text ?? "");
+      if (!value) return;
+      spec.stamp(value);
+      if (record) await this.recordProviderEvent(turn, providerEvents, type, { text: value });
+      await this.sendEvent({
+        type,
+        session_id: turn.sessionId,
+        branch_id: turn.branchId,
+        turn_id: turn.turnId,
+        [spec.key]: value,
+        ...(revisions ? await this.phraseAssist.revisionField(turn, value) : {}),
+      });
+    };
     return {
       isTurnActive: () => !turnSuperseded(),
       onTurnProgress: async (stage) => {
@@ -688,52 +712,18 @@ class VoiceSessionConnection {
           ...sanitized,
         });
       },
-      onTranscriptPartial: async (text) => {
-        if (turnSuperseded()) return;
-        const value = String(text || "").trim();
-        if (!value) return;
-        providerEvents.transcript = value;
-        await this.recordProviderEvent(turn, providerEvents, "transcript_partial", { text: value });
-        await this.sendEvent({
-          type: "transcript_partial",
-          session_id: turn.sessionId,
-          branch_id: turn.branchId,
-          turn_id: turn.turnId,
-          text: value,
-          ...await this.phraseAssist.revisionField(turn, value),
-        });
-      },
-      onTranscriptFinal: async (text) => {
-        if (turnSuperseded()) return;
-        const value = String(text || "").trim();
-        if (!value) return;
-        providerEvents.transcript = value;
-        providerEvents.transcriptFinalSent = true;
-        await this.recordProviderEvent(turn, providerEvents, "transcript_final", { text: value });
-        await this.sendEvent({
-          type: "transcript_final",
-          session_id: turn.sessionId,
-          branch_id: turn.branchId,
-          turn_id: turn.turnId,
-          text: value,
-          ...await this.phraseAssist.revisionField(turn, value),
-        });
-      },
-      onAssistantText: async (text) => {
-        if (turnSuperseded()) return;
-        const value = String(text || "").trim();
-        if (!value) return;
-        providerEvents.assistantText = value;
-        providerEvents.assistantTextSent = true;
-        await this.recordProviderEvent(turn, providerEvents, "assistant_text", { text: value });
-        await this.sendEvent({
-          type: "assistant_text",
-          session_id: turn.sessionId,
-          branch_id: turn.branchId,
-          turn_id: turn.turnId,
-          text: value,
-        });
-      },
+      // The four text hooks differ only in which providerEvents field they
+      // stamp and whether they carry phrase-assist revisions, so they share one
+      // emitter. `record: false` keeps per-token deltas out of the turn's event
+      // log while still broadcasting them.
+      onTranscriptPartial: (text) => sendTurnText("transcript_partial", text, { revisions: true }),
+      onTranscriptFinal: (text) => sendTurnText("transcript_final", text, { revisions: true }),
+      onAssistantText: (text) => sendTurnText("assistant_text", text),
+      // Incremental reply text: the same sanitized deltas that feed the chunked
+      // TTS leg, forwarded so the ribbon fills in as the model writes.
+      // `assistant_text` stays the one stored, authoritative reply, so a client
+      // that ignores deltas still renders a correct turn.
+      onAssistantTextDelta: (delta) => sendTurnText("assistant_text_delta", delta, { record: false }),
       onAssistantAudioSegment: async (segment) => {
         assertTurnActive();
         const normalized = normalizeAssistantAudioSegment(segment, turn.assistantAudioSegments);
