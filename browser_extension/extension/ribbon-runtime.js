@@ -571,7 +571,10 @@
     function position() {
       const rect = launcher.getBoundingClientRect();
       if (!rect.width && !rect.height) return;
-      const width = you.el.offsetWidth || Math.min(340, Math.max(232, win.innerWidth * 0.44));
+      // Derived, never measured. position() writes these widths, so reading the
+      // element back would feed its own output in and collapse the box a little
+      // further on every pass. Mirrors the CSS clamp for --agee-ribbon-w.
+      const width = Math.min(340, Math.max(232, win.innerWidth * 0.44));
       const place = Layout.ribbonPlacement({
         launcherRect: rect,
         viewportWidth: win.innerWidth,
@@ -580,26 +583,25 @@
       });
       you.el.style.left = `${place.youLeft}px`;
       reply.el.style.left = `${place.replyLeft}px`;
+      // The sides never swap, so each box's width is what absorbs a companion
+      // near an edge. Writing width here overrides the CSS clamp deliberately:
+      // the available space on that side of the seam is the real constraint.
+      you.el.style.width = `${place.youWidth}px`;
+      reply.el.style.width = `${place.replyWidth}px`;
       // Anchor each line to the edge that sits on the companion, so the words
-      // hug it from whichever side the box ended up on.
+      // hug it rather than sitting at the far end of the box.
       you.el.dataset.ageeSeam = place.youSeam;
       reply.el.dataset.ageeSeam = place.replySeam;
-      if (place.youAnchor === "top") {
-        you.el.style.top = `${place.youTop}px`;
-        you.el.style.bottom = "auto";
-      } else {
-        you.el.style.top = "auto";
-        you.el.style.bottom = `${place.youBottom}px`;
-      }
-      if (place.replyAnchor === "bottom") {
-        reply.el.style.top = "auto";
-        reply.el.style.bottom = `${place.replyBottom}px`;
-      } else {
-        reply.el.style.top = `${place.replyTop}px`;
-        reply.el.style.bottom = "auto";
-      }
-      root.classList.toggle("agee-ribbons-flipped", place.flip);
-      root.classList.toggle("agee-ribbons-stacked-above", place.stackAbove);
+      // Height is capped by the space on that side, never by moving the box:
+      // an expanded turn grows away from the companion until it runs out of
+      // room, and then scrolls inside itself.
+      you.el.style.maxHeight = `${place.youMaxHeight}px`;
+      reply.el.style.maxHeight = `${place.replyMaxHeight}px`;
+      you.el.style.top = "auto";
+      you.el.style.bottom = `${place.youBottom}px`;
+      reply.el.style.top = `${place.replyTop}px`;
+      reply.el.style.bottom = "auto";
+      root.classList.toggle("agee-ribbons-cramped", place.youCramped || place.replyCramped);
     }
 
     // The ambient glyphs sit directly on page content, so sample what is

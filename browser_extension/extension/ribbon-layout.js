@@ -12,6 +12,8 @@
   const EDGE = 16;   // minimum distance from any viewport edge
   const GAP = 8;     // companion <-> ribbon
   const HEIGHT = 28; // collapsed ribbon height
+  const MIN_WIDTH = 120;  // narrower than this and a line of text is unreadable
+  const MIN_HEIGHT = 28;  // one line; the floor a box may be squeezed to
 
   const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
 
@@ -42,57 +44,58 @@
     // reads as one exchange pivoting on the companion rather than as two bars
     // stacked on top of each other. Clamping can pull a box off the line near a
     // viewport edge — staying on screen wins over staying on the seam.
-    const minX = edge;
-    const maxX = Math.max(edge, viewportWidth - width - edge);
-    const clampX = (value) => clamp(value, minX, maxX);
-    // Near a viewport edge the preferred side does not fit. Mirror to the other
-    // side of the same line rather than sliding the box off it: the seam is the
-    // point of the layout, and a mirrored box still starts (or ends) exactly on
-    // the companion. Only a viewport narrower than one box breaks the seam, and
-    // then staying on screen wins.
-    const onSeam = (preferred, mirrored) => {
-      if (preferred >= minX && preferred <= maxX) return preferred;
-      if (mirrored >= minX && mirrored <= maxX) return mirrored;
-      return clampX(preferred);
-    };
-    const youLeft = onSeam(centerX, centerX - width);
-    const replyLeft = onSeam(centerX - width, centerX);
-    // Which edge of each box actually landed on the line. The text inside is
-    // anchored to that edge, so the words always sit against the companion
-    // rather than at the far end of a 340px box — that gap is what made the
-    // unit read as "floating off to one side" (2026-07-29).
-    const seamSide = (left) => (Math.abs(left + width - centerX) < Math.abs(left - centerX) ? "right" : "left");
+    // The sides are FIXED: what you said always starts on the line and runs
+    // right; what Ag replied always ends on the line and runs left. A box that
+    // does not fit is made narrower — it never mirrors to the other side and
+    // never slides off the line. Mirroring kept the box a constant width but
+    // moved the exchange to the wrong side of the companion, which read as the
+    // unit jumping around when the mascot was dragged near an edge.
+    // The seam is absolute. A box takes the room available on its own side,
+    // preferring MIN_WIDTH but never sliding off the line to get it — dragging
+    // the companion into a corner makes its box narrow, not detached. The
+    // cramped flags below let the presentation react (wrap to more lines).
+    const youRoom = Math.max(0, viewportWidth - edge - centerX);
+    const replyRoom = Math.max(0, centerX - edge);
+    const fit = (room) => Math.max(1, Math.min(width, room < MIN_WIDTH ? room : Math.max(MIN_WIDTH, room)));
+    const youWidth = fit(youRoom);
+    const replyWidth = fit(replyRoom);
+    const youLeft = centerX;
+    const replyLeft = centerX - replyWidth;
 
-    const aboveTop = rect.top - gap - height;
-    const belowSecondBottom = rect.bottom + gap * 2 + height * 2;
-    const flip = aboveTop < edge && belowSecondBottom <= viewportHeight - edge;
-    // Near the bottom edge, a below-companion reply would be clamped into the
-    // mascot. Stack both streams above it instead, with the reply closest to
-    // the companion. This keeps the companion visually anchoring the unit.
-    const stackAbove = !flip && rect.bottom + gap + height > viewportHeight - edge;
-
-    const clampTop = (value) => clamp(value, edge, Math.max(edge, viewportHeight - height - edge));
-    const youTop = clampTop(flip
-      ? rect.bottom + gap
-      : stackAbove ? rect.top - gap * 2 - height * 2 : aboveTop);
-    const replyTop = clampTop(flip
-      ? rect.bottom + gap * 2 + height
-      : stackAbove ? aboveTop : rect.bottom + gap);
+    // Vertical: the companion does not move, and neither box is repositioned to
+    // make room. Each is given the height actually available on its own side of
+    // the companion and grows away from it, so a long turn expands into free
+    // space instead of pushing the mascot or crossing it.
+    const youMaxHeight = Math.max(MIN_HEIGHT, rect.top - gap - edge);
+    const replyMaxHeight = Math.max(MIN_HEIGHT, viewportHeight - rect.bottom - gap - edge);
+    // Anchored on the edge furthest from the companion, so growth is away from
+    // it: the upper box is pinned by its bottom, the lower by its top.
+    // Both are pinned to the companion unconditionally. Clamping these to the
+    // viewport is what used to slide a box up into the mascot at the bottom
+    // edge; the height budget above absorbs that instead.
+    const youBottom = Math.max(edge, viewportHeight - rect.top + gap);
+    const replyTop = rect.bottom + gap;
 
     return {
-      flip,
-      stackAbove,
       youLeft,
       replyLeft,
-      youSeam: seamSide(youLeft),
-      replySeam: seamSide(replyLeft),
-      youTop,
+      youWidth,
+      replyWidth,
+      // Which edge sits on the line. The text inside anchors to that edge, so
+      // the words always sit against the companion rather than at the far end
+      // of the box.
+      youSeam: "left",
+      replySeam: "right",
+      youMaxHeight,
+      replyMaxHeight,
+      youBottom,
+      youAnchor: "bottom",
       replyTop,
-      // Applied instead of youTop when not flipped, so the upper ribbon grows up.
-      youBottom: Math.max(edge, viewportHeight - youTop - height),
-      youAnchor: flip ? "top" : "bottom",
-      replyBottom: Math.max(edge, viewportHeight - replyTop - height),
-      replyAnchor: stackAbove ? "bottom" : "top",
+      replyAnchor: "top",
+      // True when a side is squeezed to its floor. The caller may nudge the
+      // companion for the composer case; the ribbons themselves never move it.
+      youCramped: rect.top - gap - edge < MIN_HEIGHT || youRoom < MIN_WIDTH,
+      replyCramped: viewportHeight - rect.bottom - gap - edge < MIN_HEIGHT || replyRoom < MIN_WIDTH,
     };
   }
 
@@ -146,6 +149,8 @@
     EDGE,
     GAP,
     HEIGHT,
+    MIN_WIDTH,
+    MIN_HEIGHT,
     isWithinProximity,
     popupPlacement,
     relativeLuminance,

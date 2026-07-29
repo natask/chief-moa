@@ -21,99 +21,98 @@ const place = (rect, width = 340) => L.ribbonPlacement({
   launcherRect: rect, viewportWidth: 1000, viewportHeight: 800, ribbonWidth: width,
 });
 
-// The companion's centre line is the seam: what you said starts on it and runs
-// right, what Ag replied ends on it and runs left.
+// The companion's centre line is the seam, and the sides never swap: what you
+// said always starts on the line and runs right, what Ag replied always ends on
+// it and runs left.
 test("the boxes hang off the companion centre line in opposite directions", () => {
   const rect = launcher(400);
   const result = place(rect);
   const centre = rect.left + rect.width / 2; // 631
   assert.equal(result.youLeft, centre, "you-box left edge sits on the centre line");
-  assert.equal(result.replyLeft + 340, centre, "reply-box right edge sits on the centre line");
-  assert.equal(result.flip, false);
+  assert.equal(result.replyLeft + result.replyWidth, centre, "reply-box right edge sits on the line");
+  assert.equal(result.youSeam, "left");
+  assert.equal(result.replySeam, "right");
 });
 
-// Near an edge the preferred side does not fit, so the box mirrors to the other
-// side of the same line. It never slides off the companion.
-// Whichever side a box lands on, its text is anchored to the edge that touches
-// the companion, so the words hug the mark instead of sitting 340px away.
-test("each box reports which of its edges is on the seam", () => {
-  const rect = launcher(400);
+// The old layout mirrored a box that did not fit, which moved the exchange to
+// the wrong side of the companion. The box is narrowed instead: the side a
+// stream lives on is fixed, and width is what absorbs a companion near an edge.
+test("a box that cannot fit is narrowed, never mirrored across the line", () => {
+  const right = launcher(400, 700);
+  const rightCentre = right.left + right.width / 2; // 731
+  const atRight = place(right);
+  assert.equal(atRight.youLeft, rightCentre, "you-box still starts on the line");
+  assert.equal(atRight.youWidth, 1000 - L.EDGE - rightCentre, "and takes the room that is left");
+  assert.ok(atRight.youWidth < 340, "which is narrower than the preferred width");
+  assert.equal(atRight.replyWidth, 340, "the reply side had room, so it is untouched");
+
+  const left = launcher(400, 200);
+  const leftCentre = left.left + left.width / 2; // 231
+  const atLeft = place(left);
+  assert.equal(atLeft.replyLeft + atLeft.replyWidth, leftCentre, "reply-box still ends on the line");
+  assert.equal(atLeft.replyWidth, leftCentre - L.EDGE, "narrowed to the room on its own side");
+  assert.ok(atLeft.replyWidth < 340);
+  assert.equal(atLeft.youWidth, 340, "the you side had room, so it is untouched");
+});
+
+// The seam is absolute: a companion dragged into a corner gets a narrow box,
+// never a detached one. Sliding off the line was what made the unit look like
+// it had jumped somewhere else on the screen.
+test("a cornered companion narrows its box rather than leaving the line", () => {
+  const rect = launcher(400, 980);
+  const centre = rect.left + rect.width / 2; // 1011 -- past the edge margin
   const result = place(rect);
-  assert.equal(result.youSeam, "left", "you-box starts at the line");
-  assert.equal(result.replySeam, "right", "reply-box ends at the line");
-
-  const right = launcher(400, 900);
-  assert.equal(place(right).youSeam, "right", "a mirrored you-box ends at the line");
-  const left = launcher(400, 10);
-  assert.equal(place(left).replySeam, "left", "a mirrored reply-box starts at the line");
-});
-
-test("a box that cannot fit mirrors across the line instead of drifting", () => {
-  const right = launcher(400, 900);
-  const rightCentre = right.left + right.width / 2;
-  assert.equal(place(right).youLeft + 340, rightCentre, "you-box mirrors to the left of the line");
-  assert.equal(place(right).replyLeft + 340, rightCentre, "reply-box keeps its own side");
-
-  const left = launcher(400, 10);
-  const leftCentre = left.left + left.width / 2;
-  assert.equal(place(left).replyLeft, leftCentre, "reply-box mirrors to the right of the line");
-  assert.equal(place(left).youLeft, leftCentre, "you-box keeps its own side");
+  assert.equal(result.youLeft, centre, "still starts exactly on the line");
+  assert.ok(result.youWidth < L.MIN_WIDTH, "narrower than the preferred floor");
+  assert.equal(result.youCramped, true, "and says so, so the view can react");
 });
 
 test("a viewport narrower than one box falls back to staying on screen", () => {
   const result = L.ribbonPlacement({
     launcherRect: launcher(400, 300), viewportWidth: 320, viewportHeight: 800, ribbonWidth: 340,
   });
-  assert.equal(result.youLeft, L.EDGE);
-  assert.equal(result.replyLeft, L.EDGE);
+  const centre = 300 + 62 / 2;
+  assert.equal(result.youLeft, centre, "the seam holds even in a narrow viewport");
+  assert.equal(result.replyLeft + result.replyWidth, centre);
 });
 
-test("the upper ribbon is bottom-anchored so expanding grows upward", () => {
-  const result = place(launcher(400));
+test("the upper box is bottom-anchored so expanding grows upward", () => {
+  const rect = launcher(400);
+  const result = place(rect);
   assert.equal(result.youAnchor, "bottom");
-  // Collapsed top would be 400 - 8 - 28 = 364, so its bottom edge is 392.
-  assert.equal(result.youTop, 364);
-  assert.equal(result.youBottom, 800 - 364 - 28);
-  // Applying youBottom pins the bottom edge: growth can only go up.
-  assert.equal(800 - result.youBottom, result.youTop + L.HEIGHT);
+  // Bottom pinned one gap above the companion: growth can only go up.
+  assert.equal(800 - result.youBottom, rect.top - L.GAP);
 });
 
-test("the lower ribbon is top-anchored so expanding grows downward", () => {
-  const result = place(launcher(400));
-  assert.equal(result.replyTop, 462 + 8, "companion bottom + gap");
+test("the lower box is top-anchored so expanding grows downward", () => {
+  const rect = launcher(400);
+  const result = place(rect);
   assert.equal(result.replyAnchor, "top");
+  assert.equal(result.replyTop, rect.bottom + L.GAP);
 });
 
-test("both ribbons stack above a bottom-edge companion without colliding", () => {
+// The companion never moves and no box is repositioned to make room. A box near
+// an edge gets a smaller height budget instead, and scrolls inside itself.
+test("height is capped by the space on that side, not by moving the box", () => {
+  const rect = launcher(400);
+  const result = place(rect);
+  assert.equal(result.youMaxHeight, rect.top - L.GAP - L.EDGE);
+  assert.equal(result.replyMaxHeight, 800 - rect.bottom - L.GAP - L.EDGE);
+
+  const high = launcher(30);
+  const atTop = place(high);
+  assert.equal(atTop.replyTop, high.bottom + L.GAP, "the reply still sits below the companion");
+  assert.ok(atTop.youMaxHeight >= L.MIN_HEIGHT, "the you-box keeps at least one line");
+  assert.equal(atTop.youCramped, true, "and reports that it is squeezed");
+});
+
+test("a companion at the bottom edge squeezes the reply without moving it", () => {
   const rect = launcher(720);
   const result = place(rect);
-  assert.equal(result.stackAbove, true);
-  assert.equal(result.replyAnchor, "bottom");
-  assert.equal(result.replyTop, rect.top - L.GAP - L.HEIGHT);
-  assert.equal(result.youTop, rect.top - L.GAP * 2 - L.HEIGHT * 2);
-  assert.equal(result.replyTop + L.HEIGHT + L.GAP, rect.top);
-  assert.ok(result.youTop + L.HEIGHT < result.replyTop);
-});
-
-test("both ribbons flip together at the top edge and the companion stays put", () => {
-  const rect = launcher(20);
-  const flipped = place(rect);
-  assert.equal(flipped.flip, true);
-  // Reading order survives: you above reply, both below the companion.
-  assert.ok(flipped.youTop < flipped.replyTop);
-  assert.equal(flipped.youTop, rect.bottom + L.GAP);
-  assert.equal(flipped.replyTop, rect.bottom + L.GAP * 2 + L.HEIGHT);
-  // Flipped, the upper ribbon anchors by its top, because growing down is now
-  // growing away from the companion.
-  assert.equal(flipped.youAnchor, "top");
-});
-
-test("no flip when there is no room below either, so ribbons stay above", () => {
-  // Companion near the top AND the viewport too short for two ribbons below.
-  const result = L.ribbonPlacement({
-    launcherRect: launcher(20), viewportWidth: 1000, viewportHeight: 140, ribbonWidth: 340,
-  });
-  assert.equal(result.flip, false);
+  assert.equal(result.replyTop, rect.bottom + L.GAP, "the reply stays below the companion");
+  assert.ok(result.replyMaxHeight >= L.MIN_HEIGHT, "and keeps at least one line of budget");
+  assert.equal(result.replyCramped, true);
+  assert.ok(result.youMaxHeight > result.replyMaxHeight, "the roomy side keeps its budget");
 });
 
 test("popups flip above their anchor rather than being clipped", () => {

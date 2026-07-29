@@ -1551,9 +1551,19 @@ if (
   throw new Error("a ribbon tap must expand the bounded bar to the full text and reveal the copy rail");
 }
 // The expanded bar grows AWAY from the companion, so the companion never moves
-// and the page never reflows: the upper ribbon is bottom-anchored.
-if (!/youAnchor: flip \? "top" : "bottom"/.test(ribbonLayoutSource) || !/you\.el\.style\.bottom = `\$\{place\.youBottom\}px`;/.test(ribbonRuntimeSource)) {
+// and the page never reflows: the upper ribbon is bottom-anchored, always. It
+// used to flip to a top anchor near the viewport top; now the box's height
+// budget absorbs a cramped side instead of the box changing sides.
+if (!/youAnchor: "bottom"/.test(ribbonLayoutSource) || !/you\.el\.style\.bottom = `\$\{place\.youBottom\}px`;/.test(ribbonRuntimeSource)) {
   throw new Error("the upper ribbon must be bottom-anchored so expanding grows away from the companion");
+}
+// A box near a viewport edge is narrowed and height-capped on its own side of
+// the seam. It must never mirror across the companion or be moved to fit.
+if (!/youWidth,\s*\n\s*replyWidth,/.test(ribbonLayoutSource)
+  || !/youSeam: "left"/.test(ribbonLayoutSource)
+  || !/replySeam: "right"/.test(ribbonLayoutSource)
+  || !/you\.el\.style\.maxHeight = `\$\{place\.youMaxHeight\}px`;/.test(ribbonRuntimeSource)) {
+  throw new Error("each stream must keep its own side of the seam and absorb an edge by resizing");
 }
 
 // Copy is a three-way choice with a default, not one button: literal,

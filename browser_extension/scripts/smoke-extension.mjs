@@ -931,7 +931,6 @@ async function main() {
               launcherBottom: Math.round(document.querySelector("#agee-launcher").getBoundingClientRect().bottom),
               replyTop: Math.round(reply.getBoundingClientRect().top),
               replyBottom: Math.round(reply.getBoundingClientRect().bottom),
-              stackedAbove: root.classList.contains("agee-ribbons-stacked-above"),
               you: read(you),
               reply: read(reply),
               expectedUserLength: expectedUser.length,
@@ -1025,8 +1024,11 @@ async function main() {
       ribbonBefore.glyphHittable !== "auto" ||
       Number(ribbonBefore.launcherOpacity) !== 0.92 ||
       Number(ribbonBefore.you.copyOpacity) !== 0 ||
-      !ribbonBefore.stackedAbove ||
-      ribbonBefore.replyBottom + 7 > ribbonBefore.launcherTop
+      // The companion never moves and neither box changes sides: the reply
+      // stays below it even at the bottom edge, absorbing the squeeze in its
+      // height budget instead of stacking above.
+      ribbonBefore.replyTop < ribbonBefore.launcherBottom ||
+      ribbonBefore.replyTop > ribbonBefore.launcherBottom + 10
     ) {
       throw new Error(`ambient overlay must paint no plate and take no page clicks: ${JSON.stringify(ribbonBefore)}`);
     }
