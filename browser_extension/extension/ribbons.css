@@ -267,6 +267,33 @@
 .agee-ribbon-streaming   50% { opacity: 0.15; }
 }
 
+/* The caret is the interactivity signal on BOTH lines: it blinks while a line
+   is receiving, so a turn reads as live before its first word lands and while
+   it streams. On the user's line it is the cursor for what is being said or
+   typed; on the reply it is the beat between committing and the first token. */
+.agee-ribbon-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--agee-ribbon-accent);
+  opacity: 0;
+}
+.agee-ribbon-streaming .agee-ribbon-caret,
+.agee-ribbon-pending .agee-ribbon-caret {
+  opacity: 1;
+  animation: agee-ribbon-caret 1060ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes agee-ribbon-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agee-ribbon-streaming .agee-ribbon-caret,
+  .agee-ribbon-pending .agee-ribbon-caret { animation: none; }
+}
+
 /* Copy rail: always present. Copy and history are things you reach for while
    reading, so hiding them behind a press hid them behind a shape change. */
 .agee-ribbon-copy {

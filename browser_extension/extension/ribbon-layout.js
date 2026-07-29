@@ -12,6 +12,10 @@
   const EDGE = 16;   // minimum distance from any viewport edge
   const GAP = 8;     // companion <-> ribbon
   const HEIGHT = 28; // collapsed ribbon height
+  // The room a stream must have before the companion may sit somewhere. These
+  // are the numbers the drag boundary is derived from.
+  const MIN_BUBBLE_W = 232;
+  const MIN_BUBBLE_H = 28;
   const MIN_WIDTH = 120;  // narrower than this and a line of text is unreadable
   const MIN_HEIGHT = 28;  // one line; the floor a box may be squeezed to
 
@@ -99,6 +103,57 @@
     };
   }
 
+  // Where the companion is ALLOWED to be.
+  //
+  // The boxes used to absorb a cornered companion by getting narrower, which is
+  // how a drag into the corner produced a 30px-wide box. The constraint belongs
+  // on the companion instead: it may only be placed where both streams still
+  // have their minimum room. Everything here is derived from the same tokens
+  // the boxes are laid out with, so the two can never disagree.
+  //
+  // Returns the permitted range for the companion's top-left corner. A viewport
+  // too small to satisfy the minimums collapses to a single legal point rather
+  // than reporting an empty range, so a clamp always yields something on screen.
+  function launcherBounds({
+    viewportWidth,
+    viewportHeight,
+    launcherWidth,
+    launcherHeight,
+    minBubbleWidth = MIN_BUBBLE_W,
+    minBubbleHeight = MIN_BUBBLE_H,
+    edge = EDGE,
+    gap = GAP,
+  }) {
+    const w = Number(launcherWidth) || 0;
+    const h = Number(launcherHeight) || 0;
+    // Horizontal: the centre line is the seam, so each side needs its own room.
+    // Expressed against the left corner, which is what drag code carries.
+    const minCentreX = edge + minBubbleWidth;
+    const maxCentreX = viewportWidth - edge - minBubbleWidth;
+    const minLeft = minCentreX - w / 2;
+    const maxLeft = maxCentreX - w / 2;
+    // Vertical: the you-box lives above and the reply below, each needing a
+    // bubble plus its gap.
+    const minTop = edge + minBubbleHeight + gap;
+    const maxTop = viewportHeight - edge - minBubbleHeight - gap - h;
+    return {
+      minLeft,
+      maxLeft: Math.max(minLeft, maxLeft),
+      minTop,
+      maxTop: Math.max(minTop, maxTop),
+    };
+  }
+
+  // Clamp a proposed companion position into the permitted range. Applied while
+  // dragging AND on resize, so a window that shrinks pulls the companion back
+  // rather than stranding it somewhere its boxes cannot fit.
+  function clampLauncher(left, top, bounds) {
+    return {
+      left: clamp(left, bounds.minLeft, bounds.maxLeft),
+      top: clamp(top, bounds.minTop, bounds.maxTop),
+    };
+  }
+
   // Popups flip to stay inside the viewport instead of being clipped by it.
   function popupPlacement({
     anchorRect,
@@ -151,6 +206,10 @@
     HEIGHT,
     MIN_WIDTH,
     MIN_HEIGHT,
+    MIN_BUBBLE_W,
+    MIN_BUBBLE_H,
+    launcherBounds,
+    clampLauncher,
     isWithinProximity,
     popupPlacement,
     relativeLuminance,
