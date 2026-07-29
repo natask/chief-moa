@@ -91,12 +91,14 @@ in the primary checkout succeeds only when that checkout is on `master`. If the
 user explicitly requests another shared branch, the launcher requires both the
 exact `--allow-shared-branch` value and a durable `--user-request` citation.
 
-Tracked Claude Code and Codex hooks run the same workspace guard at session
-start and around shell tools. They deny `git switch`, `git checkout`, and direct
-`HEAD` rewrites aimed at the primary checkout. A post-tool check reports any
-violation that bypassed command inspection. Linked worktrees are deliberately
-outside this restriction, so branch work remains isolated from local sessions
-that use the shared checkout.
+Machine-local Claude Code and Codex hooks run the same workspace guard at
+session start and around shell tools. Install or refresh them from `master` with
+`node scripts/agent-workspace-guard.mjs install`; the installer merges the guard
+into existing provider settings instead of replacing other hooks or permissions.
+The hooks deny `git switch`, `git checkout`, and direct `HEAD` rewrites aimed at
+the primary checkout. A post-tool check reports any violation that bypassed
+command inspection. Linked worktrees are deliberately outside this restriction,
+so branch work remains isolated from local sessions that use the shared checkout.
 
 ## Context Pack Template
 

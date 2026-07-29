@@ -19,8 +19,30 @@ try {
   run("git", ["-C", shared, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture"]);
   const initialHead = git(shared, "rev-parse", "HEAD");
 
+  fs.mkdirSync(path.join(shared, ".codex"), { recursive: true });
+  fs.mkdirSync(path.join(shared, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(shared, ".codex", "hooks.json"), `${JSON.stringify({
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "preserve-codex-hook" }] }] },
+  })}\n`);
+  fs.writeFileSync(path.join(shared, ".claude", "settings.json"), `${JSON.stringify({
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "preserve-claude-hook" }] }] },
+    permissions: { deny: ["Read(./private/**)"] },
+  })}\n`);
+  fs.writeFileSync(path.join(shared, ".codex", "config.toml"), "model = \"fixture\"\n");
+  run(process.execPath, [guard, "install", "--cwd", shared]);
+  run(process.execPath, [guard, "install", "--cwd", shared]);
+  const codexSettings = JSON.parse(fs.readFileSync(path.join(shared, ".codex", "hooks.json"), "utf8"));
+  const claudeSettings = JSON.parse(fs.readFileSync(path.join(shared, ".claude", "settings.json"), "utf8"));
+  assert.equal(codexSettings.hooks.Stop[0].hooks[0].command, "preserve-codex-hook");
+  assert.equal(claudeSettings.hooks.Stop[0].hooks[0].command, "preserve-claude-hook");
+  assert.deepEqual(claudeSettings.permissions.deny, ["Read(./private/**)"]);
+  assert.equal(codexSettings.hooks.PreToolUse.length, 1);
+  assert.match(codexSettings.hooks.PreToolUse[0].matcher, /unified_exec/);
+  assert.equal(claudeSettings.hooks.PreToolUse.length, 1);
+  assert.match(fs.readFileSync(path.join(shared, ".codex", "config.toml"), "utf8"), /model = "fixture"[\s\S]*\[features\]\nhooks = true/);
+
   for (const provider of ["codex", "claude"]) {
-    const denied = hook(provider, shared, "PreToolUse", "git switch -c unsafe");
+    const denied = hook(provider, shared, "PreToolUse", "git switch -c unsafe", provider === "codex" ? "cmd" : "command");
     assert.equal(denied.status, 0);
     assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny");
     assert.equal(git(shared, "symbolic-ref", "--short", "HEAD"), "master");
@@ -51,6 +73,10 @@ try {
   const violation = hook("codex", shared, "PostToolUse", "git switch unsafe");
   assert.equal(violation.status, 2);
   assert.match(violation.stderr, /shared checkout violation/);
+  run("git", ["-C", shared, "checkout", "--detach", initialHead]);
+  const detachedViolation = hook("claude", shared, "PostToolUse", "custom-wrapper");
+  assert.equal(detachedViolation.status, 2);
+  assert.match(detachedViolation.stderr, /detached HEAD, expected master/);
   run("git", ["-C", shared, "symbolic-ref", "HEAD", "refs/heads/master"]);
   run("git", ["-C", shared, "reset", "--hard", initialHead]);
 
@@ -61,10 +87,10 @@ try {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-function hook(provider, cwd, event, command) {
+function hook(provider, cwd, event, command, commandKey = "command") {
   return spawnSync(process.execPath, [guard, "hook", "--provider", provider], {
     cwd,
-    input: JSON.stringify({ hook_event_name: event, cwd, tool_name: "Bash", tool_input: { command } }),
+    input: JSON.stringify({ hook_event_name: event, cwd, tool_name: "Bash", tool_input: { [commandKey]: command } }),
     encoding: "utf8",
   });
 }

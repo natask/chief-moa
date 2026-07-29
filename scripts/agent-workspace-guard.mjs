@@ -30,6 +30,71 @@ function hookInput() {
   return raw ? JSON.parse(raw) : {};
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+function readJson(file) {
+  if (!fs.existsSync(file)) return {};
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    throw new Error(`${file} must contain a JSON object`);
+  }
+  return value;
+}
+
+function addHook(settings, event, matcher, command, statusMessage = "") {
+  settings.hooks ||= {};
+  settings.hooks[event] ||= [];
+  const exists = settings.hooks[event].some((group) =>
+    Array.isArray(group?.hooks) && group.hooks.some((hook) => hook?.command === command));
+  if (exists) return;
+  const hook = { type: "command", command, timeout: 10 };
+  if (statusMessage) hook.statusMessage = statusMessage;
+  settings.hooks[event].push({ matcher, hooks: [hook] });
+}
+
+function writeProviderHooks(file, provider, guardPath) {
+  const settings = readJson(file);
+  const command = `node ${shellQuote(guardPath)} hook --provider ${provider}`;
+  const shellMatcher = provider === "claude"
+    ? "Bash"
+    : "^(shell|shell_command|exec_command|unified_exec|Bash)$";
+  addHook(settings, "SessionStart", provider === "claude" ? "" : null, command, "Checking ChiefMoa workspace");
+  addHook(settings, "PreToolUse", shellMatcher, command, "Protecting shared checkout");
+  addHook(settings, "PostToolUse", shellMatcher, command);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+}
+
+function enableCodexHooks(file) {
+  const original = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const lines = original.split(/\r?\n/);
+  let features = -1;
+  let nextSection = lines.length;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (/^\s*\[features\]\s*$/.test(lines[index])) features = index;
+    else if (features !== -1 && index > features && /^\s*\[/.test(lines[index])) {
+      nextSection = index;
+      break;
+    }
+  }
+  if (features === -1) {
+    const prefix = original && !original.endsWith("\n") ? "\n" : "";
+    fs.writeFileSync(file, `${original}${prefix}[features]\nhooks = true\n`, { mode: 0o600 });
+    return;
+  }
+  for (let index = features + 1; index < nextSection; index += 1) {
+    if (/^\s*hooks\s*=/.test(lines[index])) {
+      lines[index] = "hooks = true";
+      fs.writeFileSync(file, `${lines.join("\n").replace(/\n+$/, "")}\n`, { mode: 0o600 });
+      return;
+    }
+  }
+  lines.splice(nextSection, 0, "hooks = true");
+  fs.writeFileSync(file, `${lines.join("\n").replace(/\n+$/, "")}\n`, { mode: 0o600 });
+}
+
 function denial(reason) {
   process.stdout.write(`${JSON.stringify({
     decision: "block",
@@ -71,8 +136,13 @@ function changesCheckout(command) {
   return gitCommand.test(command) || directHead.test(command);
 }
 
+function currentBranch(cwd) {
+  const result = spawnSync("git", ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "detached HEAD";
+}
+
 function assertSharedState(state, event = "PostToolUse") {
-  const sharedBranch = git(state.primary, "symbolic-ref", "--quiet", "--short", "HEAD");
+  const sharedBranch = currentBranch(state.primary);
   if (sharedBranch === REQUIRED_SHARED_BRANCH) return true;
   const reason = `ChiefMoa shared checkout violation: ${state.primary} is on ${sharedBranch}, expected ${REQUIRED_SHARED_BRANCH}. Use an isolated git worktree for branch work.`;
   if (event === "PostToolUse") {
@@ -95,13 +165,23 @@ function runHook(provider) {
     return;
   }
   if (event === "PreToolUse") {
-    const command = String(input.tool_input?.command || "");
+    const rawCommand = input.tool_input?.command ?? input.tool_input?.cmd ?? "";
+    const command = Array.isArray(rawCommand) ? rawCommand.join(" ") : String(rawCommand);
     if (changesCheckout(command) && targetsPrimary(command, state, cwd)) {
       denial(`Blocked ${provider} from changing the ChiefMoa shared checkout. Create or use an isolated worktree; only a user-recorded launcher override may change the shared branch.`);
     }
     return;
   }
   assertSharedState(state, event);
+}
+
+function runInstall(args) {
+  const state = workspace(option(args, "--cwd") || process.cwd());
+  const guardPath = real(option(args, "--guard") || new URL(import.meta.url).pathname);
+  writeProviderHooks(path.join(state.primary, ".claude", "settings.json"), "claude", guardPath);
+  writeProviderHooks(path.join(state.primary, ".codex", "hooks.json"), "codex", guardPath);
+  enableCodexHooks(path.join(state.primary, ".codex", "config.toml"));
+  process.stdout.write(`installed ChiefMoa workspace hooks without replacing existing provider hooks\n`);
 }
 
 function runLaunch(args) {
@@ -135,12 +215,13 @@ function main() {
   const [mode, ...args] = process.argv.slice(2);
   if (mode === "hook") return runHook(option(args, "--provider") || "agent");
   if (mode === "launch") return runLaunch(args);
+  if (mode === "install") return runInstall(args);
   if (mode === "status") {
     const state = workspace(option(args, "--cwd") || process.cwd());
     process.stdout.write(`${JSON.stringify({ ...state, required_shared_branch: REQUIRED_SHARED_BRANCH })}\n`);
     return;
   }
-  throw new Error("usage: agent-workspace-guard.mjs hook|launch|status");
+  throw new Error("usage: agent-workspace-guard.mjs hook|install|launch|status");
 }
 
 try {

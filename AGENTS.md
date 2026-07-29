@@ -34,8 +34,9 @@ For Android-first product work, the active change is usually
   on `master`; an agent must not switch, detach, or rewrite its `HEAD` unless the
   user explicitly requests that exact shared-checkout change.
 - Launch Claude Code and Codex through `scripts/agent-session.sh`. Branch work
-  starts in an isolated Git worktree. The tracked provider hooks block checkout
-  changes aimed at the shared checkout and report an already-invalid branch.
+  starts in an isolated Git worktree. Install the machine-local provider hooks
+  with `node scripts/agent-workspace-guard.mjs install`; the installer preserves
+  existing hooks while adding checkout protection and violation reporting.
 - Prefer existing files and patterns over new frameworks.
 - Keep architecture-significant changes reflected in `ARCHITECTURE.md` and
   OpenSpec.
