@@ -4808,6 +4808,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       cancelTabCues(tabId);
       // A tab-wide stop also cancels any autonomous background agent-loop.
       cancelAgentLoopCues();
+      // ...and closes every open capture, wherever it was started. A capture
+      // outlives the tab that opened it (that is what keeps a spoken turn alive
+      // across a navigation), so without this a capture whose owning tab is
+      // gone can only be closed by the 30-minute stuck-microphone backstop.
+      // Stop is the one control that must always be able to shut the
+      // microphone off, from any tab, with nothing left listening.
+      for (const [id, session] of [...voiceSessions]) {
+        if (!session.closed) closeVoiceSession(id, "user pressed stop");
+      }
     }
   }
   if (msg.cmd === "ambientStart" && sender.tab) {
