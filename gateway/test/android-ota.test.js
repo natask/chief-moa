@@ -585,3 +585,66 @@ test("a non-permission directory failure still throws", () => {
   });
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+// Moving the OTA store off DATA_DIR is staged: the gateway serves from the new
+// location once it holds a store and from the legacy one until then, so the
+// copy, the publisher cutover, and a rollback to the previous gateway are each
+// independently reversible without stranding the phone's update endpoint.
+test("the store resolves to the new location only once it holds releases", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-resolve-"));
+  const primary = path.join(root, "srv");
+  const legacy = path.join(root, "data");
+
+  // Stage A: new code, nothing copied. Legacy has the store, so legacy serves.
+  fs.mkdirSync(path.join(legacy, "releases", "ai.moa.assistant-1"), { recursive: true });
+  fs.mkdirSync(primary, { recursive: true });
+  let resolved = androidOta.resolveStoreDir({ primary, legacy });
+  assert.equal(resolved.dir, legacy);
+  assert.equal(resolved.source, "legacy");
+  assert.equal(resolved.legacyPending, true);
+
+  // An empty primary directory is not a store. A half-created volume must not
+  // silently orphan the update endpoint.
+  fs.mkdirSync(path.join(primary, "releases"), { recursive: true });
+  resolved = androidOta.resolveStoreDir({ primary, legacy });
+  assert.equal(resolved.source, "legacy");
+
+  // Stage B: bytes copied. Primary now holds a store and takes over, while
+  // legacy still exists so reverting the mount reverts the move.
+  fs.mkdirSync(path.join(primary, "releases", "ai.moa.assistant-1"), { recursive: true });
+  resolved = androidOta.resolveStoreDir({ primary, legacy });
+  assert.equal(resolved.dir, primary);
+  assert.equal(resolved.source, "primary");
+  assert.equal(resolved.legacyPending, true);
+
+  // Stage D: legacy removed. Primary serves and nothing is pending.
+  fs.rmSync(legacy, { recursive: true, force: true });
+  resolved = androidOta.resolveStoreDir({ primary, legacy });
+  assert.equal(resolved.dir, primary);
+  assert.equal(resolved.legacyPending, false);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("a current pointer alone counts as a store, and a fresh install uses primary", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-resolve2-"));
+  const primary = path.join(root, "srv");
+  const legacy = path.join(root, "data");
+
+  // Neither location has anything: a fresh install belongs in the new place.
+  fs.mkdirSync(primary, { recursive: true });
+  fs.mkdirSync(legacy, { recursive: true });
+  assert.equal(androidOta.resolveStoreDir({ primary, legacy }).source, "primary");
+
+  // A legacy store identified only by its current symlink still wins.
+  fs.symlinkSync("releases/ai.moa.assistant-1", path.join(legacy, "current"));
+  const resolved = androidOta.resolveStoreDir({ primary, legacy });
+  assert.equal(resolved.dir, legacy);
+  assert.equal(resolved.source, "legacy");
+
+  // With no legacy configured the primary is used unconditionally.
+  assert.equal(androidOta.resolveStoreDir({ primary }).dir, primary);
+  assert.equal(androidOta.resolveStoreDir({ primary, legacy: primary }).source, "primary");
+
+  fs.rmSync(root, { recursive: true, force: true });
+});

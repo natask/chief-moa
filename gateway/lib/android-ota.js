@@ -728,6 +728,50 @@ function publishRelease(otaDir, { apk, meta = {}, updateLegacy = true } = {}) {
   });
 }
 
+// Moving the OTA store off DATA_DIR is staged, because the phone's update
+// endpoint must keep working through every step and through a rollback to the
+// previous gateway.
+//
+// The gateway serves from `primary` when that path already holds a store, and
+// from `legacy` otherwise. That single rule makes each stage independently
+// reversible:
+//
+//   A. Ship this code with primary unpopulated -> serves legacy, no change.
+//   B. Copy the release bytes to primary       -> serves primary; legacy is
+//                                                 untouched, so reverting the
+//                                                 mount reverts the move.
+//   C. Point the publisher at primary          -> new releases land there.
+//   D. Remove legacy                           -> only after a publish and a
+//                                                 phone install are confirmed.
+//
+// "Holds a store" means a `current` pointer or a non-empty releases/ directory.
+// An empty or absent primary is not a store, so a half-created volume can never
+// silently orphan the phone's update endpoint.
+function storeIsPopulated(dir) {
+  if (!dir) return false;
+  try {
+    if (fs.lstatSync(path.join(dir, CURRENT_LINK_NAME))) return true;
+  } catch {
+    // No current pointer; fall through to the releases directory.
+  }
+  try {
+    return fs.readdirSync(path.join(dir, RELEASES_DIRNAME)).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function resolveStoreDir({ primary, legacy } = {}) {
+  const primaryDir = primary ? path.resolve(primary) : "";
+  const legacyDir = legacy ? path.resolve(legacy) : "";
+  if (!legacyDir || legacyDir === primaryDir) return { dir: primaryDir, source: "primary", legacyPending: false };
+  if (storeIsPopulated(primaryDir)) {
+    return { dir: primaryDir, source: "primary", legacyPending: storeIsPopulated(legacyDir) };
+  }
+  if (storeIsPopulated(legacyDir)) return { dir: legacyDir, source: "legacy", legacyPending: true };
+  return { dir: primaryDir, source: "primary", legacyPending: false };
+}
+
 // The OTA store is the one directory in DATA_DIR the gateway does not own.
 // android_app/deploy/ota/sync-vps.sh writes releases, snapshots, locks and
 // channel subtrees into it over SSH as the host publisher, so parts of the
@@ -759,6 +803,7 @@ function ensurePublisherOwnedDir(dir) {
 module.exports = {
   RELEASE_ID_PATTERN,
   ensurePublisherOwnedDir,
+  resolveStoreDir,
   STORE_BUSY_ERROR_CODE,
   DEFAULT_APK_NAME,
   isValidReleaseId,
