@@ -837,7 +837,7 @@ if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
 if grep -q '^rsync$' "$FAKE_CALL_LOG"; then exit 1; fi
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
-# A local build whose application id has no configured release channel fails
+# A local build whose application id is not an allowed release target fails
 # closed before any network contact -- it must not silently fall back to the
 # default (ai.moa.assistant) store or invent a new channel directory from an
 # unrecognized string.
@@ -849,7 +849,11 @@ publish_release "$local_dir" 300 '2026-07-05T00:00:00Z' unknown-300 com.example.
 : > "$FAKE_CALL_LOG"
 if run_sync "$local_dir" "$remote_dir" "$case_dir/output"; then exit 1; fi
 [ ! -s "$FAKE_CALL_LOG" ]
-grep -Fq 'no configured release channel' "$case_dir/output"
+# The allowlist in the local validation step rejects it before any channel
+# routing is reached, so assert that message rather than the routing one. What
+# matters is proven above: it fails, and FAKE_CALL_LOG is empty, so nothing
+# touched the network with an unrecognised application id.
+grep -Fq 'Local OTA store validation returned unsafe release facts.' "$case_dir/output"
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
 # ag.companion (the renamed app's own clean install; see the
