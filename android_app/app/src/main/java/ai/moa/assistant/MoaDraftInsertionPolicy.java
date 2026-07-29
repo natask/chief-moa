@@ -36,6 +36,8 @@ final class MoaDraftInsertionPolicy {
     enum Reason {
         NONE,
         INVALID_PROPOSAL,
+        NO_ACTIVE_EDITOR,
+        NO_CANDIDATE,
         EMPTY_TEXT,
         TEXT_TOO_LARGE,
         SEND_UNSUPPORTED,
@@ -204,8 +206,12 @@ final class MoaDraftInsertionPolicy {
             this.proposalId = proposal == null ? "" : proposal.proposalId;
             this.status = status;
             this.reason = reason;
-            this.targetPackage = target == null ? "" : target.packageName;
-            this.targetFingerprint = target == null ? "" : target.fingerprint;
+            this.targetPackage = proposal != null && !proposal.expectedPackage.isEmpty()
+                    ? proposal.expectedPackage
+                    : target == null ? "" : target.packageName;
+            this.targetFingerprint = proposal != null && !proposal.targetFingerprint.isEmpty()
+                    ? proposal.targetFingerprint
+                    : target == null ? "" : target.fingerprint;
             this.proposedTextSha256 = proposal == null ? "" : sha256(proposal.exactText);
             this.effectPath = EffectPath.IME_COMMIT_TEXT;
             this.explicitApproval = explicitApproval;
@@ -229,6 +235,9 @@ final class MoaDraftInsertionPolicy {
             Reason refusal = authorize(proposal, approval, finalTarget, nowMs);
             boolean explicitlyApproved = approval != null;
             if (refusal != Reason.NONE) {
+                if (proposal != null && !proposal.proposalId.isEmpty()) {
+                    terminalProposalIds.add(proposal.proposalId);
+                }
                 return new Receipt(proposal, Status.REFUSED, refusal, finalTarget, explicitlyApproved);
             }
             if (terminalProposalIds.contains(proposal.proposalId)) {
@@ -245,6 +254,28 @@ final class MoaDraftInsertionPolicy {
                     finalTarget,
                     true
             );
+        }
+
+        Receipt refuseTerminal(
+                Proposal proposal,
+                Approval approval,
+                EditableTarget finalTarget,
+                Reason reason
+        ) {
+            boolean explicitlyApproved = approval != null;
+            if (proposal != null && !proposal.proposalId.isEmpty()
+                    && terminalProposalIds.contains(proposal.proposalId)) {
+                return new Receipt(proposal, Status.REFUSED, Reason.REPLAYED, finalTarget,
+                        explicitlyApproved);
+            }
+            if (proposal != null && !proposal.proposalId.isEmpty()) {
+                terminalProposalIds.add(proposal.proposalId);
+            }
+            Reason terminalReason = reason == null || reason == Reason.NONE
+                    ? Reason.INVALID_PROPOSAL
+                    : reason;
+            return new Receipt(proposal, Status.REFUSED, terminalReason, finalTarget,
+                    explicitlyApproved);
         }
     }
 
@@ -320,6 +351,10 @@ final class MoaDraftInsertionPolicy {
                 return "Editor changed; draft was not inserted";
             case SENSITIVE_TARGET:
                 return "Sensitive editor: insertion blocked";
+            case NO_ACTIVE_EDITOR:
+                return "No active editor; draft was not inserted";
+            case NO_CANDIDATE:
+                return "No candidate staged; nothing was inserted";
             case EFFECT_FAILED:
                 return "Editor refused insertion";
             case REPLAYED:

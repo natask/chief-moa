@@ -243,6 +243,15 @@ public final class MoaDraftInsertionPolicyTest {
                 target,
                 NOW
         );
+        MoaDraftInsertionPolicy.Proposal invalidSend =
+                MoaDraftInsertionPolicy.Proposal.send("send-without-target", null, NOW);
+        assertReason(
+                MoaDraftInsertionPolicy.Reason.INVALID_PROPOSAL,
+                invalidSend,
+                MoaDraftInsertionPolicy.Approval.explicitLocal(invalidSend, NOW),
+                target,
+                NOW
+        );
     }
 
     @Test
@@ -301,6 +310,28 @@ public final class MoaDraftInsertionPolicyTest {
                 MoaDraftInsertionPolicy.reasonMessage(MoaDraftInsertionPolicy.Reason.REPLAYED));
         assertEquals("Insertion refused",
                 MoaDraftInsertionPolicy.reasonMessage(MoaDraftInsertionPolicy.Reason.MISSING_APPROVAL));
+    }
+
+    @Test
+    public void terminalRefusalHandlesMissingProposalApprovalTargetAndReason() {
+        MoaDraftInsertionPolicy.Controller controller = new MoaDraftInsertionPolicy.Controller();
+        MoaDraftInsertionPolicy.Receipt missing =
+                controller.refuseTerminal(null, null, null, null);
+        assertEquals(MoaDraftInsertionPolicy.Reason.INVALID_PROPOSAL, missing.reason);
+        assertFalse(missing.explicitApproval);
+        assertEquals("", missing.targetPackage);
+        assertEquals("", missing.targetFingerprint);
+
+        MoaDraftInsertionPolicy.EditableTarget target = target(editor("pkg", 7, "body"), NOW);
+        MoaDraftInsertionPolicy.Proposal proposal = MoaDraftInsertionPolicy.Proposal.insert(
+                "none-reason", "text", target, NOW);
+        MoaDraftInsertionPolicy.Receipt none = controller.refuseTerminal(
+                proposal,
+                MoaDraftInsertionPolicy.Approval.explicitLocal(proposal, NOW),
+                target,
+                MoaDraftInsertionPolicy.Reason.NONE
+        );
+        assertEquals(MoaDraftInsertionPolicy.Reason.INVALID_PROPOSAL, none.reason);
     }
 
     private static void assertReason(

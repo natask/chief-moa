@@ -16,6 +16,13 @@ password targets, and invokes exactly one `InputConnection.commitText(text, 1)`.
 The approval is terminal before the platform call, so an editor refusal cannot
 be retried into a second mutation.
 
+The service path also forms and appends a terminal refusal receipt when editor
+session binding rejects before policy authorization (missing candidate, missing
+editor, sensitive field, or changed editor). When proposal text or the bound
+editor remains available, its digest/package/fingerprint remain on that refusal.
+Receipt-store write failure returns a complete in-memory terminal receipt and a
+visible save warning; it cannot authorize, repeat, or roll back an insertion.
+
 Each terminal attempt appends a local hash-chained receipt with proposal id,
 target package/fingerprint, effect path, status/reason, and proposed-text digest.
 The receipt does not retain the proposed text. `send` is independently refused;
@@ -28,6 +35,9 @@ the candidate adds no click, editor action, submit, or Accessibility
   approval mismatch, expiry, target freshness, package/fingerprint drift,
   password suppression, missing/failed effect, replay refusal, and the distinct
   unsupported Send action.
+- Service-path and direct-store tests cover all early binding refusals, zero
+  mutation, receipt metadata/text non-retention, hash-chain extension, malformed
+  prior storage, and persistence failure.
 - `verifyDraftInsertionPolicyCoverage` requires at least 90 percent line,
   branch, and method coverage for the pure authority module.
 - The final candidate must run full Android unit tests, all focused coverage

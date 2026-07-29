@@ -83,6 +83,11 @@ final class MoaEditorSessionBinding {
         candidate = null;
     }
 
+    /** Returns staged text only for the currently active token, for terminal receipt formation. */
+    String stagedCandidateForAttempt(SessionToken session) {
+        return activeSession != null && activeSession.equals(session) ? candidate : null;
+    }
+
     private Rejection validateSession(
             SessionToken session,
             MoaEditorSensitivityPolicy.EditorIdentity observedEditor

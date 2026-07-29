@@ -35,7 +35,10 @@ semantic `EditorInfo` fingerprint. The user reviews that exact text in the IME
 and the dedicated Insert press creates the only approval. Android re-reads the
 target immediately before one `InputConnection.commitText`, consumes the
 approval before invoking the editor, and records target metadata plus a text
-digest. It does not add `ACTION_SET_TEXT`; send remains a separately unsupported
+digest. Pre-authorization editor/session refusal is terminal and receipts the
+bound proposal without invoking the effect. Receipt persistence failure stays
+visible and never changes or retries the action result. It does not add
+`ACTION_SET_TEXT`; send remains a separately unsupported
 action and no click, editor action, or submit is implied by insertion.
 
 ## Staging

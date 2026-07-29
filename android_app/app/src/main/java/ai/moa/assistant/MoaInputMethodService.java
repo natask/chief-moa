@@ -29,6 +29,8 @@ public final class MoaInputMethodService extends InputMethodService {
     private final MoaEditorSessionBinding binding = new MoaEditorSessionBinding();
     private final MoaDraftInsertionPolicy.Controller draftInsertionController =
             new MoaDraftInsertionPolicy.Controller();
+    private final MoaImeDraftInsertionCoordinator draftInsertionCoordinator =
+            new MoaImeDraftInsertionCoordinator(binding, draftInsertionController);
     private MoaEditorSessionBinding.SessionToken editorSession;
     private MoaEditorSessionBinding.SessionToken recognitionSession;
     private SpeechRecognizer speechRecognizer;
@@ -236,47 +238,29 @@ public final class MoaInputMethodService extends InputMethodService {
     }
 
     private void commitCandidate() {
-        MoaEditorSensitivityPolicy.EditorIdentity reviewedEditor =
-                MoaEditorSensitivityPolicy.EditorIdentity.from(getCurrentInputEditorInfo());
-        MoaEditorSessionBinding.CommitDecision decision =
-                binding.authorizeCommit(editorSession, reviewedEditor);
-        if (!decision.allowed) {
-            renderState(rejectionMessage(decision.rejection));
-            return;
-        }
-
-        long proposalTimeMs = System.currentTimeMillis();
-        MoaDraftInsertionPolicy.EditableTarget reviewedTarget =
-                MoaDraftInsertionPolicy.EditableTarget.fromEditor(reviewedEditor, proposalTimeMs);
-        MoaDraftInsertionPolicy.Proposal proposal = MoaDraftInsertionPolicy.Proposal.insert(
-                "ime-draft-" + UUID.randomUUID(),
-                decision.exactText,
-                reviewedTarget,
-                proposalTimeMs
-        );
-        // The user has reviewed the literal/derived candidate shown by this IME and pressed the
-        // dedicated Insert control. This approval is local, proposal-bound, and cannot approve Send.
-        MoaDraftInsertionPolicy.Approval approval =
-                MoaDraftInsertionPolicy.Approval.explicitLocal(proposal, proposalTimeMs);
-        InputConnection connection = getCurrentInputConnection();
         long executionTimeMs = System.currentTimeMillis();
         MoaEditorSensitivityPolicy.EditorIdentity finalEditor =
                 MoaEditorSensitivityPolicy.EditorIdentity.from(getCurrentInputEditorInfo());
-        MoaDraftInsertionPolicy.EditableTarget finalTarget =
-                MoaDraftInsertionPolicy.EditableTarget.fromEditor(finalEditor, executionTimeMs);
-        MoaDraftInsertionPolicy.Receipt receipt = draftInsertionController.execute(
-                proposal,
-                approval,
-                finalTarget,
+        InputConnection connection = getCurrentInputConnection();
+        MoaDraftInsertionPolicy.Receipt receipt = draftInsertionCoordinator.attemptInsert(
+                "ime-draft-" + UUID.randomUUID(),
+                editorSession,
+                finalEditor,
                 executionTimeMs,
                 exactText -> connection != null && connection.commitText(exactText, 1)
         );
-        MoaActionReceiptStore.recordDraftInsertion(this, receipt);
+        // Every press reaches this append, including stale/sensitive/no-candidate refusal paths.
+        MoaActionReceiptStore.WriteResult storedReceipt =
+                MoaActionReceiptStore.recordDraftInsertion(this, receipt);
+        String terminalMessage = MoaDraftInsertionPolicy.reasonMessage(receipt.reason);
+        if (!storedReceipt.persisted) {
+            terminalMessage += " · local receipt could not be saved";
+        }
         if (receipt.succeeded()) {
             binding.clearCandidate();
-            renderState(MoaDraftInsertionPolicy.reasonMessage(receipt.reason));
+            renderState(terminalMessage);
         } else {
-            renderState(MoaDraftInsertionPolicy.reasonMessage(receipt.reason));
+            renderState(terminalMessage);
         }
     }
 

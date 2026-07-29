@@ -185,7 +185,10 @@ def screenEvidenceEnvelopeClasses = files(
 def draftInsertionPolicyClasses = files(
         fileTree(
                 dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
-                includes: ['**/MoaDraftInsertionPolicy*.class']
+                includes: [
+                        '**/MoaDraftInsertionPolicy*.class',
+                        '**/MoaImeDraftInsertionCoordinator*.class'
+                ]
         )
 )
 

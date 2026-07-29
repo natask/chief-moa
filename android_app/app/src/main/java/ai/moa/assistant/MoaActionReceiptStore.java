@@ -24,7 +24,19 @@ final class MoaActionReceiptStore {
         return record(context, tool, risk, approval, target, success, result, null);
     }
 
-    static JSONObject recordDraftInsertion(Context context, MoaDraftInsertionPolicy.Receipt draft) {
+    static WriteResult recordDraftInsertion(Context context, MoaDraftInsertionPolicy.Receipt draft) {
+        return recordDraftInsertion(
+                draft,
+                new SharedPreferencesBackend(context),
+                System.currentTimeMillis()
+        );
+    }
+
+    static WriteResult recordDraftInsertion(
+            MoaDraftInsertionPolicy.Receipt draft,
+            ReceiptBackend backend,
+            long timestampMs
+    ) {
         JSONObject details = new JSONObject();
         try {
             details.put("proposal_id", safe(draft == null ? "" : draft.proposalId));
@@ -37,15 +49,16 @@ final class MoaActionReceiptStore {
         } catch (JSONException ignored) {
         }
         boolean success = draft != null && draft.succeeded();
-        return record(
-                context,
+        return recordWithBackend(
+                backend,
                 "screen.insert_text",
                 "communication_draft",
                 "explicit_local_approval",
                 draft == null ? "" : draft.targetPackage,
                 success,
                 draft == null ? "Insertion refused" : MoaDraftInsertionPolicy.reasonMessage(draft.reason),
-                details
+                details,
+                timestampMs
         );
     }
 
@@ -90,12 +103,147 @@ final class MoaActionReceiptStore {
         return receipt;
     }
 
+    private static WriteResult recordWithBackend(
+            ReceiptBackend backend,
+            String tool,
+            String risk,
+            String approval,
+            String target,
+            boolean success,
+            String result,
+            JSONObject details,
+            long timestampMs
+    ) {
+        String previousHash = backend == null ? "" : safe(backend.lastHash());
+        JSONObject receipt = buildReceipt(
+                tool, risk, approval, target, success, result, details, timestampMs, previousHash);
+        JSONArray chain = parseReceipts(backend == null ? "[]" : backend.receiptsJson());
+        chain.put(receipt);
+        while (chain.length() > MAX_RECEIPTS) {
+            chain.remove(0);
+        }
+        boolean persisted = false;
+        if (backend != null) {
+            try {
+                persisted = backend.write(chain.toString(), receipt.optString("hash", previousHash));
+            } catch (RuntimeException ignored) {
+                persisted = false;
+            }
+        }
+        return new WriteResult(receipt, persisted);
+    }
+
+    private static JSONObject buildReceipt(
+            String tool,
+            String risk,
+            String approval,
+            String target,
+            boolean success,
+            String result,
+            JSONObject details,
+            long timestampMs,
+            String previousHash
+    ) {
+        JSONObject receipt = new JSONObject();
+        try {
+            receipt.put("tool", safe(tool));
+            receipt.put("risk", safe(risk));
+            receipt.put("approval", safe(approval));
+            receipt.put("target", safe(target));
+            receipt.put("success", success);
+            receipt.put("result", safe(result));
+            if (details != null) {
+                receipt.put("details", new JSONObject(details.toString()));
+            }
+            receipt.put("timestamp_ms", timestampMs);
+            receipt.put("previous_hash", safe(previousHash));
+            receipt.put("hash", hash(receipt.toString()));
+        } catch (JSONException ignored) {
+        }
+        return receipt;
+    }
+
+    private static JSONArray parseReceipts(String json) {
+        try {
+            return new JSONArray(json == null ? "[]" : json);
+        } catch (JSONException ignored) {
+            return new JSONArray();
+        }
+    }
+
     static JSONArray receipts(Context context) {
         String json = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_RECEIPTS, "[]");
         try {
             return new JSONArray(json);
         } catch (JSONException ignored) {
             return new JSONArray();
+        }
+    }
+
+    interface ReceiptBackend {
+        String receiptsJson();
+
+        String lastHash();
+
+        boolean write(String receiptsJson, String lastHash);
+    }
+
+    static final class WriteResult {
+        final JSONObject receipt;
+        final boolean persisted;
+
+        WriteResult(JSONObject receipt, boolean persisted) {
+            this.receipt = receipt;
+            this.persisted = persisted;
+        }
+    }
+
+    private static final class SharedPreferencesBackend implements ReceiptBackend {
+        private final SharedPreferences preferences;
+
+        SharedPreferencesBackend(Context context) {
+            SharedPreferences loaded;
+            try {
+                loaded = context == null
+                        ? null
+                        : context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            } catch (RuntimeException ignored) {
+                loaded = null;
+            }
+            preferences = loaded;
+        }
+
+        @Override
+        public String receiptsJson() {
+            try {
+                return preferences == null ? "[]" : preferences.getString(KEY_RECEIPTS, "[]");
+            } catch (RuntimeException ignored) {
+                return "[]";
+            }
+        }
+
+        @Override
+        public String lastHash() {
+            try {
+                return preferences == null ? "" : preferences.getString(KEY_LAST_HASH, "");
+            } catch (RuntimeException ignored) {
+                return "";
+            }
+        }
+
+        @Override
+        public boolean write(String receiptsJson, String lastHash) {
+            if (preferences == null) {
+                return false;
+            }
+            try {
+                return preferences.edit()
+                        .putString(KEY_RECEIPTS, receiptsJson)
+                        .putString(KEY_LAST_HASH, lastHash)
+                        .commit();
+            } catch (RuntimeException ignored) {
+                return false;
+            }
         }
     }
 

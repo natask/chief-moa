@@ -717,7 +717,10 @@ dedicated Insert control creates one proposal-digest-bound local approval; the
 IME reads the package and fingerprint again immediately before one
 `commitText`, consumes the approval even if the editor refuses the effect, and
 writes a local receipt containing only target metadata and the proposed-text
-digest. `send` remains a distinct unsupported action. This path adds no
+digest. Every visible Insert attempt, including binding rejection before
+authorization, forms a terminal success/failure/refusal receipt; a receipt-store
+write failure is shown locally and cannot retry or change the mutation result.
+`send` remains a distinct unsupported action. This path adds no
 Accessibility `ACTION_SET_TEXT`, click, editor action, or submit capability.
 This MVP neither calls a model nor claims durable audio: SpeechRecognizer does
 not expose the replayable raw audio required by the gateway capture-block
