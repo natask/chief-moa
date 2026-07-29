@@ -77,6 +77,17 @@ final class MoaReleaseControlClient {
         return releaseJson("POST", BASE_PATH + "/feedback", body);
     }
 
+    JSONObject createModificationRequest(JSONObject body) throws Exception {
+        return releaseJson("POST", BASE_PATH + "/modification-requests", body);
+    }
+
+    JSONObject modificationRequest(String requestId) throws Exception {
+        if (!safe(requestId).matches("[A-Za-z0-9._:-]{1,160}")) {
+            throw new IllegalArgumentException("modification request id is invalid");
+        }
+        return releaseJson("GET", BASE_PATH + "/modification-requests/" + encode(requestId), null);
+    }
+
     void downloadArtifact(String downloadUrl, long expectedSize, File destination) throws Exception {
         if (expectedSize <= 0L) throw new IllegalArgumentException("artifact size is invalid");
         URL target = new URL(safe(downloadUrl));

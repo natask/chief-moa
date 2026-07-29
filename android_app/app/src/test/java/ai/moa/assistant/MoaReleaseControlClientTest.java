@@ -82,6 +82,14 @@ public final class MoaReleaseControlClientTest {
     }
 
     @Test
+    public void modificationRequestsUseSeparateExplicitRoutes() throws Exception {
+        client().createModificationRequest(new JSONObject().put("feedback_id", "feedback-1"));
+        assertEquals("/v1/release-control/apps/chief-moa/modification-requests", target.get());
+        client().modificationRequest("request:1");
+        assertEquals("/v1/release-control/apps/chief-moa/modification-requests/request%3A1", target.get());
+    }
+
+    @Test
     public void artifactDownloadIsExactSizeAndLeavesNoPartialFile() throws Exception {
         File dir = Files.createTempDirectory("moa-release-client").toFile();
         File destination = new File(dir, "release.apk");

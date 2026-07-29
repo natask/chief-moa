@@ -20,6 +20,7 @@ import org.json.JSONObject;
 import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Instant;
 
 /** Full-app release UI. Assignment is always separate from Android installation. */
 final class MoaReleaseCardController {
@@ -49,7 +50,13 @@ final class MoaReleaseCardController {
     private Button previewButton;
     private Button installButton;
     private Button feedbackButton;
+    private Button createFixButton;
+    private Button videoButton;
+    private Button cancelVideoButton;
     private EditText feedbackInput;
+    private TextView modificationStatus;
+    private TextView modificationIdentities;
+    private TextView videoStatus;
     private EditText searchInput;
     private LinearLayout candidateColumn;
     private TextView candidateCount;
@@ -63,10 +70,19 @@ final class MoaReleaseCardController {
     private String localInstalledSha256 = "";
     private boolean disposed;
     private View cardRoot;
+    private final MoaModificationStatusStore modificationStore;
+    private MoaModificationRequestPolicy.Status latestModification;
+    private String recordedFeedbackId = "";
+    private String recordedFeedbackText = "";
+    private MoaReleaseSelectionPolicy.Assignment recordedFeedbackAssignment;
+    private MoaReleaseSelectionPolicy.Candidate recordedFeedbackCandidate;
+    private MoaVideoNoteState videoNote = MoaVideoNoteState.idle();
 
     MoaReleaseCardController(Activity activity, Host host) {
         this.activity = activity;
         this.host = host;
+        this.modificationStore = new MoaModificationStatusStore(activity);
+        this.latestModification = modificationStore.load();
     }
 
     View createView() {
@@ -134,6 +150,34 @@ final class MoaReleaseCardController {
         feedbackButton.setEnabled(false);
         feedbackButton.setOnClickListener(v -> submitFeedback());
         card.addView(feedbackButton);
+
+        createFixButton = primary("Create fix from recorded feedback");
+        createFixButton.setEnabled(false);
+        createFixButton.setOnClickListener(v -> createFix());
+        card.addView(createFixButton);
+
+        TextView fixHint = text(
+                "Submitting feedback records inert evidence. Create fix is the separate action that authorizes implementation.",
+                MoaColors.MUTED, 12, false);
+        fixHint.setPadding(0, dp(6), 0, dp(4));
+        card.addView(fixHint);
+        modificationStatus = statRow(card, "Fix status", "None");
+        modificationIdentities = text("No implementation request has been created.", MoaColors.MUTED, 12, false);
+        card.addView(modificationIdentities);
+        renderModification(latestModification);
+
+        TextView videoTitle = text("Video evidence", MoaColors.PAPER, 16, true);
+        videoTitle.setPadding(0, dp(18), 0, dp(4));
+        card.addView(videoTitle);
+        videoStatus = text("No video requested or captured.", MoaColors.MUTED, 13, false);
+        card.addView(videoStatus);
+        videoButton = secondary("Request video note");
+        videoButton.setOnClickListener(v -> requestVideoNote());
+        card.addView(videoButton);
+        cancelVideoButton = secondary("Cancel video note");
+        cancelVideoButton.setVisibility(View.GONE);
+        cancelVideoButton.setOnClickListener(v -> cancelVideoNote());
+        card.addView(cancelVideoButton);
         return card;
     }
 
@@ -191,6 +235,7 @@ final class MoaReleaseCardController {
                     selected = candidateForAssignment(resolved);
                     render("Release control ready.", MoaColors.OK);
                     renderCatalog();
+                    refreshModificationStatus();
                 });
             } catch (Exception error) {
                 main.post(() -> {
@@ -213,6 +258,7 @@ final class MoaReleaseCardController {
         if (previewStatus != null) previewStatus.setText("Unavailable");
         if (installButton != null) installButton.setVisibility(View.GONE);
         if (feedbackButton != null) feedbackButton.setEnabled(false);
+        if (createFixButton != null) createFixButton.setEnabled(false);
         status(message, MoaColors.WARN);
         renderCatalog();
     }
@@ -266,6 +312,7 @@ final class MoaReleaseCardController {
                 view.preview != null && view.preview.compatible);
         boolean bound = exactRunningSelection();
         feedbackButton.setEnabled(bound);
+        createFixButton.setEnabled(bound && recordedFeedbackMatchesCurrent());
         installButton.setVisibility(selected != null && selected.installable()
                 ? View.VISIBLE : View.GONE);
         status(message, color);
@@ -421,11 +468,16 @@ final class MoaReleaseCardController {
             try {
                 JSONObject body = MoaReleaseSelectionPolicy.feedbackRequest(
                         host.deviceId(), current.assignment, candidate, comment, requestId("feedback"));
-                releaseClient(gateway, token).feedback(body);
+                JSONObject response = releaseClient(gateway, token).feedback(body);
+                String feedbackId = MoaModificationRequestPolicy.parseFeedbackId(response);
                 main.post(() -> {
                     if (!active(operationGeneration)) return;
-                    feedbackInput.setText("");
-                    render("Feedback recorded for " + candidate.releaseId + ".", MoaColors.OK);
+                    recordedFeedbackId = feedbackId;
+                    recordedFeedbackText = comment;
+                    recordedFeedbackAssignment = current.assignment;
+                    recordedFeedbackCandidate = candidate;
+                    render("Feedback recorded for " + candidate.releaseId
+                            + ". No implementation started.", MoaColors.OK);
                 });
             } catch (Exception error) {
                 main.post(() -> {
@@ -434,6 +486,123 @@ final class MoaReleaseCardController {
                 });
             }
         }, "moa-release-feedback").start();
+    }
+
+    private void createFix() {
+        if (recordedFeedbackId.isEmpty() || recordedFeedbackAssignment == null
+                || recordedFeedbackCandidate == null || !exactRunningSelection()
+                || selected == null
+                || !selected.releaseId.equals(recordedFeedbackCandidate.releaseId)
+                || !selected.bundleId.equals(recordedFeedbackCandidate.bundleId)
+                || !view.assignment.assignmentId.equals(recordedFeedbackAssignment.assignmentId)) {
+            render("Record feedback for the exact running release before creating a fix.", MoaColors.WARN);
+            return;
+        }
+        createFixButton.setEnabled(false);
+        int operationGeneration = ++generation;
+        String gateway = pinnedGatewayUrl;
+        String token = pinnedGatewayToken;
+        String authorizedAt = Instant.now().toString();
+        new Thread(() -> {
+            try {
+                JSONObject body = MoaModificationRequestPolicy.createRequest(
+                        recordedFeedbackId, host.deviceId(), recordedFeedbackAssignment,
+                        recordedFeedbackCandidate, recordedFeedbackText, authorizedAt,
+                        "create-fix-" + recordedFeedbackId);
+                JSONObject response = releaseClient(gateway, token).createModificationRequest(body);
+                MoaModificationRequestPolicy.Status parsed =
+                        MoaModificationRequestPolicy.parseCreateResponse(response);
+                modificationStore.save(parsed);
+                main.post(() -> {
+                    if (!active(operationGeneration)) return;
+                    latestModification = parsed;
+                    renderModification(parsed);
+                    render("Fix request created. Implementation is now explicitly authorized.", MoaColors.OK);
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    if (!active(operationGeneration)) return;
+                    createFixButton.setEnabled(true);
+                    render("Fix request was not created. Recorded feedback remains inert.", MoaColors.WARN);
+                });
+            }
+        }, "moa-create-fix").start();
+    }
+
+    private void refreshModificationStatus() {
+        MoaModificationRequestPolicy.Status current = latestModification;
+        if (current == null || current.requestId.isEmpty()) return;
+        String gateway = pinnedGatewayUrl;
+        String token = pinnedGatewayToken;
+        int expectedGeneration = generation;
+        new Thread(() -> {
+            try {
+                JSONObject response = releaseClient(gateway, token).modificationRequest(current.requestId);
+                MoaModificationRequestPolicy.Status parsed =
+                        MoaModificationRequestPolicy.parseStatusResponse(response, current.requestId);
+                modificationStore.save(parsed);
+                main.post(() -> {
+                    if (!active(expectedGeneration)) return;
+                    latestModification = parsed;
+                    renderModification(parsed);
+                });
+            } catch (Exception ignored) {
+                // Keep rendering the last durable truthful projection; transport failure is not a state change.
+            }
+        }, "moa-modification-status").start();
+    }
+
+    private void renderModification(MoaModificationRequestPolicy.Status status) {
+        if (modificationStatus == null || modificationIdentities == null) return;
+        if (status == null) {
+            modificationStatus.setText("None");
+            modificationIdentities.setText("No implementation request has been created.");
+            return;
+        }
+        String label = status.state;
+        if (!status.blockingReason.isEmpty()) label += " · " + status.blockingReason;
+        modificationStatus.setText(label);
+        modificationStatus.setTextColor(("blocked".equals(status.state) || "failed".equals(status.state)
+                || "reclaimable".equals(status.state)) ? MoaColors.WARN : MoaColors.OK);
+        modificationIdentities.setText("Request " + status.requestId + "\nIntent " + value(status.intentId)
+                + " · Task " + value(status.taskId) + "\nRun " + value(status.runId)
+                + " · Owner " + value(status.ownerId) + "\nQA " + value(status.qaId)
+                + " · Artifact " + value(status.artifactId) + " · Preview " + value(status.previewId));
+    }
+
+    private void requestVideoNote() {
+        if (!exactRunningSelection() || view == null || view.assignment == null || selected == null
+                || selected.artifact == null) {
+            videoStatus.setText("Video evidence requires the exact running release.");
+            videoStatus.setTextColor(MoaColors.WARN);
+            return;
+        }
+        try {
+            videoNote = videoNote.request(new MoaVideoNoteState.Binding(
+                    view.assignment.assignmentId, selected.releaseId, selected.bundleId,
+                    selected.artifact.sha256));
+            videoStatus.setText("Video capture requested for this exact release. Capture is not active; no artifact exists.");
+            videoStatus.setTextColor(MoaColors.GOLD);
+            videoButton.setEnabled(false);
+            cancelVideoButton.setVisibility(View.VISIBLE);
+        } catch (Exception error) {
+            videoStatus.setText("Video capture request could not be prepared.");
+            videoStatus.setTextColor(MoaColors.WARN);
+        }
+    }
+
+    private void cancelVideoNote() {
+        try {
+            videoNote = videoNote.cancel();
+            videoStatus.setText("Video note cancelled. No captured or uploaded artifact exists.");
+            videoStatus.setTextColor(MoaColors.MUTED);
+            videoButton.setEnabled(true);
+            cancelVideoButton.setVisibility(View.GONE);
+        } catch (Exception ignored) { }
+    }
+
+    private static String value(String value) {
+        return value == null || value.isEmpty() ? "pending" : value;
     }
 
     private MoaReleaseSelectionPolicy.Candidate candidateForAssignment(
@@ -452,6 +621,15 @@ final class MoaReleaseCardController {
     private boolean exactRunningSelection() {
         return MoaReleaseSelectionPolicy.exactRunningSelection(
                 view, selected, localInstalledSha256);
+    }
+
+    private boolean recordedFeedbackMatchesCurrent() {
+        return !recordedFeedbackId.isEmpty() && view != null && view.assignment != null
+                && selected != null && recordedFeedbackAssignment != null
+                && recordedFeedbackCandidate != null
+                && selected.releaseId.equals(recordedFeedbackCandidate.releaseId)
+                && selected.bundleId.equals(recordedFeedbackCandidate.bundleId)
+                && view.assignment.assignmentId.equals(recordedFeedbackAssignment.assignmentId);
     }
 
     private boolean active(int expectedGeneration) {
