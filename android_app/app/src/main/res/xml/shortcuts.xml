@@ -7,8 +7,8 @@
         android:shortcutLongLabel="@string/control_center_shortcut_long"
         android:shortcutShortLabel="@string/control_center_shortcut_short">
         <intent
-            android:action="ai.moa.assistant.action.SHOW_CONTROL_CENTER"
-            android:targetClass="ai.moa.assistant.MainActivity"
-            android:targetPackage="ai.moa.assistant" />
+            android:action="ag.companion.action.SHOW_CONTROL_CENTER"
+            android:targetClass="ag.companion.MainActivity"
+            android:targetPackage="ag.companion" />
     </shortcut>
 </shortcuts>

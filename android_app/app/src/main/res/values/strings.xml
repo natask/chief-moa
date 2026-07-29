@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AG</string>
+    <string name="app_name">Ag</string>
     <string name="control_center_shortcut_short">Settings</string>
-    <string name="control_center_shortcut_long">Open AG control center</string>
-    <string name="accessibility_service_description">AG uses screen access to read visible text, identify buttons, and perform user-requested taps, back, and home actions while the assistant overlay is running.</string>
-    <string name="media_control_service_label">AG media control</string>
+    <string name="control_center_shortcut_long">Open Ag control center</string>
+    <string name="accessibility_service_description">Ag uses screen access to read visible text, identify buttons, and perform user-requested taps, back, and home actions while the companion overlay is running.</string>
+    <string name="media_control_service_label">Ag media control</string>
 </resources>

@@ -47,7 +47,7 @@ const androidOta = require(path.join(process.env.OTA_MODULE_DIR, "android-ota"))
 const published = androidOta.publishRelease(process.env.ANDROID_OTA_DIR, {
   apk: process.env.MOA_OTA_APK_PATH,
   meta: {
-    app_id: "ai.moa.assistant",
+    app_id: "ag.companion",
     version_code: Number(process.env.MOA_ANDROID_VERSION_CODE),
     version_name: process.env.MOA_ANDROID_VERSION_NAME,
     git_sha: process.env.MOA_ANDROID_GIT_SHA,

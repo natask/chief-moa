@@ -29,7 +29,7 @@ await import("node:fs/promises").then(({ mkdir }) =>
 );
 writeFileSync(path.join(candidate, "moa-assistant.apk"), apk, { mode: 0o600 });
 const manifest = {
-  app_id: "ai.moa.assistant",
+  app_id: "ag.companion",
   version_code: 123,
   version_name: "0.1.123-preview",
   apk: "moa-assistant.apk",

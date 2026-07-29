@@ -26,7 +26,7 @@ def releaseKeystorePath = envOrDefault('MOA_ANDROID_KEYSTORE_PATH', '')
 def hasReleaseSigning = !releaseKeystorePath.isEmpty()
 
 android {
-    namespace 'ai.moa.assistant'
+    namespace 'ag.companion'
     compileSdk 35
 
     buildFeatures {
@@ -38,7 +38,7 @@ android {
     }
 
     defaultConfig {
-        applicationId 'ai.moa.assistant'
+        applicationId 'ag.companion'
         minSdk 26
         targetSdk 35
         versionCode envOrDefault('MOA_ANDROID_VERSION_CODE', '1').toInteger()

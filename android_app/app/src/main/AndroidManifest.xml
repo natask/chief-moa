@@ -89,7 +89,7 @@
             android:foregroundServiceType="microphone|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="assistant overlay" />
+                android:value="personal AI companion overlay" />
         </service>
 
         <service

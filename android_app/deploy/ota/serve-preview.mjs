@@ -98,7 +98,7 @@ const loadCandidate = (directory) => {
   const apkBytes = readFileSync(apkPath);
   const digest = sha256(apkBytes);
   if (
-    manifest?.app_id !== "ai.moa.assistant" ||
+    manifest?.app_id !== "ag.companion" ||
     manifest?.apk !== "moa-assistant.apk" ||
     !Number.isSafeInteger(manifest?.version_code) ||
     manifest.version_code <= 0 ||
