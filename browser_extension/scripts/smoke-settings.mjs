@@ -289,27 +289,20 @@ async function configureExtensionStorage(workerCdp, optionsCdp) {
 function triggerRunExpr(instruction) {
   return `
     (() => {
-      const log = document.querySelector("#agee-log");
-      window.__ageeRowsBefore = log ? log.childElementCount : 0;
+      window.__ageeLastTurn = null;
       chrome.runtime.sendMessage({ cmd: "run", instruction: ${JSON.stringify(instruction)} }).catch(() => {});
       return true;
     })()
   `;
 }
 
+// A reply reads in the lower ribbon. Ask for the turn's recorded terminal state
+// rather than a card: an ordinary turn no longer opens one.
 function renderedReplyExpr() {
   return `
     (() => {
-      const log = document.querySelector("#agee-log");
-      if (!log) return null;
-      const before = window.__ageeRowsBefore || 0;
-      const rows = [...log.children].slice(before);
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i];
-        if (row.classList.contains("agee-done")) return { kind: "done", text: row.textContent };
-        if (row.classList.contains("agee-error")) return { kind: "error", text: row.textContent };
-      }
-      return null;
+      const turn = window.__ageeLastTurn;
+      return turn && turn.text ? { kind: turn.kind, text: turn.text } : null;
     })()
   `;
 }
