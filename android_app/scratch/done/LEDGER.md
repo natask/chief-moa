@@ -26,3 +26,4 @@
 - Recovered incomplete hosted speech from a verified suffix boundary or the full reply and drained streamed playback before release — agent: Codex/GPT-5 — 9f139933
 - Made Android YouTube opening report only observed search, accessibility, selection, or playback states and preserve them across receipt retries — agent: Codex/GPT-5.6 — fix/android-truthful-media-open-20260727
 - Added fail-closed visible-label VLC source handoff with truthful title-only outcomes — agent: Codex/GPT-5 — Entire checkpoint
+- Added phone-independent headless emulator UI QA with debug-only transcript fixtures and exact artifact evidence verification — agent: Codex/GPT-5 — f14a4ac6
