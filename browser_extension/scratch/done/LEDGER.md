@@ -1,3 +1,4 @@
+- Made browser releases cancel stale same-ref work and fail closed unless the packaged source tree, archive, evidence, and workflow commit match exactly — agent: codex/gpt-5 — run_534c312c1ad6
 - Removed the legacy browser cue/log conversation renderer so typed and spoken turns share only the aligned streaming ribbons, with controls kept text-free — agent: codex/gpt-5 — run_dffae8e5be4a
 - Sent bounded current-page JPEG evidence to browser reasoning and delegated planners, and connected validated visual page-tweak proposals to the visible tab — agent: codex/gpt-5 — ab24e69e
 - Anchored the ribbon words to the companion (they were rendering at the far end of a 340px box), slowed the reveal to a grapheme-paced 26/s so Amharic is readable, and removed the pet name/motion labels — agent: claude/opus-5 — lane/seam-hug-20260729

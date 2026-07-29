@@ -65,6 +65,11 @@
       Acceptance: the workflow has no 40-minute observation job, the local
       observer rejects a different SHA, and the protected release command does
       not report completion until the active SHA matches.
+- [x] 1b.3 Cancel stale same-ref browser release runs and bind the extension
+      archive, its source tree, and store evidence to the exact workflow commit.
+      Acceptance: a newer run cancels obsolete browser verification, packaging
+      rechecks the immutable checkout, and publication rejects mismatched SHA,
+      source-tree, version, digest, or size evidence before uploading bytes.
 
 ## 2. Keep Deployment Identity Through Rollback
 
