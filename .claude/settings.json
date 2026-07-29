@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-workspace-guard.mjs\" hook --provider claude",
+            "timeout": 10,
+            "statusMessage": "Checking ChiefMoa workspace"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-workspace-guard.mjs\" hook --provider claude",
+            "timeout": 10,
+            "statusMessage": "Protecting shared checkout"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-workspace-guard.mjs\" hook --provider claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

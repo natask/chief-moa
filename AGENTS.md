@@ -30,6 +30,12 @@ For Android-first product work, the active change is usually
 
 ## Working Rules
 
+- Treat `/Users/natnaelkahssay/projs/chief-moa` as the shared checkout. It stays
+  on `master`; an agent must not switch, detach, or rewrite its `HEAD` unless the
+  user explicitly requests that exact shared-checkout change.
+- Launch Claude Code and Codex through `scripts/agent-session.sh`. Branch work
+  starts in an isolated Git worktree. The tracked provider hooks block checkout
+  changes aimed at the shared checkout and report an already-invalid branch.
 - Prefer existing files and patterns over new frameworks.
 - Keep architecture-significant changes reflected in `ARCHITECTURE.md` and
   OpenSpec.

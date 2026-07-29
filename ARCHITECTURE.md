@@ -132,6 +132,14 @@ Execution machine
   Owns: Codex/Gemini/Claude/other harnesses, repo edits, long-running research,
   build/test commands, desktop/browser/server automation.
 
+  The primary ChiefMoa checkout is a shared foreground resource and remains on
+  `master` across agent sessions. Provider launchers and shell-tool hooks share
+  one workspace policy: reject an unsafe launch, deny checkout-changing Git
+  commands aimed at the primary worktree, and report a branch violation after
+  any unrecognized command. Branch development belongs in a linked isolated
+  worktree. An exception requires an exact shared branch plus durable evidence
+  that the user explicitly requested the shared-checkout change.
+
 External APIs
   Own: third-party systems such as email, calendar, repo hosts, docs, payments,
   and SaaS tools. Use official APIs where possible.

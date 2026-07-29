@@ -31,6 +31,10 @@ leave artifacts that another agent can resume.
      OpenSpec/task, target files, and verification command.
    - Avoid dumping logs, screenshots, old transcripts, or unrelated docs into
      every context window.
+   - Keep the shared ChiefMoa checkout on `master`. Launch local sessions with
+     `scripts/agent-session.sh codex -- ...` or
+     `scripts/agent-session.sh claude -- ...`. Create an isolated worktree for
+     branch work instead of switching the shared checkout.
 
 6. Verify and record evidence.
    - Run the narrowest real command that proves the ticket.
@@ -79,6 +83,20 @@ must not repair their own findings; simplification may edit only while
 preserving the frozen behavior contract in one isolated candidate. It may test
 and commit that candidate, but it may not weaken checks, verify/accept itself,
 merge, deploy, promote, publish, push master, or change active deployment state.
+
+## Shared Checkout Guard
+
+`scripts/agent-session.sh` is the enforceable local launch boundary. A launch
+in the primary checkout succeeds only when that checkout is on `master`. If the
+user explicitly requests another shared branch, the launcher requires both the
+exact `--allow-shared-branch` value and a durable `--user-request` citation.
+
+Tracked Claude Code and Codex hooks run the same workspace guard at session
+start and around shell tools. They deny `git switch`, `git checkout`, and direct
+`HEAD` rewrites aimed at the primary checkout. A post-tool check reports any
+violation that bypassed command inspection. Linked worktrees are deliberately
+outside this restriction, so branch work remains isolated from local sessions
+that use the shared checkout.
 
 ## Context Pack Template
 
