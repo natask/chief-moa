@@ -54,6 +54,13 @@
 
 ## 7. Voice Quality Upgrade
 
+- [x] 7.0 Keep the streaming overlay at one line by default, allow a bounded
+      five-line expansion, and keep History and Copy visible without stacking
+      durable history over the current app.
+- [ ] 7.0a Add gateway-owned, non-executing cleaned and structured transcript
+      proposals with source/provenance fields, then expose them as explicit
+      overlay actions after endpoint smoke coverage exists.
+
 - [x] 7.1 Keep Android `SpeechRecognizer` as the baseline path.
 - [x] 7.2 Add an abstraction boundary for future streaming STT and hosted TTS.
 - [x] 7.3 Add a setting to mute spoken replies while preserving full display text.

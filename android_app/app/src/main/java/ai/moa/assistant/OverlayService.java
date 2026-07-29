@@ -89,6 +89,7 @@ public final class OverlayService extends Service {
     private EditText composer;
     private TextView runStatusView;
     private View transcriptView;
+    private boolean voiceTranscriptExpanded;
     private LinearLayout voiceTranscriptColumn;
     private ScrollView voiceTranscriptScroll;
     private TextView voiceMetaLine;
@@ -836,9 +837,7 @@ public final class OverlayService extends Service {
 
         card.addView(createVoiceHeader());
 
-        int transcriptBodyHeight = MoaOverlayWindowLayout.transcriptBodyHeight(
-                getResources().getDisplayMetrics().heightPixels,
-                getResources().getDisplayMetrics().density);
+        int transcriptBodyHeight = dp(MoaTranscriptViewport.bodyHeightDp(voiceTranscriptExpanded));
         voiceTranscriptScroll = new CappedScrollView(this, transcriptBodyHeight);
         voiceTranscriptScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         voiceTranscriptScroll.setVerticalScrollBarEnabled(false);
@@ -901,6 +900,16 @@ public final class OverlayService extends Service {
         TextView title = text("Voice", MoaColors.PAPER, 13, true);
         title.setLetterSpacing(0.04f);
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView history = pill("History", 0x16FFFFFF, MoaColors.PAPER);
+        history.setContentDescription("Open voice history");
+        history.setOnClickListener(v -> openVoiceHistory());
+        header.addView(history);
+
+        TextView copy = pill("Copy", 0x16FFFFFF, 0xFF9BC1FF);
+        copy.setContentDescription("Copy latest voice text");
+        copy.setOnClickListener(v -> copyLatestVoiceText(copy));
+        header.addView(copy);
 
         voiceMetaLine = text(agentRunStatusText(), MoaColors.MUTED, 11, false);
         header.addView(voiceMetaLine);
@@ -1119,7 +1128,9 @@ public final class OverlayService extends Service {
         }
         voiceTranscriptColumn.removeAllViews();
         int count = voiceLog.size();
-        for (int i = 0; i < count; i++) {
+        // The overlay is a glanceable live surface. Older rows remain durable in
+        // the full-app history instead of growing this window over other apps.
+        for (int i = Math.max(0, count - 1); i < count; i++) {
             MoaVoiceTranscriptLog.Entry entry = voiceLog.get(i);
             boolean assistant = !entry.isUser();
             String rowText = entry.interrupted
@@ -1302,6 +1313,10 @@ public final class OverlayService extends Service {
 
         String bodyText = text.isEmpty() ? "..." : text;
         TextView body = text(bodyText, MoaColors.PAPER, assistant ? 15 : 16, false);
+        body.setMaxLines(MoaTranscriptViewport.maxLines(voiceTranscriptExpanded));
+        body.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        body.setOnClickListener(v -> toggleVoiceTranscriptExpansion());
+        body.setContentDescription((voiceTranscriptExpanded ? "Collapse" : "Expand") + " voice text");
         body.setTextIsSelectable(true);
         body.setCustomSelectionActionModeCallback(new ActionMode.Callback() {
             @Override public boolean onCreateActionMode(ActionMode mode, android.view.Menu menu) {
@@ -1363,6 +1378,36 @@ public final class OverlayService extends Service {
                 receipt.setContentDescription("Copy voice transcript");
             }
         }, 1600);
+    }
+
+    private void copyLatestVoiceText(TextView receipt) {
+        if (voiceLog.isEmpty()) {
+            receipt.setText("Empty");
+            mainHandler.postDelayed(() -> {
+                if (receipt.isAttachedToWindow()) receipt.setText("Copy");
+            }, 1200);
+            return;
+        }
+        copyVoiceTranscript(voiceLog.get(voiceLog.size() - 1).text, receipt);
+    }
+
+    private void openVoiceHistory() {
+        Intent intent = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
+    }
+
+    private void toggleVoiceTranscriptExpansion() {
+        voiceTranscriptExpanded = !voiceTranscriptExpanded;
+        if (voiceTranscriptScroll != null) {
+            ViewGroup.LayoutParams params = voiceTranscriptScroll.getLayoutParams();
+            params.height = dp(MoaTranscriptViewport.bodyHeightDp(voiceTranscriptExpanded));
+            voiceTranscriptScroll.setLayoutParams(params);
+        }
+        renderVoiceTranscriptRows();
+        if (transcriptView != null) {
+            transcriptView.post(() -> positionSurfaceNearOrb(transcriptView, transcriptParams));
+        }
     }
 
     private void setVoiceRuntimeState(VoiceRuntimeState state) {

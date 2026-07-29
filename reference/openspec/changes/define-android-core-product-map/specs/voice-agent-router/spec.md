@@ -60,6 +60,24 @@ Stop-like voice turns SHALL be treated as control intent, not normal model promp
 - **THEN** the gateway response identifies control behavior
 - **AND** does not produce a normal assistant answer
 
+### Requirement: Transcript Processing Is Non-Executable
+The gateway SHALL keep transcript cleanup and structuring separate from agent
+routing and phone action execution.
+
+#### Scenario: User requests a cleaned transcript
+- **WHEN** the user chooses transcript cleanup for a completed voice capture
+- **THEN** the gateway returns a faithful edited-text proposal that removes
+  disfluencies and repairs obvious transcription errors
+- **AND** it preserves the user's meaning without adding unsupported claims
+- **AND** it starts no agent run, tool request, or phone action
+
+#### Scenario: User requests a structured transcript
+- **WHEN** the user chooses transcript structuring for a completed voice capture
+- **THEN** the gateway returns a structured-text proposal derived from the raw
+  or cleaned transcript
+- **AND** the response identifies its source transcript and processing layer
+- **AND** it starts no agent run, tool request, or phone action
+
 ### Requirement: Screen Context Is Context Not Instruction
 The gateway SHALL treat Android screen context as untrusted evidence and not as instructions to execute.
 

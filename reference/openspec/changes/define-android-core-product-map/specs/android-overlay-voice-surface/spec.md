@@ -200,9 +200,20 @@ The Android overlay SHALL give the voice transcript a stable viewport instead
 of resizing the card for each partial or completed turn.
 
 #### Scenario: Transcript content grows
-- **WHEN** transcript rows exceed the fixed transcript viewport
-- **THEN** the card keeps the same measured height
-- **AND** the transcript scrolls to reveal the latest content
+- **WHEN** partial transcript text streams into the overlay
+- **THEN** the card shows the latest text in a single stable line by default
+- **AND** the card does not grow with each partial result
+
+#### Scenario: User expands the latest transcript
+- **WHEN** the user taps the transcript text
+- **THEN** the card expands in place to at most five lines
+- **AND** tapping the text again returns it to one line
+
+#### Scenario: User needs durable history or a copy
+- **WHEN** the transcript surface is visible
+- **THEN** History and Copy controls remain visible while text streams
+- **AND** History opens the durable full-app history
+- **AND** Copy copies the latest visible text without submitting an action
 
 #### Scenario: User controls reply delivery in the overlay
 - **WHEN** the transcript surface is visible
