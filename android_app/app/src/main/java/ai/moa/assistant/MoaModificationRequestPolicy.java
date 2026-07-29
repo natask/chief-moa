@@ -2,7 +2,6 @@ package ai.moa.assistant;
 
 import org.json.JSONObject;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
@@ -71,7 +70,7 @@ final class MoaModificationRequestPolicy {
     static JSONObject createRequest(
             String feedbackId, String deviceId, MoaReleaseSelectionPolicy.Assignment assignment,
             MoaReleaseSelectionPolicy.Candidate candidate, String objective,
-            String authorizedAt, String idempotencyKey) throws Exception {
+            MoaCreateFixAuthorization authorization) throws Exception {
         String boundedObjective = safe(objective);
         if (boundedObjective.isEmpty() || boundedObjective.length() > MAX_OBJECTIVE_CHARS) {
             throw new IllegalArgumentException("objective must be 1-" + MAX_OBJECTIVE_CHARS + " characters");
@@ -85,9 +84,8 @@ final class MoaModificationRequestPolicy {
                 && !assignment.artifactSha256.equals(candidate.artifact.sha256))) {
             throw new IllegalArgumentException("Create fix requires the exact feedback release assignment");
         }
-        String timestamp = safe(authorizedAt);
-        try { Instant.parse(timestamp); } catch (Exception error) {
-            throw new IllegalArgumentException("authorization timestamp is invalid");
+        if (authorization == null || !authorization.feedbackId.equals(feedbackId)) {
+            throw new IllegalArgumentException("Create fix authorization does not match feedback");
         }
         return new JSONObject()
                 .put("schema", "modification_request.v1")
@@ -102,8 +100,9 @@ final class MoaModificationRequestPolicy {
                 .put("authorization", new JSONObject()
                         .put("kind", "implementation_authorized")
                         .put("authorized", true)
-                        .put("authorized_at", timestamp))
-                .put("idempotency_key", requireId(idempotencyKey, "idempotency_key"));
+                        .put("authorized_at", authorization.authorizedAt))
+                .put("idempotency_key", requireId(
+                        authorization.idempotencyKey, "idempotency_key"));
     }
 
     static Status parseCreateResponse(JSONObject response) {

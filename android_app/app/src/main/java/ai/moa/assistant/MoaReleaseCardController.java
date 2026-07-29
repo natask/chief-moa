@@ -71,6 +71,7 @@ final class MoaReleaseCardController {
     private boolean disposed;
     private View cardRoot;
     private final MoaModificationStatusStore modificationStore;
+    private final MoaCreateFixAuthorizationStore createFixAuthorizationStore;
     private MoaModificationRequestPolicy.Status latestModification;
     private String recordedFeedbackId = "";
     private String recordedFeedbackText = "";
@@ -82,6 +83,7 @@ final class MoaReleaseCardController {
         this.activity = activity;
         this.host = host;
         this.modificationStore = new MoaModificationStatusStore(activity);
+        this.createFixAuthorizationStore = new MoaCreateFixAuthorizationStore(activity);
         this.latestModification = modificationStore.load();
     }
 
@@ -502,13 +504,21 @@ final class MoaReleaseCardController {
         int operationGeneration = ++generation;
         String gateway = pinnedGatewayUrl;
         String token = pinnedGatewayToken;
-        String authorizedAt = Instant.now().toString();
+        final MoaCreateFixAuthorization authorization;
+        try {
+            authorization = MoaCreateFixAuthorization.authorizeExplicitly(
+                    recordedFeedbackId, createFixAuthorizationStore.load(), Instant.now());
+            createFixAuthorizationStore.save(authorization);
+        } catch (Exception error) {
+            createFixButton.setEnabled(true);
+            render("Fix authorization could not be saved. No request was sent.", MoaColors.WARN);
+            return;
+        }
         new Thread(() -> {
             try {
                 JSONObject body = MoaModificationRequestPolicy.createRequest(
                         recordedFeedbackId, host.deviceId(), recordedFeedbackAssignment,
-                        recordedFeedbackCandidate, recordedFeedbackText, authorizedAt,
-                        "create-fix-" + recordedFeedbackId);
+                        recordedFeedbackCandidate, recordedFeedbackText, authorization);
                 JSONObject response = releaseClient(gateway, token).createModificationRequest(body);
                 MoaModificationRequestPolicy.Status parsed =
                         MoaModificationRequestPolicy.parseCreateResponse(response);

@@ -20,7 +20,8 @@ public final class MoaModificationRequestPolicyTest {
 
         JSONObject body = MoaModificationRequestPolicy.createRequest(
                 "feedback-1", "android-1", assignment, candidate, "Fix the ribbon.",
-                "2026-07-28T12:00:00Z", "create-fix-1");
+                new MoaCreateFixAuthorization(
+                        "feedback-1", "create-fix-1", "2026-07-28T12:00:00Z"));
 
         assertEquals("modification_request.v1", body.getString("schema"));
         assertEquals("feedback-1", body.getString("feedback_id"));
