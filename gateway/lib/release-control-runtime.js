@@ -80,6 +80,7 @@ async function createReleaseControlRuntime(options = {}) {
         intentWorkflow: options.intentWorkflow,
         releaseControlService: service,
         resolveBaseCommit: options.resolveBaseCommit,
+        candidateEvidenceResolver: options.candidateEvidenceResolver,
         now: options.now,
       })
       : null;
@@ -92,6 +93,7 @@ async function createReleaseControlRuntime(options = {}) {
       enabled: true,
       storage: "postgres",
       registrationAuthority: authentication?.registrationAuthority || null,
+      modificationCoordinator,
       authority,
       async route(request, response, url, transport = {}) {
         if (!String(url?.pathname || "").startsWith(RELEASE_CONTROL_PREFIX)) return false;

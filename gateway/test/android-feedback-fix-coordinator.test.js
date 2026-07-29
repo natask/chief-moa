@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createAndroidFeedbackFixCoordinator } = require("../lib/android-feedback-fix-coordinator");
+const { createAndroidFeedbackFixCoordinator, defaultBaseCommitResolver } = require("../lib/android-feedback-fix-coordinator");
 const { createEventSubstrateStore } = require("../lib/event-substrate");
 const { createIntentRuntime } = require("../lib/intent-runtime");
 const { createIntentWorkflow } = require("../lib/intent-workflow");
@@ -33,7 +33,9 @@ function harness(t, overrides = {}) {
   return {
     events, workHistory, feedback,
     coordinator: createAndroidFeedbackFixCoordinator({ events, intentWorkflow, releaseControlService,
-      resolveBaseCommit: async () => COMMIT, now: () => new Date(CLOCK), ...overrides }),
+      resolveBaseCommit: async () => COMMIT, now: () => new Date(CLOCK),
+      candidateEvidenceResolver: async ({ submitted }) => ({ verified: true, evidence: submitted }),
+      ...overrides }),
   };
 }
 
@@ -45,6 +47,20 @@ function request(overrides = {}) {
     authorization: { kind: "implementation_authorized", authorized: true, authorized_at: CLOCK },
     idempotency_key: "create-fix-1", device_id: "phone_1", application_id: "chief-moa",
     tenant_id: "tenant_1", actor_id: "device-principal-1", ...overrides,
+  };
+}
+
+function candidate(requestId, overrides = {}) {
+  const apk = "d".repeat(64);
+  const candidateCommit = "e".repeat(40);
+  return {
+    schema: "android_candidate_evidence.v1", idempotency_key: `candidate-${requestId}`,
+    request_binding: { feedback_id: "feedback_1", feedback_artifact_sha256: APK, base_ref: "origin/master", base_commit: COMMIT },
+    source: { base_ref: "origin/master", base_commit: COMMIT, candidate_commit: candidateCommit },
+    artifact: { apk_sha256: apk, signer_sha256: "f".repeat(64), artifact_ref: "artifact://candidate.apk" },
+    qa: { result: "passed", emulator_smoked: true, manifest_ref: "evidence://manifest.json", manifest_sha256: "1".repeat(64), source_commit: candidateCommit, app_apk_sha256: apk, test_apk_sha256: "2".repeat(64), preview_namespace: requestId, scenario_revision: "transcript-ribbon-v1", environment_identity: "macos-arm64/android-35" },
+    preview: { namespace: requestId, release_id: "preview-release-1", artifact_sha256: apk, artifact_ref: "preview://candidate.apk", download_url: "https://preview.example/candidate.apk" },
+    ...overrides,
   };
 }
 
@@ -113,4 +129,64 @@ test("worker base verification detects drift before a claim", async (t) => {
   const run = await h.workHistory.runDetail(created.identities.run_id);
   assert.match(workerBaseDrift(run.run, { base_ref: "origin/master", resolved_base_commit: "c".repeat(40) }), /base drift/);
   assert.equal(workerBaseDrift(run.run, { base_ref: "origin/master", resolved_base_commit: COMMIT }), "");
+});
+
+test("exact passing emulator evidence admits one non-assigned preview projection", async (t) => {
+  const h = harness(t);
+  const created = await h.coordinator.create(request());
+  const input = candidate(created.identities.request_id);
+  const admitted = await h.coordinator.admitCandidate(created.identities.request_id, input, { kind: "worker", id: "preview-worker" });
+  const retry = await h.coordinator.admitCandidate(created.identities.request_id, input, { kind: "worker", id: "preview-worker" });
+  assert.deepEqual(retry.preview, admitted.preview);
+  assert.equal(admitted.state, "candidate");
+  assert.equal(admitted.qa.emulator_smoked, true);
+  assert.equal(admitted.artifact.apk_sha256, input.artifact.apk_sha256);
+  assert.equal(admitted.preview.assignment_created, false);
+  assert.equal(admitted.preview.channel_moved, false);
+  const events = await h.events.listEvents({ event_type: "modification.candidate_admitted", limit: 10 });
+  assert.equal(events.length, 1);
+});
+
+test("candidate admission rejects mismatched or failed QA without a preview", async (t) => {
+  const h = harness(t);
+  const created = await h.coordinator.create(request());
+  const id = created.identities.request_id;
+  const badQa = candidate(id);
+  badQa.qa.app_apk_sha256 = "3".repeat(64);
+  await assert.rejects(h.coordinator.admitCandidate(id, badQa, { kind: "owner", id: "nat" }), (error) => error.reason === "qa_apk_mismatch");
+  const failed = candidate(id);
+  failed.qa.result = "failed";
+  failed.idempotency_key = "failed-qa";
+  await assert.rejects(h.coordinator.admitCandidate(id, failed, { kind: "owner", id: "nat" }), (error) => error.reason === "emulator_qa_not_passed");
+  const status = await h.coordinator.status(id);
+  assert.equal(status.qa, null);
+  assert.equal(status.artifact, null);
+  assert.equal(status.preview, null);
+  assert.equal((await h.events.listEvents({ event_type: "modification.candidate_admitted", limit: 10 })).length, 0);
+});
+
+test("candidate admission blocks when retained bytes have no authoritative resolver", async (t) => {
+  const h = harness(t, { candidateEvidenceResolver: null });
+  const created = await h.coordinator.create(request());
+  await assert.rejects(h.coordinator.admitCandidate(created.identities.request_id, candidate(created.identities.request_id), { kind: "owner", id: "nat" }), (error) => error.reason === "authoritative_candidate_evidence_unavailable");
+  assert.equal((await h.coordinator.status(created.identities.request_id)).preview, null);
+});
+
+test("default base resolver fetches and proves remote master instead of trusting build SHA", (t) => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "moa-fake-git-"));
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  const calls = path.join(bin, "calls");
+  const git = path.join(bin, "git");
+  fs.writeFileSync(git, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\ncase "$1" in\n  fetch) exit 0 ;;\n  rev-parse) printf '%s\\n' '${COMMIT}' ;;\nesac\n`);
+  fs.chmodSync(git, 0o755);
+  const priorPath = process.env.PATH;
+  const priorBuild = process.env.MOA_BUILD_SHA;
+  process.env.PATH = `${bin}:${priorPath}`;
+  process.env.MOA_BUILD_SHA = "9".repeat(40);
+  t.after(() => { process.env.PATH = priorPath; if (priorBuild == null) delete process.env.MOA_BUILD_SHA; else process.env.MOA_BUILD_SHA = priorBuild; });
+  assert.equal(defaultBaseCommitResolver("origin/master"), COMMIT);
+  assert.deepEqual(fs.readFileSync(calls, "utf8").trim().split("\n"), [
+    "fetch --quiet origin master",
+    "rev-parse --verify refs/remotes/origin/master^{commit}",
+  ]);
 });

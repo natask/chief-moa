@@ -1945,7 +1945,11 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   lifecycle bound to one exact Android feedback record. The gateway pins
   `origin/master` and its resolved commit, idempotently links one canonical
   intent, work task, queued run, and owner lease, and projects an expired lease
-  as reclaimable instead of silently leaving authorized work unowned.
+  as reclaimable instead of silently leaving authorized work unowned. Candidate
+  admission is owner/preview-worker scoped and remains blocked unless an
+  authoritative resolver verifies retained emulator evidence, artifact bytes,
+  and durable preview publication; caller-supplied digests alone never admit a
+  candidate or move a release assignment/channel.
 - `run_control_request`: a pause/cancel/redirect proposal the owning worker
   must claim and receipt before the run state changes.
 - `deployment_record`: preview/artifact/applied deployment state with URLs and

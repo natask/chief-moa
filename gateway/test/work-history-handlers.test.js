@@ -73,6 +73,7 @@ function makeHarness(overrides = {}) {
         };
       },
     },
+    modificationCoordinator: () => ({ admitCandidate: async (id, body, actor) => ({ request_id: id, body, actor }) }),
     semanticTelemetry: { query: async (query) => ({ query }) },
     parseWorkHistoryIntent: (text) => text === "unknown" ? null : ({ kind: "create_work", objective: text, wants_run: false }),
     authorized: () => true,
@@ -159,6 +160,33 @@ test("worker claim records a base-drift blocker before ownership changes", async
   assert.equal(harness.calls.some(([name]) => name === "claimRun"), false);
   assert.equal(harness.calls.some(([name]) => name === "appendRunEvent"), true);
   assert.equal(harness.calls.some(([name]) => name === "setTaskStatus"), true);
+});
+
+test("oldest-run claim cannot bypass pinned modification base verification", async () => {
+  const harness = makeHarness({ workHistory: {
+    statusSummary: async () => ({ ...structuredClone(EMPTY_SUMMARY), queued: [{ run_id: "wr_fix" }] }),
+    runDetail: async () => ({ run: { run_id: "wr_fix", workspace_base: { ref: "origin/master", commit: "a".repeat(40) } } }),
+  } });
+  const response = await route(harness, "POST", "/v1/work-history/runs/claim", { worker_id: "worker_1" });
+  assert.equal(response.status, 400);
+  assert.match(response.payload.error, /run_id, base_ref, and resolved_base_commit/);
+  assert.equal(harness.calls.some(([name]) => name === "claimRun"), false);
+});
+
+test("candidate evidence admission accepts only owner or preview-worker authority", async () => {
+  const owner = makeHarness();
+  let response = await route(owner, "POST", "/v1/work-history/modification-requests/mreq%201/candidate-evidence", { schema: "android_candidate_evidence.v1" });
+  assert.equal(response.status, 201);
+  assert.equal(response.payload.status.actor.kind, "owner");
+
+  const worker = makeHarness({ authorized: () => false });
+  response = await route(worker, "POST", "/v1/work-history/modification-requests/mreq_1/candidate-evidence", {});
+  assert.equal(response.status, 201);
+  assert.equal(response.payload.status.actor.kind, "preview");
+
+  const device = makeHarness({ authorized: () => false, deploymentPrincipal: () => null });
+  response = await route(device, "POST", "/v1/work-history/modification-requests/mreq_1/candidate-evidence", {});
+  assert.equal(response.status, 403);
 });
 
 test("deployment routes keep user, reviewer, preview, and promoter authority separate", async () => {

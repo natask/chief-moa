@@ -677,6 +677,7 @@ const { routeIntentPlane } = createIntentPlaneHandlers({
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
   intentWorkflow,
+  modificationCoordinator: () => releaseControlRuntime?.modificationCoordinator || null,
   semanticTelemetry,
   parseWorkHistoryIntent,
   authorized,

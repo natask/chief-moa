@@ -14,6 +14,7 @@ function createAndroidFeedbackFixCoordinator(options = {}) {
   if (!releaseControlService?.feedbackDetail) throw new Error("feedback fix coordinator requires release feedback lookup");
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const resolveBaseCommit = options.resolveBaseCommit || defaultBaseCommitResolver;
+  const candidateEvidenceResolver = options.candidateEvidenceResolver;
 
   async function create(input = {}) {
     const authorization = normalizeAuthorization(input.authorization, now);
@@ -108,12 +109,14 @@ function createAndroidFeedbackFixCoordinator(options = {}) {
     const queued = all.find((event) => event.event_type === "modification.request.queued")?.payload || null;
     const blockedEvent = [...all].reverse().find((event) => event.event_type === "modification.request.blocked")?.payload || null;
     const lease = [...all].reverse().find((event) => event.event_type === "modification.owner_leased")?.payload || null;
+    const candidate = [...all].reverse().find((event) => event.event_type === "modification.candidate_admitted")?.payload || null;
     const delivery = queued?.intent_id ? await intentWorkflow.delivery(queued.intent_id) : null;
     const run = delivery?.run_refs?.find((item) => item.run_id === queued?.run_id) || null;
     const expired = lease?.status === "active" && Date.parse(lease.lease_expires_at) <= new Date(now()).getTime()
       && run && !["completed", "failed", "canceled"].includes(run.status);
     let state = queued ? (expired ? "reclaimable" : run?.status || "queued") : blockedEvent ? "blocked" : "creating";
     let blockingReason = queued ? (expired ? "owner lease expired; request is reclaimable" : "") : blockedEvent?.blocking_reason || "";
+    if (candidate && !["completed", "failed", "canceled"].includes(run?.status)) state = "candidate";
     if (state === "queued" && (!lease || !queued.run_id || !queued.owner_id)) {
       state = "blocked"; blockingReason = "ownerless queued state rejected";
     }
@@ -123,8 +126,42 @@ function createAndroidFeedbackFixCoordinator(options = {}) {
       intent: delivery ? { intent_id: delivery.intent_id, revision: delivery.intent_revision, state: delivery.lifecycle_state } : null,
       task: delivery?.task_refs?.find((item) => item.task_id === queued?.task_id) || null,
       run, owner_lease: lease ? { ...lease, status: expired ? "expired" : lease.status } : null,
-      qa: null, artifact: null, preview: null,
+      qa: candidate?.qa || null, artifact: candidate?.artifact || null, preview: candidate?.preview || null,
     };
+  }
+
+  async function admitCandidate(requestId, input = {}, actor = {}) {
+    const safeId = required(requestId, "request_id", 160);
+    const idempotencyKey = required(input.idempotency_key, "idempotency_key", 200);
+    if (input.schema !== "android_candidate_evidence.v1") throw blocked("candidate_evidence_invalid", "schema must be android_candidate_evidence.v1");
+    return events.withStreamLock(`modification-request:${safeId}`, async () => {
+      const existing = await status(safeId);
+      if (!existing) throw conflict("modification_request_not_found");
+      if (typeof candidateEvidenceResolver !== "function") throw blocked("authoritative_candidate_evidence_unavailable", "candidate admission requires an authoritative evidence and artifact resolver");
+      const authoritative = await candidateEvidenceResolver({
+        request: existing.request,
+        manifest_ref: required(input.qa?.manifest_ref, "qa.manifest_ref", 800),
+        artifact_ref: required(input.artifact?.artifact_ref, "artifact.artifact_ref", 800),
+        preview_ref: required(input.preview?.artifact_ref, "preview.artifact_ref", 800),
+        submitted: input,
+      });
+      if (!authoritative || authoritative.verified !== true) throw blocked("authoritative_candidate_evidence_unverified", "authoritative evidence lookup did not verify retained bytes and publication");
+      const evidence = normalizeCandidateEvidence(authoritative.evidence, existing.request);
+      const fingerprint = hash(JSON.stringify(evidence));
+      const all = await events.listEvents({ stream_id: `modification-request:${safeId}`, event_type: "modification.candidate_admitted", limit: 100, order: "asc" });
+      const prior = all.find((event) => event.payload?.idempotency_key === idempotencyKey);
+      if (prior) {
+        if (prior.payload.evidence_fingerprint !== fingerprint) throw conflict("idempotency_key_reused");
+        return status(safeId);
+      }
+      if (all.length) throw conflict("candidate_already_admitted");
+      await append("modification.candidate_admitted", safeId, `candidate:${idempotencyKey}`, {
+        schema: "android_candidate_admission.v1", request_id: safeId, idempotency_key: idempotencyKey,
+        evidence_fingerprint: fingerprint, admitted_by: { kind: required(actor.kind, "actor.kind", 40), id: required(actor.id, "actor.id", 160) },
+        admitted_at: iso(now()), ...evidence,
+      }, actor.id, iso(now()));
+      return status(safeId);
+    });
   }
 
   async function requestEvent(requestId) {
@@ -138,7 +175,37 @@ function createAndroidFeedbackFixCoordinator(options = {}) {
       actor: { kind: "gateway", id: actorId }, correlation_id: requestId,
       idempotency_key: `feedback-fix:${requestId}:${suffix}`, payload });
   }
-  return { create, status };
+  return { create, status, admitCandidate };
+}
+
+function normalizeCandidateEvidence(input, request) {
+  const binding = object(input.request_binding, "request_binding");
+  const source = object(input.source, "source");
+  const artifact = object(input.artifact, "artifact");
+  const qa = object(input.qa, "qa");
+  const preview = object(input.preview, "preview");
+  const exact = [[binding.feedback_id, request.feedback_id, "feedback_mismatch"], [binding.feedback_artifact_sha256, request.artifact_sha256, "feedback_artifact_mismatch"],
+    [binding.base_ref, request.base_ref, "base_ref_mismatch"], [binding.base_commit, request.base_commit, "base_commit_mismatch"],
+    [source.base_ref, request.base_ref, "source_base_ref_mismatch"], [source.base_commit, request.base_commit, "source_base_commit_mismatch"]];
+  for (const [actual, expected, reason] of exact) if (actual !== expected) throw conflict(reason);
+  const candidateCommit = digest(source.candidate_commit, 40, "source.candidate_commit", SHA);
+  const apk = digest(artifact.apk_sha256, 64, "artifact.apk_sha256");
+  const signer = digest(artifact.signer_sha256, 64, "artifact.signer_sha256");
+  if (qa.result !== "passed" || qa.emulator_smoked !== true) throw blocked("emulator_qa_not_passed", "emulator QA must be passed and emulator_smoked");
+  const qaSource = digest(qa.source_commit, 40, "qa.source_commit", SHA);
+  const qaApk = digest(qa.app_apk_sha256, 64, "qa.app_apk_sha256");
+  if (qaSource !== candidateCommit) throw conflict("qa_source_mismatch");
+  if (qaApk !== apk) throw conflict("qa_apk_mismatch");
+  const previewApk = digest(preview.artifact_sha256, 64, "preview.artifact_sha256");
+  if (previewApk !== apk) throw conflict("preview_artifact_mismatch");
+  const namespace = required(preview.namespace, "preview.namespace", 200);
+  if (required(qa.preview_namespace, "qa.preview_namespace", 200) !== namespace) throw conflict("preview_namespace_mismatch");
+  return {
+    source: { base_ref: request.base_ref, base_commit: request.base_commit, candidate_commit: candidateCommit },
+    artifact: { surface: "android", apk_sha256: apk, signer_sha256: signer, artifact_ref: required(artifact.artifact_ref, "artifact.artifact_ref", 800) },
+    qa: { result: "passed", emulator_smoked: true, manifest_ref: required(qa.manifest_ref, "qa.manifest_ref", 800), manifest_sha256: digest(qa.manifest_sha256, 64, "qa.manifest_sha256"), source_commit: qaSource, app_apk_sha256: qaApk, test_apk_sha256: digest(qa.test_apk_sha256, 64, "qa.test_apk_sha256"), preview_namespace: namespace, scenario_revision: required(qa.scenario_revision, "qa.scenario_revision", 160), environment_identity: required(qa.environment_identity, "qa.environment_identity", 400) },
+    preview: { namespace, release_id: required(preview.release_id, "preview.release_id", 160), artifact_sha256: previewApk, artifact_ref: required(preview.artifact_ref, "preview.artifact_ref", 800), download_url: previewUrl(preview.download_url), assignment_created: false, channel_moved: false },
+  };
 }
 
 function normalizeAuthorization(input, now) {
@@ -166,11 +233,23 @@ function requestFingerprint(input, authorization, trusted) {
 }
 
 function publicRequest(request) { const { request_fingerprint, tenant_id, device_id, ...visible } = request; return visible; }
-function defaultBaseCommitResolver(ref) { const configured = String(process.env.MOA_BUILD_SHA || "").trim().toLowerCase(); return SHA.test(configured) ? configured : execFileSync("git", ["rev-parse", "--verify", ref], { encoding: "utf8", timeout: 5_000 }).trim(); }
+function defaultBaseCommitResolver(ref) {
+  if (ref !== BASE_REF) throw blocked("base_ref_unsupported", "only origin/master may be resolved");
+  execFileSync("git", ["fetch", "--quiet", "origin", "master"], { encoding: "utf8", timeout: 30_000 });
+  return execFileSync("git", ["rev-parse", "--verify", "refs/remotes/origin/master^{commit}"], { encoding: "utf8", timeout: 5_000 }).trim();
+}
 function required(value, field, max) { const text = String(value || "").trim(); if (!text || text.length > max) throw new Error(`${field} is invalid`); return text; }
+function object(value, field) { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} is invalid`); return value; }
+function digest(value, length, field, pattern = /^[0-9a-f]{64}$/) { const text = required(value, field, length).toLowerCase(); if (text.length !== length || !pattern.test(text)) throw new Error(`${field} is invalid`); return text; }
+function previewUrl(value) {
+  const url = new URL(required(value, "preview.download_url", 2048));
+  if (url.username || url.password || (url.protocol !== "https:" && !(url.protocol === "http:" && privateHost(url.hostname)))) throw new Error("preview.download_url is invalid");
+  return url.toString();
+}
+function privateHost(host) { return host === "localhost" || host.endsWith(".local") || /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host); }
 function iso(value) { const date = value instanceof Date ? value : new Date(value); if (!Number.isFinite(date.getTime())) throw new Error("timestamp is invalid"); return date.toISOString(); }
 function hash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function conflict(reason) { const error = new Error(reason); error.code = "modification_request_conflict"; error.reason = reason; return error; }
 function blocked(reason, message) { const error = new Error(message || reason); error.code = "modification_request_blocked"; error.reason = reason; return error; }
 
-module.exports = { BASE_REF, createAndroidFeedbackFixCoordinator };
+module.exports = { BASE_REF, createAndroidFeedbackFixCoordinator, defaultBaseCommitResolver };

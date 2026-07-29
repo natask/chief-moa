@@ -8,6 +8,7 @@ function createWorkHistoryHandlers(deps) {
   const {
     workHistory,
     intentWorkflow,
+    modificationCoordinator,
     semanticTelemetry,
     parseWorkHistoryIntent,
     authorized,
@@ -31,8 +32,23 @@ function createWorkHistoryHandlers(deps) {
     const method = request.method;
     const pathname = url.pathname;
     try {
-      if (!authorized(request) && !pathname.startsWith("/v1/work-history/deployments")) {
+      const candidateEvidencePath = pathname.match(/^\/v1\/work-history\/modification-requests\/([^/]+)\/candidate-evidence$/);
+      if (!authorized(request) && !pathname.startsWith("/v1/work-history/deployments")
+          && !(candidateEvidencePath && deploymentPrincipal(request, "preview"))) {
         sendJson(response, 403, { error: "scoped deployment credentials cannot access general work-history actions" });
+        return true;
+      }
+      if (method === "POST" && candidateEvidencePath) {
+        const owner = authorized(request);
+        const worker = owner ? null : deploymentPrincipal(request, "preview");
+        if (!owner && !worker) throw new Error("owner or preview worker authority is required");
+        const coordinator = modificationCoordinator?.();
+        if (!coordinator?.admitCandidate) throw new Error("modification coordinator is unavailable");
+        const status = await coordinator.admitCandidate(
+          decodeURIComponent(candidateEvidencePath[1]), await readJsonBody(request),
+          owner ? { kind: "owner", id: accountUserId() } : worker.actor,
+        );
+        sendJson(response, 201, { status });
         return true;
       }
       if (method === "POST" && pathname === "/v1/work-history/turns") {
@@ -68,6 +84,13 @@ function createWorkHistoryHandlers(deps) {
       }
       if (method === "POST" && pathname === "/v1/work-history/runs/claim") {
         const body = await readJsonBody(request);
+        if (!body.run_id) {
+          const summary = await workHistory.statusSummary();
+          for (const queued of summary.queued || []) {
+            const detail = await workHistory.runDetail(queued.run_id);
+            if (detail?.run?.workspace_base) throw new Error("run_id, base_ref, and resolved_base_commit are required while a pinned modification run is queued");
+          }
+        }
         if (body.run_id) {
           const detail = await workHistory.runDetail(body.run_id);
           const drift = workerBaseDrift(detail?.run, body);

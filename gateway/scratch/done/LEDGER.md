@@ -1,3 +1,4 @@
+- Closed Android fix candidate admission around authoritative retained-byte evidence, owner/worker authority, exact digest joins, fresh remote-master proof, and claim-time base enforcement — agent: Codex/GPT-5 — Entire checkpoint
 - Added exact-release Android Create-fix admission with one idempotent request/intent/task/run/owner lease, pinned master verification, and joined reclaimable status — agent: Codex/GPT-5 — Entire checkpoint
 - Added citation-bound durable intent continuation packets and message routing, with repeated agent-run children retaining their exact branch and intent scope — agent: Codex/GPT-5 — fix/session-continuity-scoped-20260726
 - Finalized streaming and batch transcripts through one dominant unexpected-script safeguard, retried once from retained PCM, and made repeated failure visible without fallback resurrection, reasoning, final hooks, or history — agent: Codex/GPT-5 — fix/transcript-wrong-script-finalized-20260726
