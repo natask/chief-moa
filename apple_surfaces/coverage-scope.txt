@@ -9,6 +9,7 @@ executable Sources/MoaMac/main.swift
 executable Sources/MoaMacCore/GatewayChat.swift
 executable Sources/MoaMacCore/GatewayVoice.swift
 executable Sources/MoaMacCore/CurrentAppAsk.swift
+executable Sources/MoaMacCore/CurrentAppAskReceipts.swift
 executable Sources/MoaMacCore/MoaMacCore.swift
 executable Sources/MoaMacCore/PanelLayoutPolicy.swift
 executable Sources/MoaMacCore/TranscriptInsertion.swift

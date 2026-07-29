@@ -4,11 +4,14 @@ import Foundation
 public enum CurrentAppAskError: Error, Equatable, Sendable {
     case unavailable
     case invalidEvidence
+    case expired
     case staleEvidence
     case destinationChanged
     case approvalMismatch
     case scopeChanged
     case cancelled
+    case journalFailure
+    case terminalJournalFailure
 }
 
 public struct GatewayScreenAwareChatRequest: Sendable {
@@ -230,10 +233,25 @@ public actor CurrentAppAskCoordinator {
         let focusedWindowID: UInt32?
     }
 
+    private struct ReceiptContext: Sendable {
+        let attemptID: UUID
+        let grantID: UUID
+        let requestDigest: String
+        let semanticDigest: String
+        let screenshotDigest: String?
+        let destinationDigest: String
+        let scopeDigest: String
+    }
+
     private var entry: Entry?
     private var generation: UInt64 = 0
+    private let journal: any CurrentAppAskReceiptJournaling
+    private var activeReceipt: ReceiptContext?
+    private var activeSend: Task<GatewayChatReply, Error>?
 
-    public init() {}
+    public init(journal: any CurrentAppAskReceiptJournaling = InMemoryCurrentAppAskReceiptJournal()) {
+        self.journal = journal
+    }
 
     public func publishVerified(
         grant: ObservationGrant,
@@ -251,9 +269,18 @@ public actor CurrentAppAskCoordinator {
         entry = Entry(id: UUID(), grant: grant, observation: observation, focusedWindowID: focusedWindowID)
     }
 
-    public func revoke() {
+    public func revoke(at date: Date = Date()) throws {
         generation &+= 1
         entry = nil
+        activeSend?.cancel()
+        activeSend = nil
+        guard let context = activeReceipt else { return }
+        activeReceipt = nil
+        do {
+            _ = try journal.append(draft(context, stage: .terminal, outcome: .canceled, at: date, error: "revoked"))
+        } catch {
+            throw CurrentAppAskError.terminalJournalFailure
+        }
     }
 
     public func hasEvidence(now: Date) -> Bool {
@@ -300,20 +327,55 @@ public actor CurrentAppAskCoordinator {
             windowTitle: selected.observation.window.title,
             expiresAt: selected.grant.expiresAt
         )
-        let approval = try await approver.approve(preview)
-        try current(selected, started: started, origin: origin, at: now())
-        try request.validateApproval(approval)
-        guard await scope.validate(process: selected.grant.process, focusedWindowID: selected.focusedWindowID) else {
-            throw CurrentAppAskError.scopeChanged
+        let context = ReceiptContext(
+            attemptID: UUID(),
+            grantID: selected.grant.id,
+            requestDigest: request.bodySHA256,
+            semanticDigest: TranscriptDigest.sha256(request.semanticSummary),
+            screenshotDigest: request.screenshotSHA256,
+            destinationDigest: TranscriptDigest.sha256(request.endpoint.absoluteString),
+            scopeDigest: Self.scopeDigest(selected)
+        )
+        do {
+            _ = try journal.append(draft(context, stage: .pending, outcome: .pending, at: now()))
+        } catch {
+            throw CurrentAppAskError.journalFailure
         }
-        try current(selected, started: started, origin: origin, at: now())
-        let reply = try await sender.send(request, bearerToken: bearerToken)
-        try current(selected, started: started, origin: origin, at: now())
-        guard await scope.validate(process: selected.grant.process, focusedWindowID: selected.focusedWindowID) else {
-            throw CurrentAppAskError.scopeChanged
+        activeReceipt = context
+
+        do {
+            let approval = try await approver.approve(preview)
+            try current(selected, started: started, origin: origin, at: now())
+            try request.validateApproval(approval)
+            try append(context, stage: .approved, outcome: .approved, at: now())
+            guard await scope.validate(process: selected.grant.process, focusedWindowID: selected.focusedWindowID) else {
+                throw CurrentAppAskError.scopeChanged
+            }
+            try current(selected, started: started, origin: origin, at: now())
+            try append(context, stage: .released, outcome: .released, at: now())
+            let send = Task { try await sender.send(request, bearerToken: bearerToken) }
+            activeSend = send
+            let reply = try await send.value
+            activeSend = nil
+            try current(selected, started: started, origin: origin, at: now())
+            guard await scope.validate(process: selected.grant.process, focusedWindowID: selected.focusedWindowID) else {
+                throw CurrentAppAskError.scopeChanged
+            }
+            try current(selected, started: started, origin: origin, at: now())
+            try terminate(context, outcome: .completed, at: now())
+            return reply
+        } catch {
+            activeSend?.cancel()
+            activeSend = nil
+            if activeReceipt?.attemptID == context.attemptID {
+                do {
+                    try terminate(context, outcome: terminalOutcome(error), at: now(), error: errorCode(error))
+                } catch {
+                    throw CurrentAppAskError.terminalJournalFailure
+                }
+            }
+            throw error
         }
-        try current(selected, started: started, origin: origin, at: now())
-        return reply
     }
 
     private func current(_ selected: Entry, started: UInt64, origin: URL, at date: Date) throws {
@@ -322,11 +384,80 @@ public actor CurrentAppAskCoordinator {
     }
 
     private func validate(_ selected: Entry, origin: URL, at date: Date) throws {
-        guard date < selected.grant.expiresAt else { throw CurrentAppAskError.staleEvidence }
+        guard date < selected.grant.expiresAt else { throw CurrentAppAskError.expired }
         guard date >= selected.observation.capturedAt,
               date.timeIntervalSince(selected.observation.capturedAt) <= 60 else {
             throw CurrentAppAskError.staleEvidence
         }
         guard selected.grant.destinationOrigin == origin else { throw CurrentAppAskError.destinationChanged }
+    }
+
+    private func append(
+        _ context: ReceiptContext,
+        stage: CurrentAppAskReceiptStage,
+        outcome: CurrentAppAskReceiptOutcome,
+        at date: Date
+    ) throws {
+        do { _ = try journal.append(draft(context, stage: stage, outcome: outcome, at: date)) }
+        catch { throw CurrentAppAskError.journalFailure }
+    }
+
+    private func terminate(
+        _ context: ReceiptContext,
+        outcome: CurrentAppAskReceiptOutcome,
+        at date: Date,
+        error: String? = nil
+    ) throws {
+        activeReceipt = nil
+        do { _ = try journal.append(draft(context, stage: .terminal, outcome: outcome, at: date, error: error)) }
+        catch { throw CurrentAppAskError.terminalJournalFailure }
+    }
+
+    private func draft(
+        _ context: ReceiptContext,
+        stage: CurrentAppAskReceiptStage,
+        outcome: CurrentAppAskReceiptOutcome,
+        at date: Date,
+        error: String? = nil
+    ) -> CurrentAppAskReceiptDraft {
+        .init(
+            attemptID: context.attemptID,
+            grantID: context.grantID,
+            stage: stage,
+            outcome: outcome,
+            requestDigest: context.requestDigest,
+            semanticDigest: context.semanticDigest,
+            screenshotDigest: context.screenshotDigest,
+            destinationDigest: context.destinationDigest,
+            scopeDigest: context.scopeDigest,
+            recordedAt: date,
+            errorCode: error
+        )
+    }
+
+    private func terminalOutcome(_ error: Error) -> CurrentAppAskReceiptOutcome {
+        switch error as? CurrentAppAskError {
+        case .cancelled: return .canceled
+        case .expired: return .expired
+        case .staleEvidence, .destinationChanged, .approvalMismatch, .scopeChanged: return .stale
+        default: return .failed
+        }
+    }
+
+    private func errorCode(_ error: Error) -> String {
+        if let value = error as? CurrentAppAskError { return String(describing: value) }
+        if error is CancellationError { return "cancelled" }
+        return "send_failed"
+    }
+
+    private static func scopeDigest(_ entry: Entry) -> String {
+        let process = entry.grant.process
+        return TranscriptDigest.sha256([
+            process.bundleID,
+            String(process.pid),
+            String(process.processStart.timeIntervalSince1970),
+            process.signingIdentity,
+            entry.focusedWindowID.map(String.init) ?? "missing",
+        ].joined(separator: "\u{1f}"))
     }
 }

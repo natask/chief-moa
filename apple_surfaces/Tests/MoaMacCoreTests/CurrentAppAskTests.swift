@@ -310,7 +310,7 @@ private struct MismatchedAskApprover: CurrentAppAskApproving {
 private struct RevokingAskApprover: CurrentAppAskApproving {
     let coordinator: CurrentAppAskCoordinator
     func approve(_ preview: CurrentAppAskPreview) async throws -> String {
-        await coordinator.revoke()
+        try await coordinator.revoke()
         return preview.bodySHA256
     }
 }

@@ -127,7 +127,13 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
 }
 
 public enum SystemCurrentAppAskContext {
-    public static let shared = CurrentAppAskCoordinator()
+    public static let shared: CurrentAppAskCoordinator = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
+            FileManager.default.temporaryDirectory
+        let url = base.appendingPathComponent("app.agee.moa.mac", isDirectory: true)
+            .appendingPathComponent("screen-aware-ask-receipts.jsonl")
+        return CurrentAppAskCoordinator(journal: FsyncCurrentAppAskReceiptJournal(url: url))
+    }()
 }
 
 struct CurrentAppAskWorkspaceScope: CurrentAppAskScopeValidating, @unchecked Sendable {
@@ -229,7 +235,7 @@ struct CurrentAppAskWorkspaceScope: CurrentAppAskScopeValidating, @unchecked Sen
     public func deleteToken() { KeychainToken.delete(); token = ""; status = "Token deleted from Keychain" }
     public func start() async {
         generation &+= 1; let requestedGeneration = generation; task?.cancel(); observer?.stop(); observer = nil
-        await currentAppAsk.revoke()
+        try? await currentAppAsk.revoke()
         guard AXIsProcessTrusted(), let identity, let live = NSRunningApplication(processIdentifier: identity.pid), inspectIdentity(live) == identity else { status = "Select a live app and enable Accessibility first"; return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == identity.pid else { status = "Selected app must be frontmost when starting"; return }
         let destination: URL? = mode == .localOnly ? nil : URL(string: origin)
@@ -248,9 +254,27 @@ struct CurrentAppAskWorkspaceScope: CurrentAppAskScopeValidating, @unchecked Sen
             paused = false; status = "Active for 15 minutes — \(appName), \(mode.rawValue)"; refresh()
         } catch { status = "Cannot start: invalid gateway origin or grant" }
     }
-    public func pause() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await currentAppAsk.revoke(); await grants.stop(); paused = true; status = "Paused and revoked — press Start again for a new grant" }
+    public func pause() async {
+        generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil
+        await coordinator.cancel()
+        let receiptFailed: Bool
+        do { try await currentAppAsk.revoke(); receiptFailed = false }
+        catch { receiptFailed = true }
+        await grants.stop(); paused = true
+        status = receiptFailed
+            ? "Paused and revoked — Ask receipt could not be saved"
+            : "Paused and revoked — press Start again for a new grant"
+    }
     public func resume() { status = "Pause revoked the grant — press Start again" }
-    public func stop() async { generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil; await coordinator.cancel(); await currentAppAsk.revoke(); await grants.stop(); paused = true; suggestion = ""; status = "Stopped — context purged" }
+    public func stop() async {
+        generation &+= 1; observer?.stop(); observer = nil; task?.cancel(); task = nil
+        await coordinator.cancel()
+        let receiptFailed: Bool
+        do { try await currentAppAsk.revoke(); receiptFailed = false }
+        catch { receiptFailed = true }
+        await grants.stop(); paused = true; suggestion = ""
+        status = receiptFailed ? "Stopped — context purged; Ask receipt save failed" : "Stopped — context purged"
+    }
     private func refresh() {
         guard !paused, let identity, let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier == identity.pid, inspectIdentity(front) == identity else { Task { await stop() }; return }
         task?.cancel(); task = Task { [weak self] in
@@ -267,7 +291,7 @@ struct CurrentAppAskWorkspaceScope: CurrentAppAskScopeValidating, @unchecked Sen
                 do {
                     try await currentAppAsk.publishVerified(grant: grant, observation: observation, focusedWindowID: captured.2)
                 } catch {
-                    await currentAppAsk.revoke()
+                    try? await currentAppAsk.revoke()
                 }
             }
             do {

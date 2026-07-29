@@ -260,6 +260,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending, ScreenAwareChatSe
             status = "Start a network-enabled one-app Screen Context grant first"
         } catch CurrentAppAskError.staleEvidence {
             status = "Current-app evidence expired — no request sent"
+        } catch CurrentAppAskError.expired {
+            status = "Current-app grant expired — no request sent"
         } catch CurrentAppAskError.destinationChanged {
             status = "Gateway destination changed — no request sent"
         } catch CurrentAppAskError.scopeChanged {
@@ -268,6 +270,10 @@ public struct URLSessionGatewayChatSender: GatewayChatSending, ScreenAwareChatSe
             status = "Screen-aware Ask canceled — evidence stripped"
         } catch CurrentAppAskError.approvalMismatch {
             status = "Approval no longer matches the exact request"
+        } catch CurrentAppAskError.journalFailure {
+            status = "Could not save the Ask receipt — no evidence released"
+        } catch CurrentAppAskError.terminalJournalFailure {
+            status = "Ask stopped, but its terminal receipt could not be saved"
         } catch GatewayChatTransportError.unauthorized {
             status = "Gateway rejected the token"
         } catch GatewayChatError.emptyPrompt {
