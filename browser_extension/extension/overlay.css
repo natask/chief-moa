@@ -1000,18 +1000,17 @@ button.agee-ui-list-row:hover {
   border: 0 !important;
 }
 
-/* ---- Result stack: cue cards ---------------------------------------------- */
-/* The log sits above the composer and holds transient answer cards. Terminal
-   cards linger briefly or can be dismissed immediately; canonical history is
-   opened separately. The log is height-capped so it never swallows the page. */
-#agee-log {
+/* ---- Exceptional controls ------------------------------------------------ */
+/* Conversation text never enters this container. It appears only when a turn
+   needs a button the ribbons cannot hold, such as approval, copy, or recovery. */
+#agee-controls {
   display: none;
   max-height: 38vh;
   overflow-y: auto;
   padding: 6px 0;
 }
-#agee-root.agee-has-log #agee-log,
-#agee-root.agee-confirming #agee-log:not(:empty) {
+#agee-root.agee-has-log #agee-controls,
+#agee-root.agee-confirming #agee-controls:not(:empty) {
   display: block;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -1025,200 +1024,24 @@ button.agee-ui-list-row:hover {
 .agee-row:empty {
   display: none;
 }
-.agee-you {
-  color: #9bbcff;
-}
-.agee-agee {
-  color: #cfcfd4;
-}
-.agee-done {
-  color: var(--agee-green);
-}
-.agee-error {
-  color: #ff6b61;
-}
-/* Cue cards: one per utterance. A layered glass card with a header row carrying
-   a glowing status dot and the assistant label. State lives in the dot and text
-   colour, not a heavy left border. */
-.agee-cue {
+/* A control shell carries no transcript or response text. */
+.agee-control-card {
   position: relative;
   margin: 8px 12px;
-  padding: 11px 30px 12px 13px;
+  padding: 8px 30px 8px 10px;
   border: 1px solid var(--agee-card-line);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    var(--agee-surface-1);
-  border-radius: var(--agee-radius-lg);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
-  animation: agee-cue-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  background: rgba(255, 255, 255, 0.035);
+  border-radius: 10px;
   transition: transform 0.18s ease, opacity 0.18s ease;
   touch-action: pan-y;
 }
-.agee-cue.agee-cue-dragging {
+.agee-control-card.agee-control-dragging {
   transition: none;
 }
-.agee-cue + .agee-cue {
+.agee-control-card + .agee-control-card {
   margin-top: 6px;
 }
-@keyframes agee-cue-in {
-  from { opacity: 0; transform: translateY(6px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.agee-cue .agee-you {
-  width: fit-content;
-  max-width: 88%;
-  margin: 0 0 9px auto;
-  padding: 7px 10px;
-  border: 1px solid rgba(74, 155, 255, 0.18);
-  border-radius: 12px 12px 4px 12px;
-  background: rgba(74, 155, 255, 0.12);
-  font-weight: 600;
-  color: #e8f1ff;
-  line-height: 1.5;
-  text-align: left;
-}
-.agee-cue .agee-you:empty {
-  display: none;
-}
-.agee-cue-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.agee-cue-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border-radius: 50%;
-  background: var(--agee-amber);
-  box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.12);
-  animation: agee-cue-pulse 1.25s ease-in-out infinite;
-}
-.agee-cue-name {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--agee-muted);
-}
-.agee-cue-name::after {
-  content: "";
-  font-weight: 400;
-  color: var(--agee-muted);
-}
-.agee-cue-status {
-  width: fit-content;
-  font-size: 14px;
-  line-height: 1.5;
-  color: #dcdce2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-width: min(88%, 34rem);
-  padding: 7px 10px;
-  border: 1px solid var(--agee-card-line);
-  border-radius: 12px 12px 12px 4px;
-  background: rgba(255, 255, 255, 0.055);
-}
-.agee-cue-status:empty {
-  display: none;
-}
-@keyframes agee-cue-pulse {
-  0%, 100% { opacity: 0.45; transform: scale(0.82); }
-  50% { opacity: 1; transform: scale(1); }
-}
-.agee-cue-done .agee-cue-dot {
-  background: var(--agee-green);
-  box-shadow: 0 0 0 3px rgba(53, 199, 89, 0.12);
-  animation: none;
-}
-.agee-cue-error .agee-cue-dot {
-  background: var(--agee-red);
-  box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.12);
-  animation: none;
-}
-/* Thinking (before any streamed text): a two-line shimmer skeleton in place of
-   the answer. As soon as real text arrives the card is marked streaming, the
-   skeleton is dropped and the text fades in. */
-.agee-cue-skeleton {
-  display: none;
-  flex-direction: column;
-  gap: 8px;
-  padding: 3px 0 2px;
-}
-.agee-cue-running:not(.agee-cue-streaming) .agee-cue-skeleton {
-  display: flex;
-}
-.agee-cue-running:not(.agee-cue-streaming) .agee-cue-status {
-  display: none;
-}
-.agee-skeleton-line {
-  height: 9px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.06);
-  position: relative;
-  overflow: hidden;
-}
-.agee-skeleton-line:nth-child(2) {
-  width: 72%;
-}
-.agee-skeleton-line::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
-  animation: agee-shimmer 1.5s ease-in-out infinite;
-}
-@keyframes agee-shimmer {
-  to { transform: translateX(100%); }
-}
-.agee-cue-streaming .agee-cue-status,
-.agee-cue-done .agee-cue-status,
-.agee-cue-error .agee-cue-status {
-  animation: agee-fade-in 0.22s ease-out;
-}
-.agee-cue-running.agee-cue-streaming .agee-cue-status::after {
-  content: " ···";
-  display: inline-block;
-  width: 1.7em;
-  color: var(--agee-muted);
-  overflow: hidden;
-  vertical-align: bottom;
-  animation: agee-stream-wait 0.9s steps(3, end) infinite;
-}
-@keyframes agee-stream-wait {
-  from { width: 0; }
-  to { width: 1.7em; }
-}
-@keyframes agee-fade-in {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.agee-cue-running .agee-cue-name::after {
-  content: " · thinking";
-}
-.agee-cue-done.agee-cue-steered .agee-cue-name::after {
-  content: " · steered";
-}
-.agee-cue-done .agee-cue-name {
-  color: #b7c7bd;
-}
-.agee-cue-done .agee-cue-name::after {
-  content: " · done";
-  color: var(--agee-green);
-}
-.agee-cue-done .agee-cue-status {
-  color: #e7e7ea;
-}
-.agee-cue-error .agee-cue-name::after {
-  content: " · error";
-  color: var(--agee-red);
-}
-.agee-cue-error .agee-cue-status {
-  color: #ff8278;
-}
-.agee-cue-recovery {
+.agee-control-recovery {
   display: block;
   margin-top: 10px;
   padding: 8px 11px;
@@ -1230,7 +1053,7 @@ button.agee-ui-list-row:hover {
   font-weight: 600;
   cursor: pointer;
 }
-.agee-cue-recovery:disabled {
+.agee-control-recovery:disabled {
   cursor: wait;
   opacity: 0.65;
 }
@@ -1263,7 +1086,7 @@ button.agee-ui-list-row:hover {
    entirely while the card is running (in-flight cards are not dismissable),
    and revealed on hover for a mouse; a touch/narrow viewport shows it always
    so there is no hover-only dead end. */
-.agee-cue-dismiss {
+.agee-control-dismiss {
   appearance: none;
   position: absolute;
   top: 6px;
@@ -1281,29 +1104,29 @@ button.agee-ui-list-row:hover {
   opacity: 0;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
-.agee-cue-running .agee-cue-dismiss {
+.agee-control-running .agee-control-dismiss {
   display: none;
 }
-.agee-cue:hover .agee-cue-dismiss,
-.agee-cue-dismiss:focus-visible {
+.agee-control-card:hover .agee-control-dismiss,
+.agee-control-dismiss:focus-visible {
   opacity: 1;
 }
-.agee-cue-dismiss:hover {
+.agee-control-dismiss:hover {
   background: rgba(255, 255, 255, 0.1);
   color: #ededf0;
 }
-.agee-cue-dismiss:disabled {
+.agee-control-dismiss:disabled {
   cursor: default;
 }
 /* A finished card now persists until the user dismisses it (see the ✕
    control and the swipe gesture in content.js) — it is no longer wiped by a
    timer or by the next turn starting. When it is dismissed, it fades up and
    out, then the node is removed. */
-.agee-cue-leaving {
-  animation: agee-cue-out 0.3s ease forwards;
+.agee-control-leaving {
+  animation: agee-control-out 0.3s ease forwards;
   pointer-events: none;
 }
-@keyframes agee-cue-out {
+@keyframes agee-control-out {
   from { opacity: 1; transform: translateY(0); }
   to { opacity: 0; transform: translateY(-6px); }
 }
@@ -1452,19 +1275,11 @@ button.agee-ui-list-row:hover {
   #agee-launcher.agee-gliding {
     transition: none;
   }
-  .agee-skeleton-line::after {
-    animation: none;
-  }
-  .agee-cue {
+  .agee-control-card {
     animation: none;
     transition: none;
   }
-  .agee-cue-streaming .agee-cue-status,
-  .agee-cue-done .agee-cue-status,
-  .agee-cue-error .agee-cue-status {
-    animation: none;
-  }
-  .agee-cue-leaving {
+  .agee-control-leaving {
     animation-duration: 0.01s;
   }
 }
@@ -1488,12 +1303,8 @@ button.agee-ui-list-row:hover {
   }
   /* No hover on touch/narrow viewports — keep the dismiss control visible
      rather than leaving it behind a hover that can never fire. */
-  .agee-cue-dismiss {
+  .agee-control-dismiss {
     opacity: 1;
-  }
-  .agee-cue .agee-you,
-  .agee-cue-status {
-    max-width: 92%;
   }
 }
 @media (max-width: 380px) {

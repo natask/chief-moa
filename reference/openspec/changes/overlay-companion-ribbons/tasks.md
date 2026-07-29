@@ -67,9 +67,12 @@
       window, bounded expansion, copy variants, companion-relative placement,
       and separate History handoff. The broader legacy cue-card removal named
       below remains open.
-- [ ] Remove the remaining legacy `.agee-cue`, `#agee-log`,
-      `#agee-voice-state`, and `#agee-page-context` surfaces after proving no
-      voice, status, or context regression.
+- [x] Remove the remaining legacy `.agee-cue`, `#agee-log`,
+      `#agee-voice-state`, and `#agee-page-context` surfaces. User and assistant
+      text now render only in the aligned ribbons; approval, dictation-copy,
+      microphone-recovery, and tweak-review affordances use control-only shells
+      with no duplicate message text. Verified with extension unit tests and a
+      real-extension Chrome smoke with fresh collapsed/expanded/copy captures.
 - [ ] Decide whether the Voice/Text delivery toggle needs a home in the full app
       now that the overlay no longer carries it.
 - [ ] Produce the corrected and polished transcript variants. Nothing emits them

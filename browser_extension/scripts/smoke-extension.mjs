@@ -288,8 +288,8 @@ function assertVoicePlaybackStopContract() {
   if (!/if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
     throw new Error("mascot taps must still route through the voice-first gesture machine");
   }
-  if (!/\.agee-cue-dot\s*\{[\s\S]{0,260}animation:\s*agee-cue-pulse/.test(overlayCss)) {
-    throw new Error("in-page cue cards must expose animated progress state");
+  if (/\.agee-cue|#agee-log/.test(overlayCss)) {
+    throw new Error("legacy in-page conversation cards must be absent");
   }
   if (!/\.turn \.ag\.pending::after\s*\{[\s\S]{0,260}animation:\s*pending-pulse/.test(sidepanelHtml)) {
     throw new Error("side panel pending turns must expose animated progress state");
@@ -463,7 +463,7 @@ async function main() {
             const panel = document.querySelector("#agee-panel");
             const voice = document.querySelector("#agee-voice");
             const stop = document.querySelector("#agee-stop");
-            const log = document.querySelector("#agee-log");
+            const log = document.querySelector("#agee-controls");
             // The overlay is the companion and its two ribbons. The panel is a
             // composer: no page-identity strip, no history button, no voice strip.
             const legacyChrome = [
@@ -475,6 +475,8 @@ async function main() {
               "#agee-transcript",
               // The second text surface is gone: one buffer, in the you-line.
               "#agee-input",
+              "#agee-log",
+              ".agee-cue",
             ].filter((selector) => document.querySelector(selector));
             const ribbonYou = document.querySelector("#agee-ribbon-you");
             const ribbonReply = document.querySelector("#agee-ribbon-reply");
@@ -1303,7 +1305,7 @@ async function main() {
             return {
               count: buttons.length,
               label: buttons[0]?.textContent || "",
-              receipt: buttons[0]?.closest(".agee-cue")?.querySelector(".agee-cue-status")?.textContent || "",
+              receipt: window.__ageeLastTurn?.text || "",
               draft: document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent || "",
               copies: [...(window.__ageeDictationCopySmoke?.copies || [])],
               runCalls: (window.__ageeDictationCopySmoke?.calls || []).filter((call) =>
@@ -1321,10 +1323,10 @@ async function main() {
           target: { tabId },
           func: () => {
             const button = document.querySelector(".agee-dictation-copy");
-            const card = button?.closest(".agee-cue-dictation");
+            const card = button?.closest(".agee-control-dictation");
             return {
               label: button?.textContent || "",
-              receipt: card?.querySelector(".agee-cue-status")?.textContent || "",
+              receipt: window.__ageeLastTurn?.text || "",
               copies: [...(window.__ageeDictationCopySmoke?.copies || [])],
               retireTimerHeld: !card?.dataset.retireAfterMs,
             };
@@ -1504,7 +1506,7 @@ async function main() {
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
-            document.querySelector("#agee-log")?.replaceChildren();
+            document.querySelector("#agee-controls")?.replaceChildren();
             const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
             if (buffer) {
               buffer.textContent = "draft must stay";
@@ -1518,7 +1520,7 @@ async function main() {
           target: { tabId },
           func: () => {
             const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
-            const log = document.querySelector("#agee-log");
+            const log = document.querySelector("#agee-controls");
             const ribbon = document.querySelector("#agee-ribbon-reply");
             return {
               inputValue: buffer ? buffer.textContent : null,
@@ -1604,7 +1606,7 @@ async function main() {
           const [snap] = await chrome.scripting.executeScript({
             target: { tabId },
             func: () => {
-              const log = document.querySelector("#agee-log");
+              const log = document.querySelector("#agee-controls");
               return {
                 halt: window.__ageeLastStopHalt || null,
                 runCount: window.__ageeSmokeRunCount || 0,
@@ -1630,7 +1632,7 @@ async function main() {
         const [final] = await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
-            const log = document.querySelector("#agee-log");
+            const log = document.querySelector("#agee-controls");
             return { logText: log ? log.textContent : "" };
           },
         });
@@ -1873,7 +1875,10 @@ async function main() {
     server.close();
     chrome.kill("SIGTERM");
     await delay(300);
-    rmSync(runDir, { recursive: true, force: true });
+    // Chrome may finish one last cache rename after SIGTERM. Let Node retry
+    // transient ENOTEMPTY/EBUSY cleanup races so a fully passed smoke does not
+    // report a product failure while removing its throwaway profile.
+    rmSync(runDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 });
   }
 }
 

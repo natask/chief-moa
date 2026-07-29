@@ -189,15 +189,16 @@ binding match.
 ## 5. Persistent Browser Workspace
 
 - [x] 5.0 Restore cross-surface turn visibility: render the submitted browser
-      text/transcript immediately, keep an in-flight response card visible
-      while the gateway is silent, and show an animated progress indicator in
+      text/transcript immediately, keep the reply ribbon visible while the
+      gateway is silent, and show an animated progress indicator in
       both the in-page overlay and side panel. Android's existing
       Listening/Sending/Thinking/Speaking header contract remains the parity
       reference.
 
 Acceptance: a turn is visibly present before the first transcript or assistant
-event, remains visibly in progress until terminal state, and preserves the
-submitted text separately from the assistant response.
+event, remains visibly in progress until terminal state, preserves the
+submitted text separately from the assistant response, and creates no duplicate
+conversation card or text field.
 
 - [ ] 5.1 Turn the existing side panel into a workspace projection with active
       agent, response blocks, evidence freshness, delegated run state, stop,

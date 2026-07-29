@@ -11,6 +11,11 @@ Reproduce the final evidence from `browser_extension/`:
 AGEE_VISUAL_EVIDENCE_DIR="$PWD/../reference/openspec/changes/overlay-companion-ribbons/evidence/browser/final" npm run smoke
 ```
 
+`single-buffer-final/` is the post-cleanup capture from 2026-07-29. It proves
+the same three ribbon states after removal of `#agee-log`, `.agee-cue`, and the
+last automatic panel opening on ordinary typed turns. The real-extension smoke
+also asserts that exceptional control shells contain no user or assistant text.
+
 ## Evidence matrix
 
 | Affordance | Evidence |

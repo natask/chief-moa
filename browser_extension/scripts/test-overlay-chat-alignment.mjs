@@ -35,22 +35,16 @@ test("an opened box shows at most five lines", () => {
   );
 });
 
-// Cards survive only for turns that grew a control (approval, dictation copy,
-// microphone recovery). They keep the same sides as the ribbons.
-test("surviving cards align the user opposite the assistant", () => {
-  assert.match(ruleFor(".agee-cue .agee-you"), /margin:\s*0 0 9px auto/);
-  assert.match(ruleFor(".agee-cue-status"), /width:\s*fit-content/);
-});
-
 test("empty transient shells stay hidden", () => {
   assert.match(ruleFor("#agee-root.agee-has-ui-spec #agee-ui-surface:empty"), /display:\s*none/);
   assert.match(ruleFor(".agee-row:empty"), /display:\s*none/);
-  assert.match(ruleFor(".agee-cue .agee-you:empty"), /display:\s*none/);
-  assert.match(ruleFor(".agee-cue-status:empty"), /display:\s*none/);
 });
 
-test("narrow screens retain readable bubble widths", () => {
-  assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.agee-cue-status\s*\{\s*max-width:\s*92%/);
+test("exceptional control shells contain no conversation presentation", () => {
+  assert.match(ruleFor(".agee-control-card"), /background:\s*rgba\(255, 255, 255, 0\.035\)/);
+  for (const gone of ["#agee-log", ".agee-cue", ".agee-cue-status", ".agee-you"]) {
+    assert.equal(css.includes(gone), false, `${gone} should not remain in overlay.css`);
+  }
 });
 
 // The overlay is the companion and its ribbons. The panel is a composer, not a
@@ -64,6 +58,7 @@ test("the panel carries no legacy chrome", () => {
     ".agee-lang-chip",
     "#agee-voice-state",
     "#agee-transcript",
+    "#agee-input",
   ]) {
     assert.equal(css.includes(gone), false, `${gone} should be gone from overlay.css`);
   }

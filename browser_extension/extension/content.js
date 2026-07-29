@@ -336,9 +336,9 @@
       ${AgeeQuietCompanionControls.template()}
       <div id="agee-remove-target" role="status" aria-live="polite" aria-hidden="true">Remove Ag</div>
       ${AgeeRibbons.template()}
-      <div id="agee-panel" role="dialog" aria-label="Ag command">
+      <div id="agee-panel" role="dialog" aria-label="Ag controls">
         <div id="agee-ui-surface" aria-live="polite"></div>
-        <div id="agee-log" aria-hidden="true"></div>
+        <div id="agee-controls" aria-live="polite"></div>
         <div id="agee-bar">
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
@@ -353,7 +353,7 @@
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
-    log = root.querySelector("#agee-log");
+    log = root.querySelector("#agee-controls");
     tipEl = root.querySelector("#agee-tip");
     setupRibbons();
     quietControls = AgeeQuietCompanionControls.create({ root, launcher,
@@ -1794,9 +1794,9 @@
     root.classList.toggle("agee-avatar-runtime-active", active);
   }
 
-  // ---- Cue cards --------------------------------------------------------
-  // Each cue gets a card: the user's line plus a live status line that moves
-  // from "thinking…" through progress to a final answer/error.
+  // ---- Turn state and exceptional controls -----------------------------
+  // Conversation text belongs only to the two ribbons. The container below is
+  // reserved for controls a line cannot hold (approval, copy, recovery, undo).
   function newCueId() {
     cueSeq += 1;
     return `c_${cueSeq}_${Date.now().toString(36)}`;
@@ -1806,10 +1806,10 @@
   const TERMINAL_CUE_LINGER_MS = 12000;
   function retireResolvedCueCards() {
     if (!log) return;
-    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
+    const cards = [...log.querySelectorAll(".agee-control-card")].map((card) => ({
       id: card.dataset.cue,
       active: activeCues.has(card.dataset.cue),
-      protected: card.classList.contains("agee-cue-steered"),
+      protected: card.classList.contains("agee-control-steered"),
     }));
     for (const cueId of AgeeSteeringUi.selectResolvedCueIds(cards)) dismissCue(cueId);
   }
@@ -1823,7 +1823,7 @@
   }
   function pruneCueCards() {
     if (!log) return;
-    const cards = [...log.querySelectorAll(".agee-cue")];
+    const cards = [...log.querySelectorAll(".agee-control-card")];
     let removable = cards.length - MAX_CUE_CARDS;
     for (const card of cards) {
       if (removable <= 0) break;
@@ -1836,7 +1836,7 @@
 
   // Pure selection helper for the dismiss-and-cascade gesture (✕ button or
   // horizontal swipe): given the ordered list of cue cards (oldest first, the
-  // same order they stack in #agee-log) and the id whose control fired, return
+  // same order they stack in #agee-controls) and the id whose control fired, return
   // the ids to remove — that card and every older card above it. In-flight
   // (active) cards are never included, so a cascade that reaches back into a
   // still-running turn simply skips it instead of tearing down live state.
@@ -1866,7 +1866,7 @@
     const card = entry.cardEl;
     cues.delete(cueId);
     if (!card) return;
-    card.classList.add("agee-cue-leaving");
+    card.classList.add("agee-control-leaving");
     const finalize = () => {
       card.remove();
       syncLogVisibility();
@@ -1879,7 +1879,7 @@
   // Shared by the ✕ button and the swipe gesture below.
   function cascadeDismissFromCard(clickedId) {
     if (!log || !clickedId) return;
-    const cards = [...log.querySelectorAll(".agee-cue")].map((card) => ({
+    const cards = [...log.querySelectorAll(".agee-control-card")].map((card) => ({
       id: card.dataset.cue,
       active: activeCues.has(card.dataset.cue),
     }));
@@ -1898,9 +1898,9 @@
   function setupCueLogInteractions() {
     if (!log) return;
     log.addEventListener("click", (event) => {
-      const btn = event.target.closest(".agee-cue-dismiss");
+      const btn = event.target.closest(".agee-control-dismiss");
       if (!btn || btn.disabled) return;
-      const card = btn.closest(".agee-cue");
+      const card = btn.closest(".agee-control-card");
       if (card) cascadeDismissFromCard(card.dataset.cue);
     });
     log.addEventListener("pointerdown", handleCueSwipeStart);
@@ -1908,8 +1908,8 @@
 
   function handleCueSwipeStart(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    if (event.target.closest(".agee-cue-dismiss, .agee-tweak-review")) return;
-    const card = event.target.closest(".agee-cue");
+    if (event.target.closest(".agee-control-dismiss, .agee-tweak-review")) return;
+    const card = event.target.closest(".agee-control-card");
     if (!card) return;
     const cueId = card.dataset.cue;
     if (!cueId || activeCues.has(cueId)) return; // in-flight: no swipe-dismiss
@@ -1929,7 +1929,7 @@
       // gesture over normal text selection.
       if (Math.abs(dx) < CUE_SWIPE_ACTIVATE_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
       state.dragging = true;
-      state.card.classList.add("agee-cue-dragging");
+      state.card.classList.add("agee-control-dragging");
       try { state.card.setPointerCapture(state.pointerId); } catch { /* not capturable */ }
     }
     event.preventDefault();
@@ -1946,7 +1946,7 @@
     cueSwipeState = null;
     if (!state.dragging) return;
     const dx = event.clientX - state.startX;
-    state.card.classList.remove("agee-cue-dragging");
+    state.card.classList.remove("agee-control-dragging");
     state.card.style.transform = "";
     state.card.style.opacity = "";
     if (Math.abs(dx) >= CUE_SWIPE_DISMISS_PX) cascadeDismissFromCard(state.cueId);
@@ -1958,10 +1958,16 @@
   // remove control wired to tweak:remove (undo). Deep management stays in options;
   // this is only enough to see and undo what just changed, in overlay style.
   function attachTweakReview(cueId) {
-    const entry = cues.get(cueId);
-    const card = entry?.cardEl || log?.querySelector(`.agee-cue[data-cue="${cueId}"]`);
+    let entry = cues.get(cueId);
+    if (!entry?.cardEl) entry = materializeCue(cueId, "", "");
+    const card = entry?.cardEl || log?.querySelector(`.agee-control-card[data-cue="${cueId}"]`);
     if (!card) return;
     if (card.querySelector(".agee-tweak-review")) return; // already attached
+    activeCues.delete(cueId);
+    card.classList.remove("agee-control-running");
+    card.classList.add("agee-control-done");
+    const dismiss = card.querySelector(".agee-control-dismiss");
+    if (dismiss) dismiss.disabled = false;
 
     const review = document.createElement("div");
     review.className = "agee-tweak-review";
@@ -2073,7 +2079,7 @@
     cues.delete(cueId);
     activeCues.delete(cueId);
     entry?.cardEl?.remove();
-    log?.querySelector(`.agee-cue[data-cue="${cueId}"]`)?.remove();
+    log?.querySelector(`.agee-control-card[data-cue="${cueId}"]`)?.remove();
     syncLogVisibility();
   }
 
@@ -2100,57 +2106,28 @@
   function materializeCue(cueId, label, statusText = "thinking...") {
     if (!log) return null;
     let entry = cues.get(cueId);
-    if (entry?.cardEl && entry?.statusEl) return entry;
+    if (entry?.cardEl) return entry;
     retireResolvedCueCards();
     currentCueId = cueId;
     const card = document.createElement("div");
-    card.className = "agee-cue agee-cue-running";
+    card.className = "agee-control-card agee-control-running";
     card.dataset.cue = cueId;
-    const you = document.createElement("div");
-    you.className = "agee-row agee-you";
-    you.textContent = String(label || entry?.label || "Ag");
-    // Assistant header: a glowing status dot plus the label, so state reads from
-    // the header rather than a heavy left border.
-    const head = document.createElement("div");
-    head.className = "agee-cue-head";
-    const headDot = document.createElement("span");
-    headDot.className = "agee-cue-dot";
-    const headName = document.createElement("span");
-    headName.className = "agee-cue-name";
-    headName.textContent = "Ag";
-    head.appendChild(headDot);
-    head.appendChild(headName);
-    // Skeleton shimmer shown while waiting, replaced by the answer once it
-    // starts streaming (the card gains agee-cue-streaming).
-    const skeleton = document.createElement("div");
-    skeleton.className = "agee-cue-skeleton";
-    skeleton.appendChild(document.createElement("div")).className = "agee-skeleton-line";
-    skeleton.appendChild(document.createElement("div")).className = "agee-skeleton-line";
-    const status = document.createElement("div");
-    status.className = "agee-cue-status";
-    status.textContent = statusText || "";
-    // Dismiss control: removes this card and every older one above it. Hidden
-    // while the turn is running (see CSS) and re-enabled by updateCue() once
-    // the card lands on done/error — an in-flight card is never dismissable.
+    // This shell deliberately contains no user or assistant text. It may only
+    // receive purpose-built controls appended by the caller.
     const dismissBtn = document.createElement("button");
     dismissBtn.type = "button";
-    dismissBtn.className = "agee-cue-dismiss";
-    dismissBtn.setAttribute("aria-label", "Dismiss this reply and everything above it");
+    dismissBtn.className = "agee-control-dismiss";
+    dismissBtn.setAttribute("aria-label", "Dismiss these controls");
     dismissBtn.textContent = "×";
     dismissBtn.disabled = true;
-    card.appendChild(you);
-    card.appendChild(head);
-    card.appendChild(skeleton);
-    card.appendChild(status);
     card.appendChild(dismissBtn);
     log.appendChild(card);
     entry = {
       ...(entry || {}),
-      statusEl: status,
       cardEl: card,
-      labelEl: you,
-      presentation: "card",
-      label: you.textContent,
+      presentation: "controls",
+      label: String(label || entry?.label || ""),
+      statusText: String(statusText || entry?.statusText || ""),
     };
     cues.set(cueId, entry);
     activeCues.add(cueId);
@@ -2191,7 +2168,7 @@
     let action = entry.cardEl.querySelector(".agee-dictation-copy-action");
     if (action) return action;
 
-    entry.cardEl.classList.add("agee-cue-dictation");
+    entry.cardEl.classList.add("agee-control-dictation");
     action = document.createElement("div");
     action.className = "agee-dictation-copy-action";
     const button = document.createElement("button");
@@ -2228,7 +2205,8 @@
 
   // Update a cue's status. kind: "running" | "done" | "error".
   // The reply ribbon is the default surface for that text. Only a cue that has
-  // already grown a card (approval, dictation copy, recovery) writes into DOM.
+  // already grown controls still writes only to the ribbon, never into a second
+  // conversation box.
   function writeCueStatusToRibbon(text, kind) {
     if (!text) return;
     setReplyRibbon(String(text), {
@@ -2254,13 +2232,7 @@
     }
     if (typeof text === "string" && text) {
       entry.statusText = text;
-      if (entry.statusEl) {
-        entry.statusEl.textContent = text;
-        // Real streamed content arrived: drop the skeleton and fade the text in.
-        if (kind === "running" && entry.cardEl) entry.cardEl.classList.add("agee-cue-streaming");
-      } else {
-        writeCueStatusToRibbon(text, kind);
-      }
+      writeCueStatusToRibbon(text, kind);
     }
     if (kind === "done" || kind === "error") {
       activeCues.delete(cueId);
@@ -2269,9 +2241,9 @@
       // shows it retires on a linger timer and paints on an animation frame.
       window.__ageeLastTurn = { kind, text: entry.statusText || "", cueId: cueId || "", at: Date.now() };
       if (entry.cardEl) {
-        entry.cardEl.classList.remove("agee-cue-running", "agee-cue-done", "agee-cue-error");
-        entry.cardEl.classList.add(`agee-cue-${kind}`);
-        const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
+        entry.cardEl.classList.remove("agee-control-running", "agee-control-done", "agee-control-error");
+        entry.cardEl.classList.add(`agee-control-${kind}`);
+        const dismissBtn = entry.cardEl.querySelector(".agee-control-dismiss");
         if (dismissBtn) dismissBtn.disabled = false;
         scheduleCueRetirement(cueId);
       } else {
@@ -2323,7 +2295,7 @@
       state.pendingAssistantAudioSegments.length = 0;
       const display = AgeeSteeringUi.formatSteeredAssistantText(state.assistantText, state.steeringBoundaryText);
       ensureVoiceCueCard(state, state.transcript || "Voice", display);
-      cues.get(state.cueId)?.cardEl?.classList.add("agee-cue-steered");
+      cues.get(state.cueId)?.cardEl?.classList.add("agee-control-steered");
       updateCue(state.cueId, display, "done");
       if (!state.voiceSessionId) state.pendingSteeringReplacement = replacement;
       sendLiveVoiceControl(state, liveCancelTurnMessage(state, state.framesPlayed || 0, replacement))
@@ -2477,7 +2449,6 @@
     if (isStopCommand(instruction)) {
       window.__ageeLastStopHalt = { source: "typed", at: Date.now() };
       const cueId = newCueId();
-      openTextSurface({ fresh: false });
       createCue(cueId, displayText);
       stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
@@ -2491,7 +2462,6 @@
 
   function dispatchInstruction(instruction, displayText, role) {
     const cueId = newCueId();
-    openTextSurface({ fresh: false });
     createCue(cueId, displayText);
     // A typed turn reads in the same two ribbons as a spoken one, so the unit
     // shows one conversation regardless of how the turn was started.
@@ -2523,7 +2493,6 @@
 
   function describePage() {
     const cueId = newCueId();
-    openTextSurface({ fresh: false });
     createCue(cueId, "Describe this page");
     safeRuntimeSendMessage({ cmd: "describe", cueId }).then(() => {
       if (extensionContextInvalidated) removeCueCard(cueId);
@@ -3478,17 +3447,17 @@
 
   function attachMicrophoneRecovery(cueId, recovery) {
     if (recovery?.target !== "microphone_permission") return;
-    // "Take me to microphone setup" is a control, so this failure earns a card
-    // even though the ribbon already carries the error text.
+    // "Take me to microphone setup" is a control, so this failure earns a
+    // control shell even though the ribbon already carries the error text.
     const existing = cues.get(cueId);
     if (existing?.recoveryButton) return;
-    const entry = existing?.statusEl
+    const entry = existing?.cardEl
       ? existing
       : materializeCue(cueId, existing?.label || "Voice", existing?.statusText || "Voice failed.");
-    if (!entry?.statusEl) return;
+    if (!entry?.cardEl) return;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "agee-cue-recovery";
+    button.className = "agee-control-recovery";
     button.textContent = recovery.action_label || "Take me to microphone setup";
     button.addEventListener("click", () => {
       button.disabled = true;
@@ -3500,7 +3469,7 @@
           button.disabled = false;
         });
     });
-    entry.statusEl.appendChild(button);
+    entry.cardEl.appendChild(button);
     entry.recoveryButton = button;
   }
 
