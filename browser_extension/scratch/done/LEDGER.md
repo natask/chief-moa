@@ -1,3 +1,4 @@
+- Made the two streams wrapping tail-pinned bubbles on the Android geometry, deleted the sliding window and the per-glyph scrim, and added a CI check that every painted token flips with the page theme — agent: claude/opus-5 — lane/overlay-bubbles-20260729
 - Anchored the ribbon words to the companion (they were rendering at the far end of a 340px box), slowed the reveal to a grapheme-paced 26/s so Amharic is readable, and removed the pet name/motion labels — agent: claude/opus-5 — lane/seam-hug-20260729
 - Made the panel's text field the you-line buffer, deleted the second text surface, and lowered content.js's size ceiling with it — agent: claude/opus-5 — lane/sliding-window-20260729
 - Hung the two boxes off the companion's centre line, revealed replies at reading pace, and made a click on the companion put the caret straight into the you-line buffer — agent: claude/opus-5 — lane/sliding-window-20260729
