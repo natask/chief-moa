@@ -61,6 +61,48 @@ if (mode === "crash-after-claim") {
   };
 }
 
+if (mode === "release-ownership-lost") {
+  const originalFsyncSync = fs.fsyncSync;
+  let fsyncCount = 0;
+  fs.fsyncSync = function patchedFsyncSync(handle) {
+    const result = originalFsyncSync.apply(this, arguments);
+    fsyncCount += 1;
+    // The first fsync makes the lock candidate durable; the second makes the
+    // appended event durable. Replace the canonical lock only after that event
+    // is safely on disk, immediately before the store verifies lock ownership.
+    if (fsyncCount === 2) {
+      const dataDir = String(process.env.MOA_EVENT_DATA_DIR || "");
+      const canonical = path.join(dataDir, "product-events.jsonl.append.lock");
+      const displaced = `${canonical}.displaced`;
+      fs.renameSync(canonical, displaced);
+      fs.writeFileSync(canonical, `${JSON.stringify({
+        owner_id: "replacement-owner",
+        pid: process.pid,
+        host: os.hostname(),
+        process_instance_id: "replacement-instance",
+        acquired_at: new Date().toISOString(),
+      })}\n`, { mode: 0o600 });
+    }
+    return result;
+  };
+}
+
+if (mode === "stream-owner-write-fail" || mode === "stream-reaper-owner-write-fail") {
+  const originalWriteFileSync = fs.writeFileSync;
+  let injected = false;
+  fs.writeFileSync = function patchedWriteFileSync(filePath) {
+    const target = String(filePath || "");
+    const shouldFail = mode === "stream-owner-write-fail"
+      ? target.endsWith("stream.lock/owner.json")
+      : target.endsWith("stream.lock.reaper/owner.json");
+    if (!injected && shouldFail) {
+      injected = true;
+      throw injectedError("stream lock owner write");
+    }
+    return originalWriteFileSync.apply(this, arguments);
+  };
+}
+
 const originalRandomUUID = crypto.randomUUID;
 if (mode === "exact-live-instance-lock") {
   let first = true;
@@ -72,12 +114,33 @@ if (mode === "exact-live-instance-lock") {
     return originalRandomUUID.apply(this, arguments);
   };
 }
-const { createEventSubstrateStore } = require("../../lib/event-substrate");
+const {
+  acquireJsonStreamDirLock,
+  createEventSubstrateStore,
+  releaseJsonStreamDirLock,
+} = require("../../lib/event-substrate");
 crypto.randomUUID = originalRandomUUID;
 
 async function main() {
   const dataDir = String(process.env.MOA_EVENT_DATA_DIR || "");
   const input = JSON.parse(String(process.env.MOA_EVENT_INPUT || "{}"));
+  const streamLockOptions = {
+    timeoutMs: Number(process.env.MOA_EVENT_LOCK_TIMEOUT_MS || 2_000),
+    retryMs: Number(process.env.MOA_EVENT_LOCK_RETRY_MS || 5),
+    staleMs: Number(process.env.MOA_EVENT_LOCK_STALE_MS || 100),
+  };
+  if (mode === "stream-owner-write-fail") {
+    fs.mkdirSync(dataDir, { recursive: true });
+    await acquireJsonStreamDirLock(path.join(dataDir, "stream.lock"), streamLockOptions);
+    throw new Error("expected stream owner write to fail");
+  }
+  if (mode === "stream-reaper-owner-write-fail") {
+    fs.mkdirSync(dataDir, { recursive: true });
+    const streamLockPath = path.join(dataDir, "stream.lock");
+    const owner = await acquireJsonStreamDirLock(streamLockPath, streamLockOptions);
+    await releaseJsonStreamDirLock(streamLockPath, owner, streamLockOptions);
+    throw new Error("expected stream reaper owner write to fail");
+  }
   if (mode === "exact-live-instance-lock") {
     fs.mkdirSync(dataDir, { recursive: true });
     const exactLockPath = path.join(dataDir, "product-events.jsonl.append.lock");

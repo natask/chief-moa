@@ -140,6 +140,90 @@ test("candidate cleanup and post-fsync rename faults do not strand the canonical
   }
 });
 
+test("post-fsync lock replacement reports ownership loss without losing the durable event", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-ownership-loss-"));
+  try {
+    const result = await runChild(dataDir, input("ownership-lost", 0), "release-ownership-lost");
+    assert.equal(result.code, 2, result.stderr || result.stdout);
+    assert.equal(result.json?.error?.code, "EVENT_SUBSTRATE_LOCK_OWNERSHIP_LOST");
+
+    const store = createEventSubstrateStore({ dataDir, originId: "child-process-test" });
+    const durable = await store.listEvents({ stream_id: "intent:child-process-cas", order: "asc", limit: 10 });
+    assert.equal(durable.length, 1);
+    assert.equal(durable[0].idempotency_key, "ownership-lost");
+    assert.equal(durable[0].stream_version, 1);
+
+    fs.rmSync(lockPath(dataDir), { force: true });
+    const retry = await runChild(dataDir, input("ownership-lost", 0));
+    assert.equal(retry.code, 0, retry.stderr || retry.stdout);
+    assert.deepEqual(retry.json.result, durable[0]);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("stream lock owner write failures remove partial lock directories", async () => {
+  for (const mode of ["stream-owner-write-fail", "stream-reaper-owner-write-fail"]) {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `moa-event-${mode}-`));
+    try {
+      const result = await runChild(dataDir, {}, mode);
+      assert.equal(result.code, 2, result.stderr || result.stdout);
+      assert.equal(result.json?.error?.code, "EACCES");
+      assert.match(result.json?.error?.message || "", /stream lock owner write/);
+      const suffix = mode === "stream-owner-write-fail" ? "stream.lock" : "stream.lock.reaper";
+      assert.equal(fs.existsSync(path.join(dataDir, suffix)), false);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a forged stale-lock reaper claim fails closed before append", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-forged-reaper-claim-"));
+  try {
+    const canonical = lockPath(dataDir);
+    const owner = {
+      owner_id: "stale-owner",
+      pid: 99_999_999,
+      host: os.hostname(),
+      process_instance_id: "dead-instance",
+      acquired_at: new Date(0).toISOString(),
+    };
+    fs.writeFileSync(canonical, `${JSON.stringify(owner)}\n`, { mode: 0o600 });
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(canonical, old, old);
+    const identity = fs.statSync(canonical);
+    const claimPath = `${canonical}.claim-${owner.owner_id}-${identity.dev}-${identity.ino}`;
+    fs.writeFileSync(claimPath, `${JSON.stringify({
+      owner_id: "forged-claim",
+      pid: process.pid,
+      host: os.hostname(),
+      process_instance_id: "forged-instance",
+      acquired_at: new Date().toISOString(),
+      observed_owner_id: owner.owner_id,
+      observed_dev: identity.dev,
+      observed_ino: identity.ino + 1,
+    })}\n`, { mode: 0o600 });
+
+    const store = createEventSubstrateStore({
+      dataDir,
+      originId: "child-process-test",
+      jsonLockTimeoutMs: 200,
+      jsonLockRetryMs: 5,
+      jsonLockStaleMs: 100,
+    });
+    await assert.rejects(
+      store.appendEvent(input("forged-claim", 0)),
+      (error) => error.code === "EVENT_SUBSTRATE_UNSAFE_PATH"
+        && /append lock claim authority/.test(error.message),
+    );
+    assert.equal(fs.existsSync(path.join(dataDir, EVENTS_FILENAME)), false);
+    assert.equal(fs.existsSync(canonical), true);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("owner crashes before append and after fsync recover without losing idempotency", async () => {
   const beforeDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-owner-crash-"));
   const afterDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-release-crash-"));
