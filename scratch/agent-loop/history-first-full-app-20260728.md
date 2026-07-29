@@ -59,3 +59,16 @@ Add the secondary Activity/Switchboard using Working, Needs you, Held, and Done.
 Wire an explicit Hold gesture to a durable voice draft plus transactional child
 intent. A child setting/tool request completes with a scoped receipt, focus pops
 back to the held thought, and newly admitted turns inherit the new profile.
+
+## Release evidence
+
+- Base: `origin/master` at `cfdb881b`; candidate branch adds only the feature
+  and delivery-ledger commits.
+- Verification: strict Android product-map OpenSpec validation, Android unit
+  tests, and `assembleDebug` passed.
+- Published OTA: `ai.moa.assistant-1785288615`, version
+  `0.1.1785288615`, candidate commit `ef761a229047`.
+- VPS publication receipt and rollback snapshot were verified; public gateway
+  health passed at `https://api.agee.app`.
+- Install status: `not_attempted` because no authorized Android device was
+  attached. Publication is complete; physical-phone visual smoke remains open.
