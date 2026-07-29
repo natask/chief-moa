@@ -1130,6 +1130,10 @@ public final class OverlayService extends Service {
                 .putExtra(MainActivity.EXTRA_SHOW_HISTORY, true);
         try {
             startActivity(intent);
+            if (BuildConfig.DEBUG) {
+                getSharedPreferences("moa_qa", MODE_PRIVATE).edit()
+                        .putLong("history_opened_at", System.currentTimeMillis()).apply();
+            }
         } catch (Exception error) {
             Log.w(TAG, "history open failed: " + cleanError(error));
         }

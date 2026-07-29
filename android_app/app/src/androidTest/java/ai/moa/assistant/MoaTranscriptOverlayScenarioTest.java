@@ -71,8 +71,11 @@ public final class MoaTranscriptOverlayScenarioTest {
         assertEquals(FINAL, clipboardText());
         checkpoint("copy");
 
-        device.click(bounds.right - rail - rail / 2, bounds.top + Math.min(rail / 2, bounds.height() / 2));
-        assertTrue(device.wait(Until.hasObject(By.textContains("Recent shared history")), 5000));
+        long historyBefore = System.currentTimeMillis();
+        device.click(bounds.right - rail - rail / 2,
+                bounds.top + Math.min(rail / 2, bounds.height() / 2));
+        assertTrue("History rail did not invoke the real full-app handoff",
+                waitForQaTimestamp("history_opened_at", historyBefore));
         checkpoint("history");
     }
 
@@ -113,6 +116,16 @@ public final class MoaTranscriptOverlayScenarioTest {
             Thread.sleep(100);
         }
         throw new AssertionError("real overlay bounds were not observed; expanded=" + expanded);
+    }
+
+    private boolean waitForQaTimestamp(String key, long minimum) throws Exception {
+        SharedPreferences prefs = instrumentation.getTargetContext()
+                .getSharedPreferences("moa_qa", Context.MODE_PRIVATE);
+        for (int attempt = 0; attempt < 50; attempt++) {
+            if (prefs.getLong(key, 0) >= minimum) return true;
+            Thread.sleep(100);
+        }
+        return false;
     }
 
     private void checkpoint(String name) throws Exception {
