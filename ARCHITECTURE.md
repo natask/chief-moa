@@ -624,6 +624,11 @@ The browser side panel and Android full app hydrate that History view from the
 canonical session-message projection. They request a bounded latest window,
 preserve long message text within the API limit, and expose stale/retry state;
 overlay cue retirement remains independent of durable history.
+The Android full app opens to this History projection as its everyday surface.
+Setup, release controls, gateway configuration, raw run/session/receipt state,
+metrics, sizing, and gesture help live behind an explicit Setup & developer
+section. Opening History does not start, stop, expand, or collapse the overlay.
+Finalized history turns remain selectable and expose an exact Copy action.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript
