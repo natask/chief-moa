@@ -221,6 +221,21 @@ Failed deployments are deleting the user's backup history. This is the most
 dangerous finding in the audit and it is a direct consequence of retention
 being counted in backups rather than in time.
 
+### 2.6 Hosted runners were paid to poll an unreachable endpoint
+
+The master-push workflow started a separate Ubuntu runner after publishing
+`vps-deploy` and polled public `/health` for up to 40 minutes. Failed run
+`30430079790` spent the whole window with `observed=unavailable`, even though
+the endpoint was readable from an ordinary operator client. This was not
+candidate verification or promotion work; it was a sleeping network observer.
+
+Live observation now runs from `scripts/release/push-master.sh` through
+`scripts/vps/wait-for-live-commit.sh`. GitHub still verifies the exact tree and
+publishes only that SHA. The operator process, which can reach the public
+endpoint and consumes no hosted-runner minutes, waits for the exact active
+commit. CI concurrency is scoped by event and ref and cancels stale runs, so a
+new commit does not queue obsolete verification behind it.
+
 ## 3. Retention
 
 The user said to stop keeping deployment versions and rebuild as needed. That

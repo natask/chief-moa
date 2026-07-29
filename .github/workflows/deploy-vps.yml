@@ -30,8 +30,8 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: chief-moa-vps-deploy
-  cancel-in-progress: false
+  group: chief-moa-vps-deploy-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -87,6 +87,7 @@ jobs:
           bash scripts/vps/test-install-promotion-control-plane.sh
           bash scripts/vps/test-install-release-control-database-credentials.sh
           bash scripts/vps/test-update-rollback.sh
+          bash scripts/vps/test-wait-for-live-commit.sh
           cd gateway
           # Same installer and lockfile as dev and the Docker image: what gets
           # verified is what ships.
@@ -127,132 +128,3 @@ jobs:
           git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
           test "$(git rev-parse refs/remotes/origin/master)" = "$GITHUB_SHA"
           git push --atomic origin "${GITHUB_SHA}:refs/heads/vps-deploy"
-
-  observe:
-    name: Verify live gateway commit
-    needs: publish
-    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-    runs-on: ubuntu-latest
-    # The droplet's auto-update timer polls every ~2 minutes, and the actual
-    # promotion it then runs (backup, restore-check, image build, restart) is
-    # what dominates. Recent successful runs already spent 19m26s-19m53s in
-    # this step against the old 20-minute script deadline, and one run needed
-    # ~24 minutes end to end. 45 here leaves headroom above the 40-minute
-    # script deadline below for runner start/stop overhead.
-    timeout-minutes: 45
-    permissions:
-      contents: read
-
-    steps:
-      - name: Wait for exact commit at active gateway
-        shell: bash
-        env:
-          BASH_ENV: /dev/null
-          ENV: /dev/null
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
-          GIT_CONFIG_COUNT: "0"
-          NODE_OPTIONS: ""
-          NODE_PATH: ""
-          RUBYOPT: ""
-          RUBYLIB: ""
-          EXPECTED_GIT_SHA: ${{ github.sha }}
-          HEALTH_URL: https://api.agee.app/health
-          # Read-only, for the compare call that tells an intermediate
-          # promotion apart from a real regression. The job already declares
-          # permissions: contents: read.
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # 2400s (40 min): observed worst case is ~24 minutes end to end
-          # (run 30328408716, 2026-07-28) and typical successful runs already
-          # ran ~19-20 minutes against the old 1200s deadline, i.e. almost no
-          # headroom. 40 minutes gives ~67% headroom over the worst observed
-          # case and ~2x over the typical case.
-          deadline_seconds=2400
-          deadline="$(( $(date +%s) + deadline_seconds ))"
-          live_sha="unavailable"
-          starting_sha=""
-          had_response=0
-          saw_connection_drop=0
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            health="$(curl -fsS --connect-timeout 5 --max-time 10 \
-              -H 'Cache-Control: no-cache' "$HEALTH_URL" || true)"
-            observed="$(ruby -rjson -e '
-              health = JSON.parse(STDIN.read)
-              sha = health.dig("build", "git_sha")
-              abort unless sha.is_a?(String) && sha.match?(/\A[0-9a-f]{7,64}\z/i)
-              print sha.downcase
-            ' <<<"$health" 2>/dev/null || true)"
-            if [ -n "$observed" ]; then
-              [ -n "$starting_sha" ] || starting_sha="$observed"
-              had_response=1
-              live_sha="$observed"
-            elif [ "$had_response" -eq 1 ]; then
-              # A response we previously got now fails to connect/parse. The
-              # promotion script recreates the gateway container in place
-              # (compose up -d --no-deps gateway), which causes exactly this
-              # kind of transient drop -- a real, externally observable sign
-              # the droplet is actively promoting, not a guess.
-              saw_connection_drop=1
-            fi
-
-            if [ "$live_sha" = "$EXPECTED_GIT_SHA" ]; then
-              echo "active gateway serves exact commit $EXPECTED_GIT_SHA"
-              exit 0
-            fi
-
-            if [ -n "$starting_sha" ] && [ "$live_sha" != "unavailable" ] \
-              && [ "$live_sha" != "$EXPECTED_GIT_SHA" ] && [ "$live_sha" != "$starting_sha" ]; then
-              # A THIRD commit: neither the pre-deploy build nor the expected
-              # one. That is NOT automatically a regression. When master moves
-              # several times in quick succession the droplet promotes each
-              # vps-deploy ref move in sequence, so the gateway legitimately
-              # passes through intermediate commits on its way to ours. Run
-              # 30350237688 (2026-07-28) failed exactly this way: expected
-              # 91ffd7f4, observed 944cebe1, which is an ancestor of it.
-              #
-              # Ask GitHub whether the observed commit is behind ours. compare
-              # base...head reports "ahead" when head is ahead of base, so
-              # base=observed head=expected returning ahead/identical means the
-              # observed commit is on the path to ours -- keep waiting.
-              cmp_status="$(curl -fsS --connect-timeout 5 --max-time 10 \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/$live_sha...$EXPECTED_GIT_SHA" 2>/dev/null \
-                | ruby -rjson -e 'print(JSON.parse(STDIN.read)["status"].to_s)' 2>/dev/null || true)"
-              case "$cmp_status" in
-                ahead|identical)
-                  echo "active gateway serves $live_sha, an ancestor of $EXPECTED_GIT_SHA (intermediate promotion in progress); continuing to wait"
-                  ;;
-                behind|diverged)
-                  echo "::error::active gateway now serves $live_sha, which is $cmp_status relative to the expected commit $EXPECTED_GIT_SHA and is not the pre-deploy commit ($starting_sha) -- this is a real regression, not a slow promotion" >&2
-                  exit 1
-                  ;;
-                *)
-                  # Could not classify it. Do not claim a regression on a
-                  # failed API call; keep waiting and let the timeout report
-                  # honestly rather than assert something unproven.
-                  echo "could not classify observed commit $live_sha against $EXPECTED_GIT_SHA (compare status: '${cmp_status:-unavailable}'); continuing to wait"
-                  ;;
-              esac
-            fi
-
-            echo "waiting for active gateway: expected=$EXPECTED_GIT_SHA observed=$live_sha"
-            sleep 15
-          done
-
-          # The window elapsed without reaching the expected commit. This is
-          # NOT the same as a confirmed failure: /health does not expose any
-          # in-progress/update-status signal, so a slow-but-succeeding
-          # promotion and a stuck one look identical from here except for
-          # connection drops during container recreation. Report distinctly
-          # from a hard failure and say how to check manually; the run still
-          # exits non-zero because the gate must not pass without evidence.
-          if [ "$saw_connection_drop" -eq 1 ]; then
-            echo "::warning::verification window elapsed without reaching $EXPECTED_GIT_SHA, but health checks intermittently failed to connect during the wait -- consistent with the gateway container being actively recreated by the promotion script. INCONCLUSIVE, not a confirmed failure: the deploy may still be finishing. Re-check manually: curl -s $HEALTH_URL | ruby -rjson -e 'puts JSON.parse(STDIN.read).dig(\"build\",\"git_sha\")'" >&2
-          else
-            echo "::warning::verification window elapsed without reaching $EXPECTED_GIT_SHA and no connection activity was observed. INCONCLUSIVE, not a confirmed failure: this can mean the droplet's auto-update timer has not picked up the candidate yet, or an earlier attempt failed and update.sh's built-in rollback safely restored the previous commit ($starting_sha). No in-progress signal is exposed over HTTP, so this script cannot tell 'still working' from 'stuck and already rolled back' without droplet access. Re-check manually: curl -s $HEALTH_URL | ruby -rjson -e 'puts JSON.parse(STDIN.read).dig(\"build\",\"git_sha\")', or ssh into the droplet and check journalctl -u chief-moa-auto-update / docker compose logs gateway." >&2
-          fi
-          echo "active gateway stayed at $live_sha, expected $EXPECTED_GIT_SHA (timeout after $(( deadline_seconds / 60 ))m)" >&2
-          exit 1

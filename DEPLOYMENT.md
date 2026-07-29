@@ -289,8 +289,12 @@ the retention rules above for OTA releases do not apply to them.
 The poll interval must stay longer than the worst-case promotion. A promotion
 takes roughly 20 minutes on this droplet; a 120-second timer re-triggered the
 unit mid-flight and TERMed it, which looked like a timeout and was not.
-The workflow now remains incomplete until public `/health` reports the exact
-published commit. A green ref-publication job alone is not a successful deploy.
+GitHub Actions verifies the candidate and publishes `vps-deploy`; it does not
+hold a paid runner open while the droplet builds. `scripts/release/push-master.sh`
+waits from the operator machine until public `/health` reports the exact commit.
+A green ref-publication job alone is still not a successful deploy. Rapid
+updates to the same branch or master ref cancel stale CI runs before they spend
+more runner time.
 
 For the first release that adds the separate release-control database, install
 its two distinct role passwords without restarting the active gateway:

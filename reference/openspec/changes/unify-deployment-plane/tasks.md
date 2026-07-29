@@ -58,6 +58,13 @@
       Acceptance: the interval is tracked in the repo rather than living only
       as a hand-applied drop-in, and a promotion that outruns the interval is
       reported as a configuration fault, not a timeout.
+- [x] 1b.2 Stop using a paid GitHub-hosted runner as the long-lived production
+      observer. GitHub verifies and publishes the exact `vps-deploy` ref;
+      `scripts/release/push-master.sh` waits for that exact SHA at public health
+      from the operator machine, and same-ref CI runs cancel stale work.
+      Acceptance: the workflow has no 40-minute observation job, the local
+      observer rejects a different SHA, and the protected release command does
+      not report completion until the active SHA matches.
 
 ## 2. Keep Deployment Identity Through Rollback
 

@@ -85,7 +85,12 @@ git fetch origin master --quiet
 git merge-base --is-ancestor origin/master HEAD \
   || fail "master moved while checks ran; rebase onto origin/master and rerun"
 
-log "all checks green; fast-forwarding master (this IS the deploy)"
+log "all checks green; fast-forwarding master (this starts the deploy)"
 git push origin "HEAD:master"
-log "master -> $(git rev-parse --short HEAD). Deploy workflows now re-run on master against the identical tree."
+released_sha="$(git rev-parse HEAD)"
+log "master -> ${released_sha:0:12}. Deploy workflows now re-run on master against the identical tree."
 log "gateway: droplet timer promotes within ~2 minutes of the vps-deploy ref moving."
+if ! bash scripts/vps/wait-for-live-commit.sh "$released_sha"; then
+  fail "master and vps-deploy were published, but the active gateway did not prove the exact commit; inspect the droplet promotion receipt"
+fi
+log "gateway: exact live commit verified"
