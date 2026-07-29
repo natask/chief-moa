@@ -1115,12 +1115,37 @@ if (
   throw new Error("double-click-and-hold must start recording on the second press and use the hold threshold only to decide release-to-commit");
 }
 
-if (/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*flex;/.test(overlayCssSource)) {
-  throw new Error("browser voice must not show a separate top voice-state strip");
+// The voice-state strip, the page-identity row, the inline history snapshot and
+// the language chip are gone from the overlay entirely: a spoken turn reads in
+// the two ribbons, and the panel is a composer. Their absence is the assertion.
+for (const legacyOverlayChrome of [
+  "agee-voice-state",
+  "agee-page-context",
+  "agee-page-identity",
+  "agee-history-button",
+  "agee-copy-history",
+  "agee-lang-chip",
+  "agee-transcript",
+]) {
+  if (overlayCssSource.includes(legacyOverlayChrome) || contentSource.includes(legacyOverlayChrome)) {
+    throw new Error(`${legacyOverlayChrome} must not come back to the overlay`);
+  }
 }
 
-if (!/#agee-root\.agee-voicing #agee-voice-state \{[\s\S]{0,80}display:\s*none;/.test(overlayCssSource)) {
-  throw new Error("top voice-state strip must stay hidden during browser voice");
+// A spoken turn must never raise the panel over the page.
+for (const [name, body] of [
+  ["beginManualVoiceGesture", sourceBetween(contentSource, /function beginManualVoiceGesture\(/, /function finishLauncherPushToTalk\(/, "manual voice gesture")],
+]) {
+  if (/openTextSurface\(/.test(body)) {
+    throw new Error(`${name} must not open the composer for a spoken turn`);
+  }
+}
+
+// Manual capture ends when the user ends it. Only the hands-free re-arm may
+// pass autoCommit through to the VAD.
+const toggleVoiceBody = sourceBetween(contentSource, /function toggleVoice\(/, /const copyTextToClipboard/, "toggleVoice");
+if (!/autoCommit: false/.test(toggleVoiceBody)) {
+  throw new Error("the voice button and hotkey must start a manual capture that silence cannot send");
 }
 
 const doneMessageCase = sourceBetween(contentSource, /case "done":/, /case "error":/, "done message case");

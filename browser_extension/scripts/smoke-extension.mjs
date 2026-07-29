@@ -235,8 +235,8 @@ function assertVoicePlaybackStopContract() {
   if (!/function safeRuntimeSendMessage/.test(source) || !/function safeStorageLocalGet/.test(source) || !/function safeStorageLocalSet/.test(source)) {
     throw new Error("content.js must guard runtime and storage calls against stale extension contexts");
   }
-  if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*fresh:\s*false\s*\}\);[\s\S]{0,120}primeAudio\(\);[\s\S]{0,180}toggleVoice\(\{\s*warmCaptureId: takeGestureVoiceWarmup\(\)\s*\}\);/.test(source)) {
-    throw new Error("voice button click must open the input surface and prime audio before starting live voice");
+  if (!/voiceButton\.addEventListener\("click"[\s\S]{0,320}primeAudio\(\);[\s\S]{0,180}toggleVoice\(\{\s*warmCaptureId: takeGestureVoiceWarmup\(\)\s*\}\);/.test(source)) {
+    throw new Error("voice button click must prime audio before starting live voice");
   }
   if (!/origin === "single"\) beginCurrentThreadSteeringCapture\(replacement\)/.test(source)) {
     throw new Error("single-click current-thread capture must use an explicit steering boundary");
@@ -257,16 +257,21 @@ function assertVoicePlaybackStopContract() {
     throw new Error("late stale voice events must fail closed at the steering generation boundary");
   }
   if (!/msg\.type === "transcript_partial"[\s\S]{0,520}ensureVoiceCueCard\(state, text/.test(source)) {
-    throw new Error("live voice transcript must render in cue cards above the input");
+    throw new Error("live voice transcript must stay attached to its turn");
   }
   if (
-    !/createCue\(cueId, "Starting microphone…", \{ presentation: "card", statusText: "starting…" \}\)/.test(source) ||
+    !/createCue\(cueId, "Starting microphone…", \{ statusText: "starting…" \}\)/.test(source) ||
     !/capture_ready === false[\s\S]{0,220}ensureVoiceCueCard\(state, "Listening…", "listening…"\)/.test(source)
   ) {
-    throw new Error("live voice turns must materialize a visible startup card and invite speech only after microphone readiness");
+    throw new Error("live voice turns must open their turn immediately and invite speech only after microphone readiness");
   }
-  if (!/openTextSurface\(\{ fresh: false \}\);[\s\S]{0,180}if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
-    throw new Error("mascot taps must open the writable surface before voice-first routing");
+  // A tap that routes to voice must not raise the composer over the page: the
+  // spoken turn reads in the ribbons. Typing is the tap that resolves to chat.
+  if (/openTextSurface\([\s\S]{0,120}if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
+    throw new Error("a mascot tap that routes to voice must not open the composer");
+  }
+  if (!/if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
+    throw new Error("mascot taps must still route through the voice-first gesture machine");
   }
   if (!/\.agee-cue-dot\s*\{[\s\S]{0,260}animation:\s*agee-cue-pulse/.test(overlayCss)) {
     throw new Error("in-page cue cards must expose animated progress state");
@@ -445,11 +450,23 @@ async function main() {
             const voice = document.querySelector("#agee-voice");
             const stop = document.querySelector("#agee-stop");
             const log = document.querySelector("#agee-log");
-            const voiceState = document.querySelector("#agee-voice-state");
-            const pageIdentity = document.querySelector("#agee-page-identity");
-            const historyButton = document.querySelector("#agee-history-button");
-            if (!root || !launcher || !bird || !panel || !input || !voice || !stop || !log || !voiceState || !pageIdentity || !historyButton) {
+            // The overlay is the companion and its two ribbons. The panel is a
+            // composer: no page-identity strip, no history button, no voice strip.
+            const legacyChrome = [
+              "#agee-voice-state",
+              "#agee-page-identity",
+              "#agee-history-button",
+              "#agee-copy-history",
+              "#agee-lang-chip",
+              "#agee-transcript",
+            ].filter((selector) => document.querySelector(selector));
+            const ribbonYou = document.querySelector("#agee-ribbon-you");
+            const ribbonReply = document.querySelector("#agee-ribbon-reply");
+            if (!root || !launcher || !bird || !panel || !input || !voice || !stop || !log || !ribbonYou || !ribbonReply) {
               return { ok: false, error: "overlay nodes missing" };
+            }
+            if (legacyChrome.length) {
+              return { ok: false, error: "legacy overlay chrome present: " + legacyChrome.join(", ") };
             }
             const launcherRect = launcher.getBoundingClientRect();
             const birdRect = bird.getBoundingClientRect();
@@ -457,11 +474,7 @@ async function main() {
             const voiceRect = voice.getBoundingClientRect();
             const stopStyle = getComputedStyle(stop);
             const logStyle = getComputedStyle(log);
-            const voiceStateStyle = getComputedStyle(voiceState);
             const voiceStyle = getComputedStyle(voice);
-            root.classList.add("agee-voicing", "agee-state-listening");
-            const voiceStateDisplayWhenVoicing = getComputedStyle(voiceState).display;
-            root.classList.remove("agee-voicing", "agee-state-listening");
             return {
               ok: true,
               rootCount: document.querySelectorAll("#agee-root").length,
@@ -479,13 +492,11 @@ async function main() {
               voiceFontSize: voiceStyle.fontSize,
               stopDisplayWhenIdle: stopStyle.display,
               logDisplay: logStyle.display,
-              voiceStateDisplay: voiceStateStyle.display,
-              voiceStateDisplayWhenVoicing,
               panelOverflowX: panel.scrollWidth > panel.clientWidth + 1,
               inputOverflowX: input.scrollWidth > input.clientWidth + 1,
               activeInput: document.activeElement === input,
-              pageIdentity: pageIdentity.textContent || "",
-              historyLabel: historyButton.textContent || "",
+              youRibbonJustify: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-viewport")).justifyContent,
+              replyRibbonJustify: getComputedStyle(ribbonReply.querySelector(".agee-ribbon-viewport")).justifyContent,
             };
           },
         });
@@ -504,8 +515,8 @@ async function main() {
       throw new Error(`desktop mascot is not compact: ${JSON.stringify(overlayMetrics)}`);
     }
     if (!overlayMetrics.open || !overlayMetrics.activeInput) throw new Error(`overlay did not open and focus input: ${JSON.stringify(overlayMetrics)}`);
-    if (!overlayMetrics.pageIdentity.includes("localhost") || overlayMetrics.historyLabel.trim() !== "History") {
-      throw new Error(`overlay did not visibly ground the current page and history path: ${JSON.stringify(overlayMetrics)}`);
+    if (overlayMetrics.youRibbonJustify !== "flex-end" || overlayMetrics.replyRibbonJustify !== "flex-start") {
+      throw new Error(`ribbons did not take opposite chat sides: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
       throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);
@@ -516,11 +527,8 @@ async function main() {
     if (overlayMetrics.voiceWidth < 30 || overlayMetrics.voiceHeight < 30 || overlayMetrics.voiceFontSize !== "0px") {
       throw new Error(`voice control is not stable icon-only UI: ${JSON.stringify(overlayMetrics)}`);
     }
-    if (overlayMetrics.stopDisplayWhenIdle !== "none" || overlayMetrics.logDisplay !== "none" || overlayMetrics.voiceStateDisplay !== "none") {
-      throw new Error(`overlay exposed hidden history/voice surfaces while idle: ${JSON.stringify(overlayMetrics)}`);
-    }
-    if (overlayMetrics.voiceStateDisplayWhenVoicing !== "none") {
-      throw new Error(`overlay exposed separate top voice strip during voice: ${JSON.stringify(overlayMetrics)}`);
+    if (overlayMetrics.stopDisplayWhenIdle !== "none" || overlayMetrics.logDisplay !== "none") {
+      throw new Error(`overlay exposed hidden surfaces while idle: ${JSON.stringify(overlayMetrics)}`);
     }
 
     await pageCdp.send("Emulation.setDeviceMetricsOverride", {
@@ -574,12 +582,17 @@ async function main() {
     if (!typedSearchTab?.id || !typedSearchTab.active) {
       throw new Error(`typed Amazon search did not open an active result tab: ${JSON.stringify(typedSearchTab)}`);
     }
-    const typedSearchSummary = await waitForEval(pageCdp, `
-      (() => {
-        const card = [...document.querySelectorAll("#agee-log .agee-cue")].pop();
-        if (!card || !card.classList.contains("agee-cue-done")) return null;
-        return card.querySelector(".agee-cue-status")?.textContent || null;
-      })()
+    // The receipt reads in the reply ribbon. Ask the content script for the text
+    // it was handed rather than the painted node: the ribbon renders on an
+    // animation frame, and this tab is in the background while the result tab is
+    // active, so the paint is legitimately deferred.
+    const typedSearchSummary = await waitForEval(workerCdp, `
+      chrome.scripting.executeScript({
+        target: { tabId: ${ping.tabId} },
+        func: () => document.querySelector("#agee-ribbon-reply.agee-ribbon-live .agee-ribbon-text")?.textContent
+          || window.__ageeLastReply?.text
+          || null,
+      }).then(([entry]) => entry?.result || null)
     `);
     if (!/opened amazon results for ergonomic red chair/i.test(typedSearchSummary)) {
       throw new Error(`typed Amazon search did not render its local receipt: ${JSON.stringify(typedSearchSummary)}`);
@@ -1370,31 +1383,35 @@ async function main() {
             }
           },
         });
-        await chrome.tabs.sendMessage(tabId, { cmd: "done", cueId: null, summary: "Smoke reply stays above the input." });
+        await chrome.tabs.sendMessage(tabId, { cmd: "done", cueId: null, summary: "Smoke reply stays out of the composer." });
         await new Promise((resolve) => setTimeout(resolve, 80));
         const [result] = await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
             const input = document.querySelector("#agee-input");
             const log = document.querySelector("#agee-log");
-            const cue = log ? log.querySelector(".agee-cue, .agee-row") : null;
-            const inputRect = input?.getBoundingClientRect();
-            const cueRect = cue?.getBoundingClientRect();
+            const ribbon = document.querySelector("#agee-ribbon-reply");
             return {
               inputValue: input ? input.value : null,
               logText: log ? log.textContent : "",
-              cueAboveInput: !!(inputRect && cueRect && cueRect.bottom <= inputRect.top + 1),
+              replyText: ribbon?.querySelector(".agee-ribbon-text")?.textContent || window.__ageeLastReply?.text || "",
+              replyLive: !!ribbon?.classList.contains("agee-ribbon-live"),
             };
           },
         });
         return result?.result;
       })()
     `);
-    if (resultPlacement?.inputValue !== "draft must stay" || !String(resultPlacement?.logText || "").includes("Smoke reply stays above the input.")) {
+    // A reply reads in the lower ribbon, never as a card in the panel and never
+    // in the composer, so a draft the user is typing survives the turn.
+    if (resultPlacement?.inputValue !== "draft must stay") {
       throw new Error(`reply changed the command input draft: ${JSON.stringify(resultPlacement)}`);
     }
-    if (!resultPlacement?.cueAboveInput) {
-      throw new Error(`result cue did not render above the command input: ${JSON.stringify(resultPlacement)}`);
+    if (!resultPlacement?.replyLive || !String(resultPlacement?.replyText || "").includes("Smoke reply stays out of the composer.")) {
+      throw new Error(`reply did not render in the reply ribbon: ${JSON.stringify(resultPlacement)}`);
+    }
+    if (String(resultPlacement?.logText || "").trim()) {
+      throw new Error(`a plain reply opened a card in the panel: ${JSON.stringify(resultPlacement)}`);
     }
 
     // Fast local stop path (typed): named smoke:stop-local contract. A whole

@@ -269,18 +269,25 @@ function installProgressRecorderExpr() {
   return `
     (() => {
       window.__ageeProgressTexts = [];
+      // Progress reads in the reply ribbon now, with cards left only for turns
+      // that grow a control. Watch both, plus the recorded reply, so a step that
+      // scrolls past the ribbon's window is still observed.
       const remember = () => {
         const texts = [...document.querySelectorAll(".agee-cue-status, .agee-row")]
           .map((node) => (node.textContent || "").trim())
           .filter(Boolean);
+        for (const recorded of window.__ageeReplyTrail || []) texts.push(String(recorded).trim());
         for (const text of texts) {
-          if (!window.__ageeProgressTexts.includes(text)) window.__ageeProgressTexts.push(text);
+          if (text && !window.__ageeProgressTexts.includes(text)) window.__ageeProgressTexts.push(text);
         }
       };
       const log = document.querySelector("#agee-log");
+      const replyRibbon = document.querySelector("#agee-ribbon-reply");
       if (window.__ageeProgressObserver) window.__ageeProgressObserver.disconnect();
       window.__ageeProgressObserver = new MutationObserver(remember);
       if (log) window.__ageeProgressObserver.observe(log, { childList: true, subtree: true, characterData: true });
+      if (replyRibbon) window.__ageeProgressObserver.observe(replyRibbon, { childList: true, subtree: true, characterData: true });
+      window.__ageeProgressPoll = setInterval(remember, 200);
       remember();
       return true;
     })()
@@ -305,15 +312,21 @@ function latestResultExpr() {
     (() => {
       const log = document.querySelector("#agee-log");
       const input = document.querySelector("#agee-input");
+      // A turn is terminal when it lands on done/error, whether it kept a card
+      // (approval, dictation copy, recovery) or read only in the reply ribbon.
       const terminal = [...document.querySelectorAll(".agee-cue-done, .agee-cue-error, .agee-done, .agee-error")].pop();
-      return terminal ? {
-        kind: terminal.classList.contains("agee-cue-error") || terminal.classList.contains("agee-error") ? "error" : "done",
-        text: terminal.textContent || "",
+      const recorded = window.__ageeLastTurn || null;
+      if (!terminal && !recorded) return null;
+      return {
+        kind: terminal
+          ? (terminal.classList.contains("agee-cue-error") || terminal.classList.contains("agee-error") ? "error" : "done")
+          : recorded.kind,
+        text: terminal ? (terminal.textContent || "") : recorded.text,
         draft: input ? input.value : "",
         logVisible: log ? getComputedStyle(log).display !== "none" : false,
         progress: window.__ageeProgressTexts || [],
         pageResult: document.querySelector("#results")?.textContent || "",
-      } : null;
+      };
     })()
   `;
 }

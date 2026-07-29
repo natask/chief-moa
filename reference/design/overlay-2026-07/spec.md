@@ -59,11 +59,19 @@ Nothing else exists in the overlay. No settings entry point, no mode selector,
 no history list, no approval UI, no page-identity strip, no log. Those live in
 the full Android app and the browser side panel.
 
-The text composer (`#agee-input` / `panelView`) is unchanged and is **not** part
-of the unit. It opens on the existing gesture (voice-first triple-click / Android
-`showPanel`) and continues to anchor above the companion using
+The text composer (`#agee-input` / `panelView`) is **not** part of the unit. It
+opens on the existing gesture (voice-first triple-click / Android `showPanel`)
+and continues to anchor above the companion using
 `MoaOrbOverlayGeometry.anchoredSurface`. When the composer is open the ribbons
 hide (opacity 0) so there is only ever one text surface.
+
+Landed 2026-07-28 in the browser: the composer is now the input row alone. The
+page-identity strip, the Copy/History buttons, the inline history snapshot, the
+language chip and the legacy voice strip are deleted, not hidden. **No voice
+gesture opens the composer** — a spoken turn reads in the ribbons, which is what
+stops the panel covering the page while Ag talks. Cue cards no longer render
+ordinary turn text; a card is materialized only when a turn grows a control the
+ribbons cannot hold (approval row, dictation copy, microphone recovery).
 
 ## 2.1 Ribbon internals
 

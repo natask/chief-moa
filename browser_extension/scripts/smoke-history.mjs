@@ -323,14 +323,14 @@ async function main() {
       { contextId: contentCtx },
     );
 
-    // Wait for the live turn's done row (the cue card flips to agee-cue-done).
+    // Wait for the live turn's reply. It reads in the lower ribbon; the recorded
+    // value covers the window between the reply landing and the ribbon's linger
+    // timer retiring it.
     const liveReply = await waitForEval(
       pageCdp,
       `(() => {
-        const card = [...document.querySelectorAll("#agee-log .agee-cue-done")].pop();
-        if (!card) return null;
-        const status = card.querySelector(".agee-cue-status");
-        return status ? status.textContent : null;
+        const live = document.querySelector("#agee-ribbon-reply.agee-ribbon-live .agee-ribbon-text");
+        return (live && live.textContent) || (window.__ageeLastReply && window.__ageeLastReply.text) || null;
       })()`,
       30000,
       { contextId: contentCtx },

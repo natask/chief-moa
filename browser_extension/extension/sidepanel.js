@@ -811,7 +811,9 @@ async function startTurn(kind, options) {
       turnId: state.turnId,
       cueId: `panel_${state.turnId}`,
       capture: kind === "voice" ? "extension-offscreen" : "content-script",
-      autoCommit: kind === "voice",
+      // Manual capture: the panel's own control ends the turn. Silence does not
+      // send, so a pause mid-thought cannot cut the utterance short.
+      autoCommit: false,
     });
     if (!res?.ok || !res.voiceSessionId) {
       failTurn(state, String(res?.error || "Could not start the turn."));

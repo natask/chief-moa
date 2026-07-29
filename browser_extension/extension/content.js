@@ -29,17 +29,9 @@
     recordButton,
     stopButton,
     log,
-    historyButton,
-    copyHistoryButton,
-    copyHistoryStatus,
-    historyView,
-    pageIdentityEl,
-    langChip,
     uiSpecSurfaceEl,
     pendingConfirm = null,
     open = false,
-    voiceState,
-    transcriptEl,
     liveVoice = null,
     surfacePhase = "idle",
     listening = false,
@@ -317,8 +309,7 @@
 
   function showContextModeCue(label, statusText) {
     const cueId = newCueId();
-    openTextSurface({ fresh: false });
-    createCue(cueId, label, { presentation: "card" });
+    createCue(cueId, label);
     updateCue(cueId, statusText, "done");
   }
   function build() {
@@ -349,22 +340,9 @@
       <div id="agee-remove-target" role="status" aria-live="polite" aria-hidden="true">Remove Ag</div>
       ${AgeeRibbons.template()}
       <div id="agee-panel" role="dialog" aria-label="Ag command">
-        <div id="agee-page-context">
-          <span id="agee-page-identity" aria-live="polite"></span>
-          <button id="agee-copy-history" type="button" aria-expanded="false" aria-controls="agee-history">Copy</button>
-          <button id="agee-history-button" type="button" aria-expanded="false">History</button>
-          <span id="agee-copy-history-status" class="agee-visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
-        </div>
-        <div id="agee-voice-state" aria-hidden="true">
-          <span id="agee-orb"></span>
-          <span id="agee-transcript" aria-live="polite"></span>
-        </div>
         <div id="agee-ui-surface" aria-live="polite"></div>
-        <div id="agee-lang-chip" class="agee-lang-chip" hidden aria-live="polite"></div>
-        <div id="agee-history" hidden></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
-          <span id="agee-dot"></span>
           <textarea id="agee-input" rows="1" placeholder="Ask Ag" autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
@@ -381,14 +359,6 @@
     stopButton = root.querySelector("#agee-stop");
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-log");
-    historyButton = root.querySelector("#agee-history-button");
-    copyHistoryButton = root.querySelector("#agee-copy-history");
-    copyHistoryStatus = root.querySelector("#agee-copy-history-status");
-    historyView = root.querySelector("#agee-history");
-    pageIdentityEl = root.querySelector("#agee-page-identity");
-    langChip = root.querySelector("#agee-lang-chip");
-    voiceState = root.querySelector("#agee-voice-state");
-    transcriptEl = root.querySelector("#agee-transcript");
     tipEl = root.querySelector("#agee-tip");
     setupRibbons();
     quietControls = AgeeQuietCompanionControls.create({ root, launcher,
@@ -406,8 +376,6 @@
     loadAvatarBehaviorRuntime();
     loadUiSpec();
     loadActiveCompanionPet();
-    loadLanguageChip();
-    AgeeSteeringUi.observePageIdentity({ element: pageIdentityEl, document, location, window });
     // Launcher gestures intentionally match the Android orb:
     //   single click            -> chat menu
     //   first press + movement  -> drag the mark
@@ -423,19 +391,6 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
-    historyButton.addEventListener("click", () => AgeeSteeringUi.toggleHistorySnapshot({
-      view: historyView, button: historyButton, sendMessage: safeRuntimeSendMessage, positionPanel, document,
-    }));
-    copyHistoryButton.addEventListener("click", () => AgeeSteeringUi.copyTranscriptAndOpenHistory({
-      transcript: transcriptEl.textContent,
-      view: historyView,
-      button: copyHistoryButton,
-      status: copyHistoryStatus,
-      copyText: copyTextToClipboard,
-      sendMessage: safeRuntimeSendMessage,
-      positionPanel,
-      document,
-    }));
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -777,11 +732,10 @@
       cancelGestureVoiceWarmup();
       return;
     }
-    // A mascot tap is also the write-surface affordance. Open it before
-    // gesture routing so voice-first mode cannot consume the click invisibly.
-    // Voice may start after this, but the user always gets a place to type and
-    // see the current turn.
-    openTextSurface({ fresh: false });
+    // A tap that routes to voice must not raise the composer: a spoken turn
+    // reads in the ribbons, and the panel would cover the page while Ag talks.
+    // The typing affordance is the tap that resolves to chat (scheduleLauncherTap
+    // below, or the triple-tap in voice-first mode).
     if (voiceFirstGestures) {
       handleVoiceFirstTap(e, chainCount);
       return;
@@ -854,7 +808,7 @@
   }
 
   function beginManualVoiceGesture() {
-    openTextSurface({ fresh: false });
+    // Push-to-talk stays ribbon-only. No panel opens for a spoken turn.
     primeAudio();
     if (liveVoice && listening) {
       cancelGestureVoiceWarmup();
@@ -1209,20 +1163,6 @@
     input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
   }
 
-  function makeRow(who, text) {
-    const row = document.createElement("div");
-    row.className = `agee-row agee-${who}`;
-    row.textContent = text;
-    return row;
-  }
-
-  function addLog(who, text) {
-    if (!log) return;
-    log.appendChild(makeRow(who, text));
-    syncLogVisibility();
-    log.scrollTop = log.scrollHeight;
-  }
-
   function askInlineConfirm(text) {
     if (!log) return Promise.resolve(false);
     if (pendingConfirm) pendingConfirm(false);
@@ -1265,8 +1205,6 @@
   // The launcher dot is "running" while any cue is in flight, otherwise it shows
   // the most recent terminal state. The Stop button is visible only while busy.
   function refreshStatus() {
-    const dot = root && root.querySelector("#agee-dot");
-    if (dot) dot.className = anyActive() ? "running" : lastTerminal;
     if (stopButton) stopButton.classList.toggle("visible", anyActive());
     // The mark glows while it is working so the user can tell it is busy even
     // with the panel closed.
@@ -1672,7 +1610,6 @@
     action = resolved.action;
     const resolvedPrompt = resolved.prompt;
     if (action === "voice.toggle") {
-      openTextSurface({ fresh: false });
       primeAudio();
       toggleVoice();
       return;
@@ -1758,13 +1695,15 @@
       .catch(() => {});
   }
 
-  // ---- Language chip -----------------------------------------------------
-  // "Hears en·am · Speaks am": a short, always-legible readout of what AG
-  // currently understands (STT) and replies in (TTS/text), so the active
-  // language is never a guess. Understood-language data comes from the
-  // cached gateway profile (input_languages / input_language_primary); the
-  // spoken side prefers the live reply_language from the current turn's
-  // turn_done and otherwise falls back to the profile's language_primary.
+  // ---- Language readout --------------------------------------------------
+  // "Hears en·am · Speaks am" no longer paints a chip in the overlay: the
+  // overlay is the companion and its two ribbons, nothing else (see
+  // reference/design/overlay-2026-07/spec.md §2). The formatter stays because
+  // the language state it derives is still the honest answer to "what does AG
+  // understand and reply in", and the side panel renders it. Understood
+  // languages come from the cached gateway profile (input_languages /
+  // input_language_primary); the spoken side prefers the live reply_language
+  // from the current turn and falls back to the profile's language_primary.
   function shortLangTag(code) {
     const value = String(code || "").trim();
     if (!value) return "";
@@ -1794,28 +1733,6 @@
     if (heard.length) parts.push(`Hears ${[...new Set(heard)].join("·")}`);
     if (spoken.length) parts.push(`Speaks ${spoken[0]}`);
     return parts.join(" · ");
-  }
-
-  function renderLanguageChip() {
-    if (!langChip) return;
-    const profile = ageeProfileCacheValue?.profile || ageeProfileCacheValue || null;
-    const text = formatLanguageChipText(profile, lastReplyLanguageCode);
-    if (!text) {
-      langChip.hidden = true;
-      langChip.textContent = "";
-      return;
-    }
-    langChip.hidden = false;
-    langChip.textContent = text;
-  }
-
-  function loadLanguageChip() {
-    safeStorageLocalGet({ [PROFILE_CACHE_KEY]: null })
-      .then((stored) => {
-        ageeProfileCacheValue = stored?.[PROFILE_CACHE_KEY] || null;
-        renderLanguageChip();
-      })
-      .catch(() => {});
   }
 
   function applyActiveCompanionPet(payload) {
@@ -2214,16 +2131,18 @@
     setTimeout(() => revokedCueIds.delete(cueId), 30000);
   }
 
-  function createCue(cueId, label, { presentation = "card", statusText = "thinking..." } = {}) {
+  // A turn is bookkeeping, not a card. What the user said and what Ag replied
+  // belong to the two ribbons around the companion — one line each, no surface
+  // behind them (reference/design/overlay-2026-07/spec.md §1). A card is
+  // materialized only when the turn grows a control the ribbons cannot hold: an
+  // approval row, a dictation copy button, a microphone-recovery button.
+  function createCue(cueId, label, { statusText = "thinking..." } = {}) {
     retireResolvedCueCards();
-    if (presentation === "icon") {
-      currentCueId = cueId;
-      cues.set(cueId, { presentation, label: String(label || "") });
-      activeCues.add(cueId);
-      refreshStatus();
-      return;
-    }
-    materializeCue(cueId, label, statusText);
+    currentCueId = cueId;
+    const entry = cues.get(cueId) || {};
+    cues.set(cueId, { ...entry, presentation: "ribbon", label: String(label || entry.label || ""), statusText });
+    activeCues.add(cueId);
+    refreshStatus();
   }
 
   function materializeCue(cueId, label, statusText = "thinking...") {
@@ -2290,21 +2209,32 @@
     return entry;
   }
 
+  // A live voice turn is ribbon-only until something needs a control, so this
+  // only keeps the cue's bookkeeping current. It no longer opens a card.
   function ensureVoiceCueCard(state, label = "", statusText = "") {
     if (!state?.cueId) return null;
-    const entry = cues.get(state.cueId);
-    if (entry?.statusEl) {
-      if (label) updateCueLabel(state.cueId, label);
-      if (statusText) entry.statusEl.textContent = statusText;
-      return entry;
+    let entry = cues.get(state.cueId);
+    if (!entry) {
+      createCue(state.cueId, label || state.transcript || "Voice", { statusText });
+      entry = cues.get(state.cueId);
     }
-    return materializeCue(state.cueId, label || state.transcript || "Voice", statusText || "");
+    if (label) updateCueLabel(state.cueId, label);
+    if (statusText) {
+      entry.statusText = statusText;
+      if (entry.statusEl) entry.statusEl.textContent = statusText;
+    }
+    return entry;
   }
 
   function attachDictationCopyAction(state, transcript, { copied = false } = {}) {
     const value = String(transcript || "").trim();
     if (!state?.cueId || !value) return null;
-    const entry = cues.get(state.cueId);
+    // A copy button is a control, so this is one of the few turns that earns a
+    // card. Materialize it here rather than for every dictation status update.
+    const existing = cues.get(state.cueId);
+    const entry = existing?.cardEl
+      ? existing
+      : materializeCue(state.cueId, existing?.label || value, existing?.statusText || "");
     if (!entry?.cardEl) return null;
     let action = entry.cardEl.querySelector(".agee-dictation-copy-action");
     if (action) return action;
@@ -2344,51 +2274,58 @@
     if (entry?.labelEl) entry.labelEl.textContent = value;
   }
 
-  // Update a cue's status line. kind: "running" | "done" | "error".
+  // Update a cue's status. kind: "running" | "done" | "error".
+  // The reply ribbon is the default surface for that text. Only a cue that has
+  // already grown a card (approval, dictation copy, recovery) writes into DOM.
+  function writeCueStatusToRibbon(text, kind) {
+    if (!text) return;
+    setReplyRibbon(String(text), {
+      tone: kind === "error" ? "warn" : "",
+      streaming: kind === "running",
+    });
+  }
+
   function updateCue(cueId, text, kind) {
     if (cueId && revokedCueIds.has(cueId)) return;
-    let entry = cues.get(cueId);
-    // A message for an unknown cue (e.g. server-generated id) falls back to a row.
-    // Tag the terminal kind so harnesses can distinguish final state from
-    // interim progress in the hidden one-turn ledger.
+    const entry = cues.get(cueId);
+    // A message for an unknown cue (e.g. a server-minted id) still belongs to
+    // the current turn, so it reads in the reply ribbon like any other reply.
     if (!entry) {
       if (cueId && currentCueId && cueId !== currentCueId) return;
-      addLog(kind === "error" ? "error" : kind === "done" ? "done" : "agee", text);
+      writeCueStatusToRibbon(text, kind);
       if (kind === "done" || kind === "error") {
         lastTerminal = kind;
+        window.__ageeLastTurn = { kind, text: String(text || ""), cueId: cueId || "", at: Date.now() };
         refreshStatus();
       }
       return;
     }
-    if (!entry.statusEl) {
-      if (kind === "error") {
-        entry = materializeCue(cueId, entry.label || "Voice", text || "Voice failed.");
-      } else if (kind === "done") {
-        activeCues.delete(cueId);
-        cues.delete(cueId);
-        lastTerminal = kind;
-        refreshStatus();
-        syncLogVisibility();
-        return;
+    if (typeof text === "string" && text) {
+      entry.statusText = text;
+      if (entry.statusEl) {
+        entry.statusEl.textContent = text;
+        // Real streamed content arrived: drop the skeleton and fade the text in.
+        if (kind === "running" && entry.cardEl) entry.cardEl.classList.add("agee-cue-streaming");
       } else {
-        refreshStatus();
-        return;
+        writeCueStatusToRibbon(text, kind);
       }
     }
-    if (!entry?.statusEl) return;
-    if (typeof text === "string" && text) {
-      entry.statusEl.textContent = text;
-      // Real streamed content arrived: drop the skeleton and fade the text in.
-      if (kind === "running" && entry.cardEl) entry.cardEl.classList.add("agee-cue-streaming");
-    }
     if (kind === "done" || kind === "error") {
-      entry.cardEl.classList.remove("agee-cue-running", "agee-cue-done", "agee-cue-error");
-      entry.cardEl.classList.add(`agee-cue-${kind}`);
       activeCues.delete(cueId);
       lastTerminal = kind;
-      const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
-      if (dismissBtn) dismissBtn.disabled = false;
-      scheduleCueRetirement(cueId);
+      // The turn's terminal text and state, recorded because the ribbon that
+      // shows it retires on a linger timer and paints on an animation frame.
+      window.__ageeLastTurn = { kind, text: entry.statusText || "", cueId: cueId || "", at: Date.now() };
+      if (entry.cardEl) {
+        entry.cardEl.classList.remove("agee-cue-running", "agee-cue-done", "agee-cue-error");
+        entry.cardEl.classList.add(`agee-cue-${kind}`);
+        const dismissBtn = entry.cardEl.querySelector(".agee-cue-dismiss");
+        if (dismissBtn) dismissBtn.disabled = false;
+        scheduleCueRetirement(cueId);
+      } else {
+        cues.delete(cueId);
+        syncLogVisibility();
+      }
     }
     refreshStatus();
     if (log) log.scrollTop = log.scrollHeight;
@@ -2590,7 +2527,7 @@
       window.__ageeLastStopHalt = { source: "typed", at: Date.now() };
       const cueId = newCueId();
       openTextSurface({ fresh: false });
-      createCue(cueId, displayText, { presentation: "card" });
+      createCue(cueId, displayText);
       stopAllLiveVoiceTurns("cancel");
       stopSpeaking();
       updateCue(cueId, "", "done");
@@ -2605,7 +2542,7 @@
   function dispatchInstruction(instruction, displayText, role) {
     const cueId = newCueId();
     openTextSurface({ fresh: false });
-    createCue(cueId, displayText, { presentation: "card" });
+    createCue(cueId, displayText);
     // A typed turn reads in the same two ribbons as a spoken one, so the unit
     // shows one conversation regardless of how the turn was started.
     ribbons?.setUser(displayText);
@@ -2638,7 +2575,7 @@
   function describePage() {
     const cueId = newCueId();
     openTextSurface({ fresh: false });
-    createCue(cueId, "Describe this page", { presentation: "card" });
+    createCue(cueId, "Describe this page");
     safeRuntimeSendMessage({ cmd: "describe", cueId }).then(() => {
       if (extensionContextInvalidated) removeCueCard(cueId);
     }).catch((error) => {
@@ -2656,8 +2593,8 @@
     }
   }
 
-  // Drive voice state on the root. The top strip stays hidden; live transcript
-  // and assistant text render in cue cards above the input.
+  // Drive voice state on the root. Live transcript and assistant text render in
+  // the two ribbons around the companion, never in a panel.
   function setAgentState(next) {
     agentState = next;
     if (!root) return;
@@ -2666,7 +2603,6 @@
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
-    if (voiceState) voiceState.setAttribute("aria-hidden", "true");
     if (next === "idle") setTranscript("");
     // Every stop/error/teardown path lands here, so the talk-mode ring can
     // never outlive conversation mode.
@@ -2674,21 +2610,31 @@
     syncAvatarBehaviorTrigger();
   }
 
-  // Keep the legacy transcript node inert; visible voice feedback lives in
-  // cue cards above the input so the draft buffer remains untouched.
+  // The upper ribbon is the live transcription stream, and the only place the
+  // overlay shows what you said. An empty transcript only stops the caret: the
+  // ribbon retires on its own linger timer so you can still read (and copy)
+  // what you said after the turn ends.
   function setTranscript(text, interim = false) {
-    // The upper ribbon is the live transcription stream. An empty transcript
-    // only stops the caret: the ribbon retires on its own linger timer so the
-    // user can still read (and copy) what they said after the turn ends.
-    const value = String(text || "");
-    ribbons?.setUser(value, { interim });
-    if (!transcriptEl) return;
-    transcriptEl.textContent = value;
-    transcriptEl.classList.toggle("agee-interim", !!interim && !!value);
+    ribbons?.setUser(String(text || ""), { interim });
   }
 
   // The lower ribbon is the assistant response stream.
-  const setReplyRibbon = (text, options) => ribbons?.setReply(text, options);
+  // The lower ribbon is the assistant response stream. The last value is also
+  // recorded because the ribbon retires on its own linger timer: a check that
+  // arrives after the reply faded still needs to know what was said.
+  const REPLY_TRAIL_MAX = 50;
+  const setReplyRibbon = (text, options) => {
+    const value = String(text || "").trim();
+    if (value) {
+      window.__ageeLastReply = { text: value, tone: options?.tone || "", at: Date.now() };
+      // A bounded trail of what the ribbon was handed. A progress step can be
+      // replaced within one animation frame, so polling the node can miss it.
+      const trail = Array.isArray(window.__ageeReplyTrail) ? window.__ageeReplyTrail : [];
+      if (trail[trail.length - 1] !== value) trail.push(value);
+      window.__ageeReplyTrail = trail.slice(-REPLY_TRAIL_MAX);
+    }
+    return ribbons?.setReply(text, options);
+  };
 
   function setAmbientState(next) {
     ambientState = next === "on" ? "on" : "off";
@@ -2833,10 +2779,9 @@
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
-    // Materialize the turn immediately. The launcher can stay compact, but the
-    // conversation surface must show the user's turn before STT or the gateway
-    // emits its first event.
-    createCue(cueId, "Starting microphone…", { presentation: "card", statusText: "starting…" });
+    // Open the turn's bookkeeping immediately so the ribbons have somewhere to
+    // hang before STT or the gateway emits its first event.
+    createCue(cueId, "Starting microphone…", { statusText: "starting…" });
     setVoiceState(true);
     setAgentState("listening");
     setTranscript("");
@@ -3051,10 +2996,9 @@
       state.clipboardCopied = msg.clipboard_copied === true;
       if (msg.reply_language) {
         state.replyLanguage = String(msg.reply_language);
-        // Live-update the "Speaks" side of the language chip from this turn,
-        // overriding the profile's default reply language until it changes.
+        // Track the live "Speaks" language for this turn; it overrides the
+        // profile default until it changes. Nothing in the overlay paints it.
         lastReplyLanguageCode = state.replyLanguage;
-        renderLanguageChip();
       }
       if (msg.turn_id) state.gatewayTurnId = String(msg.turn_id);
       if (status === "no_speech" && !state.assistantText) {
@@ -3178,7 +3122,7 @@
     setAgentState("thinking");
     setTranscript(transcript);
     updateCueLabel(state.cueId, transcript);
-    materializeCue(state.cueId, transcript, pageContextTurn ? "collecting page context" : browserCommandTurn ? "opening browser..." : "updating settings...");
+    createCue(state.cueId, transcript, { statusText: pageContextTurn ? "collecting page context" : browserCommandTurn ? "opening browser..." : "updating settings..." });
     sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments));
     closeLiveVoiceSession(state, pageContextTurn ? "page context routed to browser agent" : browserCommandTurn ? "browser command routed locally" : "profile control routed to gateway");
     untrackLiveVoiceState(state);
@@ -3552,8 +3496,14 @@
 
   function attachMicrophoneRecovery(cueId, recovery) {
     if (recovery?.target !== "microphone_permission") return;
-    const entry = cues.get(cueId);
-    if (!entry?.statusEl || entry.recoveryButton) return;
+    // "Take me to microphone setup" is a control, so this failure earns a card
+    // even though the ribbon already carries the error text.
+    const existing = cues.get(cueId);
+    if (existing?.recoveryButton) return;
+    const entry = existing?.statusEl
+      ? existing
+      : materializeCue(cueId, existing?.label || "Voice", existing?.statusText || "Voice failed.");
+    if (!entry?.statusEl) return;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "agee-cue-recovery";
@@ -3586,6 +3536,12 @@
     if (!shown && agentState !== "idle") setAgentState("idle");
   }
 
+  // The mic button and the voice hotkey are manual capture: they start
+  // listening and keep listening until the user ends the turn with the same
+  // control. End-of-speech silence never sends for them — a pause to think is
+  // not the end of a sentence. Silence only ends a turn in hands-free mode,
+  // where the re-armed listen after a reply passes autoCommit through (and a
+  // spoken "stop" still halts everything, see isStopCommand).
   function toggleVoice(options = {}) {
     if (liveVoice && listening) {
       cancelGestureVoiceWarmup();
@@ -3594,13 +3550,18 @@
     }
     if (liveVoice) {
       if (assistantSpeechOverlap === true && liveVoice.committed) {
-        startLiveVoiceTurn({ preserveAssistantPlayback: true, warmCaptureId: options.warmCaptureId || null });
+        startLiveVoiceTurn({
+          preserveAssistantPlayback: true,
+          autoCommit: false,
+          warmCaptureId: options.warmCaptureId || null,
+        });
         return;
       }
       stopLiveVoiceTurn("cancel");
     }
     startLiveVoiceTurn({
       preserveAssistantPlayback: assistantSpeechOverlap === true,
+      autoCommit: false,
       warmCaptureId: options.warmCaptureId || null,
     });
   }
@@ -3613,9 +3574,12 @@
       return;
     }
     if (liveVoice) stopLiveVoiceTurn("cancel");
+    // Dictation is manual capture too: it runs until the same control ends it,
+    // so a pause mid-sentence cannot cut the transcript short.
     startLiveVoiceTurn({
       conversation: false,
       dictation: true,
+      autoCommit: false,
       preserveAssistantPlayback: false,
     });
   }
@@ -3625,6 +3589,7 @@
     startLiveVoiceTurn({
       conversation: false,
       dictation: true,
+      autoCommit: false,
       dictationLeaseId,
       preserveAssistantPlayback: false,
     });
@@ -3690,7 +3655,6 @@
 
   function toggleRecordMode() {
     if (recordPending) return;
-    openTextSurface({ fresh: false });
     if (recordActive) {
       cancelGestureVoiceWarmup();
       stopRecordMode();
@@ -3702,7 +3666,7 @@
     // the background's voiceStartPending mutex closes the other half.
     if (liveVoice || listening) {
       const cueId = newCueId();
-      materializeCue(cueId, "Audio note", "");
+      createCue(cueId, "Audio note", { statusText: "" });
       updateCue(cueId, "Voice is active. Stop voice before recording a note.", "error");
       cancelGestureVoiceWarmup();
       return;
@@ -3717,7 +3681,7 @@
       if (!res && extensionContextInvalidated) return;
       if (!res?.ok) {
         const cueId = newCueId();
-        materializeCue(cueId, "Audio note", "");
+        createCue(cueId, "Audio note", { statusText: "" });
         updateCue(cueId, res?.error || "Could not start recording.", "error");
         return;
       }
@@ -3726,7 +3690,7 @@
     }).catch((error) => {
       recordPending = false;
       const cueId = newCueId();
-      materializeCue(cueId, "Audio note", "");
+      createCue(cueId, "Audio note", { statusText: "" });
       updateCue(cueId, String(error?.message || error), "error");
     });
   }
@@ -3736,7 +3700,7 @@
     const startedAt = recordStartedAt;
     setRecordState(false);
     const cueId = newCueId();
-    materializeCue(cueId, "Audio note", "storing...");
+    createCue(cueId, "Audio note", { statusText: "storing..." });
     safeRuntimeSendMessage({ cmd: "recordSessionStop" }).then((res) => {
       recordPending = false;
       if (!res && extensionContextInvalidated) return;
@@ -3779,20 +3743,19 @@
 
   function toggleVideoNoteMode() {
     if (videoNotePending || recordPending) return;
-    openTextSurface({ fresh: false });
     if (videoNoteActive) {
       stopVideoNoteMode();
       return;
     }
     if (recordActive) {
       const cueId = newCueId();
-      materializeCue(cueId, "Video note", "");
+      createCue(cueId, "Video note", { statusText: "" });
       updateCue(cueId, "An audio note is recording. Finish it before starting a video note.", "error");
       return;
     }
     if (liveVoice || listening) {
       const cueId = newCueId();
-      materializeCue(cueId, "Video note", "");
+      createCue(cueId, "Video note", { statusText: "" });
       updateCue(cueId, "Voice is active. Stop voice before recording a video note.", "error");
       return;
     }
@@ -3806,7 +3769,7 @@
       if (!res && extensionContextInvalidated) return;
       if (!res?.ok) {
         const cueId = newCueId();
-        materializeCue(cueId, "Video note", "");
+        createCue(cueId, "Video note", { statusText: "" });
         updateCue(cueId, res?.error || "Could not start the video note.", "error");
         return;
       }
@@ -3814,7 +3777,7 @@
     }).catch((error) => {
       videoNotePending = false;
       const cueId = newCueId();
-      materializeCue(cueId, "Video note", "");
+      createCue(cueId, "Video note", { statusText: "" });
       updateCue(cueId, String(error?.message || error), "error");
     });
   }
@@ -3823,7 +3786,7 @@
     videoNotePending = true;
     setVideoNoteState(false);
     const cueId = newCueId();
-    materializeCue(cueId, "Video note", "storing...");
+    createCue(cueId, "Video note", { statusText: "storing..." });
     safeRuntimeSendMessage({ cmd: "videoSessionStop", cueId }).then((res) => {
       videoNotePending = false;
       if (!res && extensionContextInvalidated) return;
@@ -4094,7 +4057,6 @@
           }
           if (changes[PROFILE_CACHE_KEY]) {
             ageeProfileCacheValue = changes[PROFILE_CACHE_KEY].newValue || null;
-            renderLanguageChip();
           }
           if (changes.ageeDevReloadEnabled || changes.ageeDevReloadServer || changes.ageeDevReloadVersion) {
             configure().catch(() => {});

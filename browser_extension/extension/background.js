@@ -125,9 +125,10 @@ const VOICE_AUTO_COMMIT_SILENCE_MS = 950;
 const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
 // NOT a product limit on how long the user may speak. Speech is streamed to the
 // gateway frame-by-frame, so an utterance can run indefinitely. This is only a
-// safety backstop that force-commits if the VAD gets stuck and never detects the
-// end-of-speech silence — 30 minutes, far past any real turn. Normal turns end
-// on the VAD silence auto-commit or on push-to-talk release, not here.
+// safety backstop for a microphone nobody closed — 30 minutes, far past any real
+// turn. It applies to manual captures too, which by contract never end on
+// silence: without it a forgotten open mic would stream forever. Normal turns
+// end on the user's own stop, or on the VAD auto-commit in hands-free mode.
 const VOICE_STUCK_VAD_BACKSTOP_MS = 1_800_000;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
@@ -3231,7 +3232,7 @@ function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
 }
 
 function noteVoiceSessionAudio(session, buffer) {
-  if (!session?.autoCommitEnabled || session.committed || !buffer?.byteLength) return;
+  if (!session || session.committed || !buffer?.byteLength) return;
   const now = Date.now();
   const durationMs = Math.max(1, Math.round((buffer.byteLength / 2 / 16000) * 1000));
   session.audioStartedAt ||= now;
@@ -3241,6 +3242,14 @@ function noteVoiceSessionAudio(session, buffer) {
     session.lastSpeechAt = now;
     session.speechMs = (session.speechMs || 0) + durationMs;
   }
+  // Every open capture gets the stuck-microphone backstop, manual or not.
+  if (!session.maxCommitTimer) {
+    session.maxCommitTimer = setTimeout(() => {
+      forceCloseStuckVoiceSession(session.id).catch(() => {});
+    }, VOICE_STUCK_VAD_BACKSTOP_MS);
+  }
+  // Manual capture ends when the user ends it. Silence is a pause, not a send.
+  if (!session.autoCommitEnabled) return;
   if (
     !activity.speech &&
     session.lastSpeechAt &&
@@ -3253,11 +3262,25 @@ function noteVoiceSessionAudio(session, buffer) {
   if (session.lastSpeechAt) {
     scheduleVoiceAutoCommit(session, VOICE_AUTO_COMMIT_SILENCE_MS);
   }
-  if (session.lastSpeechAt && !session.maxCommitTimer) {
-    session.maxCommitTimer = setTimeout(() => {
-      autoCommitVoiceSession(session.id, "stuck-VAD backstop reached").catch(() => {});
-    }, VOICE_STUCK_VAD_BACKSTOP_MS);
+}
+
+// The backstop fired: the capture has been open for the whole window without
+// anyone ending it. Send what was actually spoken, or close a capture that
+// never heard speech. It never re-arms, so it cannot become a silence timer on
+// a manual capture.
+async function forceCloseStuckVoiceSession(id) {
+  const session = voiceSessions.get(id);
+  if (!session || session.committed || !voiceSessionSocketOpen(session)) return;
+  session.maxCommitTimer = null;
+  if (!session.lastSpeechAt || (session.speechMs || 0) < VOICE_AUTO_COMMIT_MIN_SPEECH_MS) {
+    closeVoiceSession(id, "voice capture backstop: no speech");
+    return;
   }
+  await sendVoiceSessionControl(id, {
+    type: "commit_turn",
+    turn_id: session.turnId,
+    reason: "browser_auto_commit:capture backstop reached",
+  });
 }
 
 function scheduleVoiceAutoCommit(session, delayMs) {
