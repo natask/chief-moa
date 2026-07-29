@@ -77,6 +77,19 @@ final class AgEnrollmentClient {
         return new Result(continuity.optString("account_id"), continuity.optString("tenant_id"), restore);
     }
 
+    /**
+     * Read the account's restorable settings with the scoped device credential.
+     * This is what makes a clean install come back configured; it never reads,
+     * and cannot read, another package's app-private storage.
+     */
+    JSONObject readSettings(String credential) throws Exception {
+        if (!CREDENTIAL.matcher(safe(credential)).matches()) {
+            throw new IllegalStateException("stored Ag device credential is invalid");
+        }
+        return transport.request("GET", "/v1/device-enrollments/continuity/settings", null,
+                "Device " + credential);
+    }
+
     private void validateIssued(JSONObject issued, String deviceId) {
         if (issued == null || !safe(deviceId).equals(safe(issued.optString("device_id")))
                 || !"android".equals(issued.optString("surface_id"))

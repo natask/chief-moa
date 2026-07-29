@@ -1,8 +1,12 @@
 "use strict";
 
+const { continuitySettingsPayload } = require("./continuity-settings");
+
 const CAPABILITY_PATH = "/v1/device-enrollments/capabilities";
 const EXCHANGE_PATH = "/v1/device-enrollments/exchanges";
 const CONTINUITY_PATH = "/v1/device-enrollments/continuity";
+const CONTINUITY_SETTINGS_PATH = "/v1/device-enrollments/continuity/settings";
+const GET_PATHS = new Set([CONTINUITY_PATH, CONTINUITY_SETTINGS_PATH]);
 
 function createDeviceEnrollmentHandlers(options = {}) {
   const service = options.service;
@@ -11,21 +15,47 @@ function createDeviceEnrollmentHandlers(options = {}) {
   const authority = requiredFunction(options.authority, "authority");
   const readJsonBody = requiredFunction(options.readJsonBody, "readJsonBody");
   const sendJson = requiredFunction(options.sendJson, "sendJson");
+  const readAccountSettings = requiredFunction(options.readAccountSettings, "readAccountSettings");
   if (!service || typeof service.issue !== "function" || typeof service.exchange !== "function") {
     throw new Error("device enrollment service is required");
   }
 
+  // Both continuity reads are device-authenticated: the clean install holds only
+  // its own scoped `Device` credential and never the owner bearer token.
+  async function scopedPrincipal(request, scope) {
+    const principal = await authenticateDevice(request);
+    if (!principal?.owner_id || principal.application_id !== "ag.companion"
+        || !principal.scopes?.includes(scope)) {
+      return null;
+    }
+    return principal;
+  }
+
   return async function handle(request, response, pathname) {
-    if (pathname !== CAPABILITY_PATH && pathname !== EXCHANGE_PATH && pathname !== CONTINUITY_PATH) return false;
-    const expectedMethod = pathname === CONTINUITY_PATH ? "GET" : "POST";
+    if (pathname !== CAPABILITY_PATH && pathname !== EXCHANGE_PATH && !GET_PATHS.has(pathname)) return false;
+    const expectedMethod = GET_PATHS.has(pathname) ? "GET" : "POST";
     if (String(request.method || "").toUpperCase() !== expectedMethod) {
       sendJson(response, 405, { error: "method_not_allowed" });
       return true;
     }
+    if (pathname === CONTINUITY_SETTINGS_PATH) {
+      const principal = await scopedPrincipal(request, "profile.read");
+      if (!principal) {
+        sendJson(response, 401, { error: "invalid_device_credential" });
+        return true;
+      }
+      const account = await readAccountSettings(principal);
+      sendJson(response, 200, continuitySettingsPayload({
+        profile: account?.profile,
+        profileVersion: account?.profile_version,
+        accountId: principal.owner_id,
+        tenantId: principal.tenant_id,
+      }));
+      return true;
+    }
     if (pathname === CONTINUITY_PATH) {
-      const principal = await authenticateDevice(request);
-      if (!principal?.owner_id || principal.application_id !== "ag.companion"
-          || !principal.scopes?.includes("continuity.read")) {
+      const principal = await scopedPrincipal(request, "continuity.read");
+      if (!principal) {
         sendJson(response, 401, { error: "invalid_device_credential" });
         return true;
       }
@@ -34,6 +64,7 @@ function createDeviceEnrollmentHandlers(options = {}) {
         account_id: principal.owner_id,
         tenant_id: principal.tenant_id,
         restore: ["conversations", "sessions", "runs", "profile"],
+        settings_endpoint: CONTINUITY_SETTINGS_PATH,
         local_state_transferred: false,
       });
       return true;

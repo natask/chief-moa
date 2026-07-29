@@ -50,6 +50,7 @@ final class MoaPrefs {
     private static final String KEY_YOUTUBE_FIXTURE_VERSION = "youtube_fixture_version";
     private static final String KEY_YOUTUBE_FIXTURE_SIGNER = "youtube_fixture_signer";
     private static final String KEY_FIRST_CONVERSATION_COMPLETED = "ag_first_conversation_completed";
+    private static final String KEY_SETTINGS_SCHEMA_VERSION = "ag_settings_schema_version";
     static final String DEFAULT_YOUTUBE_PACKAGE = "app.revanced.android.youtube";
 
     // Orb scale contract shared by the overlay (applies it) and the main app
@@ -274,6 +275,28 @@ final class MoaPrefs {
 
     static void setAgentProfileJson(Context context, String profileJson) {
         prefs(context).edit().putString(KEY_AGENT_PROFILE_JSON, profileJson == null ? "" : profileJson).apply();
+    }
+
+    /**
+     * Merge an authenticated account settings snapshot over the local profile
+     * cache. This is how a clean {@code ag.companion} install comes back
+     * configured: the settings are re-fetched from the account, never copied
+     * from another package's storage. A rejected snapshot changes nothing.
+     */
+    static AgSettingsRestore.Result restoreAccountSettings(Context context, JSONObject payload) {
+        AgSettingsRestore.Result result = AgSettingsRestore.apply(agentProfileJson(context), payload);
+        if (result.restored()) {
+            prefs(context).edit()
+                    .putString(KEY_AGENT_PROFILE_JSON, result.settingsJson)
+                    .putInt(KEY_SETTINGS_SCHEMA_VERSION, result.serverSchemaVersion)
+                    .apply();
+        }
+        return result;
+    }
+
+    /** Settings schema version of the last applied snapshot; 0 when never restored. */
+    static int restoredSettingsSchemaVersion(Context context) {
+        return prefs(context).getInt(KEY_SETTINGS_SCHEMA_VERSION, 0);
     }
 
     static String activeCompanionJson(Context context) {

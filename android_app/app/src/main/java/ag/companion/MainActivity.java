@@ -439,13 +439,17 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 MoaPrefs.saveGatewayConfig(this, origin, "");
-                AgEnrollmentClient.Result result = new AgEnrollmentClient(origin).exchangeAndDiscover(
-                        capability, new MoaDeviceCredentialStore(this), androidDeviceId());
+                MoaDeviceCredentialStore store = new MoaDeviceCredentialStore(this);
+                AgEnrollmentClient client = new AgEnrollmentClient(origin);
+                AgEnrollmentClient.Result result = client.exchangeAndDiscover(
+                        capability, store, androidDeviceId());
+                final String restoreSummary = AgContinuityRestore.restoreAndSummarize(
+                        this, client, store, androidDeviceId());
                 mainHandler.post(() -> {
                     if (enrollmentCapabilityInput != null) enrollmentCapabilityInput.setText("");
                     if (enrollmentStatus != null) enrollmentStatus.setText(
                             "Authenticated continuity verified for account " + result.accountId
-                                    + ". No app-local state was transferred.");
+                                    + ". No app-local state was transferred. " + restoreSummary);
                     button.setEnabled(true);
                     setContentView(createContent());
                     updatePermissionState();

@@ -1201,6 +1201,13 @@ async function initializeReleaseControl() {
     authority: () => releaseControlRuntime.authority,
     readJsonBody,
     sendJson,
+    // The restorable settings a clean ag.companion install re-fetches. Scope is
+    // global today because the profile store is single-account; the principal is
+    // passed through so per-account scoping lands here, not in the handler.
+    readAccountSettings: () => ({
+      profile: agentProfile.effective(),
+      profile_version: agentProfile.currentVersion(),
+    }),
   });
   releaseControlReady = true;
 }

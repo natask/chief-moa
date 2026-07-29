@@ -15,11 +15,15 @@ function handler(overrides = {}) {
     authorized: () => true,
     authenticateDevice: async () => ({
       tenant_id: "trusted_tenant", owner_id: "trusted_owner", application_id: "ag.companion",
-      scopes: ["continuity.read"],
+      scopes: ["continuity.read", "profile.read"],
     }),
     authority: () => ({ tenant_id: "trusted_tenant", owner_id: "trusted_owner" }),
     readJsonBody: async (request) => request.body,
     sendJson: (target, status, body) => Object.assign(target, { status, body }),
+    readAccountSettings: async () => ({
+      profile: { assistant_name: "Ag", voice: "Aoede", system_prompt: "server-owned" },
+      profile_version: "prof_3",
+    }),
     ...overrides,
   });
 }
@@ -56,6 +60,7 @@ test("scoped Ag credential returns gateway-owned continuity and no local-transfe
     account_id: "trusted_owner",
     tenant_id: "trusted_tenant",
     restore: ["conversations", "sessions", "runs", "profile"],
+    settings_endpoint: "/v1/device-enrollments/continuity/settings",
     local_state_transferred: false,
   });
 
@@ -63,6 +68,32 @@ test("scoped Ag credential returns gateway-owned continuity and no local-transfe
   await handler({ authenticateDevice: async () => null })({ method: "GET" }, denied,
     "/v1/device-enrollments/continuity");
   assert.equal(denied.status, 401);
+});
+
+test("settings restore needs profile.read and returns only account-owned settings", async () => {
+  const target = response();
+  await handler()({ method: "GET", headers: { authorization: "Device opaque" } }, target,
+    "/v1/device-enrollments/continuity/settings");
+  assert.equal(target.status, 200);
+  assert.equal(target.body.settings_schema_version, 1);
+  assert.equal(target.body.account_id, "trusted_owner");
+  assert.equal(target.body.profile_version, "prof_3");
+  assert.equal(target.body.local_state_transferred, false);
+  assert.deepEqual(target.body.settings, { assistant_name: "Ag", voice: "Aoede" });
+
+  const denied = response();
+  await handler({ authenticateDevice: async () => ({
+    tenant_id: "trusted_tenant", owner_id: "trusted_owner", application_id: "ag.companion",
+    scopes: ["continuity.read"],
+  }) })({ method: "GET" }, denied, "/v1/device-enrollments/continuity/settings");
+  assert.equal(denied.status, 401);
+
+  const wrongApp = response();
+  await handler({ authenticateDevice: async () => ({
+    tenant_id: "trusted_tenant", owner_id: "trusted_owner", application_id: "ai.moa.assistant",
+    scopes: ["profile.read"],
+  }) })({ method: "GET" }, wrongApp, "/v1/device-enrollments/continuity/settings");
+  assert.equal(wrongApp.status, 401);
 });
 
 test("issuance requires owner auth and handler rejects wrong methods and unrelated paths", async () => {
