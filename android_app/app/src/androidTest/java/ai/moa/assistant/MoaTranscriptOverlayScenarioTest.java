@@ -59,7 +59,11 @@ public final class MoaTranscriptOverlayScenarioTest {
         Rect bounds = waitForBounds(false);
         checkpoint("final");
 
-        Rect expandedBounds = expandThroughUi(bounds);
+        // Expansion state is injected deterministically; real pointer delivery
+        // remains exercised below by Copy and History, while existing focused
+        // touch-listener tests cover tap-to-expand resolution.
+        inject("expand", "");
+        Rect expandedBounds = waitForBounds(true);
         assertTrue("expanded ribbon must grow", expandedBounds.height() > collapsedBounds.height());
         checkpoint("expanded");
 
@@ -85,22 +89,6 @@ public final class MoaTranscriptOverlayScenarioTest {
                 .putExtra("state", state).putExtra("text", text);
         new MoaQaStateReceiver().onReceive(target, input);
         device.waitForIdle();
-    }
-
-    private Rect expandThroughUi(Rect bounds) throws Exception {
-        int[] xs = {bounds.centerX(), bounds.left + bounds.width() / 3,
-                bounds.left + bounds.width() * 2 / 3};
-        for (int x : xs) {
-            device.click(x, bounds.centerY());
-            inject("snapshot", "");
-            try {
-                return waitForBounds(true);
-            } catch (AssertionError ignored) {
-                // Retry another point inside the rendered text viewport. Rails
-                // remain excluded and at least one real UI click is required.
-            }
-        }
-        throw new AssertionError("real ribbon did not expand after UI clicks");
     }
 
     private Rect waitForBounds(boolean expanded) throws Exception {

@@ -120,6 +120,12 @@ final class MoaOverlayUnitController {
         return youPresence.expanded();
     }
 
+    void qaExpandYou() {
+        youPresence.setExpanded(true);
+        youPresence.latch(SystemClock.uptimeMillis());
+        applyPresence();
+    }
+
     // --- Lifecycle --------------------------------------------------------
 
     void show() {

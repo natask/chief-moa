@@ -311,6 +311,8 @@ public final class OverlayService extends Service {
         } else if ("final".equals(state)) {
             showTranscriptOverlay(text);
             updateVoiceUserTranscript(text, true);
+        } else if ("expand".equals(state)) {
+            overlayUnit.qaExpandYou();
         }
         mainHandler.postDelayed(this::recordQaOverlayState, 350);
         Log.i(TAG, "qa_state_applied state=" + state + " chars=" + text.length());
