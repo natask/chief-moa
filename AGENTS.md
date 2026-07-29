@@ -53,9 +53,21 @@ For Android-first product work, the active change is usually
 
 ## Verification Defaults
 
-- Android changes: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug`
+- Android changes: `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew lintDebug assembleDebug testDebugUnitTest`
+  Lint is part of the gate, not optional: `assembleDebug` alone does not run it,
+  and it has caught a real crash (an API 30 call against a minSdk 26 app) that
+  the build and the unit tests both passed.
 - Gateway changes: `cd gateway && npm run check`
+  Install with `pnpm install --frozen-lockfile`. Never `npm install` here — it
+  rewrites the pnpm lockfile and creates drift.
 - Browser extension changes: `cd browser_extension && npm run verify && npm run smoke`
+- Any surface: the repo-wide source-size ceiling is `node scripts/source-size-policy.js`.
+  That script is the canonical definition; `gateway/test/source-size-policy.test.js`
+  is one caller of it, not its home. It now runs from the Android build, the
+  extension's `verify`, and an unfiltered CI workflow, because it is repo-wide
+  but used to be reachable only through the gateway suite — so an Android-only
+  change never ran it and the breach surfaced at merge time with master already
+  red and every unrelated release blocked.
 - OpenSpec changes: inspect `reference/openspec/changes/<change>` and run the
   matching OpenSpec validation if the CLI has been initialized for this checkout.
 - Runtime behavior: verify with gateway smoke checks or phone QA, whichever is
