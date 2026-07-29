@@ -255,6 +255,16 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     return adapter.appendFeedback(feedback);
   }
 
+  async function feedbackDetail(input) {
+    const tenantId = key(input.tenant_id, "tenant_id");
+    const applicationId = key(input.application_id, "application_id");
+    const feedbackId = key(input.feedback_id, "feedback_id");
+    authorize(input, "read", applicationId, "all");
+    return (await adapter.listFeedback(tenantId, applicationId))
+      .map(normalizeReleaseFeedback)
+      .find((item) => item.feedback_id === feedbackId) || null;
+  }
+
   async function loadContext(input) {
     const tenantId = key(input.tenant_id, "tenant_id");
     const applicationId = key(input.application_id, "application_id");
@@ -272,7 +282,7 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     };
   }
 
-  return Object.freeze({ view, listCandidates, selectCandidate, assign, fallback, recordInstallReceipt, recordFeedback });
+  return Object.freeze({ view, listCandidates, selectCandidate, assign, fallback, recordInstallReceipt, recordFeedback, feedbackDetail });
 }
 
 function latestHeads(records) {

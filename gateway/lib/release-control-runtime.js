@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { Pool } = require("pg");
+const { createAndroidFeedbackFixCoordinator } = require("./android-feedback-fix-coordinator");
 
 const RELEASE_CONTROL_PREFIX = "/v1/release-control/";
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -73,8 +74,18 @@ async function createReleaseControlRuntime(options = {}) {
     ]);
     const adapter = createPostgresReleaseAdapter(pool);
     const service = createReleaseControlService({ adapter });
+    const modificationCoordinator = options.events && options.intentWorkflow
+      ? createAndroidFeedbackFixCoordinator({
+        events: options.events,
+        intentWorkflow: options.intentWorkflow,
+        releaseControlService: service,
+        resolveBaseCommit: options.resolveBaseCommit,
+        now: options.now,
+      })
+      : null;
     const handle = createReleaseControlHttpHandler(service, {
       authenticate,
+      modificationCoordinator,
     });
 
     return Object.freeze({

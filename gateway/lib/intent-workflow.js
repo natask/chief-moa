@@ -110,6 +110,7 @@ function createIntentWorkflow({ intentRuntime, workHistory }) {
           intent_id: intentId,
           intent_revision: intent.version,
           acceptance_contract_ref: acceptanceContractRef,
+          workspace_base: input.workspace_base,
           actor,
           idempotency_key: `${idempotencyBase}-run`,
         });

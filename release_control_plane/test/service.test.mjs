@@ -196,6 +196,42 @@ test("feedback rejects bundle, release, and digest mismatches and appends an exa
     (error) => error.code === "release_binding_mismatch" && error.reason === "release_mismatch",
   );
   assert.equal(adapter.snapshot().feedback.length, 1);
+  const fetched = await service.feedbackDetail({
+    tenant_id: "personal", application_id: "chief-moa", feedback_id: saved.feedback_id,
+    authority, surface: "android",
+  });
+  assert.deepEqual(fetched, saved);
+});
+
+test("authenticated modification routes preserve trusted device scope", async () => {
+  const { service } = harness();
+  const calls = [];
+  const http = createReleaseControlHttpHandler(service, {
+    authenticate: async () => ({
+      tenant_id: "personal", actor_id: "nat", owner_id: "nat",
+      device_id: "phone-1", surface_id: "android",
+    }),
+    modificationCoordinator: {
+      async create(input) {
+        calls.push(input);
+        return {
+          request: { request_id: "mreq_1" }, identities: { request_id: "mreq_1", run_id: "wr_1" },
+          owner_lease: { owner_id: "software-factory/android", lease_id: "lease_1" }, state: "queued",
+        };
+      },
+      async status(requestId, input) {
+        calls.push({ requestId, ...input });
+        return requestId === "mreq_1" ? { schema: "modification_status.v1", state: "queued" } : null;
+      },
+    },
+  });
+  const created = await http({ method: "POST", path: "/v1/release-control/apps/chief-moa/modification-requests", body: { device_id: "forged", surface: "browser_extension" } });
+  assert.equal(created.status, 201);
+  assert.equal(calls[0].device_id, "phone-1");
+  assert.equal(calls[0].surface_id, "android");
+  const status = await http({ method: "GET", path: "/v1/release-control/apps/chief-moa/modification-requests/mreq_1", query: {} });
+  assert.equal(status.status, 200);
+  assert.equal(calls[1].requestId, "mreq_1");
 });
 
 test("fallback appends a new assignment to recorded last-known-good and stays install-pending", async () => {

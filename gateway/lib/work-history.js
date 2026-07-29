@@ -157,7 +157,7 @@ function createWorkHistoryStore({ events }) {
       created_from_turn_id: text(input.created_from_turn_id, 160),
       route_decision_id: text(input.route_decision_id, 160),
       context_pack_ref: text(input.context_pack_ref, 400),
-      profile_version: text(input.profile_version, 160), intent_id: text(input.intent_id, 160), intent_revision: integer(input.intent_revision), acceptance_contract_ref: text(input.acceptance_contract_ref, 400),
+      profile_version: text(input.profile_version, 160), intent_id: text(input.intent_id, 160), intent_revision: integer(input.intent_revision), acceptance_contract_ref: text(input.acceptance_contract_ref, 400), workspace_base: plain(input.workspace_base),
       created_at: now,
     };
     if (!run.objective) {
@@ -190,7 +190,8 @@ function createWorkHistoryStore({ events }) {
 
   // A worker claims the oldest queued run (or a named run). The claim is the
   // gate between durable intent and execution: nothing runs before it exists.
-  async function claimRun({ worker_id: workerId, run_id: runId } = {}) {
+  async function claimRun(input = {}) {
+    const { worker_id: workerId, run_id: runId } = input;
     const worker = text(workerId, 160);
     if (!worker) {
       throw new Error("worker_id is required");

@@ -1941,6 +1941,11 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   to the exact assignment, bundle, release, surface, and artifact SHA-256 being
   evaluated. Any generated summary or modification request is non-executable
   proposal data.
+- `modification_request`: an explicitly implementation-authorized Create-fix
+  lifecycle bound to one exact Android feedback record. The gateway pins
+  `origin/master` and its resolved commit, idempotently links one canonical
+  intent, work task, queued run, and owner lease, and projects an expired lease
+  as reclaimable instead of silently leaving authorized work unowned.
 - `run_control_request`: a pause/cancel/redirect proposal the owning worker
   must claim and receipt before the run state changes.
 - `deployment_record`: preview/artifact/applied deployment state with URLs and
@@ -2090,6 +2095,9 @@ queues.
   current work turn to the canonical intent runtime, a work-history task, and an
   inert queued run proposal. It exposes `moa.delivery-intent.v1`; it never
   claims a worker, executes code, or records promotion.
+- `gateway/lib/android-feedback-fix-coordinator.js`: authenticated exact-release
+  Create-fix admission and the joined modification request/intent/task/run/owner
+  status projection. Feedback alone remains inert.
 - `gateway/scripts/smoke-work-history.js`: end-to-end control-plane smoke
   (voice create, worker evidence, status, feedback, cancel receipt, deployment
   links, ui.open claim/receipt), run via `npm run smoke:work-history`.

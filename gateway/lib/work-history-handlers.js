@@ -1,5 +1,7 @@
 "use strict";
 
+const { workerBaseDrift } = require("./worker-base-binding");
+
 const DEPLOYMENT_OPERATIONS = new Set(["preview", "apply", "rollback"]);
 
 function createWorkHistoryHandlers(deps) {
@@ -65,7 +67,17 @@ function createWorkHistoryHandlers(deps) {
         return true;
       }
       if (method === "POST" && pathname === "/v1/work-history/runs/claim") {
-        const result = await workHistory.claimRun(await readJsonBody(request));
+        const body = await readJsonBody(request);
+        if (body.run_id) {
+          const detail = await workHistory.runDetail(body.run_id);
+          const drift = workerBaseDrift(detail?.run, body);
+          if (drift) {
+            await workHistory.appendRunEvent({ run_id: body.run_id, type: "run.failed", summary: drift, worker_id: body.worker_id });
+            if (detail?.run?.task_id) await workHistory.setTaskStatus(detail.run.task_id, "blocked", drift);
+            throw new Error(drift);
+          }
+        }
+        const result = await workHistory.claimRun(body);
         sendJson(response, result.run ? 200 : 204, result.run ? result : {});
         return true;
       }

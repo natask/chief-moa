@@ -3,7 +3,7 @@
 // Framework-neutral transport boundary. Authentication is injected so caller
 // JSON can never choose its tenant or actor. The service remains the authority
 // check and persistence boundary.
-export function createReleaseControlHttpHandler(service, { authenticate } = {}) {
+export function createReleaseControlHttpHandler(service, { authenticate, modificationCoordinator } = {}) {
   if (!service) throw new Error("service is required");
   if (typeof authenticate !== "function") throw new Error("authenticate(request) is required");
 
@@ -15,10 +15,11 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
         return response(401, { error: "unauthorized" });
       }
       const method = String(request.method || "GET").toUpperCase();
-      const match = String(request.path || "").match(/^\/v1\/release-control\/apps\/([^/]+)\/(view|candidates|candidate-selections|assignments|fallback|install-receipts|feedback)$/);
+      const match = String(request.path || "").match(/^\/v1\/release-control\/apps\/([^/]+)\/(view|candidates|candidate-selections|assignments|fallback|install-receipts|feedback|modification-requests)(?:\/([^/]+))?$/);
       if (!match) return response(404, { error: "not_found" });
       const applicationId = decodeURIComponent(match[1]);
       const action = match[2];
+      const resourceId = match[3] ? decodeURIComponent(match[3]) : "";
       const caller = method === "GET" ? request.query : request.body;
       const trustedSurface = principal.surface_id;
       const input = {
@@ -70,6 +71,17 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
       if (method === "POST" && action === "feedback") {
         return response(201, { feedback: publicFeedback(await service.recordFeedback(input)) });
       }
+      if (action === "modification-requests") {
+        if (!modificationCoordinator) return response(503, { error: "modification_coordinator_unavailable" });
+        if (method === "POST" && !resourceId) {
+          const status = await modificationCoordinator.create(input);
+          return response(201, { modification_request: status.request, identities: status.identities, owner_lease: status.owner_lease, status });
+        }
+        if (method === "GET" && resourceId) {
+          const status = await modificationCoordinator.status(resourceId, input);
+          return status ? response(200, { status }) : response(404, { error: "modification_request_not_found" });
+        }
+      }
       return response(405, { error: "method_not_allowed" });
     } catch (error) {
       if (error?.code === "release_not_authorized") return response(403, { error: error.code });
@@ -82,6 +94,12 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
       }
       if (error?.code === "release_binding_mismatch") {
         return response(409, { error: error.code, reason: error.reason });
+      }
+      if (error?.code === "modification_request_conflict") {
+        return response(409, { error: error.code, reason: error.reason });
+      }
+      if (error?.code === "modification_request_blocked") {
+        return response(422, { error: error.code, reason: error.reason, message: String(error.message || error).slice(0, 500) });
       }
       return response(400, { error: "invalid_request", message: String(error?.message || error).slice(0, 500) });
     }

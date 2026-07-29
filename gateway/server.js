@@ -1153,6 +1153,8 @@ if (require.main === module) {
 async function initializeReleaseControl() {
   releaseControlRuntime = await createReleaseControlRuntime({
     enabled: RELEASE_CONTROL_CONFIGURED,
+    events: eventSubstrate,
+    intentWorkflow,
     migrate: process.env.MOA_RELEASE_CONTROL_MIGRATE_AT_BOOT !== "0",
     createAuthentication: async (pool, authority) => {
       const registry = createDeviceCredentialRegistry({

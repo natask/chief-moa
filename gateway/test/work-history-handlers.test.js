@@ -25,6 +25,7 @@ function makeHarness(overrides = {}) {
     queueRun: async (body) => ({ run_id: body.run_id || "wr_1", status: "queued", ...body }),
     claimRun: async () => ({ run: { run_id: "wr_1" }, claim_id: "claim_1" }),
     appendRunEvent: async (body) => ({ event_id: "evt_1", ...body }),
+    setTaskStatus: async (task_id, status, reason) => ({ task_id, status, reason }),
     recordSnapshot: async (body) => ({ snapshot_id: "snap_1", ...body }),
     recordDiff: async (body) => ({ diff_id: "diff_1", ...body }),
     recordVerification: async (body) => ({ verification_id: "ver_1", ...body }),
@@ -142,6 +143,22 @@ test("general routes cover missing, empty claim, scoped denial, and caught error
     error: "run queue failed",
     intent_workflow_partial: { intent_id: "intent_1", task_id: "wt_1" },
   });
+});
+
+test("worker claim records a base-drift blocker before ownership changes", async () => {
+  const harness = makeHarness({ workHistory: { runDetail: async () => ({ run: {
+    run_id: "wr_fix", task_id: "wt_fix",
+    workspace_base: { ref: "origin/master", commit: "a".repeat(40) },
+  } }) } });
+  const response = await route(harness, "POST", "/v1/work-history/runs/claim", {
+    run_id: "wr_fix", worker_id: "worker_1", base_ref: "origin/master",
+    resolved_base_commit: "b".repeat(40),
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.payload.error, /base drift/);
+  assert.equal(harness.calls.some(([name]) => name === "claimRun"), false);
+  assert.equal(harness.calls.some(([name]) => name === "appendRunEvent"), true);
+  assert.equal(harness.calls.some(([name]) => name === "setTaskStatus"), true);
 });
 
 test("deployment routes keep user, reviewer, preview, and promoter authority separate", async () => {
