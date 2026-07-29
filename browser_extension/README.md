@@ -34,12 +34,12 @@ classified pages from structural counts while withholding page meaning, so its
 generic suggestions gave the model too little context to be useful and the
 label looked like an agent role.
 
-The future privacy direction is explicit context choice, not automatic context
-starvation. A user should be able to allow page text while denying a screenshot,
-optionally extract/summarize/redact and preserve a local version, inspect the
-exact outbound payload, and then approve richer context for the normal browser
-turn. Privacy means informed control over collection, local transformation,
-retention, and release.
+An explicit browser-agent submission sends a bounded whole-document semantic
+projection and one bounded current-viewport JPEG to the configured gateway.
+Passive operation sends neither. Future context controls should let the user
+narrow that bundle, optionally extract, summarize, redact, and preserve a local
+version, and inspect the exact outbound payload. Privacy means informed control
+over collection, local transformation, retention, and release.
 
 ## Develop it (quiet by default)
 

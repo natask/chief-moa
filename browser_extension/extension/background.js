@@ -37,6 +37,7 @@ import { createToolReceiptRuntime } from "./tool-receipt-runtime.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   MAX_SCREENSHOT_BASE64_CHARS,
+  agentLoopScreenshotObservation,
   buildAgentLoopObservationPayload,
   clampAgentLoopMaxSteps,
   validateAgentLoopAction,
@@ -3894,6 +3895,9 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   await noteBrowserAgentProgress(tabId, cueId, text, 0, "collecting_page_context");
   throwIfAborted(signal);
   const snapshot = await collectBrowserSnapshot(tabId);
+  await noteBrowserAgentProgress(tabId, cueId, text, 1, "capturing_visual_context", "capturing visual context");
+  throwIfAborted(signal);
+  const screenshot = agentLoopScreenshotObservation(await captureScreenshot(tabId));
 
   const delegationEnvelope = role === "delegate"
     ? browserDelegationEnvelope(text, snapshot.url)
@@ -3911,7 +3915,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
     client,
   };
 
-  await noteBrowserAgentProgress(tabId, cueId, text, 1, "sending_to_gateway");
+  await noteBrowserAgentProgress(tabId, cueId, text, 2, "sending_to_gateway");
   throwIfAborted(signal);
   let started = await callGateway(cfg, "/v1/browser/turns", {
     signal,
@@ -3953,6 +3957,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
           captured_at: snapshot.capturedAt,
         },
         screen: snapToScreen(snapshot),
+        screenshot,
       },
     });
     evidenceId = evidence?.evidence?.id || evidence?.evidence_id || evidence?.id || evidence?.ref || snapshot.snapshotId;
@@ -3960,6 +3965,8 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   }
 
   const data = await waitForBrowserTurnAnswer(cfg, started, signal);
+  const pageTweak = browserTurnActions(data).some((action) => action?.type === "page_tweak");
+  if (pageTweak && await maybeApplyTurnActions(tabId, data, signal, cueId, text)) return data;
   const mediaAction = mediaActionsFromTurn(data)[0];
   if (mediaAction) data.local_action_receipts = [...(Array.isArray(data.local_action_receipts) ? data.local_action_receipts : []), await browserMedia.execute(mediaAction, { tabId, sourceText: text })];
   const summary = browserTurnSummary(data);
@@ -3971,7 +3978,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   await saveTaskState(cueId, {
     status: "done",
     instruction: text,
-    step: 3,
+    step: 4,
     tabId,
     browserTurnId: browserTurnId(data) || browserTurnId(started) || null,
     evidenceId: evidenceId || null,

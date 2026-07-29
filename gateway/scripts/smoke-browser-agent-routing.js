@@ -32,7 +32,8 @@ async function main() {
 
     await step("auth required", () => assertAuthRequired(baseUrl));
     const needsEvidence = await step("missing page evidence returns lifecycle request", () => assertNeedsEvidence(baseUrl, sessionId));
-    await step("posted evidence completes the pending turn", () => assertEvidenceCompletesTurn(baseUrl, dataDir, needsEvidence));
+    await step("posted visual evidence reaches the model and completes the pending turn", () => assertEvidenceCompletesTurn(baseUrl, dataDir, needsEvidence, modelServer));
+    await step("visual browser turn proposes a bounded current-page tweak", () => assertVisualPageTweakTurn(baseUrl, sessionId));
     await step("inline evidence completes an explicit browser turn", () => assertInlineEvidenceTurn(baseUrl, sessionId));
     await step("browser-shaped chat delegates to browser turn path", () => assertChatDelegates(baseUrl, sessionId));
     await step("browser-shaped voice delegates to browser turn path", () => assertVoiceDelegates(baseUrl, sessionId));
@@ -46,7 +47,8 @@ async function main() {
         "POST /v1/browser/turns requires a token",
         "missing evidence returns classification=browser_page_question and status=needs_evidence",
         "GET /v1/browser/turns/:id/status reflects pending and completed lifecycle state",
-        "POST /v1/browser/evidence links to the evidence request and completes the turn",
+        "POST /v1/browser/evidence links bounded JPEG evidence to the request and sends it to the model",
+        "visual Collaborate turn returns a validated current-page tweak without launching a background task",
     "inline evidence produces a model-backed browser answer when a model is configured",
     "browser-shaped /v1/chat and /v1/voice/turns delegate to the same browser turn path",
     "browser voice profile-control with screen context does not get stolen by the browser turn adapter",
@@ -63,6 +65,34 @@ async function main() {
     }
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+async function assertVisualPageTweakTurn(baseUrl, sessionId) {
+  const pending = await postJson(`${baseUrl}/v1/browser/turns`, {
+    source: "agee-extension",
+    session_id: sessionId,
+    conversation_id: sessionId,
+    branch_id: "visual-tweak",
+    turn_id: "browser_visual_tweak",
+    client: { platform: "browser", id: "smoke-extension" },
+    role: "collaborate",
+    text: "Make the current page black using the visible page as context.",
+    page_ref: { title: "Visual fixture", url: "https://example.test/visual" },
+  });
+  assert.equal(pending.status, 202);
+  const completed = await postJson(`${baseUrl}/v1/browser/evidence`, {
+    source: "agee-extension",
+    turn_id: pending.json.turn_id,
+    evidence_request_id: pending.json.evidence_request_ids[0],
+    evidence_id: "browser_visual_tweak_evidence",
+    visible_text: "A light page that the user wants restyled.",
+    screenshot: { encoding: "base64_jpeg", data: "/9j/2Q==" },
+  });
+  assert.equal(completed.status, 200);
+  assert.equal(completed.json.actions.length, 1);
+  assert.equal(completed.json.actions[0].type, "page_tweak");
+  assert.equal(completed.json.actions[0].record.kind, "black");
+  assert.deepEqual(completed.json.task_ids, []);
 }
 
 async function assertAuthRequired(baseUrl) {
@@ -103,7 +133,7 @@ async function assertNeedsEvidence(baseUrl, sessionId) {
   return turn.json;
 }
 
-async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending) {
+async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending, modelServer) {
   const evidenceRequestId = pending.evidence_request_ids[0];
   const completed = await postJson(`${baseUrl}/v1/browser/evidence`, {
     source: "browser-agent-routing-smoke",
@@ -118,10 +148,8 @@ async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending) {
     },
     screenshot: {
       media_type: "image/jpeg",
-      encoding: "omitted",
-      omitted: true,
-      bytes: 650000,
-      reason: "screenshot too large for gateway evidence payload",
+      encoding: "base64_jpeg",
+      data: "/9j/2Q==",
     },
   });
   assert.equal(completed.status, 200);
@@ -146,9 +174,12 @@ async function assertEvidenceCompletesTurn(baseUrl, dataDir, pending) {
   assert.equal(stored.turn_id, pending.turn_id);
   assert.equal(stored.status, "completed");
   assert.ok(stored.evidence_refs.includes("browser_evidence_1"));
-  assert.equal(storedEvidence.screenshot.encoding, "omitted");
-  assert.equal(storedEvidence.screenshot.omitted, true);
-  assert.equal(storedEvidence.screenshot.data, undefined, "stored browser evidence must not persist screenshot base64 data");
+  assert.equal(storedEvidence.screenshot.encoding, "base64");
+  assert.equal(storedEvidence.screenshot.omitted, false);
+  assert.equal(storedEvidence.screenshot.data, "/9j/2Q==");
+  assert.equal(modelServer.requests.some((body) => body.messages?.some((message) => (
+    Array.isArray(message.content) && message.content.some((part) => part.type === "image_url")
+  ))), true, "the model request must include the stored browser JPEG");
 }
 
 async function assertInlineEvidenceTurn(baseUrl, sessionId) {
@@ -335,6 +366,7 @@ async function startGateway({ port, dataDir, modelBaseUrl }) {
 }
 
 async function startFakeModelServer() {
+  const requests = [];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
@@ -352,10 +384,27 @@ async function startFakeModelServer() {
       try {
         body = JSON.parse(raw || "{}");
       } catch {}
+      requests.push(body);
       const lastUser = Array.isArray(body.messages)
         ? [...body.messages].reverse().find((message) => message.role === "user")
         : null;
-      const prompt = String(lastUser?.content || "");
+      const prompt = Array.isArray(lastUser?.content)
+        ? lastUser.content.filter((part) => part?.type === "text").map((part) => String(part.text || "")).join("\n")
+        : String(lastUser?.content || "");
+      if (prompt.includes("Make the current page black")) {
+        const hasToolResult = body.messages.some((message) => message.role === "tool");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          choices: [{ message: hasToolResult ? { content: "Prepared the bounded black page change." } : {
+            content: "",
+            tool_calls: [{ id: "page-tweak-1", type: "function", function: {
+              name: "propose_page_tweak",
+              arguments: JSON.stringify({ kind: "black", name: "Black page" }),
+            } }],
+          } }],
+        }));
+        return;
+      }
       const answer = [
         "MODEL_BROWSER_ANSWER",
         prompt.includes("Chief Moa") ? "Chief Moa" : "",
@@ -375,7 +424,7 @@ async function startFakeModelServer() {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  return { server, baseUrl: `http://127.0.0.1:${port}/v1` };
+  return { server, baseUrl: `http://127.0.0.1:${port}/v1`, requests };
 }
 
 function closeHttpServer(server) {

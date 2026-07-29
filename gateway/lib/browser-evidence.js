@@ -2,6 +2,8 @@
 
 const { sanitizeLooseId, screenNodeLabel } = require("./input-utils");
 
+const MAX_BROWSER_SCREENSHOT_BASE64_CHARS = 420 * 1024;
+
 function truncate(value, max) {
   const text = String(value || "");
   return text.length > max ? `${text.slice(0, max)}...` : text;
@@ -39,6 +41,34 @@ function browserEvidenceSummaryFromBody(body) {
   }
   if (!summaries.length) return emptyBrowserEvidenceSummary(browserPageRefFromBody(body));
   return mergeBrowserEvidenceSummaries(...summaries, { page_ref: browserPageRefFromBody(body) });
+}
+
+function sanitizeBrowserVisualEvidence(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = String(value.data || value.data_base64 || "").trim();
+  if (value.omitted === true || !raw) {
+    return {
+      media_type: "image/jpeg", encoding: "omitted", bytes: 0,
+      omitted: true, reason: truncate(String(value.reason || "visual evidence unavailable"), 200),
+    };
+  }
+  if (raw.length > MAX_BROWSER_SCREENSHOT_BASE64_CHARS || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(raw)) {
+    return {
+      media_type: "image/jpeg", encoding: "omitted", bytes: 0, omitted: true,
+      reason: raw.length > MAX_BROWSER_SCREENSHOT_BASE64_CHARS ? "visual evidence exceeds gateway cap" : "visual evidence is not valid base64",
+    };
+  }
+  const bytes = Buffer.from(raw, "base64");
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) {
+    return {
+      media_type: "image/jpeg", encoding: "omitted", bytes: 0,
+      omitted: true, reason: "visual evidence is not a complete JPEG",
+    };
+  }
+  return {
+    media_type: "image/jpeg", encoding: "base64", data: raw, bytes: bytes.length,
+    omitted: false, reason: "",
+  };
 }
 
 function browserEvidenceSummaryFromValue(value) {
@@ -229,6 +259,7 @@ function browserTurnStatusUrl(id) {
 }
 
 module.exports = {
+  MAX_BROWSER_SCREENSHOT_BASE64_CHARS,
   browserEvidenceSummaryFromBody,
   browserEvidenceSummaryFromValue,
   browserOriginFromUrl,
@@ -245,4 +276,5 @@ module.exports = {
   sanitizeBrowserClientMetadata,
   sanitizeBrowserIdList,
   sanitizeBrowserPageRef,
+  sanitizeBrowserVisualEvidence,
 };

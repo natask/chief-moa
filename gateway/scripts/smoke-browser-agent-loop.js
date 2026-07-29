@@ -54,7 +54,7 @@ async function main() {
       expectKind: "finish",
       expectDone: true,
     }));
-    await step("screenshot is stored on the task, not sent to the model", () => assertScreenshotStored(baseUrl, dataDir, created.id));
+    await step("latest bounded screenshot is stored for visual planning and audit", () => assertScreenshotStored(baseUrl, dataDir, created.id));
     await step("finish folds the summary into the linked agent_run", () => assertFinish(baseUrl, dataDir, created));
     await step("finished task record has the expected shape", () => assertFinalRecord(baseUrl, dataDir, created.id));
     await step("role catalog and turn authority are deterministic", () => assertRoleContract(baseUrl, dataDir));

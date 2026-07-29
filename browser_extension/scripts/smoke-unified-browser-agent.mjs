@@ -425,8 +425,8 @@ async function main() {
         throw new Error(`missing progress state "${state}": ${JSON.stringify(typed.progress)}`);
       }
     }
-    if (typed.progress.some((text) => text.includes("capturing screenshot"))) {
-      throw new Error(`ordinary page context unexpectedly captured a screenshot: ${JSON.stringify(typed.progress)}`);
+    if (!typed.progress.some((text) => text.includes("capturing visual context"))) {
+      throw new Error(`browser turn did not report visual capture: ${JSON.stringify(typed.progress)}`);
     }
     if (!typed.text.includes("not executed in this slice")) {
       throw new Error(`action proposal was not rendered as inert: ${JSON.stringify(typed)}`);
@@ -458,7 +458,9 @@ async function main() {
       throw new Error(`page-context turns incorrectly used /v1/voice/turns: ${JSON.stringify(voiceCalls)}`);
     }
     for (const call of evidenceCalls) {
-      if ("screenshot" in call.body) throw new Error(`ordinary browser evidence included a screenshot: ${JSON.stringify(call.body.screenshot)}`);
+      if (call.body?.screenshot?.encoding !== "base64_jpeg" || !call.body.screenshot.data) {
+        throw new Error("browser evidence did not include bounded JPEG visual context");
+      }
     }
 
     const firstEvidence = evidenceCalls[0].body;

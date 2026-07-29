@@ -10,10 +10,10 @@
 // server.js (create/claim with lease/list/get, plus sanitizers), but adds the
 // per-step planner loop extracted from the agee action-loop prior art.
 //
-// The step planner is TEXT-ONLY in v1: the model sees the instruction, a
-// bounded step history, and the latest observation's url/title/elements/
-// page_text. Screenshots are stored on the task record (latest only) for audit
-// and are NEVER sent to the model in v1. When no reasoning provider is
+// The step planner sees the instruction, a bounded step history, the latest
+// observation's url/title/elements/page_text, and the latest bounded screenshot
+// when one was requested. Screenshots remain latest-only in task storage and
+// do not add execution authority. When no reasoning provider is
 // configured (or the model/transport errors, or it proposes an invalid action)
 // a deterministic keyless fallback keeps the loop moving: step 0 waits, later
 // steps finish.
@@ -240,9 +240,10 @@ function oneLineStep(entry) {
   return `step ${entry.step}: ${actionText}${where ? ` @ ${sanitizeText(where, 80)}` : ""}`;
 }
 
-// Build the TEXT-ONLY model context: instruction + bounded step history (last 8
-// full, older one-line each) + the latest observation's url/title/elements/
-// page_text. No screenshot ever reaches the model in v1.
+// Build the text portion of model context: instruction + bounded step history
+// (last 8 full, older one-line each) + the latest observation's
+// url/title/elements/page_text. The caller may attach the latest bounded
+// screenshot as visual evidence without changing the action envelope.
 function buildPlannerContext(task, observation) {
   const steps = Array.isArray(task.steps) ? task.steps : [];
   const older = steps.slice(0, Math.max(0, steps.length - HISTORY_FULL_STEPS));

@@ -19,6 +19,7 @@ const {
   sanitizeBrowserClientMetadata,
   sanitizeBrowserIdList,
   sanitizeBrowserPageRef,
+  sanitizeBrowserVisualEvidence,
 } = require("../lib/browser-evidence");
 const { screenNodeLabel } = require("../lib/input-utils");
 
@@ -124,6 +125,15 @@ test("browser evidence sanitizers cover empty, invalid, and bounded values", () 
   assert.deepEqual(sanitizeBrowserClientMetadata([]), {});
   assert.equal(browserTurnStatusUrl(""), "/v1/browser/turns/browserturn/status");
   assert.equal(browserRouteRef("x".repeat(250)).length, 203);
+});
+
+test("browser visual evidence accepts only bounded complete JPEG data", () => {
+  assert.equal(sanitizeBrowserVisualEvidence(null), null);
+  assert.equal(sanitizeBrowserVisualEvidence({ data: "/9j/2Q==" }).omitted, false);
+  assert.equal(sanitizeBrowserVisualEvidence({ data: "/9j/2Q==" }).bytes, 4);
+  assert.match(sanitizeBrowserVisualEvidence({ data: "not-base64" }).reason, /base64/);
+  assert.match(sanitizeBrowserVisualEvidence({ data: Buffer.from("not jpeg").toString("base64") }).reason, /JPEG/);
+  assert.match(sanitizeBrowserVisualEvidence({ data: "x".repeat(420 * 1024 + 1) }).reason, /cap/);
 });
 
 test("evidence merging ignores malformed inputs and keeps first provenance", () => {

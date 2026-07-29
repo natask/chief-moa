@@ -44,12 +44,12 @@ Browser extension
   subscriptions, and it is not the deployment target for user-specific
   customizations.
 
-  On an explicit page question, reading evidence is a bounded semantic
-  projection of the whole currently rendered DOM with scope/completeness
-  metadata. It is distinct from the viewport-bound interactive-element index.
-  Ordinary page questions do not capture pixels; screenshots are a separate
-  explicit visual-evidence class and may not silently broaden local action
-  authority.
+  On an explicit browser-agent turn, reading evidence combines a bounded
+  semantic projection of the whole currently rendered DOM with one bounded
+  current-viewport JPEG. The semantic projection carries scope/completeness
+  metadata and remains distinct from the viewport-bound interactive-element
+  index. Pixels and DOM content are untrusted evidence only: releasing visual
+  evidence to the configured gateway does not broaden local action authority.
 
   An explicit desktop-dictation session is a capture-only browser turn. The
   extension requests gateway transcription, copies the final literal transcript
@@ -1259,13 +1259,12 @@ role instead of a data-handling choice. The browser no longer samples page
 structure for suggestions, renders proactive cards, or sends packaged generic
 prompts through a separate proactive endpoint.
 
-Future page-context work must expose concrete user choices over context types
-and scope. A user can, for example, approve extracted page text while excluding
-a screenshot. The browser may locally extract, summarize, redact, and preserve
-a selected representation, but it must show the exact outbound context and
-destination before the user approves release through the normal browser-turn
-path. The UI must distinguish source content, local transformed/retained data,
-and outbound model context.
+An explicit browser-agent submission releases the bounded DOM projection and
+one current-viewport JPEG to the user's configured gateway. Passive observation
+still releases neither. Future context controls may let the user narrow that
+explicit-turn bundle further, and must show the outbound context and
+destination. The UI must distinguish source content, local transformed or
+retained data, and outbound model context.
 
 Privacy means informed scope and consent, not systematically minimizing context
 until the model cannot perform the requested task. Existing independent privacy

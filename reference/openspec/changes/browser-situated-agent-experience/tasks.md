@@ -97,17 +97,17 @@ cd gateway && npm run check
 ## 2. Observation Anchor Primitive
 
 - [x] 2.0 Replace viewport-only page-question evidence with bounded semantic
-      context from the whole currently rendered document. Ordinary page
-      questions must not capture or upload a screenshot; evidence must declare
-      whether it is complete or a distributed bounded sample. Keep screenshot
-      capture as a separate, explicit visual-evidence capability rather than an
-      ambient prerequisite for page understanding.
+      context from the whole currently rendered document. An explicit
+      browser-agent turn also captures one bounded current-viewport JPEG;
+      evidence declares whether DOM context is complete or a distributed
+      bounded sample. Neither evidence class broadens action authority.
 
 Acceptance: an isolated long-page fixture includes markers above and below the
 initial viewport in the gateway evidence, reports its scope and truncation
-state, and sends no screenshot field for a normal “summarize this page” turn.
-The current-viewport interactive-element index remains separate so broader
-reading context does not silently broaden action authority.
+state, and sends a bounded JPEG for a normal “summarize this page” turn. The
+gateway provides both representations to the reasoning model as untrusted
+evidence. The current-viewport interactive-element index remains separate so
+broader reading or visual context does not silently broaden action authority.
 
 - [ ] 2.1 Add a browser-local observation runtime that assigns page/layout
       epochs and emits stable element refs with observation-time document and

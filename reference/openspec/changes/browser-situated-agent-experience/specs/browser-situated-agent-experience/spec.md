@@ -26,6 +26,31 @@ from current location.
 - **AND** the extension does not silently attach the annotation or action to the
   replacement
 
+### Requirement: Explicit turns include visual and semantic evidence
+
+An explicit browser-agent turn SHALL send one bounded current-viewport JPEG
+alongside the bounded semantic page projection to the user's configured
+gateway. The gateway SHALL provide both evidence classes to the reasoning model
+when available. Page pixels and DOM content SHALL remain untrusted evidence and
+SHALL NOT expand the selected agent, delegation envelope, approval policy, or
+local execution authority.
+
+#### Scenario: User asks for help with the visible page
+
+- **WHEN** the user explicitly submits a browser-agent turn on an ordinary page
+- **THEN** the extension captures the current viewport and semantic page context
+- **AND** the gateway reasons over both representations
+- **AND** any page effect still requires the existing browser-owned validation,
+  approval, execution, and receipt path
+
+#### Scenario: Page has no useful DOM text
+
+- **WHEN** an explicit turn targets a canvas-heavy or otherwise visually
+  rendered page with no extractable semantic text
+- **THEN** a valid bounded JPEG is sufficient evidence to answer the turn
+- **AND** the absence of DOM text does not cause the gateway to discard the
+  visual evidence
+
 ### Requirement: Freshness-bound on-page output
 
 Every anchored explanation, instruction, or action proposal SHALL bind to the

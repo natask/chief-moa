@@ -40,7 +40,7 @@ function harness(overrides = {}) {
     sanitizeBrowserClientMetadata: (value) => value || {},
     mergeBrowserPageRefs: (...refs) => Object.assign({}, ...refs.filter(Boolean)),
     browserPageRefFromBody: (body) => body.page || {},
-    sanitizeBrowserScreenshot: (value) => value || null,
+    sanitizeBrowserVisualEvidence: (value) => value || null,
     browserTurnLifecycle: { completeBrowserTurnRecord: async (record) => ({ ...record, status: "completed" }) },
     mergeBrowserEvidenceSummaries: (left, right) => ({ ...(left || {}), ...(right || {}) }),
     attachBrowserRoleExecution: (record) => ({ ...record, role_attached: true }),
@@ -119,6 +119,17 @@ test("evidence requires a locator, an existing turn, and visible evidence", asyn
   response = {};
   await state.handlers.handleBrowserEvidence(request("POST", { browser_turn_id: "turn-1" }), response);
   assert.deepEqual(response, { status: 400, payload: { error: "evidence or screen visible text is required" } });
+});
+
+test("visual evidence can ground a page with no extractable DOM text", async () => {
+  const state = harness();
+  const response = {};
+  await state.handlers.handleBrowserEvidence(request("POST", {
+    turn_id: "turn-1",
+    screenshot: { omitted: false, data: "/9j/2Q==" },
+  }), response);
+  assert.equal(response.status, 200);
+  assert.equal(state.evidenceWrites[0].screenshot.data, "/9j/2Q==");
 });
 
 test("evidence lookup by request id completes, dedupes, persists, and projects aliases", async () => {

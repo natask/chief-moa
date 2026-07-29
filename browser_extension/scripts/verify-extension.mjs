@@ -827,8 +827,12 @@ if (
   throw new Error("browser-agent turns must render named progress states through the existing result surface");
 }
 
-if (/captureScreenshot\(|captureScreenshotViaDebugger\(|browserScreenshotEvidence|screenshot:/.test(browserAgentTurnBody)) {
-  throw new Error("ordinary browser-agent page context must not capture or upload screenshot evidence");
+if (
+  !/capturing visual context/.test(browserAgentTurnBody) ||
+  !/captureScreenshot\(tabId\)/.test(browserAgentTurnBody) ||
+  !/screenshot,/.test(browserAgentTurnBody)
+) {
+  throw new Error("explicit browser-agent turns must attach bounded visual evidence to the DOM projection");
 }
 
 if (

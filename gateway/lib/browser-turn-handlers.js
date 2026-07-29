@@ -6,7 +6,7 @@ function createBrowserTurnHandlers(deps) {
     browserTurns, browserTurnModality, browserTurnInputText, buildBrowserTurnRecord,
     cleanError, browserEvidenceSummaryFromBody, sanitizeOptionalId, randomId,
     sanitizeLooseId, sanitizeBrowserClientMetadata, mergeBrowserPageRefs,
-    browserPageRefFromBody, sanitizeBrowserScreenshot, browserTurnLifecycle,
+    browserPageRefFromBody, sanitizeBrowserVisualEvidence, browserTurnLifecycle,
     mergeBrowserEvidenceSummaries, attachBrowserRoleExecution,
   } = deps;
   const now = typeof deps.now === "function" ? deps.now : () => new Date().toISOString();
@@ -61,7 +61,8 @@ function createBrowserTurnHandlers(deps) {
       : browserTurnStore.findBrowserTurnByEvidenceRequestId(requestedEvidenceRequestId);
     if (!turn) { sendJson(response, 404, { error: "browser turn not found" }); return; }
     const summary = browserEvidenceSummaryFromBody(body);
-    if (!summary.visible_text && !summary.source_ref && !summary.context_scope) {
+    const screenshot = sanitizeBrowserVisualEvidence(body.screenshot);
+    if (!summary.visible_text && !summary.source_ref && !summary.context_scope && screenshot?.omitted !== false) {
       sendJson(response, 400, { error: "evidence or screen visible text is required" }); return;
     }
     const timestamp = now();
@@ -75,7 +76,7 @@ function createBrowserTurnHandlers(deps) {
       source: String(body.source || body.client?.source || "browser-extension").slice(0, 80),
       client: sanitizeBrowserClientMetadata(body.client),
       page_ref: mergeBrowserPageRefs(turn.page_ref, summary.page_ref, browserPageRefFromBody(body)),
-      screenshot: sanitizeBrowserScreenshot(body.screenshot), summary, created_at: timestamp,
+      screenshot, summary, created_at: timestamp,
     };
     browserTurnStore.writeBrowserEvidenceRecord(evidence);
     const evidenceRefs = Array.from(new Set([].concat(turn.evidence_refs || [], evidence.id).filter(Boolean)));
