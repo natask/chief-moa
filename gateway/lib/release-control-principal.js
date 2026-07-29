@@ -13,7 +13,9 @@ function createReleaseControlPrincipalResolver(options = {}) {
 
   return async function authenticate(request = {}) {
     const device = await authenticateDevice(request);
-    if (!device?.tenant_id || !device?.device_id || !device?.surface_id || !device?.credential_id) return null;
+    const scopes = Array.isArray(device?.scopes) ? device.scopes : ["release.read"];
+    if (!device?.tenant_id || !device?.device_id || !device?.surface_id || !device?.credential_id
+        || !scopes.includes("release.read")) return null;
     const owner = ownerId(request);
     if (!owner) return null;
 
@@ -27,7 +29,7 @@ function createReleaseControlPrincipalResolver(options = {}) {
         tenant_id: device.tenant_id,
         principal_id: device.credential_id,
         role: "device",
-        scope: Object.freeze({ application_id: "chief-moa", channel: "*" }),
+        scope: Object.freeze({ application_id: device.application_id || "chief-moa", channel: "*" }),
       })]),
       delegation_grants: Object.freeze([]),
     });

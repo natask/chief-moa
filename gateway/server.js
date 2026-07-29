@@ -127,6 +127,11 @@ const {
   createPostgresDeviceCredentialStore,
 } = require("./lib/device-credentials");
 const { createDeviceCredentialHandlers } = require("./lib/device-credential-handlers");
+const {
+  createDeviceEnrollmentService,
+  createPostgresDeviceEnrollmentStore,
+} = require("./lib/device-enrollment");
+const { createDeviceEnrollmentHandlers } = require("./lib/device-enrollment-handlers");
 const { createReleaseControlPrincipalResolver } = require("./lib/release-control-principal");
 const {
   normalizeSpeech,
@@ -320,6 +325,7 @@ const ECHO_HARNESS_SCRIPT =
 let cachedVertexToken = { value: "", expiresAt: 0 };
 let releaseControlRuntime = null;
 let routeDeviceCredentialRegistration = async () => false;
+let routeDeviceEnrollment = async () => false;
 let releaseControlReady = false;
 
 fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true });
@@ -899,6 +905,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (await routeDeviceEnrollment(request, response, url.pathname)) {
+      return;
+    }
+
     if (releaseControlRuntime
         && await releaseControlRuntime.route(request, response, url, { readJsonBody, sendJson })) {
       return;
@@ -1169,6 +1179,10 @@ async function initializeReleaseControl() {
           ownerId: () => authority.owner_id,
         }),
         registrationAuthority: registry,
+        enrollmentAuthority: createDeviceEnrollmentService({
+          store: createPostgresDeviceEnrollmentStore(pool),
+        }),
+        authenticateDevice: registry.authenticateRequest,
       };
     },
   });
@@ -1177,6 +1191,14 @@ async function initializeReleaseControl() {
     registry: releaseControlRuntime.registrationAuthority,
     authorized,
     tenantId: () => releaseControlRuntime.authority.tenant_id,
+    readJsonBody,
+    sendJson,
+  });
+  routeDeviceEnrollment = createDeviceEnrollmentHandlers({
+    service: releaseControlRuntime.enrollmentAuthority,
+    authenticateDevice: releaseControlRuntime.authenticateDevice,
+    authorized,
+    authority: () => releaseControlRuntime.authority,
     readJsonBody,
     sendJson,
   });

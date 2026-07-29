@@ -26,6 +26,18 @@ normal authorization checks. The old package grants no authority to the new
 one. No shared storage, exported migration component, or signing assumption may
 silently copy secrets or permissions.
 
+Clean-device authentication uses a two-step enrollment exchange. An
+owner-authenticated surface creates a random, five-minute, single-use capability
+bound server-side to the stable tenant/owner, device id, surface, and
+`ag.companion`. The clean device exchanges that capability, without receiving
+or presenting the long-lived gateway bearer token, for a client-generated
+`Device` credential. The gateway stores only hashes and assigns the credential's
+continuity, conversation, profile, release-read, and applicable receipt scopes;
+the client cannot request broader scopes. Successful device authentication may
+then recover gateway-owned continuity and explicitly reports that no app-local
+state was transferred. The legacy bearer registration route remains available
+unchanged to already shipped clients.
+
 The new package receives its own stable/preview channel identity. The old OTA
 channel remains immutable or receives only an explicit retirement notice; it
 must never serve an `ag.companion` APK as though it were an update.

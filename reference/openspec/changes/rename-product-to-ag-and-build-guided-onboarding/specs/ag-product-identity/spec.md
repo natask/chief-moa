@@ -39,6 +39,17 @@ transfer of the old package's local authority.
 - **AND** it does not claim that old app-private preferences, permissions,
   secrets, downloads, or local receipts were transferred
 
+#### Scenario: Clean Ag install enrolls with the gateway
+- **WHEN** an owner approves enrollment for a clean `ag.companion` device
+- **THEN** the gateway issues a short-lived, single-use capability bound to the
+  authenticated account, device, surface, and application
+- **AND** the device exchanges that capability for a server-scoped, hash-only
+  device credential without receiving the long-lived gateway bearer token
+- **AND** successful device authentication identifies the gateway-owned
+  conversations, sessions, runs, and profile eligible for restoration
+- **AND** replayed, expired, malformed, or differently scoped capabilities fail
+  closed
+
 #### Scenario: Old OTA channel is queried
 - **WHEN** an `ai.moa.assistant` client checks its existing update channel
 - **THEN** that channel does not offer an `ag.companion` APK as an update

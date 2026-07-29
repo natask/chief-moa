@@ -81,6 +81,8 @@ async function createReleaseControlRuntime(options = {}) {
       enabled: true,
       storage: "postgres",
       registrationAuthority: authentication?.registrationAuthority || null,
+      enrollmentAuthority: authentication?.enrollmentAuthority || null,
+      authenticateDevice: authentication?.authenticateDevice || null,
       authority,
       async route(request, response, url, transport = {}) {
         if (!String(url?.pathname || "").startsWith(RELEASE_CONTROL_PREFIX)) return false;

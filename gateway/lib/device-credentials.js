@@ -7,7 +7,7 @@ const TOKEN_PREFIX = "moa_dev_v1";
 const SURFACES = new Set(["android", "browser_extension", "desktop"]);
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const IDEMPOTENCY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
-const DEVICE_TOKEN_PATTERN = /^moa_dev_v1\.[A-Za-z0-9_-]{43}$/;
+const DEVICE_TOKEN_PATTERN = /^(?:moa|ag)_dev_v1\.[A-Za-z0-9_-]{43}$/;
 
 function createDeviceCredentialRegistry(options = {}) {
   const store = options.store;
@@ -80,6 +80,9 @@ function createDeviceCredentialRegistry(options = {}) {
       device_id: record.device_id,
       surface_id: record.surface_id,
       credential_id: record.credential_id,
+      owner_id: record.owner_id || "",
+      application_id: record.application_id || "chief-moa",
+      scopes: Object.freeze(Array.isArray(record.scopes) ? record.scopes.map(String) : ["release.read"]),
     });
   }
 
@@ -180,7 +183,7 @@ function publicReceipt(record) {
 }
 
 function parseDeviceAuthorization(value) {
-  const match = String(value || "").match(/^Device (moa_dev_v1\.[A-Za-z0-9_-]{43})$/);
+  const match = String(value || "").match(/^Device ((?:moa|ag)_dev_v1\.[A-Za-z0-9_-]{43})$/);
   return match ? match[1] : "";
 }
 

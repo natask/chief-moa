@@ -18,6 +18,10 @@
 - [ ] 2.3 Prove parallel installation does not overwrite, inherit permissions
       from, or receive app-private secrets from `ai.moa.assistant`.
 - [ ] 2.4 Reauthenticate and restore only authorized gateway-owned continuity.
+  - [x] 2.4a Add the Android-independent gateway protocol and persistent store
+        for short-lived, single-use `ag.companion` enrollment capabilities,
+        scoped hash-only device credentials, and authenticated continuity
+        discovery while preserving the legacy registration route.
 
 ## 3. Build progressive onboarding
 
