@@ -973,6 +973,82 @@ if (
   throw new Error("overlay.css must carry visible thinking (pulse) and speaking (steady tint) mark states for the already-toggled agee-state-* classes");
 }
 
+// The companion rim is the state display: one element, six states, painted by
+// default. Contract: reference/design/overlay-2026-07-28/spec.md section 3.
+// The listening rule used to be scoped to the .agee-voice-first experiment,
+// which is off by default, so "the mic is open" looked exactly like idle.
+if (/\.agee-voice-first\.agee-state-listening/.test(overlayCssSource)) {
+  throw new Error("the listening state must not be gated behind the agee-voice-first experiment");
+}
+for (const rimRule of [
+  /#agee-launcher \.agee-ring \{[\s\S]{0,220}inset: -0\.18em/,
+  /#agee-root\.agee-state-listening #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-you/,
+  /#agee-root\.agee-state-thinking #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-amber/,
+  /#agee-root\.agee-state-speaking #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-gold/,
+  /#agee-root\.agee-recording #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-red/,
+  /#agee-root\.agee-state-error #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-ember/,
+  /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,600}#agee-root\.agee-state-listening #agee-launcher \.agee-ring/,
+]) {
+  if (!rimRule.test(overlayCssSource)) {
+    throw new Error(`overlay.css is missing a companion rim state rule: ${rimRule}`);
+  }
+}
+// Width and opacity only. A glow or a scale pulse reads as a notification
+// badge, not a creature, and neither is compositor-cheap on a 44px mark.
+const rimRules = overlayCssSource.match(/#agee-[^{]*\.agee-ring[^{]*\{[^}]*\}/g) || [];
+for (const rule of rimRules) {
+  if (/box-shadow|filter:|transform:/.test(rule)) {
+    throw new Error(`the companion rim may only animate width and opacity: ${rule}`);
+  }
+}
+if (!/for \(const s of \["idle", "listening", "thinking", "speaking", "error"\]\)/.test(contentSource)) {
+  throw new Error("setAgentState must paint all six companion states, error included");
+}
+if (!/companionRim\?\.setState\(next\)/.test(contentSource) || !/AgeeCompanionRim\.createCompanionRim\(root\)/.test(contentSource)) {
+  throw new Error("content.js must drive the companion rim runtime from setAgentState");
+}
+
+// The mic level pipeline: worklet RMS -> offscreen -> background -> content ->
+// one CSS var. Contract: spec section 3.1.
+const companionLevelSource = readFileSync("extension/companion-level.js", "utf8");
+const companionRimSource = readFileSync("extension/companion-rim.js", "utf8");
+if (
+  !/const LEVEL_BLOCKS = 8/.test(offscreenWorkletSource) ||
+  !/postMessage\(\{ level: Math\.sqrt\(this\.levelSum \/ this\.levelCount\) \}\)/.test(offscreenWorkletSource)
+) {
+  throw new Error("the capture worklet must accumulate RMS and emit a level every 8 blocks (~24Hz)");
+}
+if (!/cmd: "offscreenVoiceLevel"/.test(offscreenVoiceBridgeSource) || !/forwardCaptureLevel/.test(offscreenSource)) {
+  throw new Error("the offscreen document must forward worklet levels through the voice bridge");
+}
+if (
+  !/msg\.cmd === "offscreenVoiceLevel"/.test(backgroundSource) ||
+  !/event: \{ type: "mic_level", rms \}/.test(backgroundSource) ||
+  !/function sendVoiceSessionLevel[\s\S]{0,300}!session\.attached/.test(backgroundSource)
+) {
+  throw new Error("background.js must relay mic_level on the voice event channel and never queue it for an unattached tab");
+}
+if (!/msg\.type === "mic_level"[\s\S]{0,300}companionRim\?\.pushMicLevel\(msg\.rms\)/.test(contentSource)) {
+  throw new Error("content.js must route mic_level into the companion rim");
+}
+if (
+  !/const DB_FLOOR = -55/.test(companionLevelSource) ||
+  !/const DB_RANGE = 40/.test(companionLevelSource) ||
+  !/const ATTACK = 0\.6/.test(companionLevelSource) ||
+  !/const RELEASE = 0\.12/.test(companionLevelSource) ||
+  !/SPEAKING_BASE = 0\.35/.test(companionLevelSource) ||
+  !/SPEAKING_SWING = 0\.25/.test(companionLevelSource) ||
+  !/SPEAKING_HZ = 2\.4/.test(companionLevelSource)
+) {
+  throw new Error("companion-level.js must keep the spec's envelope, dB window and synthetic speaking level");
+}
+if (/document|window\.|querySelector/.test(companionLevelSource)) {
+  throw new Error("companion-level.js must stay a pure module so it can be unit-tested without a browser");
+}
+if (!/setProperty\(LEVEL_VAR, next\)/.test(companionRimSource) || !/const LEVEL_VAR = "--agee-level"/.test(companionRimSource)) {
+  throw new Error("the companion rim runtime must write exactly one CSS var, --agee-level");
+}
+
 if (!/if \(isCurrentTurn\) setAgentState\("speaking"\);/.test(contentSource)) {
   throw new Error("content.js must flip the mark to speaking when assistant text starts rendering, not only on assistant_audio_start");
 }

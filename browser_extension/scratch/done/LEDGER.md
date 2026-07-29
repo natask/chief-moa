@@ -1,3 +1,4 @@
+- Made the companion answer "am I hearing you": a six-state rim on the launcher's unused ring, listening no longer flag-gated, plus a real microphone level from the capture worklet at 24Hz driving --agee-level — agent: claude/opus-5 — worktree-agent-a25870d001b72c20f 59abc9e9
 - Stopped the live transcript repeating itself: partials carry the whole sentence so far, so the client shows the newest one instead of stitching every revision onto the last — agent: claude/opus-5 — fix/live-transcript-staggered-repeat
 - Removed the legacy browser cue/log conversation renderer so typed and spoken turns share only the aligned streaming ribbons, with controls kept text-free — agent: codex/gpt-5 — run_dffae8e5be4a
 - Sent bounded current-page JPEG evidence to browser reasoning and delegated planners, and connected validated visual page-tweak proposals to the visible tab — agent: codex/gpt-5 — ab24e69e

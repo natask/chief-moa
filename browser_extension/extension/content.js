@@ -29,6 +29,8 @@
     stopButton,
     log,
     uiSpecSurfaceEl,
+    companionRim = null,
+    errorHoldTimer = null,
     pendingConfirm = null,
     open = false,
     liveVoice = null,
@@ -104,6 +106,8 @@
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
+  // How long the error rim holds before the companion returns to idle.
+  const ERROR_HOLD_MS = 3000;
   // Language chip: what AG currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
   let ageeProfileCacheValue = null;
@@ -123,9 +127,6 @@
   const AVATAR_BEHAVIOR_DURATIONS = new Set(["while_active"]);
   const COMPANION_PET_PALETTES = new Set(["graphite", "green", "blue", "violet", "red", "amber", "teal", "mono"]);
   const COMPANION_PET_MOTIONS = new Set(["hover", "peek", "tap", "trail", "float", "walk", "climb", "spark"]);
-  const UI_SPEC_CONTROL_TYPES = new Set(["button", "text", "toggle", "select"]);
-  const UI_SPEC_COMPONENT_TYPES = new Set(["card", "list", "map", "stat"]);
-  const UI_SPEC_ACTIONS = new Set(["voice.toggle", "command.open", "agent.run", "page.describe", "settings.open", "noop"]);
   const COMPANION_PET_COLORS = {
     graphite: ["#555a62", "#262a30"],
     green: ["#208553", "#0f5534"],
@@ -355,6 +356,7 @@
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-controls");
     tipEl = root.querySelector("#agee-tip");
+    companionRim = AgeeCompanionRim.createCompanionRim(root);
     setupRibbons();
     quietControls = AgeeQuietCompanionControls.create({ root, launcher,
       copyLatest: () => ribbons?.copyLatest() || false, setVoiceRepliesEnabled,
@@ -1169,150 +1171,6 @@
     syncAvatarBehaviorTrigger();
   }
 
-  function cleanUiToken(value) {
-    return String(value || "").trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 60);
-  }
-
-  function shortUiText(value, max = 160) {
-    return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
-  }
-
-  function sanitizeUiAction(value) {
-    const action = String(value || "").trim();
-    return UI_SPEC_ACTIONS.has(action) ? action : "noop";
-  }
-
-  function sanitizeUiCoordinate(value) {
-    if (!value || typeof value !== "object") return null;
-    const lat = Number(value.lat ?? value.latitude);
-    const lng = Number(value.lng ?? value.lon ?? value.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
-    return {
-      lat,
-      lng,
-      label: shortUiText(value.label || value.name, 100),
-    };
-  }
-
-  function sanitizeUiControl(control) {
-    if (!control || typeof control !== "object") return null;
-    const type = UI_SPEC_CONTROL_TYPES.has(control.type) ? control.type : "";
-    const id = cleanUiToken(control.id);
-    if (!type || !id) return null;
-    const out = {
-      type,
-      id,
-      label: shortUiText(control.label || id, 80),
-      action: sanitizeUiAction(control.action),
-      prompt: shortUiText(control.prompt, 500),
-      value: shortUiText(control.value, 500),
-      checked: control.checked === true,
-    };
-    if (type === "select" && Array.isArray(control.options)) {
-      out.options = control.options.map((option) => shortUiText(option, 80)).filter(Boolean).slice(0, 50);
-    }
-    return out;
-  }
-
-  function sanitizeUiListItem(item) {
-    if (!item || typeof item !== "object") return null;
-    const label = shortUiText(item.label || item.title, 120);
-    if (!label) return null;
-    return {
-      label,
-      detail: shortUiText(item.detail || item.body || item.text, 300),
-      action: sanitizeUiAction(item.action),
-      prompt: shortUiText(item.prompt, 500),
-    };
-  }
-
-  function sanitizeUiMapMarker(marker) {
-    const coord = sanitizeUiCoordinate(marker);
-    if (!coord) return null;
-    return {
-      ...coord,
-      detail: shortUiText(marker.detail || marker.body, 220),
-    };
-  }
-
-  function sanitizeUiComponent(component) {
-    if (!component || typeof component !== "object") return null;
-    const type = UI_SPEC_COMPONENT_TYPES.has(component.type) ? component.type : "";
-    const id = cleanUiToken(component.id);
-    if (!type || !id) return null;
-    const base = {
-      type,
-      id,
-      title: shortUiText(component.title, 100),
-      tone: ["neutral", "good", "warn", "danger", "info"].includes(component.tone) ? component.tone : "neutral",
-    };
-    if (type === "card") {
-      return { ...base, body: shortUiText(component.body || component.text, 1200) };
-    }
-    if (type === "stat") {
-      return {
-        ...base,
-        label: shortUiText(component.label || component.title || id, 80),
-        value: shortUiText(component.value, 120),
-        delta: shortUiText(component.delta, 120),
-      };
-    }
-    if (type === "list") {
-      const items = Array.isArray(component.items)
-        ? component.items.map(sanitizeUiListItem).filter(Boolean).slice(0, 30)
-        : [];
-      return items.length ? { ...base, items } : null;
-    }
-    if (type === "map") {
-      const markers = Array.isArray(component.markers)
-        ? component.markers.map(sanitizeUiMapMarker).filter(Boolean).slice(0, 24)
-        : [];
-      const center = sanitizeUiCoordinate(component.center) || markers[0] || null;
-      if (!center && markers.length === 0) return null;
-      const zoom = Number(component.zoom);
-      return {
-        ...base,
-        center,
-        zoom: Number.isFinite(zoom) ? Math.max(1, Math.min(Math.round(zoom), 20)) : 12,
-        markers,
-      };
-    }
-    return null;
-  }
-
-  function sanitizeUiSurface(surface) {
-    if (!surface || typeof surface !== "object") return null;
-    const id = cleanUiToken(surface.id);
-    if (!id) return null;
-    return {
-      id,
-      title: shortUiText(surface.title || id, 80),
-      components: Array.isArray(surface.components)
-        ? surface.components.map(sanitizeUiComponent).filter(Boolean)
-        : [],
-      controls: Array.isArray(surface.controls)
-        ? surface.controls.map(sanitizeUiControl).filter(Boolean)
-        : [],
-    };
-  }
-
-  function sanitizeUiSpecPayload(payload) {
-    if (globalThis.AgeeUiSpecRuntime?.sanitize) return globalThis.AgeeUiSpecRuntime.sanitize(payload);
-    const source = payload?.payload && typeof payload.payload === "object" ? payload.payload : payload;
-    const spec = source?.spec && typeof source.spec === "object" ? source.spec : source;
-    if (!spec || typeof spec !== "object" || spec.version !== 1 || !Array.isArray(spec.surfaces)) {
-      return null;
-    }
-    const surfaces = spec.surfaces.map(sanitizeUiSurface).filter(Boolean);
-    if (surfaces.length === 0) return null;
-    return {
-      version: 1,
-      isCustomized: source?.is_customized === true || source?.isCustomized === true,
-      surfaces,
-    };
-  }
-
   function loadUiSpec() {
     safeStorageLocalGet({ [UI_SPEC_CACHE_KEY]: null })
       .then((stored) => {
@@ -1323,8 +1181,10 @@
   }
 
   function applyUiSpec(payload) {
-    const spec = sanitizeUiSpecPayload(payload);
-    renderUiSpecSurface(spec);
+    // ui-spec-runtime.js is loaded before content.js on both the manifest and
+    // the hot-injection path, so its sanitizer is the only one. content.js used
+    // to carry a byte-for-byte duplicate as a fallback that could never run.
+    renderUiSpecSurface(globalThis.AgeeUiSpecRuntime?.sanitize(payload) || null);
   }
 
   function renderUiSpecSurface(spec) {
@@ -2517,11 +2377,17 @@
   function setAgentState(next) {
     agentState = next;
     if (!root) return;
-    for (const s of ["idle", "listening", "thinking", "speaking"]) {
+    for (const s of ["idle", "listening", "thinking", "speaking", "error"]) {
       root.classList.toggle(`agee-state-${s}`, s === next);
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
+    // The rim is the state display (spec 2026-07-28 section 3). It owns the
+    // --agee-level var, so it has to hear about every transition, including the
+    // error state, which holds for three seconds and then falls back to idle.
+    companionRim?.setState(next);
+    if (errorHoldTimer) clearTimeout(errorHoldTimer);
+    errorHoldTimer = next === "error" ? setTimeout(() => setAgentState("idle"), ERROR_HOLD_MS) : null;
     // Reacts to the microphone, not the transcriber.
     ribbons?.setUserPending(next === "listening");
     ribbons?.setReplyPending(next === "thinking");
@@ -2826,6 +2692,12 @@
     }
     if (msg.type === "revoked") {
       revokeLiveVoiceState(state, msg.reason || "revoked");
+      return;
+    }
+    if (msg.type === "mic_level") {
+      // ~24 per second while the mic is open, zero when it is not. It arrives on
+      // the same channel as the transcript so it dies with the turn.
+      if (isCurrentTurn) companionRim?.pushMicLevel(msg.rms);
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
@@ -3463,7 +3335,7 @@
 
   function finishLiveVoiceError(state, message, recovery = null) {
     if (!isLiveVoiceStateActive(state)) return;
-    const shown = showCueError(state.cueId, message);
+    showCueError(state.cueId, message);
     setReplyRibbon(String(message || "Voice turn failed."), { tone: "warn", streaming: false });
     ribbons?.endTurn({ error: true });
     attachMicrophoneRecovery(state.cueId, recovery);
@@ -3472,7 +3344,7 @@
     } else {
       stopLiveVoiceState(state, "error");
     }
-    if (!shown && agentState !== "idle") setAgentState("idle");
+    setAgentState("error");
   }
 
   // The mic button and the voice hotkey are manual capture: they start

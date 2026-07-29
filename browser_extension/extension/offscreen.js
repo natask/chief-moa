@@ -1,3 +1,4 @@
+import { micLevelMessage } from "./offscreen-voice-bridge.js";
 import { createPcm16Resampler } from "./offscreen-audio-resampler.js";
 import { createVoicePreRollBuffer } from "./voice-preroll-buffer.js";
 import { finalizeActiveVideoCapture } from "./video-capture-finalization.js";
@@ -95,6 +96,12 @@ function forwardCaptureAudio(capture, pcm) {
     .catch(() => {});
 }
 
+function forwardCaptureLevel(capture, level) {
+  const message = micLevelMessage(capture?.captureId, level);
+  if (!message || activeCapture !== capture) return;
+  chrome.runtime.sendMessage(message).catch(() => {});
+}
+
 async function startCapture(captureId, { warming = false } = {}) {
   if (!captureId) throw new Error("missing voice capture id");
   stopCapture();
@@ -150,6 +157,12 @@ async function startCapture(captureId, { warming = false } = {}) {
 
     worklet.port.onmessage = (event) => {
       if (activeCapture !== capture) return;
+      // A warming capture is a permission/latency trick with no turn behind it,
+      // so its levels have nowhere to go and nothing to paint.
+      if (event.data?.level !== undefined) {
+        if (!capture.warming) forwardCaptureLevel(capture, event.data.level);
+        return;
+      }
       const inputSamples = event.data?.samples;
       if (!(inputSamples instanceof Float32Array) || inputSamples.length <= 0) return;
       const pcm = resampler.process(inputSamples);
