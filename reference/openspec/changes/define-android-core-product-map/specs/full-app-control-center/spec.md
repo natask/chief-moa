@@ -1,5 +1,28 @@
 ## ADDED Requirements
 
+### Requirement: History-First Everyday Surface
+The full Android app SHALL open to a plain history surface rather than an
+operations dashboard.
+
+#### Scenario: User opens AG normally
+- **WHEN** the user opens the full Android app
+- **THEN** the app shows canonical conversation history first
+- **AND** it does not show gateway, run, receipt, benchmark, release, sizing, or
+  gesture diagnostics unless the user explicitly opens Setup & developer
+- **AND** opening the app does not start, stop, expand, or collapse the overlay
+
+#### Scenario: User copies a finalized turn
+- **WHEN** a retained turn contains user or assistant text
+- **THEN** the text is selectable
+- **AND** one explicit Copy turn action writes the exact retained text to the
+  Android clipboard and shows a visible copied receipt
+
+#### Scenario: User needs setup or diagnostics
+- **WHEN** the user chooses Setup & developer
+- **THEN** the existing permission, gateway, release, action, sizing, gesture,
+  session, run, receipt, and benchmark controls remain available there
+- **AND** the user can return to History through persistent top-level navigation
+
 ### Requirement: Explicit Control-Center Entry
 The full Android app SHALL remain available for setup and deep inspection
 without being the default launcher surface.

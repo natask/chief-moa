@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -66,6 +68,10 @@ public final class MainActivity extends Activity {
     private TextView requirementsSummary;
     private TextView sessionsStatus;
     private ScrollView contentScroll;
+    private LinearLayout historySection;
+    private LinearLayout developerSection;
+    private Button historySectionButton;
+    private Button developerSectionButton;
     private TextView sessionHistoryStatus;
     private LinearLayout sessionHistoryColumn;
     private TextView runsStatus;
@@ -191,8 +197,8 @@ public final class MainActivity extends Activity {
             return;
         }
         final ScrollView scroll = contentScroll;
-        final View anchor = sessionHistoryStatus;
-        scroll.post(() -> scroll.smoothScrollTo(0, anchor.getTop()));
+        showFullAppSection(false);
+        scroll.post(() -> scroll.smoothScrollTo(0, 0));
         refreshControlCenter();
     }
 
@@ -237,16 +243,44 @@ public final class MainActivity extends Activity {
 
         root.addView(heroBrand());
         root.addView(new AgOnboardingController(this).createView());
+        root.addView(fullAppNavigation());
 
-        root.addView(statusCard());
-        root.addView(gatewayCard());
-        root.addView(controlCenterCard());
-        root.addView(releaseController.createView());
-        root.addView(actionCard());
-        root.addView(orbSizeCard());
-        root.addView(gesturesCard());
+        historySection = new LinearLayout(this);
+        historySection.setOrientation(LinearLayout.VERTICAL);
+        historySection.addView(historyCard());
+        root.addView(historySection);
+
+        developerSection = new LinearLayout(this);
+        developerSection.setOrientation(LinearLayout.VERTICAL);
+        developerSection.addView(statusCard());
+        developerSection.addView(gatewayCard());
+        developerSection.addView(diagnosticsCard());
+        developerSection.addView(releaseController.createView());
+        developerSection.addView(actionCard());
+        developerSection.addView(orbSizeCard());
+        developerSection.addView(gesturesCard());
+        root.addView(developerSection);
+        showFullAppSection(false);
 
         return scrollView;
+    }
+
+    private View fullAppNavigation() {
+        LinearLayout navigation = new LinearLayout(this);
+        navigation.setOrientation(LinearLayout.HORIZONTAL);
+        historySectionButton = secondaryButton("History");
+        developerSectionButton = secondaryButton("Setup & developer");
+        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        left.rightMargin = dp(6);
+        historySectionButton.setLayoutParams(left);
+        LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        right.leftMargin = dp(6);
+        developerSectionButton.setLayoutParams(right);
+        historySectionButton.setOnClickListener(view -> showFullAppSection(false));
+        developerSectionButton.setOnClickListener(view -> showFullAppSection(true));
+        navigation.addView(historySectionButton);
+        navigation.addView(developerSectionButton);
+        return navigation;
     }
 
     private View heroBrand() {
@@ -288,6 +322,14 @@ public final class MainActivity extends Activity {
         return wrap;
     }
 
+    private void showFullAppSection(boolean developer) {
+        if (historySection != null) historySection.setVisibility(developer ? View.GONE : View.VISIBLE);
+        if (developerSection != null) developerSection.setVisibility(developer ? View.VISIBLE : View.GONE);
+        if (historySectionButton != null) historySectionButton.setText(developer ? "History" : "History · open");
+        if (developerSectionButton != null) developerSectionButton.setText(developer ? "Setup · open" : "Setup & developer");
+        if (!developer) refreshControlCenter();
+    }
+
     private View statusCard() {
         LinearLayout card = card();
         addCardTitle(card, "Required access");
@@ -307,9 +349,28 @@ public final class MainActivity extends Activity {
         return card;
     }
 
-    private View controlCenterCard() {
+    private View historyCard() {
         LinearLayout card = card();
-        addCardTitle(card, "Control center");
+        addCardTitle(card, "History");
+        TextView description = label("What you said and what AG replied.", MoaColors.MUTED, 14, false);
+        description.setPadding(0, 0, 0, dp(6));
+        card.addView(description);
+        sessionHistoryStatus = label("Loading...", MoaColors.MUTED, 12, true);
+        sessionHistoryStatus.setPadding(0, dp(8), 0, dp(8));
+        card.addView(sessionHistoryStatus);
+        sessionHistoryColumn = new LinearLayout(this);
+        sessionHistoryColumn.setOrientation(LinearLayout.VERTICAL);
+        card.addView(sessionHistoryColumn);
+        renderSessionHistory(null, "Loading history...");
+        Button refresh = secondaryButton("Refresh history");
+        refresh.setOnClickListener(view -> refreshControlCenter());
+        card.addView(refresh);
+        return card;
+    }
+
+    private View diagnosticsCard() {
+        LinearLayout card = card();
+        addCardTitle(card, "Developer diagnostics");
 
         sessionsStatus = statRow(card, "Shared session", "Checking...");
         runsStatus = statRow(card, "Runs", "Checking...");
@@ -318,27 +379,7 @@ public final class MainActivity extends Activity {
         companionStatus = statRow(card, "Companion", MoaPrefs.companionStatus(this));
         voiceE2eStatus = statRow(card, "Mobile voice E2E", MoaVoiceE2eMetricsStore.summary(this));
 
-        sessionHistoryStatus = label("Recent shared history", MoaColors.MUTED, 12, true);
-        sessionHistoryStatus.setPadding(0, dp(14), 0, dp(8));
-        card.addView(sessionHistoryStatus);
-
-        ScrollView historyScroll = new ScrollView(this);
-        historyScroll.setFillViewport(false);
-        historyScroll.setBackground(MoaDrawables.rounded(
-                MoaColors.COMPOSER_BG, dp(14), MoaColors.COMPOSER_BORDER, dp(1)));
-        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(420));
-        historyScroll.setLayoutParams(historyParams);
-
-        sessionHistoryColumn = new LinearLayout(this);
-        sessionHistoryColumn.setOrientation(LinearLayout.VERTICAL);
-        sessionHistoryColumn.setPadding(dp(12), dp(8), dp(12), dp(12));
-        historyScroll.addView(sessionHistoryColumn, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        card.addView(historyScroll);
-        renderSessionHistory(null, "Loading shared history...");
-
-        Button refresh = secondaryButton("Refresh");
+        Button refresh = secondaryButton("Refresh diagnostics");
         refresh.setOnClickListener(v -> refreshControlCenter());
         card.addView(refresh);
         return card;
@@ -1231,6 +1272,17 @@ public final class MainActivity extends Activity {
             TextView unavailable = label("No retained assistant text.", MoaColors.MUTED, 13, false);
             unavailable.setPadding(0, dp(8), 0, 0);
             container.addView(unavailable);
+        }
+        String copyText = MoaHistoryCopyText.compose(turn.userText, turn.assistantText);
+        if (!copyText.isEmpty()) {
+            Button copy = secondaryButton("Copy turn");
+            copy.setContentDescription("Copy this history turn");
+            copy.setOnClickListener(view -> {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                clipboard.setPrimaryClip(ClipData.newPlainText("AG history turn", copyText));
+                copy.setText("Copied");
+            });
+            container.addView(copy);
         }
         return container;
     }

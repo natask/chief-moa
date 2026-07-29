@@ -301,3 +301,25 @@ acknowledgement. Focused Android action/accessibility/media/receipt unit tests
 and `assembleDebug` also pass. Physical-phone QA remains open and is not
 implied by this deterministic proof. Strict OpenSpec validation remains locally
 blocked because the installed CLI cannot import its `commander` dependency.
+
+## 19. History-First Full App Shell
+
+- [x] 19.1 Build from current `origin/master` and retain its companion-between-
+      ribbons overlay rather than rebasing UI work onto the stale device-preview
+      branch.
+- [x] 19.2 Make canonical History the default full-app destination with one
+      page scroll and no nested fixed-height history viewport.
+- [x] 19.3 Move setup, gateway, release, raw lifecycle, metrics, sizing, and
+      gesture controls behind explicit Setup & developer navigation.
+- [x] 19.4 Keep retained message text selectable and add an exact Copy turn
+      action with a visible copied receipt.
+- [x] 19.5 Stop ordinary full-app open/resume from starting or collapsing the
+      overlay; explicit assistant and overlay launch paths remain unchanged.
+- [ ] 19.6 Complete physical-phone visual QA for hierarchy, copy behavior,
+      long-history scrolling, overlay independence, and back-and-forth section
+      navigation.
+
+Observable acceptance check: opening AG shows a clean History page without
+implementation status rows. Setup & developer reveals the existing operational
+controls. Copy turn copies the exact retained text. Merely opening or resuming
+the full app does not mutate the overlay.

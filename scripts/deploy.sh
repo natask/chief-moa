@@ -93,12 +93,15 @@ android_release_candidate() {
 
 android_stable_git_sha() {
   local vps_target="$1"
-  local remote_ota_dir="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
-  ssh -o ConnectTimeout=8 -o BatchMode=yes "$vps_target" sh -s -- "$remote_ota_dir" <<'REMOTE_STABLE_SHA'
+  ssh -o ConnectTimeout=8 -o BatchMode=yes "$vps_target" sh -s <<'REMOTE_STABLE_SHA'
 set -eu
-latest="$1/latest.json"
-[ -f "$latest" ] && [ ! -L "$latest" ] || exit 1
-node - "$latest" <<'NODE'
+containers="$(docker ps -q \
+  --filter label=com.docker.compose.project=chief-moa \
+  --filter label=com.docker.compose.service=gateway \
+  --filter label=com.docker.compose.container-number=1)"
+set -- $containers
+[ "$#" -eq 1 ] || exit 1
+docker exec -i "$1" node - /data/android-ota/latest.json <<'NODE'
 const fs = require("node:fs");
 let value;
 try { value = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).git_sha; } catch { process.exit(1); }
