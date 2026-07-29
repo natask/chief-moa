@@ -1,3 +1,4 @@
+- Moved streamed Android voice PCM into a bounded generation-scoped FIFO while preserving playback-head text reveal, device drain, replacement, and hosted TTS recovery ordering — agent: Codex/GPT-5 — d3702b8b
 - Removed the regressed Android X/Send draft controls and their orb-x reservation while preserving the compact overlay root, origin-matched voice gestures, and Record again path — agent: Codex/GPT-5 — this commit
 - Verified the existing Android app, URL, dialer, contact, media, accessibility, and receipt executors against model-driven typed and voice proposals; physical-phone QA remains open — agent: Codex/GPT-5 — this commit
 - Fixed the live-conversation collapsed reply to paint only playback-crossed text (paint-time override; Copy/expanded keep the full reply) and cleared stale live-turn state on surface removal, turn-ready, and not-spoken markers, with added pure event-order tests — agent: Claude Code/Fable 5 — this commit
