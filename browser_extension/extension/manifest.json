@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ag",
-  "version": "0.1.123",
+  "version": "0.1.126",
   "description": "Ag is your personal AI companion in the browser. Cmd+, to type, Cmd+. to talk.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -53,6 +53,7 @@
         "browser-command-transcript-runtime.js",
         "document-context.js",
         "voice-first-tap-chain.js",
+        "ribbon-geometry-report.js",
         "ribbon-window.js",
         "ribbon-layout.js",
         "ribbon-runtime.js",
