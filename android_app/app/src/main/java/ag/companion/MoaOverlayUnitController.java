@@ -74,6 +74,9 @@ final class MoaOverlayUnitController {
 
         void retryCapture();
 
+        /** Return true when Copy will finalize capture before copying. */
+        boolean finalizeUserTranscriptForCopy();
+
         /** Both ribbons finished lingering; nothing is left to show. */
         void onWentDormant();
     }
@@ -610,6 +613,9 @@ final class MoaOverlayUnitController {
             @Override
             public void onCopy() {
                 ribbon.flash();
+                if (!reply && host.finalizeUserTranscriptForCopy()) {
+                    return;
+                }
                 copy(variants, buffer, null);
             }
 
@@ -682,6 +688,11 @@ final class MoaOverlayUnitController {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && youView != null) {
             youView.announceForAccessibility(buffer.copyAnnouncement());
         }
+    }
+
+    /** Complete a deferred user-copy request after the final transcript renders. */
+    void copyUserTranscript() {
+        copy(youVariants, youBuffer, null);
     }
 
     private void openMenu(

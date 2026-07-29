@@ -130,6 +130,9 @@
   opening the full app.
 - Long-press and copy transcript text without moving the row. Clear selection,
   then confirm left and right swipes dismiss the same eligible row cascade.
+- While the live user transcript is still changing, press Copy. Confirm capture
+  stops, the provider finalizes the utterance, and the clipboard contains the
+  complete final transcript rather than the partial text visible at press time.
 
 ## Android OTA Publication Safety
 
