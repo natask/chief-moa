@@ -1,5 +1,5 @@
-// Ribbon runtime: the companion between two single-line streams.
-// Contract: reference/design/overlay-2026-07/spec.md
+// Ribbon runtime: the companion between two chat bubbles.
+// Contract: reference/design/overlay-2026-07-28/spec.md sections 5, 5.1, 5.2
 //
 // The DOM-bound half of the ribbon design — element wiring, the opacity/press
 // state machine, the drag-as-one-unit grouping, expand/collapse, the copy rail
@@ -7,10 +7,14 @@
 // in ribbon-layout.js; both are pure and unit-tested. This file holds only what
 // genuinely needs a document.
 //
-// A ribbon is ONE line inside a fixed viewport with no surface behind it. It
-// never wraps, never grows, and never reflows the page. That bound is the whole
-// point: the user asked twice (2026-07-16, 2026-07-23) for overlay text to stop
-// covering the persistent line.
+// A bubble WRAPS inside a bounded viewport and pins to its tail. It grows in
+// height only, to at most five lines, and then the oldest line scrolls off the
+// top under a fade. It never changes width mid-stream and never changes
+// position mid-stream, because it is anchored on the edge furthest from the
+// companion and grows away from it. The overlay still never reflows the page
+// and never pushes the persistent line out of view — that bound is the whole
+// point, asked for twice (2026-07-16, 2026-07-23) — it is just enforced by a
+// height cap now instead of by refusing to wrap.
 //
 // The runtime owns no conversation state. It renders the worker-owned active
 // turn, so the visible turn follows the user across tabs and navigations.
@@ -39,6 +43,15 @@
   // However far behind the reveal falls, it is caught up within this window.
   const REVEAL_CATCHUP_MS = 2500;
   const THEME_SAMPLE_DEBOUNCE_MS = 250;
+  // How far from the bottom of an expanded bubble still counts as "reading the
+  // tail". One line, so a stream re-pins for someone who has not scrolled away.
+  const TAIL_SLACK = 24;
+  // Mirrors the CSS clamp for --agee-ribbon-w (spec section 5). position()
+  // writes the width, so it cannot read it back without feeding its own output
+  // in and shrinking the box a little further on every pass.
+  const BUBBLE_MIN_W = 260;
+  const BUBBLE_MAX_W = 380;
+  const BUBBLE_VW = 0.4;
 
   const COPY_GLYPH = '<svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
   const CHECK_GLYPH = '<svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>';
@@ -118,6 +131,9 @@
         lingerMs,
         lineEl: el.querySelector(".agee-ribbon-line"),
         textEl: el.querySelector(".agee-ribbon-text"),
+        // The one node every stream appends into. Held here so a delta is an
+        // appendData rather than a fresh node per frame.
+        textNode: null,
         viewportEl: el.querySelector(".agee-ribbon-viewport"),
         copyEl: el.querySelector(".agee-ribbon-copy:not(.agee-ribbon-chevron)"),
         chevronEl: el.querySelector(".agee-ribbon-chevron"),
@@ -244,7 +260,47 @@
 
     // ---- Rendering --------------------------------------------------------
     // One write per animation frame, so a token-per-event stream cannot thrash
-    // layout. Only transform animates while streaming; never width or height.
+    // layout. The bubble's width is written by position() and never by a
+    // stream, so a frame can only ever change its height, and only up to the
+    // five-line cap the stylesheet holds.
+
+    // A stream is almost always an append, so append: appendData mutates the
+    // existing text node in place and the browser reflows the new run, not the
+    // whole paragraph. Assigning textContent would tear the node down and
+    // rebuild it every frame. Never innerHTML — this is model output.
+    function writeText(ribbon, next) {
+      let node = ribbon.textNode;
+      // Compose replaces the contenteditable's children, and a paste or a
+      // select-all-delete can leave the node detached. Re-adopt rather than
+      // writing into something that is no longer on screen.
+      if (!node || node.parentNode !== ribbon.textEl) {
+        ribbon.textEl.textContent = "";
+        node = doc.createTextNode("");
+        ribbon.textEl.appendChild(node);
+        ribbon.textNode = node;
+      }
+      const current = node.data;
+      if (next === current) return;
+      if (current && next.startsWith(current)) node.appendData(next.slice(current.length));
+      else node.data = next;
+    }
+
+    // Pin to the tail: the newest text is the text you are looking at, and the
+    // oldest leaves off the top under the fade. Collapsed always pins. Expanded
+    // pins only while the reader is already at the bottom, so a stream cannot
+    // yank the view away from something they scrolled back to read.
+    function pinToTail(ribbon) {
+      const viewport = ribbon.viewportEl;
+      const overflowing = viewport.scrollHeight > viewport.clientHeight + 1;
+      ribbon.el.classList.toggle("agee-ribbon-clipped", overflowing && !ribbon.expanded);
+      if (!ribbon.expanded) {
+        viewport.scrollTop = viewport.scrollHeight;
+        return;
+      }
+      const fromTail = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      if (fromTail <= TAIL_SLACK) viewport.scrollTop = viewport.scrollHeight;
+    }
+
     function render(ribbon) {
       if (!ribbon || ribbon.renderPending) return;
       ribbon.renderPending = true;
@@ -252,22 +308,14 @@
         ribbon.renderPending = false;
         ribbon.variants.literal = ribbon.target || ribbon.buffer;
         // The caret lives in this node while composing; rewriting it would move
-        // the caret to the start on every keystroke.
-        if (composing && ribbon === you) return;
-        if (ribbon.expanded) {
-          // Expanded shows everything Ag has said, wrapped inside the five-line
-          // cap. Opening a ribbon is the "show me all of it now" gesture, so it
-          // reads the target, not the paced prefix. The sliding window and the
-          // pacing are both collapsed-state rules.
-          ribbon.textEl.textContent = ribbon.target || ribbon.buffer;
-          ribbon.lineEl.style.transform = "translateX(0px)";
-          ribbon.el.classList.remove("agee-ribbon-clipped");
-          return;
-        }
-        ribbon.textEl.textContent = TextModel.windowFor(ribbon.buffer);
-        const overflow = TextModel.overflowFor(ribbon.viewportEl.clientWidth, ribbon.lineEl.scrollWidth);
-        ribbon.lineEl.style.transform = `translateX(${overflow}px)`;
-        ribbon.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+        // the caret to the start on every keystroke. Still pin, so a typed line
+        // that has passed five rows keeps the caret in view.
+        if (composing && ribbon === you) return pinToTail(ribbon);
+        // Expanded shows everything Ag has said. Opening a bubble is the "show
+        // me all of it now" gesture, so it reads the target, not the paced
+        // prefix — pacing is a collapsed-state reading aid.
+        writeText(ribbon, ribbon.expanded ? (ribbon.target || ribbon.buffer) : ribbon.buffer);
+        pinToTail(ribbon);
       };
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(paint);
       else paint();
@@ -296,7 +344,8 @@
       ribbon.revealIndex = 0;
       ribbon.truncated = false;
       ribbon.textEl.textContent = "";
-      ribbon.lineEl.style.transform = "translateX(0px)";
+      ribbon.textNode = null;
+      ribbon.viewportEl.scrollTop = 0;
       ribbon.el.classList.remove(
         "agee-ribbon-clipped", "agee-ribbon-warn", "agee-ribbon-mute",
         "agee-ribbon-copied", "agee-ribbon-streaming"
@@ -447,14 +496,14 @@
     }
 
     // ---- Compose ----------------------------------------------------------
-    // Text mode is the same box, editable. Clicking the companion puts the
-    // caret in the you-line and typing runs the identical sliding window the
-    // transcript uses, so there is one buffer and one place to look for what
+    // Text mode is the same bubble, editable. Clicking the companion puts the
+    // caret in the you-line and typing wraps and tail-pins exactly as the
+    // transcript does, so there is one buffer and one place to look for what
     // you are about to say — never a second surface stacked over the page.
     //
-    // While composing, render() must not write textContent: the caret lives in
-    // that node and rewriting it would move the caret to the start on every
-    // keystroke. Only the window transform is recomputed.
+    // While composing, render() must not write into the text node: the caret
+    // lives there and rewriting it would move the caret to the start on every
+    // keystroke. Only the tail pin runs.
     function beginCompose({ text = "" } = {}) {
       if (composing) {
         if (text) setComposedText(text);
@@ -485,14 +534,13 @@
     }
 
     // Prefill, used by the agent-authored quick actions that used to drop a
-    // prompt into the panel's field. Same buffer, same window, caret at the end.
+    // prompt into the panel's field. Same buffer, same bubble, caret at the end.
     function setComposedText(text) {
       you.target = String(text || "");
       you.buffer = you.target;
       you.textEl.textContent = you.target;
-      const overflow = TextModel.overflowFor(you.viewportEl.clientWidth, you.lineEl.scrollWidth);
-      you.lineEl.style.transform = `translateX(${overflow}px)`;
-      you.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+      you.textNode = null;
+      pinToTail(you);
       markComposeEmpty();
     }
 
@@ -541,11 +589,9 @@
       if (!composing) return;
       you.target = String(you.textEl.textContent || "");
       you.buffer = you.target;
-      // Keep the newest character pinned at the visible edge, exactly as the
-      // streaming window does, without touching the node the caret sits in.
-      const overflow = TextModel.overflowFor(you.viewportEl.clientWidth, you.lineEl.scrollWidth);
-      you.lineEl.style.transform = `translateX(${overflow}px)`;
-      you.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+      // Keep the newest line in view, exactly as the stream does, without
+      // touching the node the caret sits in.
+      pinToTail(you);
       markComposeEmpty();
     });
 
@@ -704,7 +750,7 @@
       // Derived, never measured. position() writes these widths, so reading the
       // element back would feed its own output in and collapse the box a little
       // further on every pass. Mirrors the CSS clamp for --agee-ribbon-w.
-      const width = Math.min(340, Math.max(232, win.innerWidth * 0.44));
+      const width = Math.min(BUBBLE_MAX_W, Math.max(BUBBLE_MIN_W, win.innerWidth * BUBBLE_VW));
       const place = Layout.ribbonPlacement({
         launcherRect: rect,
         viewportWidth: win.innerWidth,

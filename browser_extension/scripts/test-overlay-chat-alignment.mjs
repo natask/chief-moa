@@ -11,12 +11,25 @@ const ruleIn = (source, selector) => {
 };
 const ruleFor = (selector) => ruleIn(css, selector);
 
-// Chat sides are geometry (ribbon-layout.js), not text alignment: both lines
-// stay left-anchored inside their own box so the sliding window owns the offset.
-test("both lines stay anchored for the sliding window", () => {
+// Chat sides are geometry (ribbon-layout.js), not text alignment. The bubble
+// wraps inside a bounded block viewport and the runtime pins it to the tail;
+// the sliding window and the flex row it needed are gone.
+test("the bubble wraps inside a bounded viewport", () => {
+  const line = ruleIn(ribbons, ".agee-ribbon-line");
+  assert.match(line, /white-space:\s*pre-wrap/);
+  assert.doesNotMatch(line, /will-change:\s*transform/);
+  const viewport = ruleIn(ribbons, ".agee-ribbon-viewport");
+  assert.match(viewport, /display:\s*block/);
+  assert.match(viewport, /overflow:\s*hidden/);
+  assert.match(viewport, /max-height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\)\)/);
+});
+
+// New text arrives at the bottom; the oldest line leaves off the TOP under a
+// short fade. A horizontal fade would be the sliding window coming back.
+test("overflowing text fades off the top, not the side", () => {
   assert.match(
-    ruleIn(ribbons, "#agee-ribbon-you .agee-ribbon-viewport,\n#agee-ribbon-reply .agee-ribbon-viewport"),
-    /justify-content:\s*flex-start/,
+    ruleIn(ribbons, ".agee-ribbon-clipped .agee-ribbon-viewport"),
+    /mask-image:\s*linear-gradient\(to bottom, transparent 0, #000 var\(--agee-ribbon-fade\)\)/,
   );
 });
 
@@ -27,11 +40,19 @@ test("the you-line is the text input", () => {
   assert.match(rule, /cursor:\s*text/);
 });
 
-// An opened box is capped at five lines: it is still sitting on the page.
-test("an opened box shows at most five lines", () => {
+// Collapsed is five lines and opened is a 240px scroll — the Android
+// COLLAPSED_MAX_LINES and EXPANDED_MAX_H_DP, identically. Both are caps: an
+// opened bubble is still a box sitting on the user's page.
+test("the bubble is capped collapsed and opened", () => {
+  assert.match(ribbons, /--agee-ribbon-lines:\s*5;/);
+  assert.match(ribbons, /--agee-ribbon-expanded-h:\s*240px;/);
   assert.match(
     ruleIn(ribbons, ".agee-ribbon-expanded .agee-ribbon-viewport"),
-    /max-height:\s*calc\(5 \* var\(--agee-ribbon-line-h\)\)/,
+    /max-height:\s*var\(--agee-ribbon-expanded-h\)/,
+  );
+  assert.match(
+    ruleIn(ribbons, ".agee-ribbon"),
+    /max-height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\) \+ 2 \* var\(--agee-ribbon-pad-y\)\)/,
   );
 });
 

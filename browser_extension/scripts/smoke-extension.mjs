@@ -561,8 +561,12 @@ async function main() {
               youRightX: Math.round(youRect.right),
               replyLeftX: Math.round(replyRect.left),
               replyRightX: Math.round(replyRect.right),
-              youRibbonJustify: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-viewport")).justifyContent,
-              replyRibbonJustify: getComputedStyle(ribbonReply.querySelector(".agee-ribbon-viewport")).justifyContent,
+              // The bubble contract: the line wraps, the viewport is a bounded
+              // block, and nothing is being slid sideways under a clip.
+              youWhiteSpace: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-line")).whiteSpace,
+              replyWhiteSpace: getComputedStyle(ribbonReply.querySelector(".agee-ribbon-line")).whiteSpace,
+              youLineTransform: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-line")).transform,
+              youBorderRadius: getComputedStyle(ribbonYou).borderTopLeftRadius,
             };
           },
         });
@@ -584,17 +588,22 @@ async function main() {
     if (!overlayMetrics.composing || !overlayMetrics.youLive || !overlayMetrics.caretInYouLine) {
       throw new Error(`companion click did not open the typing buffer: ${JSON.stringify(overlayMetrics)}`);
     }
-    // The typing box is the ribbon: one line, send at the trailing edge, and no
-    // copy button on a line that has not been said yet.
+    // The typing box is the bubble, opened at its smallest: one 20px line of
+    // text, the send at the trailing edge, no copy button on a line that has
+    // not been said yet. 40px, not 36, because the 24px send button on the rail
+    // is taller than one line of text and it is the rail that sets the floor —
+    // the text viewport is still exactly one line, which composeCaretBoxHeight
+    // measures.
     if (overlayMetrics.sendDisplay === "none"
       || overlayMetrics.composeCopyDisplay !== "none"
       || overlayMetrics.sendInsideBox !== true
-      || overlayMetrics.youHeight !== 28) {
-      throw new Error(`the typing box does not carry a send on one line: ${JSON.stringify(overlayMetrics)}`);
+      || overlayMetrics.composeCaretBoxHeight !== 20
+      || overlayMetrics.youHeight !== 40) {
+      throw new Error(`the typing box does not open at one bubble line: ${JSON.stringify(overlayMetrics)}`);
     }
     // The companion may only sit where both streams keep their minimum room, so
     // a box narrow enough to squeeze the rail off its own end cannot happen.
-    if (!(overlayMetrics.youWidth >= 232)) {
+    if (!(overlayMetrics.youWidth >= 260)) {
       throw new Error(`the companion was placed where its box cannot fit: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.composeEmpty !== true) {
@@ -625,10 +634,13 @@ async function main() {
       && !onSeam(overlayMetrics.replyLeftX, overlayMetrics.companionCentreX)) {
       throw new Error(`reply-box is not attached to the companion centre line: ${JSON.stringify(overlayMetrics)}`);
     }
-    // Chat sides are geometry, asserted on the seam below. Both lines stay
-    // left-anchored inside their own box so the sliding window owns the offset.
-    if (overlayMetrics.youRibbonJustify !== "flex-start" || overlayMetrics.replyRibbonJustify !== "flex-start") {
-      throw new Error(`ribbon lines are not anchored for the sliding window: ${JSON.stringify(overlayMetrics)}`);
+    // It is a bubble: the text wraps, nothing is translated sideways, and the
+    // corner is the 14px Android radius. Chat sides are geometry, on the seam.
+    if (overlayMetrics.youWhiteSpace !== "pre-wrap"
+      || overlayMetrics.replyWhiteSpace !== "pre-wrap"
+      || (overlayMetrics.youLineTransform !== "none" && overlayMetrics.youLineTransform !== "matrix(1, 0, 0, 1, 0, 0)")
+      || overlayMetrics.youBorderRadius !== "14px") {
+      throw new Error(`the streams are not bubbles: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
       throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);
@@ -966,12 +978,13 @@ async function main() {
       throw new Error(`live transcript repeated revised speech instead of showing the latest: ${JSON.stringify(livePartials)}`);
     }
 
-    // Overlay ribbons: the companion between two single-line streams.
-    // Contract: reference/design/overlay-2026-07/spec.md. This drives the real
-    // worker-owned presentation broadcast (the same path that carries a turn
-    // across tabs) and then asserts the properties the whole redesign rests on:
-    // the unit renders both streams, truncates instead of growing, paints
-    // nothing while ambient, and reveals the copy affordance on a tap.
+    // Overlay bubbles: the companion between two chat bubbles.
+    // Contract: reference/design/overlay-2026-07-28/spec.md sections 5-5.2.
+    // This drives the real worker-owned presentation broadcast (the same path
+    // that carries a turn across tabs) and then asserts the properties the
+    // whole redesign rests on: the unit renders both streams whole, wraps and
+    // pins to the tail inside a five-line cap instead of growing, keeps one
+    // plate, and opens to the bounded scroll on a tap.
     const ribbons = await evaluate(workerCdp, `
       (async () => {
         const tabId = ${ping.tabId};
@@ -1039,9 +1052,12 @@ async function main() {
                 background: style.backgroundColor,
                 boxShadow: style.boxShadow,
                 pointerEvents: style.pointerEvents,
-                // The line slides; the box never grows.
-                translateX: line.style.transform,
+                // The bubble wraps and pins to its tail: the text overflows the
+                // five-line viewport, and what is on screen is the END of it.
+                inlineTransform: line.style.transform || "",
                 lineWraps: line.scrollHeight > viewport.clientHeight + 1,
+                pinnedToTail: viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1,
+                faded: getComputedStyle(viewport).maskImage,
                 copyOpacity: getComputedStyle(ribbon.querySelector(".agee-ribbon-copy")).opacity,
               };
             };
@@ -1120,21 +1136,36 @@ async function main() {
     if (!ribbonBefore.you?.live || !ribbonBefore.reply?.live) {
       throw new Error(`ribbons did not render the worker presentation: ${JSON.stringify(ribbonBefore)}`);
     }
-    // The sliding window truncates instead of growing: the rendered node holds
-    // a bounded tail, the line is translated left, and nothing wraps.
+    // The bubble bounds by height instead of by truncating: the whole turn is
+    // rendered, it wraps, the box never passes five lines (5 x 20px of text
+    // plus 8px of padding either side = 116), the oldest lines fade off the
+    // top, and what you are looking at is the tail. A bubble may be SHORTER
+    // than the cap when the layout gave that side of the companion less room —
+    // that budget is the point of place.youMaxHeight/replyMaxHeight — but it
+    // may never be taller, and it must still be showing the newest text.
     for (const key of ["you", "reply"]) {
       const ribbon = ribbonBefore[key];
       const sourceLength = key === "you" ? ribbonBefore.expectedUserLength : ribbonBefore.expectedReplyLength;
       if (
-        ribbon.rendered > 140 ||
-        ribbon.rendered >= sourceLength ||
+        ribbon.rendered !== sourceLength ||
+        ribbon.lineWraps !== true ||
+        ribbon.pinnedToTail !== true ||
         ribbon.clipped !== true ||
-        ribbon.lineWraps !== false ||
-        ribbon.height !== 28 ||
-        !/^translateX\(-\d/.test(ribbon.translateX || "")
+        !/linear-gradient/.test(ribbon.faded || "") ||
+        ribbon.height > 116 ||
+        ribbon.height < 36 ||
+        ribbon.width < 260 ||
+        ribbon.width > 380 ||
+        (ribbon.inlineTransform && ribbon.inlineTransform !== "none")
       ) {
-        throw new Error(`${key} ribbon must slide a bounded window, not grow: ${JSON.stringify(ribbon)}`);
+        throw new Error(`${key} bubble must wrap and pin to its tail inside five lines, not slide: ${JSON.stringify(ribbon)}`);
       }
+    }
+    // The you-bubble has the whole space above the companion, so this text —
+    // far longer than five lines — must actually reach the cap. Otherwise the
+    // loop above would pass on a bubble that simply never grew.
+    if (ribbonBefore.you.height !== 116) {
+      throw new Error(`the five-line cap must be what stops the bubble: ${JSON.stringify(ribbonBefore.you)}`);
     }
     // Ambient paints nothing and intercepts nothing.
     if (
@@ -1229,7 +1260,12 @@ async function main() {
               height: Math.round(rect.height),
               bottom: Math.round(rect.bottom),
               whiteSpace: getComputedStyle(line).whiteSpace,
-              maxHeight: getComputedStyle(you).maxHeight,
+              // The bounded scroll lives on the viewport, not on the box: the
+              // box's own max-height is written inline by position() as the
+              // room available on that side of the companion, which may be
+              // looser than the design cap. The viewport is what holds 240.
+              viewportMaxHeight: getComputedStyle(you.querySelector(".agee-ribbon-viewport")).maxHeight,
+              viewportOverflowY: getComputedStyle(you.querySelector(".agee-ribbon-viewport")).overflowY,
               launcherTop: Math.round(launcher.getBoundingClientRect().top),
               replyTop: Math.round(document.querySelector("#agee-ribbon-reply").getBoundingClientRect().top),
               docScrollHeight: document.documentElement.scrollHeight,
@@ -1264,12 +1300,14 @@ async function main() {
     const copyMenu = expand?.menu || {};
     if (
       expanded.expanded !== true ||
-      expanded.rendered <= 140 ||
+      expanded.rendered !== ribbonBefore.expectedUserLength ||
       expanded.whiteSpace !== "pre-wrap" ||
       expanded.height <= ribbonBefore.you.height ||
-      expanded.maxHeight === "none"
+      expanded.height !== 256 ||
+      expanded.viewportMaxHeight !== "240px" ||
+      expanded.viewportOverflowY !== "auto"
     ) {
-      throw new Error(`tap must expand the bar to the full text within a height cap: ${JSON.stringify(expanded)}`);
+      throw new Error(`tap must open the bubble past five lines into the 240px scroll: ${JSON.stringify(expanded)}`);
     }
     // Grew away from the companion: the bottom edge, the companion, the other
     // ribbon, and the page are all exactly where they were.
@@ -1922,10 +1960,10 @@ async function main() {
         `service worker loaded id=${extensionId}, text shortcut=${textShortcut}, voice shortcut=${voiceShortcut}, ${workerResult.elements} elements observed via background->content, ` +
         `${workerResult.visibleTextChars} visible text chars observed, ` +
         `compact overlay checked (${overlayMetrics.panelWidth}x${overlayMetrics.panelHeight}), ` +
-        `ribbons rendered the worker presentation and slid a bounded window ` +
+        `bubbles rendered the worker presentation whole, wrapped and pinned to the tail ` +
         `(you ${ribbonBefore.you.rendered}/${ribbonBefore.expectedUserLength} chars, ` +
         `reply ${ribbonBefore.reply.rendered}/${ribbonBefore.expectedReplyLength} chars, ` +
-        `${ribbonBefore.you.height}px tall, ambient background ${ribbonBefore.you.background}, ` +
+        `${ribbonBefore.you.width}x${ribbonBefore.you.height}px, ambient background ${ribbonBefore.you.background}, ` +
         `tap -> ${ribbonAfter.unitState}, expanded to ${expanded.rendered} chars in ${expanded.height}px ` +
         `without moving the companion, copy rail offers ` +
         `${copyMenu.rows.map((r) => r.label.split(" ")[0] + (r.disabled ? "(unavailable)" : r.isDefault ? "(default)" : "")).join("/")}), ` +

@@ -1,5 +1,5 @@
 /* Ribbon overlay styles for the Aggie companion.
-   Contract: reference/design/overlay-2026-07/spec.md
+   Contract: reference/design/overlay-2026-07-28/spec.md
 
    Split out of overlay.css so the ribbon presentation can grow without
    pushing the base overlay stylesheet past the repo source-size ceiling.
@@ -8,39 +8,60 @@
 */
 
 /* ==========================================================================
-   Ribbons: the companion between two single-line streams.
-   Contract: reference/design/overlay-2026-07/spec.md
+   Bubbles: the companion between two chat bubbles.
+   Contract: reference/design/overlay-2026-07-28/spec.md sections 5, 5.1, 5.2
 
-   A ribbon is ONE line of text with no surface behind it. It never wraps,
-   never grows, and never reflows the page. The unit is transparent until the
-   user is physically touching it. This is the hard cap the user asked for
-   twice (2026-07-16, 2026-07-23): overlay text may no longer cover the page
-   or push the persistent line out of view.
+   A bubble is a bounded translucent plate that WRAPS. It grows in height only,
+   to at most five lines, and then pins to its tail: new text arrives at the
+   bottom and old text scrolls off the top under a short fade. Its width never
+   changes mid-stream and its position never changes mid-stream, because each
+   bubble is anchored on the edge furthest from the companion and grows away
+   from it. The page is never reflowed and the companion never moves.
+
+   This replaces the single `white-space: pre` line slid by translateX. That
+   was the anti-reflow device for a fixed 28px box, and it cost more than it
+   bought — a clipped one-line run with a cloned box decoration painted a
+   ragged black band the width of the viewport. A bounded-height bubble does
+   the same job without a per-glyph surface, which is also why the plate — not
+   a scrim behind the letters — is the legibility mechanism now.
    ========================================================================== */
 #agee-root {
-  /* geometry */
-  --agee-ribbon-w: clamp(232px, 44vw, 340px);
-  --agee-ribbon-h: 28px;
-  --agee-ribbon-line-h: 18px;
-  --agee-ribbon-pad-x: 10px;
+  /* geometry — the Android MoaRibbonView numbers, per spec section 5 */
+  --agee-ribbon-w: clamp(260px, 40vw, 380px);
+  --agee-ribbon-line-h: 20px;
+  --agee-ribbon-lines: 5;
+  --agee-ribbon-pad-x: 12px;
+  --agee-ribbon-pad-y: 8px;
+  --agee-ribbon-radius: 14px;
+  /* How far a bubble may open on a tap before it scrolls inside itself. */
+  --agee-ribbon-expanded-h: 240px;
+  /* The tail-pin fade: old text leaves under this, it is not cut off. */
+  --agee-ribbon-fade: 12px;
   --agee-ribbon-gap: 8px;
   --agee-ribbon-edge: 16px;
 
-  /* colour — dark (default) */
+  /* colour — dark (default).
+     Every painted token here has a counterpart in the light block below, and
+     the two must differ. That invariant is enforced by
+     scripts/test-ribbon-palette.mjs; the values match Android's
+     MoaRibbonTokens so the two surfaces read as one product. */
   --agee-ribbon-ink: #f4f4f6;
   --agee-ribbon-ink-ambient: rgba(244, 244, 246, 0.88);
   --agee-ribbon-muted: #9b9ba4;
   --agee-ribbon-accent: #ffd76a;
-  --agee-ribbon-you: #7c5cff;
+  /* The ink that sits ON the accent fill (the send button). It was a literal
+     #17130a, which is a dark-mode value painted on a light page too. */
+  --agee-ribbon-on-accent: #17130a;
+  --agee-ribbon-you: #7c8cff;
   --agee-ribbon-agent: #f5a623;
   --agee-ribbon-ok: #35c759;
   --agee-ribbon-warn: #ff8a3d;
-  --agee-ribbon-plate: rgba(14, 15, 18, 0.72);
-  --agee-ribbon-plate-drag: rgba(14, 15, 18, 0.5);
+  --agee-ribbon-plate: rgba(18, 19, 23, 0.91);
+  --agee-ribbon-plate-drag: rgba(18, 19, 23, 0.69);
   --agee-ribbon-hairline: rgba(255, 255, 255, 0.14);
-  --agee-ribbon-scrim: rgba(18, 19, 23, 0.92);
-  --agee-ribbon-scrim-ink: #f7f7f8;
-  --agee-ribbon-scrim-shadow: 0 2px 8px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  /* The halo is for the ONE label that sits outside the plate, the copy
+     caption. Glyphs on the plate need no shadow — that is the whole point of
+     the plate — and the per-glyph scrim it used to accompany is gone. */
   --agee-ribbon-halo: 0 1px 2px rgba(0, 0, 0, 0.72), 0 0 8px rgba(0, 0, 0, 0.45);
   --agee-ribbon-shadow: 0 8px 28px rgba(0, 0, 0, 0.46), 0 1px 2px rgba(0, 0, 0, 0.34);
   --agee-ribbon-menu-bg: rgba(18, 19, 23, 0.86);
@@ -54,7 +75,6 @@
   --agee-ribbon-dur-solidify: 140ms;
   --agee-ribbon-dur-soften: 260ms;
   --agee-ribbon-dur-slow: 420ms;
-  --agee-ribbon-dur-slide: 90ms;
   --agee-ribbon-dur-menu: 160ms;
 }
 /* Light page behind the unit: the ambient glyphs sit directly on page content,
@@ -65,32 +85,35 @@
   --agee-ribbon-ink-ambient: rgba(20, 21, 25, 0.9);
   --agee-ribbon-muted: #6b6c76;
   --agee-ribbon-accent: #b87400;
-  --agee-ribbon-you: #5b3fe0;
+  --agee-ribbon-on-accent: #fff8ec;
+  --agee-ribbon-you: #6474e8;
   --agee-ribbon-agent: #c06b00;
   --agee-ribbon-ok: #1f8f3d;
   --agee-ribbon-warn: #c24a00;
-  --agee-ribbon-plate: rgba(252, 252, 253, 0.76);
-  --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.54);
+  --agee-ribbon-plate: rgba(252, 252, 253, 0.91);
+  --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.72);
   --agee-ribbon-hairline: rgba(0, 0, 0, 0.1);
-  --agee-ribbon-scrim: rgba(252, 252, 253, 0.92);
-  --agee-ribbon-scrim-ink: #141519;
-  --agee-ribbon-scrim-shadow: 0 2px 8px rgba(16, 18, 24, 0.16), inset 0 0 0 1px rgba(0, 0, 0, 0.1);
   --agee-ribbon-halo: 0 1px 2px rgba(255, 255, 255, 0.88), 0 0 8px rgba(255, 255, 255, 0.62);
   --agee-ribbon-shadow: 0 8px 28px rgba(16, 18, 24, 0.14), 0 1px 2px rgba(16, 18, 24, 0.1);
   --agee-ribbon-menu-bg: rgba(252, 252, 253, 0.88);
   --agee-ribbon-menu-hover: rgba(0, 0, 0, 0.05);
 }
 
+/* The bubble grows in height only, and only to five lines. Width is fixed by
+   position(), which writes the room available on that side of the seam, so a
+   stream can never widen the box under the reader. The rail sits at the
+   bottom-right of whatever height the text settled at. */
 .agee-ribbon {
   position: absolute;
   left: 0;
   top: 0;
   width: var(--agee-ribbon-w);
-  height: var(--agee-ribbon-h);
+  height: auto;
+  max-height: calc(var(--agee-ribbon-lines) * var(--agee-ribbon-line-h) + 2 * var(--agee-ribbon-pad-y));
   display: flex;
-  align-items: center;
-  padding: 0 var(--agee-ribbon-pad-x);
-  border-radius: 9px;
+  align-items: flex-end;
+  padding: var(--agee-ribbon-pad-y) var(--agee-ribbon-pad-x);
+  border-radius: var(--agee-ribbon-radius);
   background: transparent;
   box-shadow: none;
   opacity: 0;
@@ -137,42 +160,22 @@
   transform: translateY(-4px);
 }
 
-/* Viewport: the anti-reflow guarantee. Fixed box, hidden overflow, one nowrap
-   line inside translated so the newest character stays pinned right. */
+/* Viewport: the anti-reflow guarantee, now expressed as a bounded scroll
+   instead of a fixed line. Five lines of room, hidden overflow, and the runtime
+   pins scrollTop to the bottom after every write — so the newest text is always
+   the text you are looking at and the box never grows past the cap.
+
+   A block box, not a flex row: the line is a paragraph now and has to wrap. */
 .agee-ribbon-viewport {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: 100%;
+  max-height: calc(var(--agee-ribbon-lines) * var(--agee-ribbon-line-h));
   overflow: hidden;
-  display: flex;
-  align-items: center;
+  display: block;
   pointer-events: none;
 }
-/* Chat sides are geometry: ribbon-layout.js hangs the you-box off the
-   companion's centre line to the right and the reply-box off the same line to
-   the left, mirroring near a viewport edge. Whichever side a box lands on, its
-   text is anchored to the edge touching the companion — otherwise a short line
-   sits at the far end of a 340px box and the unit reads as floating away from
-   the mark it belongs to.
-
-   Anchoring applies only while the line fits. Once it is clipped the line fills
-   the viewport and the sliding window owns the offset via translateX(), so a
-   flex-end box would fight it for the same pixels. */
-#agee-ribbon-you .agee-ribbon-viewport,
-#agee-ribbon-reply .agee-ribbon-viewport {
-  justify-content: flex-start;
-}
-.agee-ribbon[data-agee-seam="right"] .agee-ribbon-viewport {
-  justify-content: flex-end;
-}
-.agee-ribbon[data-agee-seam="right"].agee-ribbon-clipped .agee-ribbon-viewport {
-  justify-content: flex-start;
-}
-.agee-ribbon[data-agee-seam="right"] .agee-ribbon-line {
-  text-align: right;
-}
-/* Text mode: the you-line IS the input. Same box, same window, same pixels —
+/* Text mode: the you-line IS the input. Same box, same bubble, same pixels —
    the only difference is a caret and a hit region that accepts a click. */
 .agee-ribbon-composing .agee-ribbon-text {
   pointer-events: auto;
@@ -184,7 +187,10 @@
   display: inline-block;
   min-width: 1px;
   min-height: var(--agee-ribbon-line-h);
-  vertical-align: top;
+  /* bottom, not top: a top-aligned inline-block leaves the line box's own
+     descender hanging below it, so an empty one-line bubble measured taller
+     than one line for no visible reason. */
+  vertical-align: bottom;
   caret-color: var(--agee-ribbon-accent);
   cursor: text;
 }
@@ -210,7 +216,7 @@
   padding: 0;
   border-radius: 999px;
   background: var(--agee-ribbon-accent);
-  color: #17130a;
+  color: var(--agee-ribbon-on-accent);
   cursor: pointer;
   pointer-events: auto;
   transition:
@@ -233,64 +239,57 @@
   position: absolute;
   /* Clear of the caret: the cursor stands at the text origin, and a prompt
      starting in the same pixel column reads as a cursor that is not there. */
-  left: 7px;
-  font-size: 13px;
+  left: 1px;
+  top: 0;
+  font-size: 14px;
   line-height: var(--agee-ribbon-line-h);
   color: var(--agee-ribbon-muted);
-  text-shadow: var(--agee-ribbon-halo);
   pointer-events: none;
 }
-.agee-ribbon-composing.agee-ribbon-empty[data-agee-seam="right"] .agee-ribbon-viewport::before {
-  left: auto;
-  right: 7px;
-}
+/* Overflowing the five-line cap: the oldest line leaves under a short fade at
+   the TOP, because the tail is what is being written. The old horizontal fade
+   belonged to a line sliding sideways and has no meaning in a bubble. */
 .agee-ribbon-clipped .agee-ribbon-viewport {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
-  mask-image: linear-gradient(to right, transparent 0, #000 16px);
-}
-.agee-ribbon-clipped .agee-ribbon-viewport::after {
-  content: "\2026";
-  position: absolute;
-  left: 0;
-  top: 5px;
-  z-index: 1;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--agee-ribbon-scrim);
-  color: var(--agee-ribbon-scrim-ink);
-  font-size: 12px;
-  line-height: 15px;
-  text-align: center;
-  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--agee-ribbon-fade));
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--agee-ribbon-fade));
 }
 .agee-ribbon-line {
-  white-space: pre;
-  will-change: transform;
-  transition: transform var(--agee-ribbon-dur-slide) linear;
-  font-size: 13px;
+  /* It WRAPS. This one declaration is the whole of section 5.1: the box is
+     bounded by height now, so nothing has to be kept on one line. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  width: 100%;
+  font-size: 14px;
   line-height: var(--agee-ribbon-line-h);
   font-weight: 450;
   letter-spacing: 0.005em;
   font-variant-numeric: tabular-nums;
   color: var(--agee-ribbon-ink-ambient);
-  text-shadow: var(--agee-ribbon-halo);
   pointer-events: none;
 }
 /* The glyph run is the ONLY hit region while ambient. An empty ribbon has a
    zero-area hit box, so a click lands on the page underneath. Events still
-   bubble to .agee-ribbon, which owns the gesture listeners. */
+   bubble to .agee-ribbon, which owns the gesture listeners.
+   It carries no surface of its own: the plate behind the whole bubble is the
+   legibility mechanism, and a scrim per glyph is what smeared. */
 .agee-ribbon-text {
   pointer-events: auto;
   position: relative;
-  color: var(--agee-ribbon-ink);
+  color: inherit;
 }
-.agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
-.agee-ribbon-mute .agee-ribbon-line { color: var(--agee-ribbon-muted); }
+/* Engaged is the reading state, so the ink goes to full strength. */
+#agee-root[data-agee-unit="engaged"] .agee-ribbon-line { color: var(--agee-ribbon-ink); }
+/* An interim transcript is a hypothesis and reads as one; it hardens to full
+   ink when the recognizer settles the words. You can watch it think. */
+#agee-ribbon-you.agee-ribbon-streaming .agee-ribbon-line { color: var(--agee-ribbon-muted); }
+/* Scoped to #agee-root so tone still beats the engaged ink rule below: a failed
+   turn has to stay amber when you touch it to read it. */
+#agee-root .agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
+#agee-root .agee-ribbon-mute .agee-ribbon-line { color: var(--agee-ribbon-muted); }
 
-/* Pending: the ribbon is live and waiting, with nothing to say yet. Three dots
-   on the same scrim the text will use, so when the first word lands the plate
-   is already there and only its contents change — no pop, no reflow. */
+/* Pending: the bubble is live and waiting, with nothing to say yet. Three dots
+   on the plate the text will use, so when the first word lands the plate is
+   already there and only its contents change — no pop, no reflow. */
 #agee-ribbon-reply.agee-ribbon-pending .agee-ribbon-line::before {
   content: "";
   display: inline-block;
@@ -302,16 +301,6 @@
     radial-gradient(circle 3px at 17px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat,
     radial-gradient(circle 3px at 29px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat;
   animation: agee-ribbon-pending 1400ms ease-in-out infinite;
-}
-/* An empty glyph run has no box, so the pending ribbon supplies its own scrim.
-   Same colour and radius as .agee-ribbon-text: the plate does not change when
-   the dots become words. */
-#agee-ribbon-reply.agee-ribbon-pending .agee-ribbon-text {
-  background: var(--agee-ribbon-scrim);
-  box-shadow: var(--agee-ribbon-scrim-shadow);
-  padding: 2px 7px;
-  border-radius: 999px;
-  color: var(--agee-ribbon-scrim-ink);
 }
 @keyframes agee-ribbon-pending {
   0%, 100% { opacity: 0.3; }
@@ -327,10 +316,10 @@
    typed; on the reply it is the beat between committing and the first token. */
 .agee-ribbon-caret {
   display: inline-block;
-  width: 1.5px;
-  height: 14px;
+  width: 2px;
+  height: 16px;
   margin-left: 2px;
-  vertical-align: -2px;
+  vertical-align: -3px;
   background: var(--agee-ribbon-accent);
   opacity: 0;
 }
@@ -496,53 +485,27 @@
     background: var(--agee-ribbon-plate);
     box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
   }
-  .agee-ribbon-text { background: transparent; }
 }
 
-/* ---- Expanded: the bounded bar opens ------------------------------------
-   The sliding window keeps the bar small; expand is how the user reads past
-   it. A tap opens the full text, wrapped and scrollable inside a height cap,
-   and brings the copy rail with it. The bar grows AWAY from the companion
-   (the upper ribbon is bottom-anchored, the lower one top-anchored), so the
-   companion never moves, the other ribbon never moves, and the page never
-   reflows. Expanded is an occluding state and that is correct: the user is
-   touching it, and it collapses the moment they are not. */
+/* ---- Expanded: the bubble opens ------------------------------------------
+   Collapsed keeps the bubble to five lines; expand is how the user reads past
+   them. A tap opens the whole turn inside a 240px scroll — the Android
+   EXPANDED_MAX_H_DP, identically — and brings the copy rail with it. The
+   bubble grows AWAY from the companion (the upper one is bottom-anchored, the
+   lower one top-anchored), so the companion never moves, the other bubble
+   never moves, and the page never reflows. Expanded is an occluding state and
+   that is correct: the user is touching it, and it collapses the moment they
+   are not. */
 .agee-ribbon.agee-ribbon-expanded {
-  height: auto;
-  /* Five lines, exactly: 5 x the 18px line box plus the 5px padding either
-     side. An opened box is the read-it-all state, but it is still a box on top
-     of the user's page — five lines is as much page as it may ever cover. */
-  max-height: calc(5 * var(--agee-ribbon-line-h) + 10px);
-  align-items: flex-start;
-  padding-top: 5px;
-  padding-bottom: 5px;
+  max-height: calc(var(--agee-ribbon-expanded-h) + 2 * var(--agee-ribbon-pad-y));
   z-index: 2;
 }
 .agee-ribbon-expanded .agee-ribbon-viewport {
-  height: auto;
-  max-height: calc(5 * var(--agee-ribbon-line-h));
+  max-height: var(--agee-ribbon-expanded-h);
   overflow-y: auto;
   overflow-x: hidden;
-  align-items: flex-start;
   -webkit-mask-image: none;
   mask-image: none;
-}
-.agee-ribbon-expanded .agee-ribbon-line {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  transform: none !important;
-  width: 100%;
-}
-.agee-ribbon-expanded .agee-ribbon-text {
-  background: transparent;
-  padding: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-.agee-ribbon-expanded .agee-ribbon-viewport::after { display: none; }
-.agee-ribbon-expanded .agee-ribbon-expanded .agee-ribbon-copy {
-  position: sticky;
-  top: 0;
 }
 
 /* ---- Copy rail: a three-way choice with a default -----------------------

@@ -1,6 +1,6 @@
 // The ribbon text model is the half of the overlay design that has to be
-// exactly right: the bounded tail window is what stops overlay text from
-// covering the page, and the variant ranking is what stops literal text being
+// exactly right: the bounded turn buffer is what keeps a long turn from growing
+// memory without limit, and the variant ranking is what stops literal text being
 // presented as polished. Both are pure, so they are tested directly here rather
 // than only through the real-browser smoke.
 import assert from "node:assert/strict";
@@ -15,12 +15,14 @@ const global = {};
 new Function("globalThis", source)(global);
 const W = global.AgeeRibbonWindow;
 
-test("the rendered window is a bounded tail, never the whole buffer", () => {
-  const long = "x".repeat(1000);
-  assert.equal(W.windowFor(long).length, W.WINDOW_CHARS);
-  assert.equal(W.windowFor(long), long.slice(-W.WINDOW_CHARS));
-  // Short text is rendered whole and unmodified.
-  assert.equal(W.windowFor("short"), "short");
+// The bubble renders the whole buffer and bounds it by height, so the model no
+// longer trims what is rendered. Nothing may bring the sliding window back:
+// with the box wrapping, a rendered tail would silently drop the top of a turn
+// that is still on screen.
+test("the model no longer trims the rendered text", () => {
+  for (const gone of ["WINDOW_CHARS", "windowFor", "overflowFor"]) {
+    assert.equal(gone in W, false, `${gone} belongs to the deleted sliding window`);
+  }
 });
 
 test("the tail never splits a grapheme cluster", () => {
@@ -44,11 +46,13 @@ test("the buffer is bounded and reports truncation", () => {
   assert.ok(second.buffer.endsWith("bb"));
 });
 
-test("the line slides only once the text overflows", () => {
-  assert.equal(W.overflowFor(300, 200), 0, "text that fits must not drift");
-  assert.equal(W.overflowFor(300, 300), 0, "text that exactly fits must not drift");
-  assert.equal(W.overflowFor(300, 460), -160, "overflow pins the newest character right");
-  assert.equal(W.overflowFor(NaN, 460), 0, "an unmeasurable viewport must not throw");
+test("the retained buffer matches the Android cap", () => {
+  assert.equal(W.BUFFER_MAX_CHARS, 8000, "same number as Android's BUFFER_MAX_CHARS");
+  // The whole turn is retained, so copy and expand are never short-changed by
+  // what the collapsed bubble happens to be showing.
+  const whole = "y".repeat(4000);
+  assert.equal(W.boundBuffer(whole).buffer, whole);
+  assert.equal(W.boundBuffer(whole).truncated, false);
 });
 
 test("the default copy variant is the highest-ranked one that exists", () => {
