@@ -17,6 +17,8 @@ proposal before any platform-local action runs.
 - [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md): how intent becomes specs, tickets,
   implementation, and verification.
 - [AGENTS.md](AGENTS.md): operating contract for coding agents.
+- [Core product intent](CORE_PRODUCT_INTENT.md): stable product
+  outcomes, current status, and the ordered work that remains.
 - [reference/openspec](reference/openspec): product maps and specs.
 - [reference/scratch](reference/scratch): working notes and planning context.
 
