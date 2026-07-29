@@ -15,10 +15,10 @@ package ai.moa.assistant;
  * beside the literal transcript, and the literal transcript stays byte-for-byte
  * unchanged and selectable.
  *
- * The polished form is the DEFAULT copy when it exists. Nothing produces
- * CORRECTED or POLISHED today — no gateway endpoint emits them — so in practice
- * this degrades to literal-only, and {@link #available} reports honestly which
- * forms have backing data rather than fabricating the missing ones.
+ * The polished form is the DEFAULT copy when it exists. Android requests
+ * CORRECTED and POLISHED from the gateway only after final STT. Until that
+ * response arrives, this degrades to literal-only, and {@link #available}
+ * reports honestly which forms have backing data rather than fabricating them.
  */
 final class MoaTranscriptVariants {
     enum Variant {

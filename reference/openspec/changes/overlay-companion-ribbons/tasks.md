@@ -72,9 +72,10 @@
       voice, status, or context regression.
 - [ ] Decide whether the Voice/Text delivery toggle needs a home in the full app
       now that the overlay no longer carries it.
-- [ ] Produce the corrected and polished transcript variants. Nothing emits them
-      today, so the UI degrades to literal-only. Section 3 of
-      `voice-capture-notebook-ime` is the contract.
+- [x] Produce corrected and polished transcript variants through the gateway's
+      authenticated, non-executing transcript-revision route. Android requests
+      them after final STT, rejects stale responses, preserves the literal, and
+      defaults Copy to polished when available.
 - [x] Confirm Android and browser both use tap for bounded current-turn
       expansion while History remains a separate surface.
 - [ ] Confirm the two capture bounds against how the user actually works. They

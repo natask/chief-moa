@@ -120,6 +120,13 @@ Moa Gateway
   after the latency-sensitive transcript/clipboard result and may reconcile
   idempotently from completed turns after a restart.
 
+  Final Android transcripts may be submitted to the authenticated
+  `/v1/voice/transcript-variants` editing boundary. It returns corrected and
+  polished/structured text beside the unchanged literal transcript. This path
+  does not enter voice intent routing, create agent runs or tools, or grant
+  action authority; Android discards a response if a newer transcript has
+  replaced its source before the edit completes.
+
   Streaming STT treats provider hypotheses as replacements, not append-only
   text. Final result identities are idempotent within a provider stream, while
   bounded word overlap reconciles stream rotation and reconnect boundaries.

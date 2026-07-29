@@ -111,6 +111,7 @@ const { createVideoNoteHandlers, createVideoNotesStore, videoInlinePart } = requ
 const { createVoiceModeHandlers, createVoiceModeStore, routingFor } = require("./lib/voice-modes");
 const { WorkerPullError, createWorkerPullStore } = require("./lib/worker-pull");
 const { runResearch } = require("./lib/research-workflow");
+const { transcriptVariantMessages, parseTranscriptVariants } = require("./lib/transcript-variants");
 const { createPresentationHandlers } = require("./lib/presentation-handlers");
 const { createSupervisorHandlers } = require("./lib/supervisor-handlers");
 const { createSessionReadHandlers } = require("./lib/session-read-handlers");
@@ -1048,6 +1049,15 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       await handleVoiceTurn(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/voice/transcript-variants") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      await handleTranscriptVariants(request, response);
       return;
     }
 
@@ -7887,6 +7897,40 @@ async function handleVoiceRetranscribe(request, response, url) {
     record_updated: Boolean(record),
     updated_at: now,
   });
+}
+
+async function handleTranscriptVariants(request, response) {
+  const body = await readJsonBody(request);
+  const literal = String(body.transcript || "").trim();
+  let messages;
+  try {
+    messages = transcriptVariantMessages(literal);
+  } catch (error) {
+    sendJson(response, 400, { error: cleanError(error) });
+    return;
+  }
+  try {
+    const profile = agentProfile.effective({
+      scope: profileDeviceIdFromBody(body) ? "device" : "global",
+      deviceId: profileDeviceIdFromBody(body),
+    });
+    const raw = await callModelOrFallback(messages, profile);
+    const variants = parseTranscriptVariants(raw, literal);
+    sendJson(response, 200, {
+      literal,
+      ...variants,
+      source: {
+        session_id: sanitizeOptionalId(body.session_id || body.conversation_id, "default"),
+        branch_id: sanitizeOptionalId(body.branch_id, "default"),
+        turn_id: sanitizeOptionalId(body.turn_id, ""),
+      },
+      processing: "non_executable_transcript_revision_v1",
+      actions: [],
+      agent_runs: [],
+    });
+  } catch (error) {
+    sendJson(response, 502, { error: `transcript refinement failed: ${cleanError(error)}` });
+  }
 }
 
 function normalizeRetranscribeLanguageCodes(value) {

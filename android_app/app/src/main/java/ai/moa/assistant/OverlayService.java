@@ -149,6 +149,7 @@ public final class OverlayService extends Service {
     private String nextManualVoiceFollowUpRunId = "";
     private String nextStreamingVoiceFollowUpRunId = "";
     private int streamingVoiceGeneration;
+    private int transcriptVariantGeneration;
     private boolean continuousVoiceLoop;
     private final MoaContinuousCaptureLoop captureLoop =
             new MoaContinuousCaptureLoop(continuousCaptureSink());
@@ -1277,11 +1278,43 @@ public final class OverlayService extends Service {
         voiceLog.setUser(value, isFinal);
         voiceUserTranscript = value;
         voiceUserTranscriptFinal = isFinal;
+        if (isFinal) {
+            requestTranscriptVariants(value);
+        }
         if (!overlayUnit.isShowing()) {
             showTranscriptOverlay(value);
             return;
         }
         renderVoiceTranscriptRows();
+    }
+
+    private void requestTranscriptVariants(String literal) {
+        final int generation = ++transcriptVariantGeneration;
+        final String source = safe(literal);
+        if (source.isEmpty()) return;
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        final String sessionId = conversationId;
+        final String branchId = activeBranchId;
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("transcript", source);
+                body.put("session_id", sessionId);
+                body.put("branch_id", branchId);
+                body.put("device_id", androidDeviceId());
+                JSONObject response = new MoaGatewayClient(url, token).transcriptVariants(body);
+                String corrected = safe(response.optString("corrected", ""));
+                String polished = safe(response.optString("polished", ""));
+                mainHandler.post(() -> {
+                    if (generation != transcriptVariantGeneration
+                            || !source.equals(safe(voiceUserTranscript))) return;
+                    overlayUnit.setDerivedTranscripts(corrected, polished);
+                });
+            } catch (Exception error) {
+                Log.w(TAG, "transcript refinement unavailable: " + cleanError(error));
+            }
+        }, "moa-transcript-variants").start();
     }
 
     private void updateVoiceAssistantTranscript(String text) {

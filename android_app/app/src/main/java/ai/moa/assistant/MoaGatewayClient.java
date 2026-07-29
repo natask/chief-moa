@@ -43,6 +43,11 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject transcriptVariants(JSONObject body) throws Exception {
+        String responseText = postJson(apiEndpoint("/v1/voice/transcript-variants"), body.toString(), 90000);
+        return new JSONObject(responseText);
+    }
+
     // Set the active thread for the shared session, or mint a new/fork/incognito
     // branch. Streaming voice must call this before opening the WS session so the
     // socket branch is fixed to the resolved thread; the reply carries the
