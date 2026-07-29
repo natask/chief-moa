@@ -34,6 +34,9 @@ final class MoaAudioPlaybackController {
     private static final int MAX_WRITE_SLICE_MS = 100;
     private static final int MAX_WRITE_SLICE_BYTES =
             SAMPLE_RATE_HZ * PCM_BYTES_PER_SAMPLE * MAX_WRITE_SLICE_MS / 1000;
+    // Two minutes of queued mono PCM bounds memory while leaving ordinary long
+    // replies ample room to arrive faster than the device can play them.
+    static final int MAX_PENDING_PCM_BYTES = SAMPLE_RATE_HZ * PCM_BYTES_PER_SAMPLE * 120;
 
     interface Callback {
         void onPlaybackStarted();
@@ -56,6 +59,9 @@ final class MoaAudioPlaybackController {
     private long playbackHeadWrapFrames;
     private long lastPlaybackHeadRawFrames;
     private long lastKnownPlayedPcmFrames;
+    private long playbackGeneration;
+    private long drainTimeoutMs = 60000L;
+    private MoaPcmPlaybackQueue playbackQueue;
 
     MoaAudioPlaybackController(Callback callback) {
         this.callback = callback;
@@ -117,6 +123,34 @@ final class MoaAudioPlaybackController {
                 playbackHeadWrapFrames = 0L;
                 lastPlaybackHeadRawFrames = 0L;
                 lastKnownPlayedPcmFrames = 0L;
+                playbackGeneration += 1L;
+                long generation = playbackGeneration;
+                playbackQueue = new MoaPcmPlaybackQueue(
+                        MAX_PENDING_PCM_BYTES,
+                        pcm -> writeQueuedFrame(generation, pcm),
+                        new MoaPcmPlaybackQueue.Listener() {
+                            @Override
+                            public void onDrained(long acceptedBytes) {
+                                if (acceptedBytes == 0L) {
+                                    stopGeneration(generation, true);
+                                } else {
+                                    drainPlaybackHeadAndStop(generation, drainTimeoutMs);
+                                }
+                            }
+
+                            @Override
+                            public void onOverflow(int pendingBytes, int offeredBytes) {
+                                reportError(
+                                        "Assistant audio playback queue overflowed before the device could play it.",
+                                        null);
+                                stopGeneration(generation, false);
+                            }
+
+                            @Override
+                            public void onWriteFailed() {
+                                stopGeneration(generation, false);
+                            }
+                        });
             } catch (RuntimeException error) {
                 releaseAudioTrack();
                 reportError("Audio playback could not start: " + cleanError(error) + ".", error);
@@ -214,6 +248,50 @@ final class MoaAudioPlaybackController {
         return offset == pcm.length;
     }
 
+    /** Admit a streamed PCM frame without waiting for the device write. */
+    MoaPcmPlaybackQueue.OfferResult enqueue(byte[] pcm) {
+        MoaPcmPlaybackQueue queue;
+        synchronized (lock) {
+            queue = playbackQueue;
+            if (!playing || audioTrack == null || queue == null) {
+                return MoaPcmPlaybackQueue.OfferResult.CLOSED;
+            }
+        }
+        return queue.offer(pcm);
+    }
+
+    private boolean writeQueuedFrame(long generation, byte[] pcm) {
+        if (pcm == null || pcm.length == 0) {
+            return false;
+        }
+        int offset = 0;
+        while (offset < pcm.length) {
+            int written;
+            synchronized (lock) {
+                if (generation != playbackGeneration || !playing || audioTrack == null) {
+                    return false;
+                }
+                int sliceLength = Math.min(pcm.length - offset, MAX_WRITE_SLICE_BYTES);
+                try {
+                    written = audioTrack.write(pcm, offset, sliceLength);
+                } catch (RuntimeException error) {
+                    reportError("Audio playback write failed: " + cleanError(error) + ".", error);
+                    return false;
+                }
+                if (written < 0) {
+                    reportError("AudioTrack write failed with code " + written + ".", null);
+                    return false;
+                }
+                totalPcmFramesWritten += pcmBytesToFrames(written);
+            }
+            if (written == 0) {
+                return false;
+            }
+            offset += written;
+        }
+        return true;
+    }
+
     // Where playback stopped, in ms, as of the last stop(). -1 when unavailable.
     // Read after stop() to tell the gateway how much assistant audio the user
     // actually heard before interrupting.
@@ -263,11 +341,15 @@ final class MoaAudioPlaybackController {
     }
 
     void stop() {
-        stop(false);
+        stopGeneration(-1L, false);
     }
 
-    private void stop(boolean drained) {
+    private void stopGeneration(long expectedGeneration, boolean drained) {
+        MoaPcmPlaybackQueue queue;
         synchronized (lock) {
+            if (expectedGeneration >= 0L && expectedGeneration != playbackGeneration) {
+                return;
+            }
             if (!playing && audioTrack == null) {
                 return;
             }
@@ -277,6 +359,9 @@ final class MoaAudioPlaybackController {
             lastPlayedMs = currentPlayedMsLocked();
             lastKnownPlayedPcmFrames = currentPlayedPcmFramesLocked();
             playing = false;
+            playbackGeneration += 1L;
+            queue = playbackQueue;
+            playbackQueue = null;
             if (audioTrack != null) {
                 try {
                     audioTrack.pause();
@@ -286,47 +371,66 @@ final class MoaAudioPlaybackController {
             }
             releaseAudioTrack();
         }
+        if (queue != null) {
+            queue.cancel();
+        }
         if (callback != null) {
             callback.onPlaybackStopped(drained);
         }
     }
 
     void drainAndStop(long timeoutMs) {
+        MoaPcmPlaybackQueue queue;
+        synchronized (lock) {
+            queue = playbackQueue;
+            drainTimeoutMs = Math.max(1000L, Math.min(timeoutMs, 60000L));
+        }
+        if (queue == null) {
+            stopGeneration(-1L, false);
+            return;
+        }
+        queue.finish();
+    }
+
+    private void drainPlaybackHeadAndStop(long generation, long timeoutMs) {
         long playedAtStart;
         long writtenAtStart;
         synchronized (lock) {
+            if (generation != playbackGeneration || !playing || audioTrack == null) {
+                return;
+            }
             playedAtStart = currentPlayedPcmFramesLocked();
             writtenAtStart = totalPcmFramesWritten;
         }
         long remainingFrames = Math.max(0L, writtenAtStart - playedAtStart);
         long expectedRemainingMs = remainingFrames * 1000L / SAMPLE_RATE_HZ;
-        final long boundedTimeoutMs = Math.max(
+        long boundedTimeoutMs = Math.max(
                 1000L,
                 Math.min(Math.min(timeoutMs, 60000L), expectedRemainingMs + 2000L));
-        new Thread(() -> {
-            long deadline = android.os.SystemClock.elapsedRealtime() + boundedTimeoutMs;
-            boolean drained = false;
-            while (android.os.SystemClock.elapsedRealtime() < deadline) {
-                synchronized (lock) {
-                    if (!playing || audioTrack == null) {
-                        return;
-                    }
-                    drained = totalPcmFramesWritten > 0L
-                            && currentPlayedPcmFramesLocked() >= totalPcmFramesWritten;
-                }
-                if (drained) break;
-                try {
-                    Thread.sleep(20L);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
+        long deadline = android.os.SystemClock.elapsedRealtime() + boundedTimeoutMs;
+        boolean drained = false;
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            synchronized (lock) {
+                if (generation != playbackGeneration || !playing || audioTrack == null) {
                     return;
                 }
+                drained = totalPcmFramesWritten > 0L
+                        && currentPlayedPcmFramesLocked() >= totalPcmFramesWritten;
             }
-            if (!drained && callback != null) {
-                callback.onPlaybackError("Audio playback drain timed out.", null);
+            if (drained) {
+                break;
             }
-            stop(drained);
-        }, "moa-audio-drain").start();
+            try {
+                Thread.sleep(20L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        if (!drained && callback != null) {
+            callback.onPlaybackError("Audio playback drain timed out.", null);
+        }
+        stopGeneration(generation, drained);
     }
 
     private void releaseAudioTrack() {

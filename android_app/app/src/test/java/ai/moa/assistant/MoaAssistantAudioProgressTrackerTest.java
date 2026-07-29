@@ -63,16 +63,34 @@ public final class MoaAssistantAudioProgressTrackerTest {
                 .put("text_start", 0)
                 .put("text_end", 6)
                 .put("text", "Hello "));
+        tracker.onAssistantAudioFrame(new byte[8]);
         tracker.onAssistantAudioSegment(new JSONObject()
                 .put("segment_index", 1)
                 .put("text_start", 6)
                 .put("text_end", 12)
                 .put("text", "world."));
+        tracker.onAssistantAudioFrame(new byte[8]);
 
         assertEquals("Hello world.", tracker.streamedText());
 
         tracker.reset();
         assertEquals("", tracker.streamedText());
+    }
+
+    @Test
+    public void rejectedFrameConsumesPendingTextWithoutAdvancingMapping() throws Exception {
+        MoaAssistantAudioProgressTracker tracker = new MoaAssistantAudioProgressTracker();
+        tracker.onAssistantAudioSegment(new JSONObject()
+                .put("segment_index", 0)
+                .put("text_start", 0)
+                .put("text_end", 7)
+                .put("text", "dropped"));
+
+        tracker.onAssistantAudioFrameRejected();
+
+        assertEquals("", tracker.streamedText());
+        assertEquals(0L, tracker.snapshot(Long.MAX_VALUE).playedPcmBytes);
+        assertEquals(0, tracker.snapshot(Long.MAX_VALUE).assistantTextChars);
     }
 
     @Test

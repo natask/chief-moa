@@ -240,7 +240,11 @@ the installed CLI cannot import its `commander` dependency.
 - [x] 16.5 Add deterministic ordering tests for PCM receipt, audio-done drain
       ownership, immediate turn completion, disabled playback, playback errors,
       post-terminal suppression, and concurrent metrics retention.
-- [ ] 16.6 Establish the real-phone benchmark with repeated audible success,
+- [x] 16.6 Move streamed assistant PCM writes to a bounded generation-scoped
+      FIFO; admit playback text/progress only after queue acceptance and preserve
+      provider/device drain, playback-head reveal, replacement, and TTS retry
+      ordering.
+- [ ] 16.7 Establish the real-phone benchmark with repeated audible success,
       playback-disabled, cancel/replacement, connection-loss, and drain-timeout
       trials against the exact installed APK.
 
