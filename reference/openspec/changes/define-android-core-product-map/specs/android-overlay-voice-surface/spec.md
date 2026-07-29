@@ -279,6 +279,18 @@ locally without granting the gateway new telemetry authority.
   evidence
 - **AND** records a playback drain timeout rather than a completed audible turn
 
+#### Scenario: Network events remain responsive while streamed audio drains
+- **WHEN** the gateway sends multiple large assistant PCM frames followed by
+  `assistant_audio_done` and `turn_done`
+- **THEN** Android enqueues valid PCM frames into one bounded FIFO and returns
+  from each WebSocket callback without waiting for `AudioTrack.write`
+- **AND** re-arms turn liveness when the frame is accepted
+- **AND** drains every accepted frame in order after `assistant_audio_done`
+- **AND** cancel, replacement, or destroy clears pending PCM for that playback
+  generation
+- **AND** queue overflow produces a visible playback failure instead of silently
+  dropping speech
+
 #### Scenario: Rolling on-device diagnostics
 - **WHEN** voice turns complete, fail, or are intentionally torn down
 - **THEN** Android retains at most 100 bounded outcome samples in private app

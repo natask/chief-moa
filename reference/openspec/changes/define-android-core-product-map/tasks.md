@@ -217,3 +217,6 @@ installed nor physically smoked.
 - [ ] 15.6 Establish the real-phone benchmark with repeated audible success,
       playback-disabled, cancel/replacement, connection-loss, and drain-timeout
       trials against the exact installed APK.
+- [x] 15.7 Move streamed assistant PCM onto one bounded generation-bound FIFO so
+      WebSocket callbacks remain responsive, audio-done drains accepted frames,
+      cancellation clears stale audio, and queue overflow is visible.
