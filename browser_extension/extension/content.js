@@ -24,7 +24,6 @@
     launcher,
     quietControls,
     panel,
-    input,
     voiceButton,
     recordButton,
     stopButton,
@@ -33,7 +32,6 @@
     pendingConfirm = null,
     open = false,
     liveVoice = null,
-    pendingCopyAfterCapture = false,
     surfacePhase = "idle",
     listening = false,
     ambientState = "off",
@@ -344,7 +342,6 @@
         <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
-          <textarea id="agee-input" rows="1" placeholder="Ask Ag" autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
           <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
@@ -354,7 +351,6 @@
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
     panel = root.querySelector("#agee-panel");
-    input = root.querySelector("#agee-input");
     voiceButton = root.querySelector("#agee-voice");
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
@@ -392,26 +388,6 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
-
-    input.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        const text = input.value.trim();
-        if (!text) return;
-        // The composer is a draft buffer. Fire the message without clearing the
-        // field so whatever the user was typing stays visible while it streams.
-        submitInstruction(text);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeTextSurface();
-      }
-    });
-    input.addEventListener("input", () => {
-      resizeInput();
-      setSurfacePhase("editing");
-    });
 
     voiceButton.addEventListener("click", (e) => {
       e.preventDefault();
@@ -1052,7 +1028,6 @@
     if (open) {
       positionPanel(); // anchor the surface to the mark, not a fixed corner
       if (!was) chime("wake");
-      setTimeout(() => input.focus(), 0);
     }
   }
 
@@ -1078,25 +1053,15 @@
     });
   }
 
-  // Copy on a live capture finalizes the utterance WITHOUT sending it: the
-  // capture stops, no turn is created, and the transcript stays on screen to be
-  // pasted wherever the user wanted it. Returns true when the copy must wait
-  // for that stop to settle, which is what defers the clipboard write.
-  function finalizeCaptureForCopy() {
-    if (!liveVoice || !listening) return false;
-    pendingCopyAfterCapture = true;
-    // Cancel, never commit: committing is what would send the turn to the model.
-    stopAllLiveVoiceTurns("cancel");
-    setAgentState("idle");
-    // The last transcript we hold is already rendered in the you-line; hand the
-    // copy back on the next frame so it reads the settled text.
-    setTimeout(() => {
-      if (!pendingCopyAfterCapture) return;
-      pendingCopyAfterCapture = false;
-      ribbons?.copyUserTranscript();
-    }, 120);
-    return true;
-  }
+  // Copy on a live capture finalizes the utterance WITHOUT sending it.
+  // Ordering and the never-commit rule live in capture-copy-disposition.js.
+  const captureCopy = AgeeCaptureCopyDisposition.create({
+    isCapturing: () => Boolean(liveVoice) && listening,
+    cancelCapture: () => stopAllLiveVoiceTurns("cancel"),
+    onIdle: () => setAgentState("idle"),
+    copyTranscript: () => ribbons?.copyUserTranscript(),
+  });
+  const finalizeCaptureForCopy = () => captureCopy.requestFinalize();
 
   // Anchor the panel to the floating mark so the input opens right where the
   // agent is. It opens above the mark and grows upward (its bottom stays pinned
@@ -1138,21 +1103,12 @@
       safeStorageLocalSet({ ageeLauncherHidden: false }).catch(() => {});
     }
     toggle(true);
-    if (fresh) {
-      setInputText("");
-      setSurfacePhase("editing");
-    }
-    setTimeout(() => input.focus(), 0);
+    if (fresh) setSurfacePhase("editing");
   }
 
   function closeTextSurface() {
     toggle(false);
     if (surfacePhase !== "pending") setSurfacePhase("idle");
-  }
-
-  function toggleTextSurface() {
-    if (open) closeTextSurface();
-    else openTextSurface({ fresh: false });
   }
 
   function setSurfacePhase(next) {
@@ -1161,9 +1117,6 @@
     for (const phase of ["idle", "editing", "pending", "result", "error"]) {
       root.classList.toggle(`agee-phase-${phase}`, phase === next);
     }
-    // The composer stays editable through every phase. Answers live in the cue
-    // cards above, never in the input, so a running turn never locks typing.
-    if (input) input.readOnly = false;
     syncAvatarBehaviorTrigger();
   }
 
@@ -1174,25 +1127,6 @@
     if (!root || !log) return;
     const hasVisibleWork = log.children.length > 0;
     root.classList.toggle("agee-has-log", hasVisibleWork);
-  }
-
-  function setInputText(text, { select = false } = {}) {
-    if (!input) return;
-    input.value = String(text || "");
-    resizeInput();
-    if (select) {
-      setTimeout(() => {
-        input.focus();
-        input.select();
-      }, 0);
-    }
-  }
-
-  function resizeInput() {
-    if (!input) return;
-    input.style.height = "auto";
-    const max = Math.max(96, Math.round(window.innerHeight * 0.32));
-    input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
   }
 
   function askInlineConfirm(text) {
@@ -1647,11 +1581,7 @@
       return;
     }
     if (action === "command.open") {
-      openTextSurface({ fresh: false });
-      if (input) {
-        if (resolvedPrompt) setInputText(resolvedPrompt, { select: true });
-        input.focus();
-      }
+      ribbons?.beginCompose({ text: resolvedPrompt });
       return;
     }
     if (action === "page.describe") {
@@ -2548,7 +2478,6 @@
     // the mode, show it in the result stack, and never run a gateway turn.
     if (maybeHandleContextSlashCommand(instruction)) {
       setSurfacePhase("editing");
-      input.focus();
       return;
     }
     // Fast local stop path for typed input: a whole-utterance "stop / shut up /
@@ -2564,7 +2493,6 @@
       stopSpeaking();
       updateCue(cueId, "", "done");
       setSurfacePhase("editing");
-      input.focus();
       return;
     }
     const role = AgeeSteeringUi.roleForInstruction(instruction);
@@ -2588,7 +2516,6 @@
       setTranscript(displayText);
       setAgentState("thinking");
     }
-    input.focus();
     const context = consumeContextControls();
     safeRuntimeSendMessage({
       cmd: "run",
@@ -4430,7 +4357,7 @@
         return true;
       case "toggle":
         if (!(msg.source === "command" && commandEchoIsRecent("text"))) {
-          toggleTextSurface();
+          ribbons?.beginCompose();
         }
         reply({ ok: true });
         return true;

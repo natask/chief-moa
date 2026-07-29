@@ -105,11 +105,11 @@ try {
   const refreshGets = await evalValue(worker, `globalThis.__uiSpecGets`);
   if (refreshGets !== 1) throw new Error(`concurrent refreshes made ${refreshGets} requests, expected 1`);
   await waitEval(page, `document.querySelector("#agee-ui-surface")?.textContent.includes("Live updated UI")`);
-  await evalValue(page, `(()=>{const input=document.querySelector("#agee-input");window.__beforeNoop=input?.value||"";[...document.querySelectorAll(".agee-ui-button")].find(b=>b.textContent==="Unknown action").click();return true})()`);
-  const noopChanged = await evalValue(page, `document.querySelector("#agee-input")?.value !== window.__beforeNoop`);
+  await evalValue(page, `(()=>{const input=document.querySelector("#agee-ribbon-you .agee-ribbon-text");window.__beforeNoop=input?.textContent||"";[...document.querySelectorAll(".agee-ui-button")].find(b=>b.textContent==="Unknown action").click();return true})()`);
+  const noopChanged = await evalValue(page, `document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent !== window.__beforeNoop`);
   if (noopChanged) throw new Error("unknown/noop control produced an observable effect");
   await evalValue(page, `[...document.querySelectorAll(".agee-ui-button")].find(b=>b.textContent==="Open command").click()`);
-  await waitEval(page, `document.querySelector("#agee-input")?.value === "safe dispatch"`);
+  await waitEval(page, `document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent === "safe dispatch"`);
   const afterHash = treeHash(extensionPath);
   if (beforeHash !== afterHash) throw new Error("extension source changed during runtime customization");
   console.log(`ui-spec real runtime smoke passed (source sha256 ${beforeHash})`);

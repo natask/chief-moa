@@ -578,6 +578,8 @@
   display: block;
 }
 /* ---- Composer: pill bar + ghost icon buttons ------------------------------ */
+/* The composer field is gone: typing happens in the you-line (see ribbons.css
+   .agee-ribbon-composing). What remains is the approval/notes control row. */
 #agee-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px 34px 34px;
@@ -586,38 +588,6 @@
   min-height: 54px;
   box-sizing: border-box;
   padding: 11px 14px 11px 16px;
-}
-#agee-input {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  background: transparent;
-  border: 0;
-  outline: 0;
-  color: var(--agee-ink);
-  font: inherit;
-  font-size: 15px;
-  letter-spacing: 0;
-  line-height: 1.45;
-  min-height: 33px;
-  max-height: 32vh;
-  overflow-y: auto;
-  padding: 6px 2px 4px 0;
-  resize: none;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-#agee-input::placeholder {
-  color: var(--agee-muted);
-}
-#agee-input[readonly] {
-  cursor: default;
-}
-#agee-root.agee-phase-result #agee-input {
-  color: #f1f1f2;
-}
-#agee-root.agee-phase-error #agee-input {
-  color: #ff918a;
 }
 #agee-voice,
 #agee-record,
@@ -1538,8 +1508,5 @@ button.agee-ui-list-row:hover {
     width: 32px;
     height: 32px;
     min-width: 32px;
-  }
-  #agee-input {
-    font-size: 14px;
   }
 }

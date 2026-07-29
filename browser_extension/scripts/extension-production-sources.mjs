@@ -44,6 +44,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/settings-intent.js",
   "extension/sidepanel.js",
   "extension/steering-ui.js",
+  "extension/capture-copy-disposition.js",
   "extension/stop-intent.js",
   "extension/tool-receipt-runtime.js",
   "extension/tweaks.js",

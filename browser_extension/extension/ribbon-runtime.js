@@ -333,8 +333,11 @@
     // While composing, render() must not write textContent: the caret lives in
     // that node and rewriting it would move the caret to the start on every
     // keystroke. Only the window transform is recomputed.
-    function beginCompose() {
-      if (composing) return;
+    function beginCompose({ text = "" } = {}) {
+      if (composing) {
+        if (text) setComposedText(text);
+        return;
+      }
       composing = true;
       stopReveal(you);
       setPending(you, false);
@@ -345,7 +348,19 @@
       you.textEl.setAttribute("aria-label", "Type to Ag");
       holdOpen();
       engage(true);
+      if (text) setComposedText(text);
       focusCompose();
+    }
+
+    // Prefill, used by the agent-authored quick actions that used to drop a
+    // prompt into the panel's field. Same buffer, same window, caret at the end.
+    function setComposedText(text) {
+      you.target = String(text || "");
+      you.buffer = you.target;
+      you.textEl.textContent = you.target;
+      const overflow = TextModel.overflowFor(you.viewportEl.clientWidth, you.lineEl.scrollWidth);
+      you.lineEl.style.transform = `translateX(${overflow}px)`;
+      you.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
     }
 
     function focusCompose() {

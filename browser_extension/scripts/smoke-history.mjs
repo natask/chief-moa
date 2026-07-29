@@ -311,12 +311,12 @@ async function main() {
     // type a conversational instruction into the bar, and press Enter. This goes
     // through submitInstruction -> createCue (a real cue card) -> background run.
     await evaluate(pageCdp, `chrome.runtime.sendMessage({ cmd: "open" }).catch(() => {}); true;`, { contextId: contentCtx });
-    await waitForEval(pageCdp, `Boolean(document.getElementById("agee-input"))`, 10000, { contextId: contentCtx });
+    await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-ribbon-you .agee-ribbon-text"))`, 10000, { contextId: contentCtx });
     await evaluate(
       pageCdp,
       `(() => {
-        const input = document.getElementById("agee-input");
-        input.value = ${JSON.stringify(TRANSCRIPT)};
+        const input = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+        input.textContent = ${JSON.stringify(TRANSCRIPT)};
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         return true;
       })()`,

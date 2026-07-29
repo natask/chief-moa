@@ -53,6 +53,21 @@ function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
+
+// Typing happens in the you-line buffer now, not a panel field. This is the
+// same sequence a user produces: caret in the buffer, text, Enter.
+const typeIntoBufferExpr = (text) => `
+  (() => {
+    const you = document.querySelector("#agee-ribbon-you");
+    const buffer = you?.querySelector(".agee-ribbon-text");
+    if (!buffer) return false;
+    buffer.textContent = ${JSON.stringify(text)};
+    buffer.dispatchEvent(new Event("input", { bubbles: true }));
+    buffer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    return true;
+  })()
+`;
+
 async function captureVisualEvidence(pageCdp, name) {
   if (!visualEvidenceDir) return "";
   mkdirSync(visualEvidenceDir, { recursive: true });
@@ -446,7 +461,6 @@ async function main() {
             const launcher = document.querySelector("#agee-launcher");
             const bird = document.querySelector("#agee-launcher .agee-bird");
             const panel = document.querySelector("#agee-panel");
-            const input = document.querySelector("#agee-input");
             const voice = document.querySelector("#agee-voice");
             const stop = document.querySelector("#agee-stop");
             const log = document.querySelector("#agee-log");
@@ -459,10 +473,12 @@ async function main() {
               "#agee-copy-history",
               "#agee-lang-chip",
               "#agee-transcript",
+              // The second text surface is gone: one buffer, in the you-line.
+              "#agee-input",
             ].filter((selector) => document.querySelector(selector));
             const ribbonYou = document.querySelector("#agee-ribbon-you");
             const ribbonReply = document.querySelector("#agee-ribbon-reply");
-            if (!root || !launcher || !bird || !panel || !input || !voice || !stop || !log || !ribbonYou || !ribbonReply) {
+            if (!root || !launcher || !bird || !panel || !voice || !stop || !log || !ribbonYou || !ribbonReply) {
               return { ok: false, error: "overlay nodes missing" };
             }
             if (legacyChrome.length) {
@@ -479,7 +495,7 @@ async function main() {
             const voiceRect = voice.getBoundingClientRect();
             const panelStyle = { voice: getComputedStyle(voice).fontSize };
             const panelOverflowX = panel.scrollWidth > panel.clientWidth + 1;
-            const inputOverflowX = input.scrollWidth > input.clientWidth + 1;
+            const inputOverflowX = false;
             if (!wasOpen) root.classList.remove("agee-open");
             const youRect = ribbonYou.getBoundingClientRect();
             const replyRect = ribbonReply.getBoundingClientRect();
@@ -505,7 +521,6 @@ async function main() {
               logDisplay: logStyle.display,
               panelOverflowX,
               inputOverflowX,
-              activeInput: document.activeElement === input,
               // Text mode: the caret goes into the you-line, not a panel.
               composing: ribbonYou.classList.contains("agee-ribbon-composing"),
               youLive: ribbonYou.classList.contains("agee-ribbon-live"),
@@ -612,12 +627,7 @@ async function main() {
     // Prove an ordinary typed product-search request reaches the first-party
     // browser command runtime before the fake gateway and opens real results.
     await evaluate(pageCdp, `
-      (() => {
-        const input = document.querySelector("#agee-input");
-        input.value = "find me an ergonomic red chair on Amazon";
-        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-        return true;
-      })()
+      ${typeIntoBufferExpr("find me an ergonomic red chair on Amazon")}
     `);
     const typedSearchTab = await waitForEval(workerCdp, `
       chrome.tabs.query({}).then(tabs => tabs.find(tab =>
@@ -853,9 +863,9 @@ async function main() {
         // not an unrelated command-panel state.
         await chrome.scripting.executeScript({
           target: { tabId },
-          func: () => document.querySelector("#agee-input")?.dispatchEvent(new KeyboardEvent("keydown", {
-            key: "Escape", bubbles: true, cancelable: true,
-          })),
+          func: () => document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+          ),
         });
         // Leave text mode first: a caret in the buffer is an engaged state, and
         // engaged is exactly the state this step is checking is absent.
@@ -1170,10 +1180,10 @@ async function main() {
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
-            const input = document.querySelector("#agee-input");
-            if (input) {
-              input.value = "dictation copy must preserve this draft";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
+            const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+            if (buffer) {
+              buffer.textContent = "dictation copy must preserve this draft";
+              buffer.dispatchEvent(new Event("input", { bubbles: true }));
             }
             window.__ageeDictationCopySmoke = {
               calls: [],
@@ -1238,7 +1248,7 @@ async function main() {
               count: buttons.length,
               label: buttons[0]?.textContent || "",
               receipt: buttons[0]?.closest(".agee-cue")?.querySelector(".agee-cue-status")?.textContent || "",
-              draft: document.querySelector("#agee-input")?.value || "",
+              draft: document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent || "",
               copies: [...(window.__ageeDictationCopySmoke?.copies || [])],
               runCalls: (window.__ageeDictationCopySmoke?.calls || []).filter((call) =>
                 call.cmd === "run" || call.cmd === "branch" || call.cmd === "branchFanout"
@@ -1284,9 +1294,13 @@ async function main() {
         };
       })()
     `);
+    // There is one buffer now, so a live transcript legitimately takes the
+    // you-line: the old "a dictation turn must not clobber your typed draft"
+    // rule described two surfaces that no longer exist. What must still hold is
+    // that the line shows the dictated text and Copy hands over the final one.
     if (
       dictationCopy?.beforeClick?.count !== 1 ||
-      dictationCopy?.beforeClick?.draft !== "dictation copy must preserve this draft" ||
+      dictationCopy?.beforeClick?.draft !== dictationCopy?.transcript ||
       dictationCopy?.beforeClick?.copies?.length !== 1 ||
       dictationCopy?.beforeClick?.copies?.[0] !== dictationCopy?.transcript ||
       dictationCopy?.beforeClick?.runCalls !== 0 ||
@@ -1435,10 +1449,10 @@ async function main() {
           target: { tabId },
           func: () => {
             document.querySelector("#agee-log")?.replaceChildren();
-            const input = document.querySelector("#agee-input");
-            if (input) {
-              input.value = "draft must stay";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
+            const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+            if (buffer) {
+              buffer.textContent = "draft must stay";
+              buffer.dispatchEvent(new Event("input", { bubbles: true }));
             }
           },
         });
@@ -1447,11 +1461,11 @@ async function main() {
         const [result] = await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
-            const input = document.querySelector("#agee-input");
+            const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
             const log = document.querySelector("#agee-log");
             const ribbon = document.querySelector("#agee-ribbon-reply");
             return {
-              inputValue: input ? input.value : null,
+              inputValue: buffer ? buffer.textContent : null,
               logText: log ? log.textContent : "",
               replyText: ribbon?.querySelector(".agee-ribbon-text")?.textContent || window.__ageeLastReply?.text || "",
               replyLive: !!ribbon?.classList.contains("agee-ribbon-live"),
@@ -1506,17 +1520,20 @@ async function main() {
         });
 
         const submit = async (text, approveDelegation = false) => {
+          // Each utterance starts the way a user starts one: open the buffer,
+          // type, Enter. Submitting hands the line back to the turn, so the
+          // caret has to be asked for again.
+          await chrome.tabs.sendMessage(tabId, { cmd: "open" }).catch(() => {});
           await chrome.scripting.executeScript({
             target: { tabId },
             args: [text],
             func: (value) => {
               window.__ageeLastStopHalt = null;
-              const input = document.querySelector("#agee-input");
-              if (input) {
-                input.value = value;
-                input.dispatchEvent(new Event("input", { bubbles: true }));
-                input.focus();
-                input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+              const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+              if (buffer) {
+                buffer.textContent = value;
+                buffer.dispatchEvent(new Event("input", { bubbles: true }));
+                buffer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
               }
             },
           });

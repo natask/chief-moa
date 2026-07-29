@@ -55,6 +55,7 @@
         "ribbon-window.js",
         "ribbon-layout.js",
         "ribbon-runtime.js",
+        "capture-copy-disposition.js",
         "quiet-companion-controls.js",
         "assistant-audio-replay.js",
         "content.js"
