@@ -56,6 +56,7 @@
         "ribbon-window.js",
         "ribbon-layout.js",
         "ribbon-runtime.js",
+        "companion-level.js",
         "capture-copy-disposition.js",
         "quiet-companion-controls.js",
         "compose-heartbeat.js",

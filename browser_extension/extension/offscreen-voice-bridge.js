@@ -48,7 +48,20 @@ async function sendToOffscreenReceiver(sendMessage, ensureReady, message) {
   }
 }
 
+// The companion rim's level leg (overlay spec 2026-07-28 section 3.1). The
+// worklet emits an RMS about 24 times a second while the mic is open; this
+// shapes it into the message background.js forwards onto the same voice-event
+// channel that already carries transcript_partial. Returns null when there is
+// nothing worth sending, so a capture with no session and a garbage sample both
+// cost zero messages.
+function micLevelMessage(voiceSessionId, level) {
+  const rms = Number(level);
+  if (!voiceSessionId || !Number.isFinite(rms) || rms < 0) return null;
+  return { cmd: "offscreenVoiceLevel", voiceSessionId, rms };
+}
+
 export {
+  micLevelMessage,
   isMissingOffscreenReceiver,
   offscreenRuntimeError,
   sendToOffscreenReceiver,

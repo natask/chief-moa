@@ -2392,7 +2392,7 @@ async function ensureContent(tabId) {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "launcher-removal-runtime.js", "browser-command-transcript-runtime.js", "document-context.js", "ribbon-window.js", "ribbon-layout.js", "ribbon-runtime.js", "quiet-companion-controls.js", "assistant-audio-replay.js", "overlay-event-trace.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "launcher-removal-runtime.js", "browser-command-transcript-runtime.js", "document-context.js", "ribbon-window.js", "ribbon-layout.js", "ribbon-runtime.js", "companion-level.js", "companion-rim.js", "quiet-companion-controls.js", "assistant-audio-replay.js", "overlay-event-trace.js", "content.js"] });
   }
 }
 
@@ -3208,6 +3208,18 @@ async function forwardVoiceSessionEvent(session, event) {
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
+}
+
+// Mic amplitude for the companion rim (overlay spec 2026-07-28 section 3.1).
+// It rides the voice-event channel that already carries transcript_partial, but
+// unlike a transcript it is worthless a moment later: never queue it for an
+// unattached tab, or a second of silence before attach replays as a second of
+// stale rim. Dropped levels cost nothing -- the next one is 42ms away.
+function sendVoiceSessionLevel(id, rms) {
+  const session = voiceSessions.get(id);
+  if (!session || session.closed || !session.attached) return { ok: false, error: "voice session is not open" };
+  send(session.tabId, { cmd: "voiceSessionEvent", voiceSessionId: session.id, event: { type: "mic_level", rms } });
+  return { ok: true };
 }
 
 function sendVoiceSessionAudio(id, audio) {
@@ -4519,6 +4531,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     sendResponse(sendVoiceSessionAudio(msg.voiceSessionId, msg.audio));
+    return true;
+  }
+  if (msg.cmd === "offscreenVoiceLevel") {
+    // A record-mode capture paints a steady red rim by contract, so its levels
+    // are dropped here rather than travelling to a tab that ignores them.
+    if (isRecordSessionId(msg.voiceSessionId)) {
+      sendResponse({ ok: true, dropped: "record" });
+      return true;
+    }
+    sendResponse(sendVoiceSessionLevel(msg.voiceSessionId, Number(msg.rms) || 0));
     return true;
   }
   if (msg.cmd === "offscreenVoiceError") {
