@@ -97,4 +97,21 @@ else
   release_count=0
 fi
 echo "Restore check passed: /health ok, supervisor status ok, nodes=$count, release_assignments=$release_count"
+
+# Record which checkout proved this backup restores. A promotion takes one
+# backup and verifies it against the candidate; update.sh reuses that exact
+# evidence instead of taking a second 1.3 GB backup minutes later. The receipt
+# is what makes the reuse checkable rather than assumed: without it, update.sh
+# refuses to reuse and takes its own backup.
+verified_commit="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+cat > "$backup_dir/restore-check.json" <<RECEIPT
+{
+  "schema_version": 1,
+  "checked_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "verified_commit": "$verified_commit",
+  "nodes": ${count:-0},
+  "release_assignments": ${release_count:-0}
+}
+RECEIPT
+
 echo "Scratch stack removed; the active stack was not touched."

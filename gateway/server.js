@@ -244,7 +244,19 @@ const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 // ask "what prompts have I set?" The profile store holds only the current value;
 // this keeps the durable, queryable history of how behavior was steered over time.
 const PROFILE_HISTORY_FILE = path.join(DATA_DIR, "agent-profile-history.jsonl");
-const ANDROID_OTA_DIR = path.resolve(process.env.ANDROID_OTA_DIR || path.join(DATA_DIR, "android-ota"));
+// The OTA store is moving off DATA_DIR onto its own volume, because a store
+// written by the host publisher and read by the gateway inside the gateway's
+// own data volume is what crash-looped production on 2026-07-29 and what makes
+// every gateway backup 292 MB heavier than it needs to be. The move is staged:
+// the gateway serves from ANDROID_OTA_DIR once that path holds a store, and
+// from ANDROID_OTA_LEGACY_DIR until then, so no stage strands the phone's
+// update endpoint. See resolveStoreDir in lib/android-ota.js.
+const ANDROID_OTA_LEGACY_DIR = path.resolve(process.env.ANDROID_OTA_LEGACY_DIR || path.join(DATA_DIR, "android-ota"));
+const ANDROID_OTA_STORE = androidOta.resolveStoreDir({
+  primary: process.env.ANDROID_OTA_DIR || path.join(DATA_DIR, "android-ota"),
+  legacy: ANDROID_OTA_LEGACY_DIR,
+});
+const ANDROID_OTA_DIR = ANDROID_OTA_STORE.dir;
 // ai.moa.assistant (the original app) keeps publishing straight to
 // ANDROID_OTA_DIR, unchanged. ag.companion (the renamed app, a clean parallel
 // install rather than an OTA update of the old one -- see
@@ -352,8 +364,13 @@ fs.mkdirSync(BROKER_EVENTS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_RESEARCH_REPORTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
-fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
-for (const channelDir of Object.values(ANDROID_OTA_CHANNELS)) fs.mkdirSync(channelDir, { recursive: true });
+// Best-effort, not fatal: the OTA store is written by the host publisher and
+// may carry its uid/mode. See ensurePublisherOwnedDir in lib/android-ota.js.
+for (const otaDir of [ANDROID_OTA_DIR, ...Object.values(ANDROID_OTA_CHANNELS)]) {
+  const ensured = androidOta.ensurePublisherOwnedDir(otaDir);
+  if (!ensured.ready) console.error(`[android-ota] ${ensured.reason}`);
+}
+console.log(`[android-ota] serving from ${ANDROID_OTA_STORE.source} store ${ANDROID_OTA_DIR}${ANDROID_OTA_STORE.legacyPending ? ` (legacy store still present at ${ANDROID_OTA_LEGACY_DIR})` : ""}`);
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const { routeAndroidOta, health: androidOtaHealth } = createAndroidOtaHandlers({
   androidOta, otaDir: ANDROID_OTA_DIR, authorized, sendJson, cleanError,

@@ -31,9 +31,25 @@ HOST="${MOA_VPS_SSH:-}"
 # ids never share one `current` pointer or `latest.json` -- see the channel
 # routing block below, after the local release facts (including the app id
 # actually being published) have been read and validated.
-REMOTE_OTA_BASE_DIR="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
+# The store is moving onto its own volume (chief-moa_moa-ota-data) so the
+# publisher and the gateway stop sharing one directory tree: publishing into
+# the gateway's data volume is what crash-looped production on 2026-07-29 and
+# what fails the gateway backup when tar meets a 0700 .publish-staging.
+# MOA_VPS_OTA_DIR overrides the target for the staged cutover and for a
+# rollback to the legacy path.
+REMOTE_OTA_BASE_DIR="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-ota-data/_data}"
+# The gateway reads this store as uid 1000. Everything the publisher creates
+# must belong to that uid, or the next gateway boot meets a directory it
+# cannot traverse. 0 means "leave ownership alone" for hosts that manage it
+# another way.
+REMOTE_OTA_OWNER_UID="${MOA_VPS_OTA_OWNER_UID:-1000}"
+REMOTE_OTA_OWNER_GID="${MOA_VPS_OTA_OWNER_GID:-1000}"
 REMOTE_PUBLIC_GATEWAY_URL="${MOA_VPS_PUBLIC_GATEWAY_URL:-}"
-SNAPSHOT_RETENTION="${MOA_OTA_SNAPSHOT_RETENTION:-5}"
+SNAPSHOT_RETENTION="${MOA_OTA_SNAPSHOT_RETENTION:-2}"
+# Keep the live release plus one predecessor: exactly the one-step rollback the
+# Android client offers. Anything older is a rebuild from the tagged commit with
+# the continuity key. Minimum 2, so a rollback target always survives.
+RELEASE_RETENTION="${MOA_OTA_RELEASE_RETENTION:-2}"
 # Secondary signal only (see the lock-reclaim comment below): how long a
 # completed-but-abandoned publish lock must sit before an unrelated operation
 # may reclaim it. This guards against racing a publish that is still running
@@ -623,6 +639,7 @@ set +e
 ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" bash -s -- \
   "$REMOTE_OTA_DIR" finalize "$RELEASE_ID" "$SNAPSHOT_ID" "$OPERATION_ID" \
   "$APK_SHA256" "$APK_SIZE" "$RELEASE_META_SHA256" "$LATEST_SHA256" \
+  "$REMOTE_OTA_OWNER_UID" "$REMOTE_OTA_OWNER_GID" \
   >/dev/null 2>&1 <<'REMOTE_FINALIZE'
 set -euo pipefail
 umask 077
@@ -635,7 +652,11 @@ apk_sha="$6"
 apk_size="$7"
 release_meta_sha="$8"
 latest_sha="$9"
+owner_uid="${10}"
+owner_gid="${11}"
 [ "$phase" = finalize ] || exit 1
+[[ "$owner_uid" =~ ^[0-9]+$ ]] || exit 1
+[[ "$owner_gid" =~ ^[0-9]+$ ]] || exit 1
 [[ "$root" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
 [[ "$root" != *"//"* && "$root" != *"/../"* && "$root" != *"/./"* \
   && "$root" != */.. && "$root" != */. ]] || exit 1
@@ -813,6 +834,22 @@ chmod 755 "$root" "$root/releases" "$target"
 chmod 644 "$target/moa-assistant.apk" "$target/release.json" \
   "$root/moa-assistant.apk" "$root/latest.json"
 
+# The gateway reads this store as an unprivileged user. Publishing over SSH
+# as root left root-owned 0700 directories inside it; on 2026-07-29 one of
+# them (channels/) made the gateway die at boot with EACCES and 502 every
+# request. Hand the whole store to the gateway user, so publisher-created
+# paths can never be unreadable by the process that has to serve them.
+# owner_uid=0 means the host manages ownership another way; skip then.
+#
+# Only a privileged publisher can hand files to another uid. Production
+# publishes over SSH as root, so this applies there. An unprivileged publisher
+# cannot chown at all and would already own everything it created consistently,
+# so skipping is correct rather than a silent hole. A root publisher that fails
+# to chown is a real error.
+if [ "$owner_uid" -ne 0 ] && [ "$(id -u)" = "0" ]; then
+  chown -R "$owner_uid:$owner_gid" "$root" || exit 1
+fi
+
 printf '%s %s %s %s %s %s\n' \
   "$operation" "$release_id" "$apk_sha" "$apk_size" "$release_meta_sha" "$latest_sha" \
   > "$receipt_tmp"
@@ -946,7 +983,8 @@ fi
 set +e
 ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" bash -s -- \
   "$REMOTE_OTA_DIR" ack "$OPERATION_ID" "$RELEASE_ID" "$APK_SHA256" "$APK_SIZE" \
-  "$RELEASE_META_SHA256" "$LATEST_SHA256" >/dev/null 2>&1 <<'REMOTE_ACK'
+  "$RELEASE_META_SHA256" "$LATEST_SHA256" "$RELEASE_RETENTION" "$SNAPSHOT_RETENTION" \
+  >/dev/null 2>&1 <<'REMOTE_ACK'
 set -euo pipefail
 root="$1"
 phase="$2"
@@ -956,7 +994,11 @@ apk_sha="$5"
 apk_size="$6"
 release_meta_sha="$7"
 latest_sha="$8"
+release_retention="$9"
+snapshot_retention="${10}"
 [ "$phase" = ack ] || exit 1
+[[ "$release_retention" =~ ^[0-9]+$ ]] && [ "$release_retention" -ge 2 ] || exit 1
+[[ "$snapshot_retention" =~ ^[0-9]+$ ]] && [ "$snapshot_retention" -ge 1 ] || exit 1
 [[ "$root" =~ ^/[A-Za-z0-9._/-]+$ ]] || exit 1
 [[ "$root" != *"//"* && "$root" != *"/../"* && "$root" != *"/./"* \
   && "$root" != */.. && "$root" != */. ]] || exit 1
@@ -986,6 +1028,73 @@ stage="$root/.publish-staging/$operation"
 rm -rf -- "$stage" "$lock"
 [ ! -e "$stage" ] && [ ! -L "$stage" ] || exit 1
 [ ! -e "$lock" ] && [ ! -L "$lock" ] || exit 1
+
+# Retention. Reached only after the new release is live AND its authenticated
+# public manifest/APK verification has already passed, so pruning here can never
+# remove a release the phone is about to be offered.
+#
+# APKs are deployment artifacts, rebuildable from the tagged commit with the
+# continuity key. Keeping the live release plus one predecessor preserves the
+# one-step rollback the client actually offers. Publication used to delete
+# nothing at all, and the store had grown to 33 releases and 36 snapshots inside
+# the gateway's data volume.
+#
+# Every rule fails safe: only well-formed release ids directly under the base are
+# considered, the live release is never a candidate, unreadable metadata keeps
+# the entry, and the live release is re-checked afterwards.
+prune_oldest() {
+  # base, how many to keep, name of an entry that must never be dropped, and a
+  # newline-separated "sortkey<TAB>name" listing on stdin. Oldest sort keys go
+  # first, so the head of the list is what gets dropped.
+  local base="$1" keep="$2" protect="$3" listing="" name="" total=0 drop=0
+  listing="$(cat)"
+  [ -n "$listing" ] || return 0
+  total="$(printf '%s\n' "$listing" | wc -l | tr -d '[:space:]')"
+  # `keep` counts the protected live entry, which the callers already exclude.
+  [ -n "$protect" ] && keep=$(( keep - 1 ))
+  drop=$(( total - keep ))
+  [ "$drop" -gt 0 ] || return 0
+  printf '%s\n' "$listing" | head -n "$drop" | cut -f2 | while IFS= read -r name; do
+    [ -n "$name" ] && [ "$name" != "$protect" ] || continue
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+    rm -rf -- "${base:?}/${name:?}"
+  done
+}
+
+# Releases are ordered by the published_at the gateway itself orders them by
+# (compareReleasesAsc in gateway/lib/android-ota.js), so the release this prune
+# keeps is exactly the one the client would roll back to.
+releases_base="$root/releases"
+if [ -d "$releases_base" ] && [ ! -L "$releases_base" ]; then
+  for entry in "$releases_base"/*/; do
+    entry="${entry%/}"
+    [ -d "$entry" ] && [ ! -L "$entry" ] || continue
+    name="${entry##*/}"
+    [[ "$name" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || continue
+    [ "$name" != "$release_id" ] || continue
+    stamp="$(sed -n 's/.*"published_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      "$entry/release.json" 2>/dev/null | head -n 1)"
+    # No readable timestamp means unknown age; keep it rather than guess.
+    [ -n "$stamp" ] || continue
+    printf '%s\t%s\n' "$stamp" "$name"
+  done | sort | prune_oldest "$releases_base" "$release_retention" "$release_id"
+fi
+
+# Snapshots carry no release.json. Their ids are timestamp-prefixed, so a plain
+# lexical sort is their chronological order.
+snapshots_base="$root/.publish-snapshots"
+if [ -d "$snapshots_base" ] && [ ! -L "$snapshots_base" ]; then
+  for entry in "$snapshots_base"/*/; do
+    entry="${entry%/}"
+    [ -d "$entry" ] && [ ! -L "$entry" ] || continue
+    name="${entry##*/}"
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+    printf '%s\t%s\n' "$name" "$name"
+  done | sort | prune_oldest "$snapshots_base" "$(( snapshot_retention + 1 ))" ""
+fi
+# The live release and its pointer must still be intact after pruning.
+[ -d "$root/releases/$release_id" ] || exit 1
+[ -L "$root/current" ] && [ "$(readlink "$root/current")" = "releases/$release_id" ] || exit 1
 REMOTE_ACK
 ACK_STATUS=$?
 set -e

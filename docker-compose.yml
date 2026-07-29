@@ -38,7 +38,13 @@ services:
       HOST: 0.0.0.0
       PORT: 8787
       DATA_DIR: /data
-      ANDROID_OTA_DIR: /data/android-ota
+      # The OTA store is moving onto its own volume so the host publisher
+      # and the gateway stop sharing one directory tree. The gateway serves
+      # from ANDROID_OTA_DIR once it holds a store and from the legacy path
+      # until then, so the move and its rollback are both non-events for the
+      # phone. See reference/architecture/deployment-plane.md.
+      ANDROID_OTA_DIR: ${ANDROID_OTA_DIR:-/srv/android-ota}
+      ANDROID_OTA_LEGACY_DIR: /data/android-ota
       DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
       # First rollout remains disabled until the new database has one complete
       # backup/restore cycle. Enabling later exposes already-migrated routes.
@@ -96,6 +102,7 @@ services:
       BLOB_JANITOR_INTERVAL_MS: ${BLOB_JANITOR_INTERVAL_MS:-}
     volumes:
       - moa-gateway-data:/data
+      - moa-ota-data:/srv/android-ota
     healthcheck:
       test:
         - CMD-SHELL
@@ -217,6 +224,7 @@ services:
 
 volumes:
   moa-gateway-data:
+  moa-ota-data:
   moa-postgres-data:
 
 networks:

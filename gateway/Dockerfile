@@ -15,7 +15,8 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8787 \
     DATA_DIR=/data \
-    ANDROID_OTA_DIR=/data/android-ota \
+    ANDROID_OTA_DIR=/srv/android-ota \
+    ANDROID_OTA_LEGACY_DIR=/data/android-ota \
     MOA_BUILD_SHA=$MOA_BUILD_SHA \
     MOA_BUILD_REF=$MOA_BUILD_REF \
     MOA_BUILD_TIME=$MOA_BUILD_TIME
@@ -42,8 +43,12 @@ COPY gateway/agent-workflows ./agent-workflows
 # records, credentials, or mutable database state into the image.
 COPY release_control_plane ./release_control_plane
 
-RUN mkdir -p /data/android-ota \
-  && chown -R node:node /app /data
+# Create and own both OTA locations. The mount point must exist and belong to
+# the gateway user before the volume is attached, so a fresh volume inherits
+# uid 1000 instead of root -- root ownership here is exactly what crash-looped
+# production on 2026-07-29.
+RUN mkdir -p /data/android-ota /srv/android-ota \
+  && chown -R node:node /app /data /srv/android-ota
 
 USER node
 

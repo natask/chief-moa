@@ -21,6 +21,7 @@
 const crypto = require("node:crypto");
 const { createInteractionFeedbackContract } = require("./interaction-feedback");
 const { createWorkHistoryCompletionBridge, runBlockingReason } = require("./work-history-completion");
+const { currentDeploymentClaim, isClaimExpired, isClaimHeldByOther } = require("./deployment-claims");
 
 const TASK_STATUSES = Object.freeze(["proposed", "queued", "active", "blocked", "completed", "canceled", "failed"]);
 
@@ -687,9 +688,10 @@ function createWorkHistoryStore({ events }) {
     const worker = requireText(input.worker_id, "worker_id");
     const operation = DEPLOYMENT_OPERATIONS.includes(input.operation) ? input.operation : "preview";
     return deploymentTransition(requestId, async (entry) => {
-      assertDeploymentOperationClaimable(entry, operation);
       const now = new Date().toISOString();
       const claimId = text(input.claim_id, 160) || id("dclm");
+      // Identify the claimant so its own retry is not mistaken for contention.
+      assertDeploymentOperationClaimable(entry, operation, { worker_id: worker, claim_id: claimId });
       const event = await append({
       event_type: "deployment.claimed",
       stream_id: `deployment:${requestId}`,
@@ -1816,21 +1818,11 @@ function currentEffectAdoption(entry, operation, effectId) {
     .slice(-1)[0] || null;
 }
 
-function currentDeploymentClaim(entry, operation) {
-  return entry.claims.get(operation) || null;
-}
-
 function currentDeploymentEffect(entry, operation, effectId) {
   const observed = entry.effects.get(operation) || null;
   if (!observed) return null;
   if (effectId && observed.effect_id !== effectId) return null;
   return observed;
-}
-
-function isClaimExpired(claim) {
-  if (!claim?.lease_expires_at) return false;
-  const expiry = new Date(claim.lease_expires_at);
-  return Number.isFinite(expiry.getTime()) && expiry.getTime() <= Date.now();
 }
 
 function deploymentApplyGuard(entry) {
@@ -1897,7 +1889,7 @@ function deploymentRequestBlockingReason(entry) {
   return "";
 }
 
-function assertDeploymentOperationClaimable(entry, operation) {
+function assertDeploymentOperationClaimable(entry, operation, claimant) {
   if (!entry?.request?.request_id) {
     throw new Error("deployment request not found");
   }
@@ -1905,7 +1897,7 @@ function assertDeploymentOperationClaimable(entry, operation) {
     throw new Error(`deployment request ${entry.request.request_id} ${operation} effect is already observed; use explicit adoption before receipt`);
   }
   const currentClaim = currentDeploymentClaim(entry, operation);
-  if (currentClaim && !isClaimExpired(currentClaim) && !entry.receipts.get(operation)) {
+  if (isClaimHeldByOther(currentClaim, claimant) && !entry.receipts.get(operation)) {
     throw new Error(`deployment request ${entry.request.request_id} ${operation} is already claimed by ${currentClaim.worker_id}`);
   }
   if (operation === "preview") {
