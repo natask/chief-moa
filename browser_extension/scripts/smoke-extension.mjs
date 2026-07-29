@@ -1017,20 +1017,21 @@ async function main() {
     // Ambient paints nothing and intercepts nothing.
     if (
       ribbonBefore.unitState !== "ambient" ||
-      ribbonBefore.you.background !== "rgba(0, 0, 0, 0)" ||
-      ribbonBefore.reply.background !== "rgba(0, 0, 0, 0)" ||
-      ribbonBefore.you.boxShadow !== "none" ||
-      ribbonBefore.you.pointerEvents !== "none" ||
+      // The plate and the copy rail are permanent: the box looks the same
+      // before and after a click, which only changes its size.
+      ribbonBefore.you.background === "rgba(0, 0, 0, 0)" ||
+      ribbonBefore.reply.background === "rgba(0, 0, 0, 0)" ||
+      ribbonBefore.you.boxShadow === "none" ||
       ribbonBefore.glyphHittable !== "auto" ||
       Number(ribbonBefore.launcherOpacity) !== 0.92 ||
-      Number(ribbonBefore.you.copyOpacity) !== 0 ||
+      Number(ribbonBefore.you.copyOpacity) < 0.5 ||
       // The companion never moves and neither box changes sides: the reply
       // stays below it even at the bottom edge, absorbing the squeeze in its
       // height budget instead of stacking above.
       ribbonBefore.replyTop < ribbonBefore.launcherBottom ||
       ribbonBefore.replyTop > ribbonBefore.launcherBottom + 10
     ) {
-      throw new Error(`ambient overlay must paint no plate and take no page clicks: ${JSON.stringify(ribbonBefore)}`);
+      throw new Error(`the plate and copy rail must be permanent: ${JSON.stringify(ribbonBefore)}`);
     }
     // The measurement transaction ends after exercising the tap, so return the
     // real unit to its collapsed state for the first visual checkpoint.
@@ -1058,13 +1059,16 @@ async function main() {
     if (
       ribbons.tapped !== true ||
       ribbonAfter.unitState !== "engaged" ||
-      Number(ribbonAfter.copyOpacity) !== 1 ||
+      // Only the height may change. The plate and the rail were already there,
+      // so a tap must not restyle the box under the cursor.
+      ribbonAfter.copyOpacity !== ribbonBefore.you.copyOpacity ||
+      ribbonAfter.background !== ribbonBefore.you.background ||
       ribbonAfter.copyPointerEvents !== "auto" ||
-      ribbonAfter.background === "rgba(0, 0, 0, 0)" ||
+      ribbonAfter.height <= ribbonBefore.you.height ||
       ribbonAfter.width !== ribbonBefore.you.width ||
       ribbonAfter.docScrollHeight !== ribbonBefore.docScrollHeight
     ) {
-      throw new Error(`tap must solidify the ribbon and reveal copy without reflowing the page: ${JSON.stringify({ ribbonBefore, ribbonAfter })}`);
+      throw new Error(`tap must change only the size, never the box's appearance: ${JSON.stringify({ ribbonBefore, ribbonAfter })}`);
     }
     await evaluate(workerCdp, `(async () => {
       await chrome.scripting.executeScript({

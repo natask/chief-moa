@@ -1514,16 +1514,18 @@ if (
   throw new Error("ribbon geometry must be fixed: one nowrap line inside a height-locked hidden viewport");
 }
 
-// Transparent until touched: the ambient ribbon paints no plate and takes no
-// pointer events; only the glyph run is hittable, so an empty ribbon lets a
-// click reach the page underneath.
+// The plate is permanent and the copy rail is always reachable: a click changes
+// the box's SIZE, never its appearance. An empty ribbon still takes no pointer
+// events, so a click with nothing on screen reaches the page underneath.
 if (
   !/\.agee-ribbon\s*\{[^}]*background:\s*transparent;[^}]*pointer-events:\s*none;/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-text\s*\{\s*pointer-events:\s*auto;/.test(ribbonsCssSource) ||
-  !/#agee-root\[data-agee-unit="engaged"\] \.agee-ribbon\.agee-ribbon-live,/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon\.agee-ribbon-live \{[^}]*background: var\(--agee-ribbon-plate\);/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-copy \{[^}]*pointer-events: auto;/.test(ribbonsCssSource) ||
+  /#agee-root\[data-agee-unit="engaged"\] \.agee-ribbon-live \.agee-ribbon-copy/.test(ribbonsCssSource) ||
   !/#agee-root\[data-agee-unit="dormant"\] #agee-launcher \{ opacity: 0\.34; \}/.test(ribbonsCssSource)
 ) {
-  throw new Error("the ambient overlay must paint no plate and must not intercept page clicks");
+  throw new Error("the plate and copy rail must be permanent; only size may change on click");
 }
 
 // The unit moves as one: dragging a ribbon moves the companion anchor and the
