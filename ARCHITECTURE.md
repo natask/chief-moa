@@ -278,6 +278,14 @@ bundle; neither discovery, notification, nor selection downloads or installs
 the APK. Stable fallback and the existing digest/signer/install receipt path
 remain the only Android release-transition authorities.
 
+The legacy direct Android publisher is fail-closed while that control-plane
+path is completed. Before it builds, it captures one clean full Git commit and
+requires both the local `origin/master` authority and the currently deployed
+stable OTA commit to be ancestors. Missing, invalid, ambiguous, or divergent
+authority blocks publication. The built artifact records the full commit SHA;
+the wrapper then rechecks the same HEAD and clean tree before allowing the
+already-built bytes into the transactional VPS publisher.
+
 CI build evidence, an uploaded artifact, store submission, publication,
 installation, and post-relaunch smoke are distinct states. No earlier state may
 be reported as a later one. macOS and Windows remain protocol/library seams

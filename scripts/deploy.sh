@@ -38,6 +38,7 @@ try {
 } catch {
   process.exit(1);
 }
+
 const target = config?.production?.vps_ssh;
 if (typeof target !== "string"
   || !/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$/.test(target)) {
@@ -50,6 +51,61 @@ if (host.length > 253 || host.includes("..") || host.includes(".-")
 }
 process.stdout.write(target);
 NODE
+}
+
+android_release_candidate() {
+  local head origin_master stable_reported stable_commit
+
+  head="$(git_head)" || {
+    log "android: cannot resolve the candidate HEAD; publication blocked" >&2
+    return 1
+  }
+  if [ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]; then
+    log "android: working tree is not clean; publication blocked" >&2
+    return 1
+  fi
+  origin_master="$(git -C "$ROOT_DIR" rev-parse --verify 'refs/remotes/origin/master^{commit}' 2>/dev/null || true)"
+  if [[ ! "$origin_master" =~ ^[0-9a-f]{40}$ ]]; then
+    log "android: authoritative origin/master commit is missing or ambiguous; publication blocked" >&2
+    return 1
+  fi
+  if ! git -C "$ROOT_DIR" merge-base --is-ancestor "$origin_master" "$head"; then
+    log "android: candidate $head does not contain origin/master $origin_master; publication blocked" >&2
+    return 1
+  fi
+
+  stable_reported="$(android_stable_git_sha "$1" 2>/dev/null || true)"
+  if [ -z "$stable_reported" ] || [[ ! "$stable_reported" =~ ^[0-9A-Fa-f]{7,64}$ ]]; then
+    log "android: deployed stable Git authority is missing or invalid; publication blocked" >&2
+    return 1
+  fi
+  stable_commit="$(git -C "$ROOT_DIR" rev-parse --verify "$stable_reported^{commit}" 2>/dev/null || true)"
+  if [[ ! "$stable_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    log "android: deployed stable Git SHA '$stable_reported' is not uniquely resolvable; publication blocked" >&2
+    return 1
+  fi
+  if ! git -C "$ROOT_DIR" merge-base --is-ancestor "$stable_commit" "$head"; then
+    log "android: candidate $head does not contain deployed stable $stable_commit; publication blocked" >&2
+    return 1
+  fi
+  printf '%s\n' "$head"
+}
+
+android_stable_git_sha() {
+  local vps_target="$1"
+  local remote_ota_dir="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
+  ssh -o ConnectTimeout=8 -o BatchMode=yes "$vps_target" sh -s -- "$remote_ota_dir" <<'REMOTE_STABLE_SHA'
+set -eu
+latest="$1/latest.json"
+[ -f "$latest" ] && [ ! -L "$latest" ] || exit 1
+node - "$latest" <<'NODE'
+const fs = require("node:fs");
+let value;
+try { value = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).git_sha; } catch { process.exit(1); }
+if (typeof value !== "string" || !/^[0-9a-fA-F]{7,64}$/.test(value)) process.exit(1);
+process.stdout.write(value);
+NODE
+REMOTE_STABLE_SHA
 }
 
 adb_path() {
@@ -112,6 +168,7 @@ deploy_gateway() {
 
 deploy_android() {
   local vps_target="${MOA_VPS_SSH:-}"
+  local candidate_head
   local install_status=0
   if [ -z "$vps_target" ]; then
     if ! vps_target="$(production_vps_target)"; then
@@ -122,11 +179,23 @@ deploy_android() {
   else
     log "android: using MOA_VPS_SSH production target override"
   fi
-  log "android: building + syncing OTA artifact"
+  candidate_head="$(android_release_candidate "$vps_target")" || return 1
+  log "android: captured release candidate $candidate_head"
+  log "android: building OTA artifact"
+  GITHUB_SHA="$candidate_head" \
+    ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
+    bash "$ROOT_DIR/android_app/deploy/ota/build-ota-artifact.sh"
+  if [ "$(git_head)" != "$candidate_head" ] \
+    || [ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]; then
+    log "android: candidate HEAD or working-tree cleanliness changed during build; publication blocked"
+    return 1
+  fi
+  log "android: candidate unchanged; syncing exact OTA artifact"
   # OTA hosting moved to the VPS gateway (api.agee.app); the main machine is
   # decommissioned. The target is non-secret; SSH still owns authentication.
   if ! MOA_VPS_SSH="$vps_target" \
     MOA_VPS_PUBLIC_GATEWAY_URL="$GATEWAY_URL" \
+    MOA_OTA_SKIP_BUILD=1 \
     ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
     bash "$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"; then
     log "android: OTA publication or public verification failed; not marking Android deployed"

@@ -93,6 +93,12 @@
       context. The first install uses a debug APK over USB. OTA builds keep the
       same local debug certificate until a tested GitHub Actions key migration
       replaces this path.
+- [x] 9.9 Make direct stable OTA publication fail closed on stale source: bind
+      artifact metadata to the captured full commit SHA, require clean HEAD to
+      contain both local `origin/master` and the uniquely resolvable deployed
+      stable SHA, and recheck HEAD/cleanliness before publishing the exact built
+      artifact. Deterministic wrapper tests cover accepted authority plus
+      missing and unresolvable stable authority without network publication.
 
 ## 10. Cross-Device Tool Hub
 

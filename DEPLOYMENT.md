@@ -41,6 +41,15 @@ Build and publish the current Android OTA through:
 bash scripts/deploy.sh android
 ```
 
+The wrapper fails closed before building. The checkout must be clean,
+`origin/master` must resolve locally and be an ancestor of the captured full
+HEAD, and the VPS stable manifest's `git_sha` must resolve uniquely and be an
+ancestor of that same HEAD. If the VPS manifest is unavailable, malformed,
+unknown to this clone, or divergent, publication is blocked. Fetch or integrate
+the authoritative history and retry; do not bypass the guard with a newer
+timestamp version code. After building, the wrapper rechecks HEAD and
+cleanliness and publishes only the exact artifact carrying that full SHA.
+
 This command builds a timestamp-versioned debug APK with the local continuity
 key, publishes it to the VPS OTA store, and installs the same APK over ADB when
 an authorized phone is connected. The repository entrypoint reads the canonical,
@@ -61,11 +70,13 @@ handy, the running gateway also reports it at `GET /health` as
 
 `scripts/deploy.sh android` runs, in order:
 
-1. **Build** — `android_app/deploy/ota/build-ota-artifact.sh` compiles a
+1. **Lineage and build** — the wrapper captures and validates the clean
+   candidate lineage, then `android_app/deploy/ota/build-ota-artifact.sh` compiles a
    debug-signed APK with a timestamp version code, unless
    `MOA_OTA_SKIP_BUILD=1` (used when a caller already built and verified the
    exact artifact, e.g. CI's stable-signed path).
-2. **Local validation** — the local OTA store's `current` symlink, release
+2. **Candidate recheck and local validation** — the wrapper proves HEAD and
+   cleanliness did not move during the build. The local OTA store's `current` symlink, release
    directory, and legacy compatibility files must be byte-consistent before
    anything is sent over the network.
 3. **Backup (remote preflight)** — over SSH, the VPS acquires a publish lock,
