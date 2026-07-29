@@ -158,7 +158,9 @@ if (
   mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("document-context.js") < 0 ||
   mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
-  !/files: \["ui-spec-runtime\.js", "steering-ui\.js", "launcher-removal-runtime\.js", "browser-command-transcript-runtime\.js", "document-context\.js", "content\.js"\]/.test(backgroundSource)
+  mainContentScript.js.indexOf("quiet-companion-controls.js") < 0 ||
+  mainContentScript.js.indexOf("quiet-companion-controls.js") > mainContentScript.js.indexOf("content.js") ||
+  !/files: \[[^\]]*"quiet-companion-controls\.js", "content\.js"\]/.test(backgroundSource)
 ) {
   throw new Error("the manifest and hot-injection paths must load every content runtime before content.js");
 }

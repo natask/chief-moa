@@ -22,6 +22,7 @@
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
+    quietControls,
     panel,
     input,
     voiceButton,
@@ -105,6 +106,7 @@
   let browserAgentOwner = null;
   let browserAgentOwnerState = "unknown";
   let assistantSpeechOverlap = false;
+  let voiceRepliesEnabled = true;
   let uiChimesEnabled = false;
   const DEV_RELOAD_DEFAULT_SERVER = "http://localhost:7777";
   const DEV_RELOAD_POLL_MS = 900;
@@ -343,6 +345,7 @@
           </span>
         </span>
       </button>
+      ${AgeeQuietCompanionControls.template()}
       <div id="agee-remove-target" role="status" aria-live="polite" aria-hidden="true">Remove Ag</div>
       ${AgeeRibbons.template()}
       <div id="agee-panel" role="dialog" aria-label="Ag command">
@@ -388,6 +391,9 @@
     transcriptEl = root.querySelector("#agee-transcript");
     tipEl = root.querySelector("#agee-tip");
     setupRibbons();
+    quietControls = AgeeQuietCompanionControls.create({ root, launcher,
+      copyLatest: () => ribbons?.copyLatest() || false, setVoiceRepliesEnabled,
+      doc: document, win: window });
 
     setupOverlayTooltips();
     setupCueLogInteractions();
@@ -395,6 +401,7 @@
     restoreLauncherVisibility();
     restoreMascotScale();
     restoreUiChimePreference();
+    restoreVoiceRepliesPreference();
     restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
     loadUiSpec();
@@ -578,6 +585,19 @@
     }).catch(() => {});
   }
 
+  function restoreVoiceRepliesPreference() {
+    safeStorageLocalGet({ ageeVoiceRepliesEnabled: true }).then(({ ageeVoiceRepliesEnabled }) => {
+      voiceRepliesEnabled = ageeVoiceRepliesEnabled !== false;
+      quietControls?.setVoiceEnabled(voiceRepliesEnabled);
+    }).catch(() => {});
+  }
+
+  function setVoiceRepliesEnabled(enabled) {
+    voiceRepliesEnabled = enabled !== false;
+    for (const state of liveVoiceStates) { state.assistantSpeechSuppressed = !voiceRepliesEnabled; if (!voiceRepliesEnabled) state.pendingAssistantAudioSegments.length = 0; }
+    if (!voiceRepliesEnabled) stopSpeaking(); safeStorageLocalSet({ ageeVoiceRepliesEnabled: voiceRepliesEnabled }).catch(() => {});
+  }
+
   function restoreLauncherPosition() {
     safeStorageLocalGet({ ageeLauncherPosition: null }).then(({ ageeLauncherPosition }) => {
       if (!launcher || !ageeLauncherPosition) return;
@@ -628,6 +648,7 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
+    quietControls?.position();
     ribbons?.position(); // the ribbons are anchored to the mark: they move with it
     if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
@@ -3079,7 +3100,7 @@
   function playLiveAssistantPcm(state, buffer) {
     if (!buffer || !buffer.byteLength) return;
     if (!isLiveVoiceStateActive(state)) return;
-    if (state.assistantSpeechSuppressed) return;
+    if (state.assistantSpeechSuppressed || !voiceRepliesEnabled) return;
     primeAudio();
     if (!audioCtx) return;
     const pcm = new Int16Array(buffer);
@@ -3584,28 +3605,7 @@
     });
   }
 
-  async function copyTextToClipboard(text) {
-    const value = String(text || "").trim();
-    if (!value) return false;
-    try {
-      await navigator.clipboard.writeText(value);
-      return true;
-    } catch {}
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    textarea.style.pointerEvents = "none";
-    document.documentElement.appendChild(textarea);
-    textarea.select();
-    let copied = false;
-    try {
-      copied = document.execCommand("copy");
-    } catch {}
-    textarea.remove();
-    return copied;
-  }
+  const copyTextToClipboard = (text) => AgeeQuietCompanionControls.copyTextToClipboard(text);
 
   function toggleDictation() {
     if (liveVoice?.dictation && listening) {
