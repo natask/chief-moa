@@ -1,5 +1,10 @@
 # Hackathon Project Page Draft
 
+> Historical snapshot from 2026-06-20. This draft contains provider, storage,
+> shortcut, and deployment claims that no longer describe the current product.
+> Use [CORE_PRODUCT_INTENT.md](../../CORE_PRODUCT_INTENT.md) for product direction
+> and [ARCHITECTURE.md](../../ARCHITECTURE.md) for the live system boundary.
+
 ## Project Story
 
 ### Inspiration
