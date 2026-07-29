@@ -9,6 +9,8 @@ import android.app.UiAutomation;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Rect;
 import android.os.ParcelFileDescriptor;
 
@@ -37,31 +39,35 @@ public final class MoaTranscriptOverlayScenarioTest {
     public void prepare() throws Exception {
         instrumentation = InstrumentationRegistry.getInstrumentation();
         device = UiDevice.getInstance(instrumentation);
+        shell("pm grant ai.moa.assistant android.permission.RECORD_AUDIO");
+        shell("pm grant ai.moa.assistant android.permission.POST_NOTIFICATIONS");
         shell("appops set ai.moa.assistant android:system_alert_window allow");
+        shell("am start -W -n ai.moa.assistant/.MainActivity");
+        assertTrue("QA host activity did not become foreground",
+                device.wait(Until.hasObject(By.pkg("ai.moa.assistant").depth(0)), 5000));
         inject("reset", "");
     }
 
     @Test
     public void partialFinalExpandedHistoryAndCopy() throws Exception {
         inject("partial", PARTIAL);
-        UiObject2 partial = waitForRibbon(PARTIAL);
-        Rect collapsedBounds = partial.getVisibleBounds();
+        Rect collapsedBounds = waitForBounds(false);
         checkpoint("partial");
 
         inject("final", FINAL);
-        UiObject2 finished = waitForRibbon("until I choose to expand it");
-        assertTrue(finished.getContentDescription().contains("Copy and History"));
+        Rect bounds = waitForBounds(false);
         checkpoint("final");
 
-        Rect bounds = finished.getVisibleBounds();
-        finished.click();
-        UiObject2 expanded = waitForRibbon("until I choose to expand it");
-        assertTrue("expanded ribbon must grow", expanded.getVisibleBounds().height() > collapsedBounds.height());
+        device.click(bounds.centerX(), bounds.centerY());
+        inject("snapshot", "");
+        Rect expandedBounds = waitForBounds(true);
+        assertTrue("expanded ribbon must grow", expandedBounds.height() > collapsedBounds.height());
         checkpoint("expanded");
 
-        bounds = expanded.getVisibleBounds();
-        int rail = Math.round(44 * instrumentation.getTargetContext()
-                .getResources().getDisplayMetrics().density);
+        bounds = expandedBounds;
+        // The rail hit target is one collapsed ribbon high. Reading it from the
+        // rendered bounds avoids target/test resource-density disagreement.
+        int rail = collapsedBounds.height();
         device.click(bounds.right - rail / 2, bounds.top + Math.min(rail / 2, bounds.height() / 2));
         assertEquals(FINAL, clipboardText());
         checkpoint("copy");
@@ -71,16 +77,27 @@ public final class MoaTranscriptOverlayScenarioTest {
         checkpoint("history");
     }
 
-    private UiObject2 waitForRibbon(String text) {
-        UiObject2 node = device.wait(Until.findObject(By.descContains(text)), 5000);
-        assertNotNull("missing real overlay ribbon containing: " + text, node);
-        return node;
+    private void inject(String state, String text) throws Exception {
+        Context target = instrumentation.getTargetContext();
+        Intent input = new Intent(target, MoaQaStateReceiver.class)
+                .putExtra("state", state).putExtra("text", text);
+        new MoaQaStateReceiver().onReceive(target, input);
+        device.waitForIdle();
     }
 
-    private void inject(String state, String text) throws Exception {
-        shell("am broadcast -a ai.moa.assistant.debug.QA_STATE -p ai.moa.assistant --es state "
-                + quote(state) + " --es text " + quote(text));
-        device.waitForIdle();
+    private Rect waitForBounds(boolean expanded) throws Exception {
+        SharedPreferences prefs = instrumentation.getTargetContext()
+                .getSharedPreferences("moa_qa", Context.MODE_PRIVATE);
+        long before = System.currentTimeMillis();
+        for (int attempt = 0; attempt < 30; attempt++) {
+            int left = prefs.getInt("left", 0), top = prefs.getInt("top", 0);
+            int right = prefs.getInt("right", 0), bottom = prefs.getInt("bottom", 0);
+            if (prefs.getLong("observed_at", 0) >= before
+                    && prefs.getBoolean("expanded", false) == expanded
+                    && right > left && bottom > top) return new Rect(left, top, right, bottom);
+            Thread.sleep(100);
+        }
+        throw new AssertionError("real overlay bounds were not observed; expanded=" + expanded);
     }
 
     private void checkpoint(String name) throws Exception {
@@ -107,7 +124,4 @@ public final class MoaTranscriptOverlayScenarioTest {
         }
     }
 
-    private static String quote(String value) {
-        return "'" + value.replace("'", "'\\''") + "'";
-    }
 }

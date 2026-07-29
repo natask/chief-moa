@@ -312,7 +312,18 @@ public final class OverlayService extends Service {
             showTranscriptOverlay(text);
             updateVoiceUserTranscript(text, true);
         }
+        mainHandler.postDelayed(this::recordQaOverlayState, 350);
         Log.i(TAG, "qa_state_applied state=" + state + " chars=" + text.length());
+    }
+
+    private void recordQaOverlayState() {
+        if (!BuildConfig.DEBUG) return;
+        Rect bounds = overlayUnit.qaYouBounds();
+        getSharedPreferences("moa_qa", MODE_PRIVATE).edit()
+                .putInt("left", bounds.left).putInt("top", bounds.top)
+                .putInt("right", bounds.right).putInt("bottom", bounds.bottom)
+                .putBoolean("expanded", overlayUnit.qaYouExpanded())
+                .putLong("observed_at", System.currentTimeMillis()).apply();
     }
 
     @Override

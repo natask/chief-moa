@@ -3,10 +3,6 @@
     <application>
         <receiver
             android:name=".MoaQaStateReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="ai.moa.assistant.debug.QA_STATE" />
-            </intent-filter>
-        </receiver>
+            android:exported="false" />
     </application>
 </manifest>

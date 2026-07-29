@@ -25,6 +25,8 @@ for (const required of ['device/interaction-trace.txt','device/logcat.txt','devi
   if (!manifest.artifacts.some(item => item.path === required)) fail(`required artifact missing: ${required}`);
 }
 if (!manifest.artifacts.some(item => item.path === 'device/junit.xml')) fail('JUnit XML evidence missing');
+const junit = readFileSync(resolve(root, 'device/junit.xml'), 'utf8');
+if (!/<testsuite\b/.test(junit) || !/failures="0"/.test(junit) || !/errors="0"/.test(junit)) fail('JUnit does not prove a passing scenario');
 for (const item of manifest.artifacts) {
   const path = resolve(root, item.path);
   if (!path.startsWith(`${root}/`) || !existsSync(path)) fail(`artifact unavailable: ${item.path}`);

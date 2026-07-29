@@ -8,7 +8,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((all, value, index,
   if (value.startsWith('--')) all.push([value.slice(2), input[index + 1]]);
   return all;
 }, []));
-for (const name of ['root','repo','apk','test-apk','apksigner','adb','serial','image','preview']) {
+for (const name of ['result','root','repo','apk','test-apk','apksigner','adb','serial','image','preview']) {
   if (!args[name]) throw new Error(`missing --${name}`);
 }
 const root = resolve(args.root);
@@ -27,7 +27,7 @@ const artifacts = walk(root)
   .sort((a, b) => a.path.localeCompare(b.path));
 const manifest = {
   schema: 'moa.android.emulator-evidence.v1',
-  result: 'emulator_smoked',
+  result: args.result,
   source_commit: output('git', ['-C', args.repo, 'rev-parse', 'HEAD']),
   application_apk: { path: relative(root, resolve(args.apk)), sha256: sha(args.apk), signer_sha256: signer },
   test_apk: { path: relative(root, resolve(args['test-apk'])), sha256: sha(args['test-apk']) },

@@ -135,7 +135,12 @@ final class MoaCompactOverlayRoot extends FrameLayout {
         if (slots.isEmpty()) return;
         List<MoaCompactOverlayGeometry.Bounds> visible = new ArrayList<>();
         for (Map.Entry<View, Slot> entry : slots.entrySet()) {
-            if (entry.getKey().getVisibility() == VISIBLE && entry.getKey().getAlpha() > 0f) {
+            // A newly engaged ribbon begins its entrance animation at alpha 0.
+            // Keep its now-touchable slot in the first union so it has a window
+            // in which to animate; otherwise the alpha animation runs outside
+            // the one-pixel dormant root and can never become visible.
+            if (entry.getKey().getVisibility() == VISIBLE
+                    && (entry.getKey().getAlpha() > 0f || entry.getValue().touchable)) {
                 visible.add(bounds(entry.getValue().screen));
             }
         }

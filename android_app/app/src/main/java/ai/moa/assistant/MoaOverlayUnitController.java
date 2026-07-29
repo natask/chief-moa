@@ -108,6 +108,16 @@ final class MoaOverlayUnitController {
         return youView != null;
     }
 
+    Rect qaYouBounds() {
+        return youParams == null ? new Rect() : new Rect(
+                youParams.x, youParams.y,
+                youParams.x + youParams.width, youParams.y + youParams.height);
+    }
+
+    boolean qaYouExpanded() {
+        return youPresence.expanded();
+    }
+
     // --- Lifecycle --------------------------------------------------------
 
     void show() {

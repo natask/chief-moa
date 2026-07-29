@@ -7,11 +7,9 @@ import android.os.Build;
 
 /** Debug-APK-only bridge for deterministic, offline UI Automator fixtures. */
 public final class MoaQaStateReceiver extends BroadcastReceiver {
-    public static final String ACTION = "ai.moa.assistant.debug.QA_STATE";
-
     @Override
     public void onReceive(Context context, Intent input) {
-        if (!BuildConfig.DEBUG || input == null || !ACTION.equals(input.getAction())) {
+        if (!BuildConfig.DEBUG || input == null) {
             return;
         }
         Intent service = new Intent(context, OverlayService.class)
@@ -24,4 +22,5 @@ public final class MoaQaStateReceiver extends BroadcastReceiver {
             context.startService(service);
         }
     }
+
 }

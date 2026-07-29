@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
 SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 API="${MOA_QA_API:-35}"
 ABI="${MOA_QA_ABI:-arm64-v8a}"
@@ -15,6 +16,10 @@ AVDMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
 APKSIGNER="$SDK_ROOT/build-tools/35.0.0/apksigner"
 
 fail_dependency() { printf 'BLOCKED missing_dependency=%s expected=%s\n' "$1" "$2" >&2; exit 2; }
+if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- android_app)" ]; then
+  echo 'BLOCKED dirty_android_source=android_app commit the exact candidate before QA' >&2
+  exit 2
+fi
 for pair in "adb:$ADB" "emulator:$EMULATOR" "avdmanager:$AVDMANAGER" "apksigner:$APKSIGNER"; do
   name="${pair%%:*}"; path="${pair#*:}"; [ -x "$path" ] || fail_dependency "$name" "$path"
 done
@@ -73,11 +78,21 @@ sleep 2
 JUNIT_XML="$(find "$ROOT_DIR/app/build/outputs/androidTest-results/connected/debug" -name 'TEST-*.xml' -print -quit 2>/dev/null || true)"
 [ -n "$JUNIT_XML" ] && cp "$JUNIT_XML" "$OUT/device/junit.xml"
 
+if [ "$TEST_STATUS" -ne 0 ]; then
+  node "$ROOT_DIR/qa/emulator/write-manifest.mjs" \
+    --result scenario_failed \
+    --root "$OUT" --repo "$REPO_ROOT" \
+    --apk "$OUT/apks/application.apk" --test-apk "$OUT/apks/test.apk" \
+    --apksigner "$APKSIGNER" --adb "$ADB" --serial emulator-5554 \
+    --image "$IMAGE" --preview "${MOA_QA_PREVIEW_NAMESPACE:-local-emulator}"
+  echo "BLOCKED scenario_exit=$TEST_STATUS evidence=$OUT/evidence-manifest.json" >&2
+  exit "$TEST_STATUS"
+fi
 node "$ROOT_DIR/qa/emulator/write-manifest.mjs" \
-  --root "$OUT" --repo "$(git -C "$ROOT_DIR/.." rev-parse --show-toplevel)" \
+  --result emulator_smoked \
+  --root "$OUT" --repo "$REPO_ROOT" \
   --apk "$OUT/apks/application.apk" --test-apk "$OUT/apks/test.apk" \
   --apksigner "$APKSIGNER" --adb "$ADB" --serial emulator-5554 \
   --image "$IMAGE" --preview "${MOA_QA_PREVIEW_NAMESPACE:-local-emulator}"
 node "$ROOT_DIR/qa/emulator/verify-evidence.mjs" "$OUT/evidence-manifest.json"
-[ "$TEST_STATUS" -eq 0 ] || { echo "BLOCKED scenario_exit=$TEST_STATUS evidence=$OUT" >&2; exit "$TEST_STATUS"; }
 printf 'emulator_smoked evidence=%s/evidence-manifest.json\n' "$OUT"
