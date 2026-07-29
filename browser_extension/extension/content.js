@@ -29,6 +29,8 @@
     stopButton,
     log,
     uiSpecSurfaceEl,
+    companionRim = null,
+    errorHoldTimer = null,
     pendingConfirm = null,
     open = false,
     liveVoice = null,
@@ -104,6 +106,8 @@
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
+  // How long the error rim holds before the companion returns to idle.
+  const ERROR_HOLD_MS = 3000;
   // Language chip: what AG currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
   let ageeProfileCacheValue = null;
@@ -352,6 +356,7 @@
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-log");
     tipEl = root.querySelector("#agee-tip");
+    companionRim = AgeeCompanionRim.createCompanionRim(root);
     setupRibbons();
     quietControls = AgeeQuietCompanionControls.create({ root, launcher,
       copyLatest: () => ribbons?.copyLatest() || false, setVoiceRepliesEnabled,
@@ -2402,11 +2407,17 @@
   function setAgentState(next) {
     agentState = next;
     if (!root) return;
-    for (const s of ["idle", "listening", "thinking", "speaking"]) {
+    for (const s of ["idle", "listening", "thinking", "speaking", "error"]) {
       root.classList.toggle(`agee-state-${s}`, s === next);
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
+    // The rim is the state display (spec 2026-07-28 section 3). It owns the
+    // --agee-level var, so it has to hear about every transition, including the
+    // error state, which holds for three seconds and then falls back to idle.
+    companionRim?.setState(next);
+    if (errorHoldTimer) clearTimeout(errorHoldTimer);
+    errorHoldTimer = next === "error" ? setTimeout(() => setAgentState("idle"), ERROR_HOLD_MS) : null;
     // Reacts to the microphone, not the transcriber.
     ribbons?.setUserPending(next === "listening");
     ribbons?.setReplyPending(next === "thinking");
@@ -2729,6 +2740,12 @@
     }
     if (msg.type === "revoked") {
       revokeLiveVoiceState(state, msg.reason || "revoked");
+      return;
+    }
+    if (msg.type === "mic_level") {
+      // ~24 per second while the mic is open, zero when it is not. It arrives on
+      // the same channel as the transcript so it dies with the turn.
+      if (isCurrentTurn) companionRim?.pushMicLevel(msg.rms);
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
@@ -3361,7 +3378,7 @@
 
   function finishLiveVoiceError(state, message, recovery = null) {
     if (!isLiveVoiceStateActive(state)) return;
-    const shown = showCueError(state.cueId, message);
+    showCueError(state.cueId, message);
     setReplyRibbon(String(message || "Voice turn failed."), { tone: "warn", streaming: false });
     ribbons?.endTurn({ error: true });
     attachMicrophoneRecovery(state.cueId, recovery);
@@ -3370,7 +3387,7 @@
     } else {
       stopLiveVoiceState(state, "error");
     }
-    if (!shown && agentState !== "idle") setAgentState("idle");
+    setAgentState("error");
   }
 
   // The mic button and the voice hotkey are manual capture: they start
