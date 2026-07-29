@@ -7,12 +7,13 @@ This file is for coding agents working in `chief-moa`.
 Before changing code, read:
 
 1. [README.md](README.md)
-2. [ARCHITECTURE.md](ARCHITECTURE.md)
-3. [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md)
-4. [DEPLOYMENT.md](DEPLOYMENT.md) for any build, release, publish, promotion,
+2. [CORE_PRODUCT_INTENT.md](CORE_PRODUCT_INTENT.md)
+3. [ARCHITECTURE.md](ARCHITECTURE.md)
+4. [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md)
+5. [DEPLOYMENT.md](DEPLOYMENT.md) for any build, release, publish, promotion,
    install, OTA, or deployment task
-5. The active OpenSpec change or task under `reference/openspec/changes/`
-6. The source files touched by the task
+6. The active OpenSpec change or task under `reference/openspec/changes/`
+7. The source files touched by the task
 
 For Android-first product work, the active change is usually
 `reference/openspec/changes/define-android-core-product-map`.
