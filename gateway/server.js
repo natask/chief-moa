@@ -99,6 +99,8 @@ const { createIntentWorkflow } = require("./lib/intent-workflow");
 const { createBrokerCompletionSpine } = require("./lib/broker-completion-spine");
 const { createIntentPlane } = require("./lib/intent-plane");
 const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
+const { createPlanningCadence } = require("./lib/planning-cadence");
+const { createPlanningCadenceHandlers } = require("./lib/planning-cadence-handlers");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -696,6 +698,10 @@ const intentPlane = createIntentPlane({ events: eventSubstrate });
 const { routeIntentPlane } = createIntentPlaneHandlers({
   plane: intentPlane, readJsonBody, sendJson, cleanError,
 });
+const planningCadence = createPlanningCadence({ events: eventSubstrate });
+const { routePlanningCadence } = createPlanningCadenceHandlers({
+  plane: planningCadence, readJsonBody, sendJson, cleanError,
+});
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
   intentWorkflow,
@@ -1057,6 +1063,17 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const handled = await routeIntentPlane(request, response, url);
+      if (handled) return;
+    }
+
+    // Nested-horizon planning/review cadence (day..lifelong). Consumes
+    // intent-plane ids by opaque reference only; owns no execution.
+    if (url.pathname.startsWith("/v1/planning-cadence")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const handled = await routePlanningCadence(request, response, url);
       if (handled) return;
     }
 
