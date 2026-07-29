@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 
-function createBrokerCompletionSpine({ intentWorkflow, intentRuntime, workHistory } = {}) {
+function createBrokerCompletionSpine({ intentWorkflow, intentRuntime, workHistory, notificationInbox } = {}) {
   if (!intentWorkflow || typeof intentWorkflow.createWork !== "function") {
     throw new Error("broker completion spine requires the intent workflow");
   }
@@ -15,6 +15,14 @@ function createBrokerCompletionSpine({ intentWorkflow, intentRuntime, workHistor
   if (!workHistory || typeof workHistory.linkExecutionRun !== "function"
     || typeof workHistory.recordExecutionResult !== "function") {
     throw new Error("broker completion spine requires the work-history store");
+  }
+  // Optional. When present, a terminal agent result also posts a ping into the
+  // shared cross-surface notification inbox (gateway/lib/intent-plane.js),
+  // dependency-inverted the same way credential-autopilot bridges into the
+  // device-tool hub: the spine stays correct with or without it, and a
+  // notification-inbox failure never fails the completion it is reporting on.
+  if (notificationInbox && typeof notificationInbox.createNotification !== "function") {
+    throw new Error("notificationInbox must expose createNotification when supplied");
   }
 
   async function prepare({ event, decision, contextPack, body = {} } = {}) {
@@ -131,14 +139,39 @@ function createBrokerCompletionSpine({ intentWorkflow, intentRuntime, workHistor
       actor: { kind: "agent", id: agentRun.intent_agent_id },
     });
     const notificationId = deterministicId("notification", `${agentRun.intent_id}:${agentRun.id}:terminal`);
+    const kind = succeeded ? "agent_output_ready" : "agent_run_stopped";
     const intent = await intentRuntime.notify(agentRun.intent_id, {
       notification_id: notificationId,
       run_id: agentRun.id,
-      kind: succeeded ? "agent_output_ready" : "agent_run_stopped",
+      kind,
       summary,
       idempotency_key: `${baseKey}:notification`,
       actor: { kind: "gateway", id: "broker-completion-spine" },
     });
+    if (notificationInbox) {
+      try {
+        // Priority tier for the delivery arbiter (voice-spine lane): this is a
+        // background completion ping. It must never take the floor from an
+        // in-flight reply or the user speaking; it only becomes visible once
+        // the arbiter finds a safe gap, or lands silently in the inbox per the
+        // user's own OS notification settings.
+        await notificationInbox.createNotification({
+          notification_id: notificationId,
+          intent_id: agentRun.intent_id,
+          kind,
+          title: succeeded ? "Agent finished" : "Agent stopped",
+          message: summary,
+          // A stopped/failed run is the higher-urgency case; a completed run
+          // producing output for review is the routine background case.
+          silent: succeeded,
+          idempotency_key: `${baseKey}:inbox`,
+        });
+      } catch {
+        // Best-effort. The intent-runtime notification above is the durable
+        // source of truth; the inbox entry can be repaired by an idempotent
+        // retry of this same completion event.
+      }
+    }
     return {
       intent_id: agentRun.intent_id,
       work_history_run_id: agentRun.work_history_run_id,

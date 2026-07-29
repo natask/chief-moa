@@ -11,6 +11,27 @@ function createIntentPlaneHandlers({ plane, readJsonBody, sendJson, cleanError }
         }));
         return true;
       }
+      // The notification inbox: a durable, reviewable, filterable list the
+      // user (or the voice agent on the user's behalf) can page independent
+      // of which intent produced each entry. This is the same store the
+      // completed/needs_user pings above use; it is not a second inbox.
+      if (request.method === "GET" && url.pathname === "/v1/intent-plane/notifications") {
+        sendJson(response, 200, await plane.listNotifications({
+          receipt_state: url.searchParams.get("receipt_state") || "",
+          kind: url.searchParams.get("kind") || "",
+          intent_id: url.searchParams.get("intent_id") || "",
+          limit: url.searchParams.get("limit") || undefined,
+          offset: url.searchParams.get("offset") || undefined,
+        }));
+        return true;
+      }
+      const dismiss = url.pathname.match(/^\/v1\/intent-plane\/notifications\/([^/]+)\/dismiss$/);
+      if (dismiss && request.method === "POST") {
+        sendJson(response, 200, {
+          notification: await plane.dismissNotification(decodeURIComponent(dismiss[1]), await readJsonBody(request)),
+        });
+        return true;
+      }
       if (request.method === "POST" && url.pathname === "/v1/intent-plane/intents") {
         sendJson(response, 201, { intent: await plane.createIntent(await readJsonBody(request)) });
         return true;

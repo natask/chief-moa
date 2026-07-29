@@ -67,3 +67,32 @@ test("authenticated CRUD, projection, explanation and receipts are wired", async
   });
   assert.equal(receipt.json.notification.receipt_state, "received");
 });
+
+test("the notification inbox lists and dismisses over HTTP without paging intents", async () => {
+  const created = await call("POST", "/v1/intent-plane/intents", {
+    intent_id: "route_intent_inbox", title: "Inbox route", objective: "Exercise the inbox API",
+    user_confirmed: true, idempotency_key: "route-create-inbox",
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.json));
+  const patched = await call("PATCH", "/v1/intent-plane/intents/route_intent_inbox", {
+    status: "completed", next_action: "Review", idempotency_key: "route-complete-inbox",
+  });
+  assert.equal(patched.status, 200, JSON.stringify(patched.json));
+
+  const listed = await call("GET", "/v1/intent-plane/notifications?receipt_state=pending");
+  assert.equal(listed.status, 200, JSON.stringify(listed.json));
+  const entry = listed.json.notifications.find((item) => item.intent_id === "route_intent_inbox");
+  assert.ok(entry, JSON.stringify(listed.json));
+  assert.equal(entry.receipt_state, "pending");
+
+  const dismissed = await call("POST", `/v1/intent-plane/notifications/${entry.notification_id}/dismiss`, {
+    actor: "route-user", idempotency_key: "route-dismiss",
+  });
+  assert.equal(dismissed.status, 200, JSON.stringify(dismissed.json));
+  assert.equal(dismissed.json.notification.receipt_state, "dismissed");
+
+  const afterDismiss = await call("GET", "/v1/intent-plane/notifications?receipt_state=dismissed");
+  assert.ok(afterDismiss.json.notifications.some((item) => item.notification_id === entry.notification_id));
+
+  assert.equal((await call("GET", "/v1/intent-plane/notifications", undefined, "")).status, 401);
+});

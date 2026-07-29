@@ -8,23 +8,29 @@ const test = require("node:test");
 
 const { createBrokerCompletionSpine } = require("../lib/broker-completion-spine");
 const { createEventSubstrateStore } = require("../lib/event-substrate");
+const { createIntentPlane } = require("../lib/intent-plane");
 const { createIntentRuntime } = require("../lib/intent-runtime");
 const { createIntentWorkflow } = require("../lib/intent-workflow");
 const { createWorkHistoryStore } = require("../lib/work-history");
 
-function harness() {
+function harness({ withNotificationInbox = false } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-broker-completion-"));
   const events = createEventSubstrateStore({ dataDir, originId: "broker-completion-test" });
   const intentRuntime = createIntentRuntime({ events });
   const workHistory = createWorkHistoryStore({ events });
   const intentWorkflow = createIntentWorkflow({ intentRuntime, workHistory });
+  const intentPlane = createIntentPlane({ events });
   return {
     dataDir,
     events,
     intentRuntime,
     workHistory,
     intentWorkflow,
-    spine: createBrokerCompletionSpine({ intentRuntime, workHistory, intentWorkflow }),
+    intentPlane,
+    spine: createBrokerCompletionSpine({
+      intentRuntime, workHistory, intentWorkflow,
+      notificationInbox: withNotificationInbox ? intentPlane : undefined,
+    }),
   };
 }
 
@@ -144,4 +150,48 @@ test("one terminal result updates and notifies only its linked intent without co
   assert.equal(all.filter((event) => event.event_type === "intent.notification_created").length, 1);
   assert.equal(all.filter((event) => event.event_type === "intent.completed").length, 0);
   assert.equal(all.filter((event) => event.event_type === "run.completed").length, 0);
+});
+
+test("a terminal result also posts a background ping to the shared notification inbox", async (t) => {
+  const h = harness({ withNotificationInbox: true });
+  t.after(() => fs.rmSync(h.dataDir, { recursive: true, force: true }));
+
+  const succeeded = await h.spine.prepare(admission("succeeded"));
+  const failed = await h.spine.prepare(admission("failed"));
+  await h.spine.activate(succeeded, agentRun(succeeded, "agent-run-succeeded"));
+  await h.spine.activate(failed, agentRun(failed, "agent-run-failed", { status: "running" }));
+
+  await h.spine.complete(agentRun(succeeded, "agent-run-succeeded"));
+  await h.spine.complete(agentRun(failed, "agent-run-failed", { status: "failed", error: "boom" }));
+  const retry = await h.spine.complete(agentRun(succeeded, "agent-run-succeeded"));
+  assert.ok(retry.notification_id);
+
+  const inbox = await h.intentPlane.listNotifications({});
+  assert.equal(inbox.notifications.length, 2);
+  const succeededEntry = inbox.notifications.find((item) => item.intent_id === succeeded.intent_id);
+  const failedEntry = inbox.notifications.find((item) => item.intent_id === failed.intent_id);
+  assert.equal(succeededEntry.kind, "agent_output_ready");
+  assert.equal(succeededEntry.silent, true);
+  assert.equal(failedEntry.kind, "agent_run_stopped");
+  assert.equal(failedEntry.silent, false);
+
+  // Idempotent retry does not create a second inbox entry.
+  assert.equal((await h.intentPlane.listNotifications({ intent_id: succeeded.intent_id })).page.total, 1);
+});
+
+test("a broken notification inbox does not fail the completion it is reporting on", async (t) => {
+  const h = harness();
+  t.after(() => fs.rmSync(h.dataDir, { recursive: true, force: true }));
+  const broken = createBrokerCompletionSpine({
+    intentRuntime: h.intentRuntime,
+    workHistory: h.workHistory,
+    intentWorkflow: h.intentWorkflow,
+    notificationInbox: { createNotification: () => { throw new Error("inbox is down"); } },
+  });
+  const prepared = await broken.prepare(admission("resilient"));
+  await broken.activate(prepared, agentRun(prepared, "agent-run-resilient"));
+  const completion = await broken.complete(agentRun(prepared, "agent-run-resilient"));
+  assert.ok(completion.notification_id);
+  const intent = await h.intentRuntime.get(prepared.intent_id);
+  assert.equal(intent.pending_notifications.length, 1);
 });

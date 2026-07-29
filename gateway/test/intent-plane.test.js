@@ -162,6 +162,57 @@ test("retry after notification append failure repairs a terminal ping", async (t
   assert.equal(view.notifications[0].receipt_state, "pending");
 });
 
+test("notification inbox lists, filters, and dismisses independent of intent paging", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));
+  await f.plane.createIntent({
+    intent_id: "intent_inbox", title: "Inbox", objective: "Prove the standalone list",
+    user_confirmed: true, idempotency_key: "create-inbox",
+  });
+
+  // A notification can be created directly, for an intent id owned by a
+  // different lifecycle system entirely (e.g. the intent-runtime completion
+  // spine), without first registering that id as an intent-plane intent.
+  const foreign = await f.plane.createNotification({
+    notification_id: "notification_foreign",
+    intent_id: "intent_runtime_abc123",
+    kind: "agent_output_ready",
+    title: "Agent finished",
+    message: "Produced output for review",
+    silent: true,
+    idempotency_key: "notify-foreign",
+  });
+  assert.equal(foreign.silent, true);
+  assert.equal(foreign.receipt_state, "pending");
+
+  await f.plane.updateIntent("intent_inbox", {
+    status: "needs_user", next_action: "Review", idempotency_key: "needs-user-inbox",
+  });
+
+  const allPending = await f.plane.listNotifications({ receipt_state: "pending" });
+  assert.equal(allPending.notifications.length, 2);
+  assert.equal(allPending.page.total, 2);
+
+  const byKind = await f.plane.listNotifications({ kind: "agent_output_ready" });
+  assert.equal(byKind.notifications.length, 1);
+  assert.equal(byKind.notifications[0].notification_id, "notification_foreign");
+
+  const dismissed = await f.plane.dismissNotification("notification_foreign", { actor: "user:test" });
+  assert.equal(dismissed.receipt_state, "dismissed");
+  const replayDismiss = await f.plane.dismissNotification("notification_foreign", { actor: "other" });
+  assert.deepEqual(replayDismiss, dismissed);
+
+  // A received notification is a stronger outcome than a dismissed one and
+  // must not be downgraded back to dismissed by a later dismiss call.
+  const other = (await f.plane.listNotifications({ kind: "needs_user" })).notifications[0];
+  await f.plane.receiveNotification(other.notification_id, { actor: "user:test" });
+  const afterReceive = await f.plane.dismissNotification(other.notification_id, {});
+  assert.equal(afterReceive.receipt_state, "received");
+
+  const remainingPending = await f.plane.listNotifications({ receipt_state: "pending" });
+  assert.equal(remainingPending.notifications.length, 0);
+});
+
 test("stable agent identity cannot move between intents and list is bounded", async (t) => {
   const f = fixture();
   t.after(() => fs.rmSync(f.dataDir, { recursive: true, force: true }));

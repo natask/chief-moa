@@ -9,10 +9,12 @@ const EVENT_TYPES = Object.freeze([
   "intent_plane.agent.progressed",
   "intent_plane.notification.created",
   "intent_plane.notification.received",
+  "intent_plane.notification.dismissed",
 ]);
 const INTENT_STATUSES = new Set(["admitted", "active", "blocked", "needs_user", "completed", "cancelled"]);
 const AGENT_STATUSES = new Set(["registered", "running", "blocked", "completed", "failed", "cancelled"]);
 const SENSITIVITIES = new Set(["normal", "sensitive", "restricted"]);
+const NOTIFICATION_RECEIPT_STATES = new Set(["pending", "received", "dismissed"]);
 
 function clean(value, max = 2_000) {
   const result = String(value || "").trim();
@@ -84,6 +86,9 @@ function reduce(events) {
     } else if (event.event_type === "intent_plane.notification.received") {
       const current = notifications.get(payload.notification_id);
       if (current) notifications.set(payload.notification_id, { ...current, receipt_state: "received", receipt: payload.receipt, version: event.stream_version, updated_at: event.occurred_at });
+    } else if (event.event_type === "intent_plane.notification.dismissed") {
+      const current = notifications.get(payload.notification_id);
+      if (current) notifications.set(payload.notification_id, { ...current, receipt_state: "dismissed", dismissal: payload.dismissal, version: event.stream_version, updated_at: event.occurred_at });
     }
   }
   return { intents, agents, notifications };
@@ -249,12 +254,21 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
     const canonicalKey = idempotencyKey("notification", notificationId, "create", rawKey);
     const payload = {
       notification_id: notificationId,
+      // intent_id may name an intent-plane intent or, for completions produced
+      // by the intent-runtime/broker-completion-spine pipeline, that system's
+      // own intent id. This store is the one cross-surface notification inbox
+      // regardless of which lifecycle system produced the ping.
       intent_id: required(input.intent_id, "intent_id", 160),
       kind: required(input.kind, "kind", 40),
       title: required(input.title, "title", 240),
       message: clean(input.message),
+      // The producer's suggestion only. It never overrides the user's own OS
+      // notification settings; each surface adapter decides the actual
+      // visible/silent presentation from its own channel/permission state.
+      silent: input.silent === true,
       receipt_state: "pending",
       receipt: null,
+      dismissal: null,
       idempotency_key: canonicalKey,
     };
     const existing = [...currentState.notifications.values()].find((item) => item.idempotency_key === canonicalKey);
@@ -276,6 +290,44 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
       receipt: { actor: clean(input.actor, 160) || "user", note: clean(input.note, 800), at: now() },
     }, input.idempotency_key || notificationId, current.version);
     return (await state()).notifications.get(notificationId);
+  }
+
+  async function dismissNotification(notificationId, input = {}) {
+    const current = (await state()).notifications.get(notificationId);
+    if (!current) throw new Error("notification not found");
+    // A user reading and acting on a notification (received) is a stronger
+    // outcome than swiping it away unread; do not downgrade a received
+    // notification back to merely dismissed.
+    if (current.receipt_state === "received" || current.receipt_state === "dismissed") return current;
+    await append("notification", notificationId, "dismiss", EVENT_TYPES[6], {
+      notification_id: notificationId,
+      intent_id: current.intent_id,
+      dismissal: { actor: clean(input.actor, 160) || "user", at: now() },
+    }, input.idempotency_key || `${notificationId}:dismiss`, current.version);
+    return (await state()).notifications.get(notificationId);
+  }
+
+  async function listNotifications(filters = {}) {
+    const current = await state();
+    const receiptState = clean(filters.receipt_state, 40);
+    if (receiptState && !NOTIFICATION_RECEIPT_STATES.has(receiptState)) {
+      throw new Error("unsupported receipt_state filter");
+    }
+    let all = [...current.notifications.values()];
+    if (receiptState) all = all.filter((item) => item.receipt_state === receiptState);
+    const kind = clean(filters.kind, 40);
+    if (kind) all = all.filter((item) => item.kind === kind);
+    const intentId = clean(filters.intent_id, 160);
+    if (intentId) all = all.filter((item) => item.intent_id === intentId);
+    all.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+    const limit = Math.max(1, Math.min(Number(filters.limit) || 100, 500));
+    const offset = Math.max(0, Math.min(Number(filters.offset) || 0, 10_000_000));
+    const page = all.slice(offset, offset + limit);
+    return {
+      schema: "moa.intent-plane.notifications.v1",
+      page: { offset, limit, returned: page.length, total: all.length },
+      notifications: page,
+    };
   }
 
   async function projection(filters = {}) {
@@ -315,7 +367,11 @@ function createIntentPlane({ events, now = () => new Date().toISOString(), idFac
     };
   }
 
-  return { createIntent, updateIntent, registerAgent, progressAgent, createNotification, receiveNotification, projection, explain };
+  return {
+    createIntent, updateIntent, registerAgent, progressAgent,
+    createNotification, receiveNotification, dismissNotification, listNotifications,
+    projection, explain,
+  };
 }
 
 module.exports = { createIntentPlane, intentPlaneEventTypes: EVENT_TYPES };

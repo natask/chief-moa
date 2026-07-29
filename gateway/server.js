@@ -691,10 +691,16 @@ const semanticTelemetry = createSemanticTelemetryStore({
 // can be linked to tasks and inert queued proposals in one idempotent workflow.
 const intentRuntime = createIntentRuntime({ events: eventSubstrate });
 const intentWorkflow = createIntentWorkflow({ intentRuntime, workHistory });
-brokerCompletionSpine = createBrokerCompletionSpine({ intentWorkflow, intentRuntime, workHistory });
+// The intent plane is the one cross-surface notification inbox (durable,
+// filterable, dismissible) regardless of which lifecycle system produced a
+// ping. Construct it before the completion spine so a terminal broker-run
+// result can post there too.
 const intentPlane = createIntentPlane({ events: eventSubstrate });
 const { routeIntentPlane } = createIntentPlaneHandlers({
   plane: intentPlane, readJsonBody, sendJson, cleanError,
+});
+brokerCompletionSpine = createBrokerCompletionSpine({
+  intentWorkflow, intentRuntime, workHistory, notificationInbox: intentPlane,
 });
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
