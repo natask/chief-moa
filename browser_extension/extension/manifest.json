@@ -60,7 +60,6 @@
         "companion-level.js",
         "companion-rim.js",
         "capture-copy-disposition.js",
-        "quiet-companion-controls.js",
         "compose-heartbeat.js",
         "assistant-audio-replay.js",
         "overlay-event-trace.js",

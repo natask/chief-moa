@@ -369,6 +369,45 @@
 .agee-ribbon-copied .agee-ribbon-copy .agee-ribbon-glyph { display: none; }
 .agee-ribbon-copied .agee-ribbon-copy .agee-ribbon-check { display: block; }
 
+/* Mute, on the reply rail only, because it acts on the reply. It was
+   #agee-quiet-controls: a fixed pill beside the mascot with its own plate
+   hard-coded in overlay.css, which is why on a light page it stayed dark while
+   the bubbles beside it flipped. Here it takes the bubble's palette by
+   inheritance and cannot disagree with it. Same button metrics as copy, so the
+   rail reads as one row. */
+.agee-ribbon-voice {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: 6px;
+  margin-right: -4px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--agee-ribbon-muted);
+  cursor: pointer;
+  opacity: 0.85;
+  pointer-events: auto;
+  transition:
+    opacity var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out),
+    color var(--agee-ribbon-dur-fast) linear;
+}
+.agee-ribbon-voice:hover { color: var(--agee-ribbon-ink); background: var(--agee-ribbon-menu-hover); }
+.agee-ribbon-voice:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: 1px; }
+.agee-ribbon-voice svg { width: 15px; height: 15px; }
+/* Unmuted shows the wave, muted shows the slash. One glyph, two paths, so the
+   button never blinks out and back on a toggle. */
+.agee-ribbon-voice .agee-ribbon-voice-slash { display: none; }
+.agee-ribbon-voice-muted .agee-ribbon-voice { color: var(--agee-ribbon-warn); }
+.agee-ribbon-voice-muted .agee-ribbon-voice .agee-ribbon-voice-wave { display: none; }
+.agee-ribbon-voice-muted .agee-ribbon-voice .agee-ribbon-voice-slash { display: block; }
+/* The composer takes the you-rail; the reply rail is untouched by it. */
+.agee-ribbon-composing .agee-ribbon-voice { display: none; }
+
 /* Double-tap acknowledgement before the history surface opens. */
 .agee-ribbon-flash::after {
   content: "";

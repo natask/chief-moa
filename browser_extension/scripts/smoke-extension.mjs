@@ -1079,6 +1079,16 @@ async function main() {
               // Only the glyph run is hittable while ambient, so an empty
               // ribbon lets a click through to the page underneath.
               glyphHittable: getComputedStyle(you.querySelector(".agee-ribbon-text")).pointerEvents,
+              // The floating copy/mute pill is deleted, not repainted. It was
+              // the last element beside the companion painting from its own
+              // hard-coded dark plate, so on a light page it stayed dark while
+              // the bubbles flipped. Mute now rides the reply rail and takes
+              // the bubble's palette; the you-rail carries copy only.
+              quietPill: !!document.querySelector("#agee-quiet-controls"),
+              replyMute: !!reply.querySelector(".agee-ribbon-voice"),
+              youMute: !!you.querySelector(".agee-ribbon-voice"),
+              muteInsideBubble: reply.querySelector(".agee-ribbon-voice")?.closest(".agee-ribbon") === reply,
+              mutePressed: reply.querySelector(".agee-ribbon-voice")?.getAttribute("aria-pressed") || "",
             };
           },
           args: [userText, replyText],
@@ -1182,9 +1192,23 @@ async function main() {
       // stays below it even at the bottom edge, absorbing the squeeze in its
       // height budget instead of stacking above.
       ribbonBefore.replyTop < ribbonBefore.launcherBottom ||
-      ribbonBefore.replyTop > ribbonBefore.launcherBottom + 10
+      // 8px design gap plus the companion rim's outset, which is drawn outside
+      // the launcher's box where getBoundingClientRect() cannot see it: 0.18em
+      // of the mascot font, so 4px at the 22px default this smoke runs at.
+      // Without that term the listening rim would paint under the bubble.
+      ribbonBefore.replyTop > ribbonBefore.launcherBottom + 14
     ) {
       throw new Error(`the plate and copy rail must be permanent: ${JSON.stringify(ribbonBefore)}`);
+    }
+    // Mute belongs to the thing it acts on, and to one palette.
+    if (
+      ribbonBefore.quietPill ||
+      !ribbonBefore.replyMute ||
+      ribbonBefore.youMute ||
+      !ribbonBefore.muteInsideBubble ||
+      ribbonBefore.mutePressed !== "true"
+    ) {
+      throw new Error(`mute must live in the reply bubble's rail and the floating pill must be gone: ${JSON.stringify(ribbonBefore)}`);
     }
     // The measurement transaction ends after exercising the tap, so return the
     // real unit to its collapsed state for the first visual checkpoint.

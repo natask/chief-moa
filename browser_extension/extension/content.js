@@ -22,7 +22,6 @@
   // ---- Overlay UI -------------------------------------------------------
   let root,
     launcher,
-    quietControls,
     panel,
     voiceButton,
     recordButton,
@@ -334,7 +333,6 @@
           </span>
         </span>
       </button>
-      ${AgeeQuietCompanionControls.template()}
       <div id="agee-remove-target" role="status" aria-live="polite" aria-hidden="true">Remove Ag</div>
       ${AgeeRibbons.template()}
       <div id="agee-panel" role="dialog" aria-label="Ag controls">
@@ -358,10 +356,6 @@
     tipEl = root.querySelector("#agee-tip");
     companionRim = AgeeCompanionRim.createCompanionRim(root);
     setupRibbons();
-    quietControls = AgeeQuietCompanionControls.create({ root, launcher,
-      copyLatest: () => ribbons?.copyLatest() || false, setVoiceRepliesEnabled,
-      doc: document, win: window });
-
     setupOverlayTooltips();
     setupCueLogInteractions();
     restoreLauncherPosition();
@@ -520,7 +514,9 @@
   function restoreVoiceRepliesPreference() {
     safeStorageLocalGet({ ageeVoiceRepliesEnabled: true }).then(({ ageeVoiceRepliesEnabled }) => {
       voiceRepliesEnabled = ageeVoiceRepliesEnabled !== false;
-      quietControls?.setVoiceEnabled(voiceRepliesEnabled);
+      // Same preference, same key; the control that shows it now lives in the
+      // reply bubble's rail instead of a floating pill beside the companion.
+      ribbons?.setVoiceReplies(voiceRepliesEnabled);
     }).catch(() => {});
   }
 
@@ -585,7 +581,6 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
-    quietControls?.position();
     ribbons?.position(); // the ribbons are anchored to the mark: they move with it
     if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
@@ -1042,6 +1037,9 @@
       // Optional by contract (see compose-heartbeat.js): a hard reference here takes every gesture down with it.
       onComposeStateChange: globalThis.AgeeComposeHeartbeat?.create?.({ write: safeStorageLocalSet }),
       finalizeUserTranscriptForCopy: finalizeCaptureForCopy,
+      // The mute button moved from the deleted floating pill into the reply
+      // bubble's rail. The wiring and the storage key are unchanged.
+      onVoiceRepliesChange: setVoiceRepliesEnabled,
       onGeometryBreach: (list) => safeStorageLocalSet({ ageeOverlayGeometryBreaches: list }).catch(() => {}),
     });
   }
@@ -3377,7 +3375,7 @@
     });
   }
 
-  const copyTextToClipboard = (text) => AgeeQuietCompanionControls.copyTextToClipboard(text);
+  const copyTextToClipboard = (text) => AgeeCaptureCopyDisposition.copyTextToClipboard(text);
 
   function toggleDictation() {
     if (liveVoice?.dictation && listening) {

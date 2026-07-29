@@ -24,9 +24,12 @@
   --agee-green: #35c759;
   --agee-red: #ff453a;
   --agee-blue: #4a9bff;
-  /* The user's own colour, shared with --agee-ribbon-you in ribbons.css. The
-     companion wears it while the microphone is open. */
-  --agee-you: #7c5cff;
+  /* The user's own colour lives in ribbons.css as --agee-ribbon-you, which is
+     the token the you-bubble already paints from and which flips with
+     data-agee-ribbon-theme. There is deliberately no second name for it here:
+     this file briefly carried a second name for it, holding a dark-mode violet
+     in both palettes, and a rim that stayed dark on a light page beside a
+     bubble that had correctly flipped was the result. Do not reintroduce it. */
   /* Mic/playback amplitude, 0..1, rewritten once per frame by content.js while
      a turn is live and reset to 0 the moment it is not. Everything that reacts
      to loudness reads this one var. */
@@ -137,79 +140,6 @@
 }
 #agee-launcher[hidden] {
   display: none !important;
-}
-#agee-launcher[hidden] + #agee-quiet-controls {
-  display: none;
-}
-#agee-quiet-controls {
-  position: fixed;
-  z-index: 2147483646;
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-  background: rgba(18, 19, 23, 0.74);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(10px);
-  pointer-events: auto;
-}
-#agee-quiet-controls button {
-  appearance: none;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(244, 244, 246, 0.82);
-  cursor: pointer;
-  padding: 5px;
-}
-#agee-quiet-controls button:hover,
-#agee-quiet-controls button:focus-visible {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-}
-#agee-quiet-controls button:focus-visible {
-  outline: 2px solid var(--agee-amber);
-  outline-offset: 1px;
-}
-#agee-quiet-controls svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-#agee-quiet-controls.agee-quiet-muted #agee-quiet-voice {
-  color: #ff9b92;
-}
-#agee-quiet-controls.agee-quiet-muted .agee-quiet-sound-wave {
-  display: none;
-}
-#agee-quiet-status {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
-  width: max-content;
-  max-width: 160px;
-  padding: 4px 7px;
-  border-radius: 7px;
-  background: rgba(18, 19, 23, 0.9);
-  color: #f4f4f6;
-  font-size: 11px;
-  line-height: 1.2;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-#agee-quiet-controls[data-agee-status] #agee-quiet-status {
-  opacity: 1;
 }
 #agee-remove-target {
   position: fixed;
@@ -451,7 +381,7 @@
    experiment that is off by default, so in the default mode "the mic is open"
    looked exactly like idle. Width tracks --agee-level at 24Hz. */
 #agee-root.agee-state-listening #agee-launcher .agee-ring {
-  border-color: var(--agee-you);
+  border-color: var(--agee-ribbon-you, #7c8cff);
   border-width: calc(0.06em + 0.05em * var(--agee-level, 0));
 }
 #agee-root.agee-state-listening #agee-launcher .agee-bird {

@@ -41,7 +41,6 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/offscreen.js",
   "extension/options.js",
   "extension/options-recovery.js",
-  "extension/quiet-companion-controls.js",
   "extension/release-control-runtime.js",
   "extension/ribbon-geometry-report.js",
   "extension/ribbon-layout.js",

@@ -159,8 +159,8 @@ if (
   mainContentScript.js.indexOf("steering-ui.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("document-context.js") < 0 ||
   mainContentScript.js.indexOf("document-context.js") > mainContentScript.js.indexOf("content.js") ||
-  mainContentScript.js.indexOf("quiet-companion-controls.js") < 0 ||
-  mainContentScript.js.indexOf("quiet-companion-controls.js") > mainContentScript.js.indexOf("content.js") ||
+  mainContentScript.js.indexOf("capture-copy-disposition.js") < 0 ||
+  mainContentScript.js.indexOf("capture-copy-disposition.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.indexOf("assistant-audio-replay.js") < 0 ||
   mainContentScript.js.indexOf("assistant-audio-replay.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.at(-1) !== "content.js" ||
@@ -983,7 +983,12 @@ if (/\.agee-voice-first\.agee-state-listening/.test(overlayCssSource)) {
 }
 for (const rimRule of [
   /#agee-launcher \.agee-ring \{[\s\S]{0,220}inset: -0\.18em/,
-  /#agee-root\.agee-state-listening #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-you/,
+  // The listening rim paints the user's colour, and there is exactly ONE token
+  // for that colour: --agee-ribbon-you in ribbons.css, which flips with
+  // data-agee-ribbon-theme like the bubble it matches. overlay.css briefly
+  // carried a second name (--agee-you) for the same thing, which did not flip,
+  // so on a light page the rim stayed dark-mode violet beside a light bubble.
+  /#agee-root\.agee-state-listening #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-ribbon-you/,
   /#agee-root\.agee-state-thinking #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-amber/,
   /#agee-root\.agee-state-speaking #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-gold/,
   /#agee-root\.agee-recording #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-red/,
@@ -1007,6 +1012,45 @@ if (!/for \(const s of \["idle", "listening", "thinking", "speaking", "error"\]\
 }
 if (!/companionRim\?\.setState\(next\)/.test(contentSource) || !/AgeeCompanionRim\.createCompanionRim\(root\)/.test(contentSource)) {
   throw new Error("content.js must drive the companion rim runtime from setAgentState");
+}
+if (/--agee-you\s*:/.test(overlayCssSource) || /var\(--agee-you[,)]/.test(overlayCssSource)) {
+  throw new Error("overlay.css must not redeclare the user's colour: --agee-ribbon-you in ribbons.css is the one token");
+}
+// The rim is drawn OUTSIDE the launcher's box, where getBoundingClientRect()
+// cannot see it, so the bubble gap has to be widened by the outset or the rim
+// paints under the bubble at a large mascot scale.
+if (!/gap: Layout\.GAP \+ rimOutset\(\)/.test(ribbonRuntimeSource)) {
+  throw new Error("ribbon placement must add the companion rim's outset to the bubble gap");
+}
+
+// The floating #agee-quiet-controls pill is deleted, not repainted. It was
+// position:fixed beside the mascot with a plate hard-coded in overlay.css, so
+// it stayed dark on a light page while the bubbles correctly flipped. Its two
+// functions moved into the reply bubble's rail, where they inherit the palette.
+// Contract: spec sections 1.2, 2 and 5.3.
+for (const [label, source] of [
+  ["overlay.css", overlayCssSource],
+  ["content.js", contentSource],
+  ["the manifest", JSON.stringify(manifest)],
+  ["background.js", backgroundSource],
+]) {
+  if (/quiet-companion-controls|agee-quiet-controls|QuietCompanionControls|quietControls/.test(source)) {
+    throw new Error(`${label} still references the deleted quiet-controls pill`);
+  }
+}
+if (!/class="agee-ribbon-voice"/.test(ribbonRuntimeSource) || !/onVoiceRepliesChange/.test(ribbonRuntimeSource)) {
+  throw new Error("the reply bubble's rail must carry the voice mute control");
+}
+// Location changed, behaviour did not: the same setter and the same key.
+if (!/onVoiceRepliesChange: setVoiceRepliesEnabled/.test(contentSource)
+  || !/ribbons\?\.setVoiceReplies\(voiceRepliesEnabled\)/.test(contentSource)
+  || !/ageeVoiceRepliesEnabled/.test(contentSource)) {
+  throw new Error("mute must keep setVoiceRepliesEnabled and the ageeVoiceRepliesEnabled key after moving to the rail");
+}
+// The clipboard write outlived the pill it used to live in.
+if (!/AgeeCaptureCopyDisposition\.copyTextToClipboard/.test(contentSource)
+  || !/async function copyTextToClipboard/.test(readFileSync("extension/capture-copy-disposition.js", "utf8"))) {
+  throw new Error("copyTextToClipboard must survive the pill deletion");
 }
 
 // The mic level pipeline: worklet RMS -> offscreen -> background -> content ->

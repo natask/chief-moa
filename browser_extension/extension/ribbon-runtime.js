@@ -57,19 +57,38 @@
   const CHECK_GLYPH = '<svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>';
   const CHEVRON_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"/></svg>';
   const SEND_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V6"/><path d="M6 12l6-6 6 6"/></svg>';
+  // The wave is a separate path so muting hides one element rather than
+  // swapping the whole glyph, which would flash the button on every toggle.
+  const VOICE_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9v6h4l5 4V5L9 9H5z"/><path class="agee-ribbon-voice-wave" d="M17 9a4 4 0 0 1 0 6"/><path class="agee-ribbon-voice-slash" d="M17 9l5 6M22 9l-5 6"/></svg>';
 
   // The send button rides the same rail the copy button sits in, and only on
   // the you-ribbon: while composing it takes copy's place, so the box you type
   // in is the box you already know, with a send where copy was.
+  //
+  // Mute rides that rail on the reply side only, because it acts on the reply.
+  // It used to be #agee-quiet-controls, a fixed pill parked beside the mascot:
+  // always on, turn-agnostic, not part of the draggable unit, and — the reason
+  // it had to go — painted from overlay.css with a hard-coded dark plate, so on
+  // a light page it stayed dark next to two bubbles that had correctly flipped.
+  // Inside the bubble it inherits the palette and cannot disagree with it.
   function ribbonMarkup(id, kind, label) {
     const send = kind === "you"
       ? `<button class="agee-ribbon-send" type="button" tabindex="-1" aria-label="Send">${SEND_GLYPH}</button>`
+      : "";
+    const voice = kind === "reply"
+      // No data-agee-tip: #agee-tip is a fixed overlay.css surface with its own
+      // hard-coded dark plate, and hanging one off a rail button would put a
+      // dark tooltip on a light page right back next to the companion — the
+      // exact defect the pill was deleted for. The rail's other buttons carry
+      // aria-label only, and this matches them.
+      ? `<button class="agee-ribbon-voice" type="button" tabindex="-1" aria-pressed="true" aria-label="Turn voice replies off">${VOICE_GLYPH}</button>`
       : "";
     return `
       <div class="agee-ribbon" id="${id}" data-agee-ribbon="${kind}" role="button" tabindex="0" aria-label="${label}">
         <div class="agee-ribbon-viewport"><div class="agee-ribbon-line" aria-live="polite"><span class="agee-ribbon-text"></span><i class="agee-ribbon-caret" aria-hidden="true"></i></div></div>
         <button class="agee-ribbon-copy" type="button" tabindex="-1" aria-label="Copy ${kind === "you" ? "what you said" : "the reply"}">${COPY_GLYPH}${CHECK_GLYPH}</button>
         <button class="agee-ribbon-copy agee-ribbon-chevron" type="button" tabindex="-1" aria-label="Choose which version to copy" aria-haspopup="menu">${CHEVRON_GLYPH}</button>
+        ${voice}
         ${send}
         <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
       </div>`;
@@ -99,6 +118,11 @@
       // can keep a dev reload from landing on top of it.
       onComposeStateChange = () => {},
       finalizeUserTranscriptForCopy = () => false,
+      // Mute moved off the floating pill and into the reply rail. The
+      // preference, its storage key and setVoiceRepliesEnabled are unchanged —
+      // only where you press it moved, so this is a location change and not a
+      // behaviour change.
+      onVoiceRepliesChange = () => {},
       // Handed the whole bounded ring whenever it grows, so the host can
       // persist it: the band is intermittent and the page it appeared on is
       // usually gone by the time anyone goes looking.
@@ -117,6 +141,7 @@
     let pendingUserCopy = false;
     let presentationCue = "";
     let themeTimer = null;
+    let voiceRepliesOn = true;
     let geometryBreaches = [];
     let geometryAuditPending = false;
 
@@ -138,6 +163,7 @@
         copyEl: el.querySelector(".agee-ribbon-copy:not(.agee-ribbon-chevron)"),
         chevronEl: el.querySelector(".agee-ribbon-chevron"),
         sendEl: el.querySelector(".agee-ribbon-send"),
+        voiceEl: el.querySelector(".agee-ribbon-voice"),
         buffer: "",
         // What the ribbon has been given, which is not always what it has shown
         // yet: `buffer` is the revealed prefix and `target` is the whole reply.
@@ -174,6 +200,12 @@
         event.stopPropagation();
         submitComposed();
       });
+      ribbon.voiceEl?.addEventListener("pointerdown", (event) => event.stopPropagation());
+      ribbon.voiceEl?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setVoiceReplies(!voiceRepliesOn, { notify: true });
+      });
       ribbon.chevronEl?.addEventListener("pointerdown", (event) => event.stopPropagation());
       ribbon.chevronEl?.addEventListener("click", (event) => {
         event.preventDefault();
@@ -189,6 +221,25 @@
     const both = [you, reply];
 
     const isLive = (ribbon) => !!ribbon?.el?.classList.contains("agee-ribbon-live");
+
+    // Mute. `notify` is false when the host is telling the rail what the stored
+    // preference already is, and true when the user pressed the button — so
+    // restoring the preference on load cannot write it back and cannot announce.
+    function setVoiceReplies(on, { notify = false } = {}) {
+      voiceRepliesOn = on !== false;
+      const label = voiceRepliesOn ? "Turn voice replies off" : "Turn voice replies on";
+      reply.el.classList.toggle("agee-ribbon-voice-muted", !voiceRepliesOn);
+      if (reply.voiceEl) {
+        reply.voiceEl.setAttribute("aria-pressed", String(voiceRepliesOn));
+        reply.voiceEl.setAttribute("aria-label", label);
+      }
+      // The button carries its own answer — the slash appears and aria-pressed
+      // flips — so there is no transient caption to read. The old pill needed
+      // one because it had no state of its own to show.
+      if (notify) {
+        try { onVoiceRepliesChange(voiceRepliesOn); } catch {}
+      }
+    }
 
     // ---- Scrollback -------------------------------------------------------
     // Hovering the unit and scrolling walks back through finished turns, in
@@ -738,6 +789,23 @@
     }
 
     // ---- Placement --------------------------------------------------------
+    // The companion's state rim (.agee-ring, overlay.css) is drawn OUTSIDE the
+    // launcher's box at inset -0.18em, and getBoundingClientRect() does not see
+    // it — so the layout's 8px gap is measured from a box the rim already
+    // overhangs. At the default 22px mascot the rim eats 4px of that gap; at
+    // the 72px scroll-to-resize maximum it is 13px and the listening rim paints
+    // underneath the bubble. Widen the gap by exactly the outset so the spec's
+    // clear space survives every mascot size. Falls back to the default rather
+    // than to zero: a missing font-size must not put the rim back under the box.
+    const RIM_OUTSET_EM = 0.18;
+    const RIM_FONT_FALLBACK_PX = 22;
+    function rimOutset() {
+      let fontPx = 0;
+      try { fontPx = parseFloat(win.getComputedStyle(launcher).fontSize); } catch {}
+      if (!Number.isFinite(fontPx) || fontPx <= 0) fontPx = RIM_FONT_FALLBACK_PX;
+      return Math.round(fontPx * RIM_OUTSET_EM);
+    }
+
     function position() {
       const rect = launcher.getBoundingClientRect();
       if (!rect.width && !rect.height) {
@@ -756,6 +824,7 @@
         viewportWidth: win.innerWidth,
         viewportHeight: win.innerHeight,
         ribbonWidth: width,
+        gap: Layout.GAP + rimOutset(),
       });
       you.el.style.left = `${place.youLeft}px`;
       reply.el.style.left = `${place.replyLeft}px`;
@@ -1152,6 +1221,10 @@
       },
 
       clampLauncherInto,
+
+      // Sync the rail to the stored preference. Never notifies back: the host
+      // is the one telling us, so echoing it would rewrite storage on load.
+      setVoiceReplies: (on) => setVoiceReplies(on),
 
       // Text mode: the you-line becomes the buffer you type into.
       beginCompose,

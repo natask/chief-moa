@@ -18,6 +18,34 @@
   // grace, not a wait for anything in particular.
   const SETTLE_MS = 120;
 
+  // The clipboard write itself. It used to live in quiet-companion-controls.js,
+  // which was deleted with the floating pill; it is here because every caller
+  // is a copy path and this module already owns what copy means in the overlay.
+  //
+  // navigator.clipboard is not available on every page the overlay runs on (an
+  // insecure context, or a permissions policy that denies it), so the textarea
+  // + execCommand path is a real fallback and not legacy cruft.
+  async function copyTextToClipboard(text, doc = global.document, nav = global.navigator) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    try {
+      await nav.clipboard.writeText(value);
+      return true;
+    } catch {}
+    const textarea = doc.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    doc.documentElement.appendChild(textarea);
+    textarea.select();
+    let copied = false;
+    try { copied = doc.execCommand("copy"); } catch {}
+    textarea.remove();
+    return copied;
+  }
+
   function create({
     isCapturing,
     cancelCapture,
@@ -50,5 +78,5 @@
     };
   }
 
-  global.AgeeCaptureCopyDisposition = Object.freeze({ create, SETTLE_MS });
+  global.AgeeCaptureCopyDisposition = Object.freeze({ copyTextToClipboard, create, SETTLE_MS });
 })(globalThis);
