@@ -27,7 +27,7 @@
       independent of browser installation or availability.
 - Acceptance: one explicit Mac request opens one HTTPS tab through the selected
   extension; with no extension, Mac reports unavailable and uses no AX fallback.
-- Verification: `cd apple_surfaces && swift test && swift build --product MoaMac`.
+- Verification: `cd apple_surfaces && swift test && swift build --product Ag`.
 
 ## 4. Browser product
 

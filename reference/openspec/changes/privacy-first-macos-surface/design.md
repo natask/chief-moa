@@ -2,7 +2,7 @@
 
 ## Authority boundary
 
-`MoaMac.app` owns Accessibility trust, observation grants, AX capture, local
+`Ag.app` owns Accessibility trust, observation grants, AX capture, local
 redaction, payload preview, the capability manifest, approval UI, semantic AX
 execution, and the canonical local receipt chain. The gateway/Aggie layer owns
 sessions, reasoning, memory, runs, and proposals. It never receives an AX object

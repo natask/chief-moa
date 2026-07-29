@@ -2,7 +2,7 @@
 
 ## Product and authority boundary
 
-`MoaMac.app` and the browser extension are peers, not shells around one another.
+`Ag.app` and the browser extension are peers, not shells around one another.
 
 | Concern | Mac product | Gateway bridge | Browser product |
 | --- | --- | --- | --- |
