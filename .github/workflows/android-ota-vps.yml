@@ -103,7 +103,7 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync(path.join(dir, "latest.json"), "utf8"));
           const apk = fs.readFileSync(path.join(dir, manifest.apk));
           const digest = crypto.createHash("sha256").update(apk).digest("hex");
-          if (manifest.app_id !== "ai.moa.assistant") throw new Error("unexpected Android application id");
+          if (manifest.app_id !== "ag.companion") throw new Error("unexpected Android application id");
           if (!Number.isSafeInteger(manifest.version_code) || manifest.version_code <= 0) {
             throw new Error("invalid Android version code");
           }
