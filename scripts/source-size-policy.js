@@ -19,7 +19,7 @@ const LEGACY_DEBT_CEILINGS = Object.freeze({
   "android_app/app/src/main/java/ag/companion/MoaActionBroker.java": 2021,
   "android_app/app/src/main/java/ag/companion/OverlayService.java": 3959,
   "browser_extension/extension/background.js": 5460,
-  "browser_extension/extension/content.js": 4528,
+  "browser_extension/extension/content.js": 4348,
   "gateway/lib/voice-drafts.js": 5950,
   "gateway/lib/voice-providers.js": 3939,
   "gateway/lib/voice-session-server.js": 2155,
