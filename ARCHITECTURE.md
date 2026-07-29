@@ -576,9 +576,15 @@ mirrors this hands-on-keyboard: Cmd+, (Ctrl+,) opens the text intent field and
 Cmd+. (Ctrl+.) mirrors the browser mark's double-click voice path. A quick
 Cmd+. tap, or a quick mark double-click, toggles a manual voice turn on; the
 next quick Cmd+. tap or double-click commits it. Holding Cmd+. or holding the
-second mark click uses push-to-talk: capture starts immediately, browser
-silence auto-commit is disabled, and release commits the turn without re-arming
-the mic. The browser mark's single click opens the chat menu, and first-press
+second mark click uses push-to-talk: capture starts immediately and release
+commits the turn without re-arming the mic. Every manual browser capture —
+hotkey, mark gesture, mic button, dictation, side panel — disables silence
+auto-commit: a pause to think is not the end of a sentence, so the turn ends
+only when the user ends it. Silence auto-commit applies to the hands-free
+re-arm after a reply, where no gesture is available to end the turn, and a
+spoken stop ("stop", "shut up", "be quiet") still halts everything. A capture
+left open for the 30-minute backstop is force-committed, or closed if it never
+heard speech, so a forgotten microphone cannot stream indefinitely. The browser mark's single click opens the chat menu, and first-press
 hold with movement only repositions the mark. Browser voice can opt a session
 into background assistant speech, where starting a new spoken turn opens a new
 gateway voice turn without stopping already queued assistant audio.
@@ -613,15 +619,18 @@ applies the resulting policy before provider work. Spoken changes and a bounded
 status projection are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
-The overlay surface stays small: it visibly identifies the current page using
-bounded local title/origin/path data and shows transient current intent/result
-plus compact run state, not a full scrollback manager. Resolved cue cards linger
-briefly and retire when the next turn begins; the explicit History affordance
-loads canonical gateway turns on demand instead of making the overlay another
-conversation store. Replies, errors, and voice state never clear or replace the
-user's current input draft. Browser voice keeps that input available, shows
-partial/final user transcript feedback above it, and streams assistant text into
-the result stack above the input. The gateway still stores
+The overlay surface is the companion between two ribbons: what the user said
+reads in one line above the mark, what Ag replied in one line below it, opposite
+chat sides and centred on the mark. A ribbon paints no surface, never wraps and
+never reflows the page, so a spoken turn cannot cover what the user is reading.
+The overlay carries nothing else — no page-identity strip, no history list, no
+language chip, no voice strip. The panel is a composer for typed input only, and
+it does not open for a spoken turn. A card survives only for a turn that grows a
+control the ribbons cannot hold: an approval row, a dictation copy button, a
+microphone-recovery button. History is the browser side panel's surface, opened
+from the ribbon's hold menu, rather than another conversation store inside the
+overlay. Replies, errors, and voice state never clear or replace the user's
+current input draft. The gateway still stores
 durable session, branch, turn, transcript, provider-event, and agent-run
 history. Realtime providers receive a bounded Moa-owned context pack at session
 start so provider memory is not the product database. The gateway's chat and
