@@ -30,6 +30,29 @@ if (!accessToken) fail("CWS access token is missing");
 
 const packageBytes = readFileSync(packagePath);
 const packageSha256 = createHash("sha256").update(packageBytes).digest("hex");
+const packageSize = packageBytes.byteLength;
+const expectedGitSha = process.env.GITHUB_SHA || "";
+let preflightEvidence;
+try {
+  preflightEvidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+} catch {
+  fail("preflight release evidence is missing or invalid");
+}
+if (preflightEvidence?.schema_version !== "chrome-web-store-release-evidence/v1") {
+  fail("preflight release evidence schema is invalid");
+}
+if (!/^[0-9a-f]{40}$/.test(expectedGitSha)
+    || preflightEvidence.git_sha !== expectedGitSha) {
+  fail("preflight release evidence does not match the exact workflow commit");
+}
+if (!/^[0-9a-f]{40}$/.test(preflightEvidence.source_tree_sha || "")) {
+  fail("preflight release evidence has no exact extension source tree");
+}
+if (preflightEvidence.expected_version !== expectedVersion
+    || preflightEvidence.package?.sha256 !== packageSha256
+    || preflightEvidence.package?.size_bytes !== packageSize) {
+  fail("preflight release evidence does not match the package bytes and version");
+}
 const itemName = `publishers/${publisherId}/items/${extensionId}`;
 const itemPath = `publishers/${encodeURIComponent(publisherId)}/items/${encodeURIComponent(extensionId)}`;
 const apiRoot = "https://chromewebstore.googleapis.com";
@@ -38,10 +61,11 @@ const evidence = {
   schema_version: "chrome-web-store-release-evidence/v1",
   extension_id: extensionId,
   expected_version: expectedVersion,
-  git_sha: process.env.GITHUB_SHA || null,
+  git_sha: expectedGitSha,
+  source_tree_sha: preflightEvidence.source_tree_sha,
   package: {
     sha256: packageSha256,
-    size_bytes: packageBytes.byteLength,
+    size_bytes: packageSize,
   },
   upload: null,
   submission: null,

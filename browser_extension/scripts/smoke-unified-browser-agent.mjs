@@ -3,8 +3,9 @@
 // Loads the REAL extension in Chrome for Testing, points it at a throwaway local
 // gateway, and proves page/current-page turns use /v1/browser/turns +
 // /v1/browser/evidence instead of the generic voice-turn route. The fake
-// gateway returns an inert action proposal; the smoke confirms the page was not
-// acted on.
+// gateway returns one inert unsupported proposal and one bounded page-tweak
+// proposal. The smoke confirms only the packaged, locally validated tweak is
+// applied.
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -125,11 +126,15 @@ function serve() {
         });
         return;
       }
+      const isBoundedPageEdit = body.role === "collaborate"
+        && String(body.instruction || body.transcript || "").includes("make this page black");
       sendJson(res, 200, {
         id,
         status: "done",
         text: `Unified browser turn answer: ${body.instruction || body.transcript || "page"}`,
-        actions: [{ action: "click", index: 0, reason: "inert proposal smoke" }],
+        actions: isBoundedPageEdit
+          ? [{ type: "page_tweak", record: { kind: "black", name: "Black page from grounded turn" } }]
+          : [{ action: "click", index: 0, reason: "inert proposal smoke" }],
       });
       return;
     }
@@ -443,10 +448,15 @@ async function main() {
       "describe browser turn call",
     );
     await waitForCondition(
-      () => gateway.calls.filter((call) => /^\/v1\/browser\/turns\/turn-\d+\/status$/.test(call.path)).length >= 2,
+      () => gateway.calls.some((call) => call.path === "/v1/browser/turns/turn-2/status"),
       20000,
       "describe browser turn status poll",
     );
+    await waitForEval(workerCdp, `
+      chrome.storage.local.get("ageeCue:describe-smoke").then((value) =>
+        value["ageeCue:describe-smoke"]?.status === "done" ? true : null
+      )
+    `, 20000);
 
     const evidenceCalls = gateway.calls.filter((call) => call.path === "/v1/browser/evidence");
     const turnCalls = gateway.calls.filter((call) => call.path === "/v1/browser/turns");
@@ -485,10 +495,47 @@ async function main() {
       throw new Error(`browser evidence payload was not linked to the turn/request: ${JSON.stringify(firstEvidence)}`);
     }
 
+    await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
+    await evaluate(pageCdp, `
+      chrome.runtime.sendMessage({
+        cmd: "run",
+        instruction: "collaborate make this page black",
+        cueId: "grounded-edit-smoke",
+        agentRole: "collaborate"
+      }).catch(() => {});
+      true;
+    `, { contextId: contentCtx });
+    await waitForCondition(
+      () => gateway.calls.filter((call) => call.path === "/v1/browser/evidence").length >= 3,
+      20000,
+      "grounded page-edit evidence",
+    );
+    const changed = await waitForEval(pageCdp, `
+      (() => {
+        const background = getComputedStyle(document.body).backgroundColor;
+        return background === "rgb(0, 0, 0)" ? "black" : null;
+      })()
+    `, 20000);
+    if (changed !== "black") throw new Error("bounded browser-turn page tweak did not reach the live page");
+
+    const finalEvidence = gateway.calls.filter((call) => call.path === "/v1/browser/evidence").at(-1)?.body;
+    const finalTurn = gateway.calls.filter((call) => call.path === "/v1/browser/turns").at(-1)?.body;
+    if (
+      finalTurn?.role !== "collaborate" ||
+      finalTurn?.input?.text !== "collaborate make this page black" ||
+      finalEvidence?.turn_id !== "turn-3" ||
+      finalEvidence?.screenshot?.encoding !== "base64_jpeg" ||
+      !String(finalEvidence?.snapshot?.page_text || "").includes(OFFSCREEN_MARKER) ||
+      finalEvidence?.snapshot?.document_context?.scope !== "whole_rendered_document"
+    ) {
+      throw new Error(`grounded page-edit turn lost its role, DOM, or visual evidence: ${JSON.stringify({ finalTurn, finalEvidence })}`);
+    }
+
     console.log(
       `unified browser-agent smoke passed: id=${extensionId}, ` +
-        `${evidenceCalls.length} evidence call(s), ${turnCalls.length} browser turn call(s), ` +
-        `status polling used, action proposal stayed inert, no window shown.`,
+        `${gateway.calls.filter((call) => call.path === "/v1/browser/evidence").length} evidence call(s), ` +
+        `${gateway.calls.filter((call) => call.path === "/v1/browser/turns").length} browser turn call(s), ` +
+        `unsupported proposal stayed inert, grounded bounded page edit applied, no window shown.`,
     );
   } finally {
     pageCdp?.close();

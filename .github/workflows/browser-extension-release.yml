@@ -21,7 +21,7 @@ on:
 
 concurrency:
   group: browser-extension-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -36,7 +36,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Bind release to exact commit
+        shell: bash
+        env:
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_GIT_SHA"
+          test -z "$(git status --porcelain --untracked-files=no -- browser_extension/extension)"
 
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -90,9 +100,15 @@ jobs:
         id: package
         working-directory: browser_extension
         shell: bash
+        env:
+          EXPECTED_GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_GIT_SHA"
+          test -z "$(git status --porcelain --untracked-files=no -- extension)"
           npm run package
+          test "$(git rev-parse HEAD)" = "$EXPECTED_GIT_SHA"
+          test -z "$(git status --porcelain --untracked-files=no -- extension)"
           version="$(node -p "require('./extension/manifest.json').version")"
           package_path="$(find dist -maxdepth 1 -type f -name "*-${version}.zip" -print -quit)"
           if [[ -z "$package_path" ]]; then
@@ -101,8 +117,11 @@ jobs:
           fi
           digest="$(sha256sum "$package_path" | awk '{print $1}')"
           size="$(stat -c '%s' "$package_path")"
+          source_tree_sha="$(git rev-parse HEAD:browser_extension/extension)"
           printf '%s  %s\n' "$digest" "$(basename "$package_path")" > "${package_path}.sha256"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "git_sha=$EXPECTED_GIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "source_tree_sha=$source_tree_sha" >> "$GITHUB_OUTPUT"
           echo "package_path=browser_extension/$package_path" >> "$GITHUB_OUTPUT"
           echo "checksum_path=browser_extension/${package_path}.sha256" >> "$GITHUB_OUTPUT"
           echo "package_sha256=$digest" >> "$GITHUB_OUTPUT"
@@ -110,6 +129,8 @@ jobs:
           {
             echo "### Browser extension artifact"
             echo "- Version: \`$version\`"
+            echo "- Commit: \`$EXPECTED_GIT_SHA\`"
+            echo "- Source tree: \`$source_tree_sha\`"
             echo "- SHA-256: \`$digest\`"
             echo "- Size: $size bytes"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -120,6 +141,8 @@ jobs:
         env:
           PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'true' || 'false' }}
           PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+          PACKAGE_GIT_SHA: ${{ steps.package.outputs.git_sha }}
+          PACKAGE_SOURCE_TREE_SHA: ${{ steps.package.outputs.source_tree_sha }}
           PACKAGE_SHA256: ${{ steps.package.outputs.package_sha256 }}
           PACKAGE_SIZE: ${{ steps.package.outputs.package_size }}
           CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
@@ -152,7 +175,8 @@ jobs:
           const evidence = {
             schema_version: "chrome-web-store-release-evidence/v1",
             expected_version: process.env.PACKAGE_VERSION,
-            git_sha: process.env.GITHUB_SHA || null,
+            git_sha: process.env.PACKAGE_GIT_SHA,
+            source_tree_sha: process.env.PACKAGE_SOURCE_TREE_SHA,
             package: {
               sha256: process.env.PACKAGE_SHA256,
               size_bytes: Number(process.env.PACKAGE_SIZE),

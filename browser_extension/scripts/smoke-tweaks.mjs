@@ -50,6 +50,18 @@ function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function removeRunDirectory(path) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(error?.code) || attempt === 7) throw error;
+      await delay(150 * (attempt + 1));
+    }
+  }
+}
+
 async function waitForFile(path, timeoutMs = 15000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -374,7 +386,7 @@ async function main() {
     server.close();
     chrome.kill("SIGTERM");
     await delay(300);
-    rmSync(runDir, { recursive: true, force: true });
+    await removeRunDirectory(runDir);
   }
 }
 
