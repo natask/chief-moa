@@ -236,7 +236,7 @@ public final class MainActivity extends Activity {
         ));
 
         root.addView(heroBrand());
-        root.addView(onboardingCard());
+        root.addView(new AgOnboardingController(this).createView());
 
         root.addView(statusCard());
         root.addView(gatewayCard());
@@ -286,54 +286,6 @@ public final class MainActivity extends Activity {
         subtitle.setPadding(0, dp(10), 0, dp(2));
         wrap.addView(subtitle);
         return wrap;
-    }
-
-    private View onboardingCard() {
-        LinearLayout card = card();
-        addCardTitle(card, "Set up Ag together");
-        addHint(card, "Start with one real conversation. Ag only asks for access when you choose a step.");
-
-        boolean connected = verifiedEnrollment() != null;
-        boolean microphone = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
-        boolean firstConversation = MoaPrefs.firstConversationCompleted(this);
-        boolean notifications = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
-        AgOnboardingState state = new AgOnboardingState(null);
-        AgOnboardingState.Capability next = state.nextRequired(
-                new AgOnboardingState.LiveState(connected, microphone, firstConversation, notifications));
-
-        onboardingRow(card, "1. Connect", connected,
-                connected ? "Authenticated continuity verified" : "Use a short-lived enrollment code below");
-        onboardingRow(card, "2. Microphone", microphone,
-                microphone ? "Android permission verified" : "Requested only when you tap Enable microphone");
-        onboardingRow(card, "3. First conversation", firstConversation,
-                firstConversation ? "A completed gateway turn was verified" : "Talk to Ag after connection and microphone are ready");
-        onboardingRow(card, "4. Notifications", notifications,
-                notifications ? "Android notification access verified" : "Optional for continuity; enable when you are ready");
-
-        if (next == AgOnboardingState.Capability.MICROPHONE) {
-            Button enableMic = primaryButton("Enable microphone");
-            enableMic.setOnClickListener(v -> requestPermissions(
-                    new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO));
-            card.addView(enableMic);
-        } else if (next == AgOnboardingState.Capability.FIRST_CONVERSATION) {
-            addHint(card, "Open the Ag companion, speak once, and wait for the reply. This step completes only after the gateway reports a completed turn.");
-        } else if (next == AgOnboardingState.Capability.NOTIFICATIONS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Button enableNotifications = primaryButton("Enable notifications");
-            enableNotifications.setOnClickListener(v -> requestPermissions(
-                    new String[]{Manifest.permission.POST_NOTIFICATIONS}, 4103));
-            card.addView(enableNotifications);
-        } else if (next == null) {
-            addHint(card, "Core setup is complete. Overlay, screen access, media control, contacts, and updates remain optional below.");
-        }
-        return card;
-    }
-
-    private void onboardingRow(LinearLayout card, String title, boolean verified, String detail) {
-        TextView row = label((verified ? "✓ " : "○ ") + title + " — " + detail,
-                verified ? MoaColors.OK : MoaColors.MUTED, 13, false);
-        row.setPadding(0, dp(6), 0, dp(2));
-        card.addView(row);
     }
 
     private View statusCard() {
@@ -466,7 +418,7 @@ public final class MainActivity extends Activity {
         return card;
     }
 
-    private MoaDeviceCredentialStore.EnrollmentCredential verifiedEnrollment() {
+    MoaDeviceCredentialStore.EnrollmentCredential verifiedEnrollment() {
         MoaDeviceCredentialStore.EnrollmentCredential credential = new MoaDeviceCredentialStore(this)
                 .loadEnrollmentCredential(MoaPrefs.gatewayUrl(this), androidDeviceId());
         return credential != null && credential.verified ? credential : null;
@@ -1871,7 +1823,7 @@ public final class MainActivity extends Activity {
         return base + path;
     }
 
-    private LinearLayout card() {
+    LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
@@ -1887,7 +1839,7 @@ public final class MainActivity extends Activity {
         return card;
     }
 
-    private void addCardTitle(LinearLayout parent, String text) {
+    void addCardTitle(LinearLayout parent, String text) {
         TextView title = label(text, MoaColors.PAPER, 18, true);
         title.setPadding(0, 0, 0, dp(12));
         parent.addView(title);
@@ -1938,7 +1890,7 @@ public final class MainActivity extends Activity {
         return right;
     }
 
-    private void addHint(LinearLayout parent, String text) {
+    void addHint(LinearLayout parent, String text) {
         TextView hint = label(text, MoaColors.MUTED, 13, false);
         hint.setLineSpacing(dp(2), 1f);
         hint.setPadding(0, 0, 0, dp(8));
@@ -1988,7 +1940,7 @@ public final class MainActivity extends Activity {
         return input;
     }
 
-    private Button primaryButton(String text) {
+    Button primaryButton(String text) {
         Button button = new Button(this);
         button.setAllCaps(false);
         button.setText(text);
@@ -2025,7 +1977,7 @@ public final class MainActivity extends Activity {
         return params;
     }
 
-    private TextView label(String text, int color, int sp, boolean bold) {
+    TextView label(String text, int color, int sp, boolean bold) {
         TextView view = new TextView(this);
         view.setText(text);
         view.setTextColor(color);
@@ -2036,7 +1988,7 @@ public final class MainActivity extends Activity {
         return view;
     }
 
-    private int dp(int value) {
+    int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }
