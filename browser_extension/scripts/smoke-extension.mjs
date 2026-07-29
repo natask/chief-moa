@@ -896,6 +896,76 @@ async function main() {
 	      throw new Error(`shortcut voice/text smoke failed: ${JSON.stringify(shortcutVoice)}`);
 	    }
 
+    // One spoken turn is one line. Every transcript_partial carries the whole
+    // transcript so far, and the recognizer revises what it already sent as it
+    // hears more (punctuation, casing, corrected words). A client that stitches
+    // those partials together instead of showing the latest one paints the
+    // sentence again on every revision — the staggered repeat the user saw.
+    const livePartials = await evaluate(workerCdp, `
+      (async () => {
+        const tabId = ${ping.tabId};
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            window.__ageePartialSmoke = { orig: chrome.runtime.sendMessage.bind(chrome.runtime) };
+            chrome.runtime.sendMessage = (message, ...rest) => {
+              const clean = JSON.parse(JSON.stringify(message || {}));
+              if (clean.cmd === "voiceSessionStart") {
+                return Promise.resolve({ ok: true, voiceSessionId: "partial-smoke" });
+              }
+              if (clean.cmd === "voiceSessionAttach" || clean.cmd === "voiceSessionControl" || clean.cmd === "voiceSessionClose") {
+                return Promise.resolve({ ok: true });
+              }
+              return window.__ageePartialSmoke.orig(message, ...rest);
+            };
+          },
+        });
+        await chrome.tabs.sendMessage(tabId, { cmd: "toggleVoice" });
+        await sleep(200);
+        const send = async (type, text) => {
+          await chrome.tabs.sendMessage(tabId, {
+            cmd: "voiceSessionEvent",
+            voiceSessionId: "partial-smoke",
+            event: { type, text },
+          }).catch(() => {});
+          await sleep(60);
+        };
+        for (const text of ["what is", "what is the weather", "What's the weather like", "What's the weather like today"]) {
+          await send("transcript_partial", text);
+        }
+        const [partial] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent || "",
+        });
+        await send("transcript_final", "What's the weather like today?");
+        const [final] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent || "",
+        });
+        await chrome.tabs.sendMessage(tabId, {
+          cmd: "voiceSessionEvent",
+          voiceSessionId: "partial-smoke",
+          event: { type: "turn_done" },
+        }).catch(() => {});
+        await sleep(120);
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            if (window.__ageePartialSmoke?.orig) chrome.runtime.sendMessage = window.__ageePartialSmoke.orig;
+            delete window.__ageePartialSmoke;
+          },
+        });
+        return { partial: partial?.result || "", final: final?.result || "" };
+      })()
+    `);
+    if (
+      livePartials?.partial !== "What's the weather like today" ||
+      livePartials?.final !== "What's the weather like today?"
+    ) {
+      throw new Error(`live transcript repeated revised speech instead of showing the latest: ${JSON.stringify(livePartials)}`);
+    }
+
     // Overlay ribbons: the companion between two single-line streams.
     // Contract: reference/design/overlay-2026-07/spec.md. This drives the real
     // worker-owned presentation broadcast (the same path that carries a turn

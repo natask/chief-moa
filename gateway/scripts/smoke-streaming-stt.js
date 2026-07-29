@@ -227,6 +227,45 @@ async function testCumulativeFinalStaircaseReplacement() {
   console.log("  A3 cumulative-final staircase replacement: ok");
 }
 
+// Every partial the session broadcasts is the whole transcript so far, even
+// while the recognizer is still revising the words it already sent. Clients
+// render the newest partial and nothing else, so a partial that carried only
+// the new fragment would leave the earlier words on screen twice.
+async function testPartialsAreWholeTranscriptSoFar() {
+  const opened = [];
+  const partials = [];
+  const session = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    onPartial: (text) => { partials.push(text); },
+    rotateAfterMs: 60000,
+  });
+  const stream = opened[0];
+  stream.emitData([{ transcript: "Book the room", isFinal: true, segmentId: "3:0" }]);
+  // The recognizer revises its own interim: casing, punctuation and a corrected
+  // word all change text it has already sent.
+  stream.emitData([{ transcript: "for tomorrow", isFinal: false }]);
+  stream.emitData([{ transcript: "for tomorrow morning", isFinal: false }]);
+  stream.emitData([{ transcript: "For Tuesday morning,", isFinal: false }]);
+  await tick();
+  const last = partials[partials.length - 1];
+  assert.equal(last, "Book the room For Tuesday morning,",
+    "a revised interim replaces the previous interim inside the whole-transcript partial");
+  for (const partial of partials) {
+    assert.ok(partial.startsWith("Book the room"),
+      `every partial carries the committed transcript: ${JSON.stringify(partial)}`);
+    assert.ok(!/for tomorrow.*for tomorrow/i.test(partial),
+      `a revision must never repeat the words it replaced: ${JSON.stringify(partial)}`);
+  }
+  await session.finalize();
+  console.log("  A4 partials are the whole transcript so far: ok");
+}
+
 function chirpProviderEnv(extra = {}) {
   return {
     VOICE_PROVIDER: "chirp",
@@ -520,6 +559,7 @@ async function main() {
   await testRotationAndPartials();
   await testProviderRetryAndOverlapReconciliation();
   await testCumulativeFinalStaircaseReplacement();
+  await testPartialsAreWholeTranscriptSoFar();
   await testV2BidiMethodSelection();
   await testBatchFallbackOnStreamingError();
   await testWindowedBatchSplit();

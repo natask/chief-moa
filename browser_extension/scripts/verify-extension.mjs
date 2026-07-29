@@ -1035,8 +1035,11 @@ if (!/parsed\?\.type === "turn_progress"/.test(backgroundSource)) {
   throw new Error("background.js must route the turn_progress keepalive to the content script like other voice-session events");
 }
 
-if (!/function mergeLiveVoiceTranscript/.test(contentSource) || !/mergeLiveVoiceTranscript\(state\.transcript, incomingText\)/.test(contentSource)) {
-  throw new Error("browser voice transcript fragments must be accumulated instead of replacing early speech");
+// transcript_partial / transcript_final carry the whole transcript so far. The
+// client must render the newest one; accumulating them locally repeats the
+// sentence every time the recognizer revises what it already sent.
+if (/mergeLiveVoiceTranscript/.test(contentSource)) {
+  throw new Error("browser voice must render the gateway's latest transcript, not stitch partials together");
 }
 
 if (!/function isIdentityProfileControl/.test(contentSource) || !/your name/.test(contentSource) || !/call\|name/.test(contentSource)) {

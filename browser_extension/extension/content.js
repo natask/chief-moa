@@ -2667,24 +2667,6 @@
     sendLiveVoiceControl(state, progress);
   }
 
-  function mergeLiveVoiceTranscript(previous, incoming) {
-    const prev = String(previous || "").trim();
-    const next = String(incoming || "").trim();
-    if (!prev) return next;
-    if (!next) return prev;
-    if (next.startsWith(prev)) return next;
-    if (prev.endsWith(next)) return prev;
-    const prevWords = prev.split(/\s+/);
-    const nextWords = next.split(/\s+/);
-    const maxOverlap = Math.min(prevWords.length, nextWords.length, 8);
-    for (let count = maxOverlap; count > 0; count -= 1) {
-      const prevTail = prevWords.slice(prevWords.length - count).join(" ").toLowerCase();
-      const nextHead = nextWords.slice(0, count).join(" ").toLowerCase();
-      if (prevTail === nextHead) return prevWords.concat(nextWords.slice(count)).join(" ");
-    }
-    return `${prev} ${next}`;
-  }
-
   async function startLiveVoiceTurn(options = {}) {
     const preserveAssistantPlayback = options.suppressAssistantPlayback === true
       ? false
@@ -2847,9 +2829,14 @@
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
-      const incomingText = String(msg.text || "").trim();
-      if (!incomingText) return;
-      const text = mergeLiveVoiceTranscript(state.transcript, incomingText);
+      // Every transcript event carries the whole transcript so far — the
+      // gateway accumulates finals and folds the live interim in before it
+      // broadcasts (voice-stt-streaming.js joinTranscript). The recognizer
+      // revises what it already sent as it hears more, so stitching these
+      // together locally repeats the sentence on every revision. Show what
+      // the gateway said the turn is.
+      const text = String(msg.text || "").trim();
+      if (!text) return;
       state.transcript = text;
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
