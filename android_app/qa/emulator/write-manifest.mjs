@@ -8,7 +8,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((all, value, index,
   if (value.startsWith('--')) all.push([value.slice(2), input[index + 1]]);
   return all;
 }, []));
-for (const name of ['result','root','repo','apk','test-apk','apksigner','adb','serial','image','preview']) {
+for (const name of ['result','root','repo','apk','test-apk','apksigner','serial','sdk','fingerprint','model','image','preview']) {
   if (!args[name]) throw new Error(`missing --${name}`);
 }
 const root = resolve(args.root);
@@ -36,9 +36,9 @@ const manifest = {
   environment: {
     serial: args.serial,
     system_image: args.image,
-    sdk: output(args.adb, ['-s', args.serial, 'shell', 'getprop', 'ro.build.version.sdk']).replace(/\r/g, ''),
-    fingerprint: output(args.adb, ['-s', args.serial, 'shell', 'getprop', 'ro.build.fingerprint']).replace(/\r/g, ''),
-    model: output(args.adb, ['-s', args.serial, 'shell', 'getprop', 'ro.product.model']).replace(/\r/g, ''),
+    sdk: args.sdk,
+    fingerprint: args.fingerprint,
+    model: args.model,
   },
   artifacts,
 };

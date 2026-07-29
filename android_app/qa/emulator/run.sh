@@ -26,9 +26,18 @@ done
 [ -f "$SDK_ROOT/system-images/android-${API}/google_apis/${ABI}/package.xml" ] || \
   fail_dependency "android_system_image" "$IMAGE (install with sdkmanager '$IMAGE')"
 
-cleanup() {
+finalize_emulator() {
+  [ -n "${EMU_PID:-}" ] || return 0
   "$ADB" -s emulator-5554 emu kill >/dev/null 2>&1 || true
-  [ -n "${EMU_PID:-}" ] && kill "$EMU_PID" >/dev/null 2>&1 || true
+  deadline=$((SECONDS + 30))
+  while kill -0 "$EMU_PID" >/dev/null 2>&1 && [ "$SECONDS" -lt "$deadline" ]; do sleep 1; done
+  kill "$EMU_PID" >/dev/null 2>&1 || true
+  wait "$EMU_PID" >/dev/null 2>&1 || true
+  EMU_PID=""
+}
+
+cleanup() {
+  finalize_emulator
   rm -rf "$AVD_HOME_DIR"
 }
 trap cleanup EXIT
@@ -77,13 +86,18 @@ sleep 2
 "$ADB" -s emulator-5554 logcat -d > "$OUT/device/logcat.txt"
 JUNIT_XML="$(find "$ROOT_DIR/app/build/outputs/androidTest-results/connected/debug" -name 'TEST-*.xml' -print -quit 2>/dev/null || true)"
 [ -n "$JUNIT_XML" ] && cp "$JUNIT_XML" "$OUT/device/junit.xml"
+DEVICE_SDK="$("$ADB" -s emulator-5554 shell getprop ro.build.version.sdk | tr -d '\r')"
+DEVICE_FINGERPRINT="$("$ADB" -s emulator-5554 shell getprop ro.build.fingerprint | tr -d '\r')"
+DEVICE_MODEL="$("$ADB" -s emulator-5554 shell getprop ro.product.model | tr -d '\r')"
+finalize_emulator
 
 if [ "$TEST_STATUS" -ne 0 ]; then
   node "$ROOT_DIR/qa/emulator/write-manifest.mjs" \
     --result scenario_failed \
     --root "$OUT" --repo "$REPO_ROOT" \
     --apk "$OUT/apks/application.apk" --test-apk "$OUT/apks/test.apk" \
-    --apksigner "$APKSIGNER" --adb "$ADB" --serial emulator-5554 \
+    --apksigner "$APKSIGNER" --serial emulator-5554 --sdk "$DEVICE_SDK" \
+    --fingerprint "$DEVICE_FINGERPRINT" --model "$DEVICE_MODEL" \
     --image "$IMAGE" --preview "${MOA_QA_PREVIEW_NAMESPACE:-local-emulator}"
   echo "BLOCKED scenario_exit=$TEST_STATUS evidence=$OUT/evidence-manifest.json" >&2
   exit "$TEST_STATUS"
@@ -92,7 +106,8 @@ node "$ROOT_DIR/qa/emulator/write-manifest.mjs" \
   --result emulator_smoked \
   --root "$OUT" --repo "$REPO_ROOT" \
   --apk "$OUT/apks/application.apk" --test-apk "$OUT/apks/test.apk" \
-  --apksigner "$APKSIGNER" --adb "$ADB" --serial emulator-5554 \
+  --apksigner "$APKSIGNER" --serial emulator-5554 --sdk "$DEVICE_SDK" \
+  --fingerprint "$DEVICE_FINGERPRINT" --model "$DEVICE_MODEL" \
   --image "$IMAGE" --preview "${MOA_QA_PREVIEW_NAMESPACE:-local-emulator}"
 node "$ROOT_DIR/qa/emulator/verify-evidence.mjs" "$OUT/evidence-manifest.json"
 printf 'emulator_smoked evidence=%s/evidence-manifest.json\n' "$OUT"
