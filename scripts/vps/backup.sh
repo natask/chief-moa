@@ -16,6 +16,18 @@ source "$SCRIPT_DIR/lib.sh"
 require_env_file
 cd "$APP_DIR"
 
+# Why a backup was taken decides what it may evict. A promotion can retry many
+# times an hour; a scheduled backup happens once a day. Counting them in one
+# pool let a retry storm delete the user's history: 66 prune events in five
+# days collapsed a 14-deep window into about five hours of wall clock.
+# Each reason now prunes only its own kind, so promotion churn can never
+# consume the scheduled retention window.
+REASON="${MOA_BACKUP_REASON:-scheduled}"
+case "$REASON" in
+  scheduled|promotion) ;;
+  *) echo "MOA_BACKUP_REASON must be 'scheduled' or 'promotion' (got: $REASON)." >&2; exit 64 ;;
+esac
+
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 out_dir="$BACKUP_DIR/$stamp"
 tmp_dir="$BACKUP_DIR/$stamp.tmp"
@@ -85,6 +97,7 @@ fi
 git_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 cat > "$tmp_dir/manifest.txt" <<MANIFEST
 created_utc=$stamp
+reason=$REASON
 git_sha=$git_sha
 postgres_dump=postgres-dump.sql
 release_control_state=$([ -f "$tmp_dir/release-control-postgres-dump.sql" ] && echo release-control-postgres-dump.sql || echo release-control-absent.txt)
@@ -98,13 +111,30 @@ trap - EXIT
 echo "Backup written to $out_dir"
 echo "Verify it with: $SCRIPT_DIR/restore-check.sh $out_dir"
 
-# Retention: keep the most recent MOA_BACKUP_RETENTION complete backups on this
-# host so the droplet disk does not fill (voice PCM turn files are the bulk).
+# Retention is per reason, and a run only ever prunes backups of its own reason.
+# Scheduled backups are the user's history (voice turns, conversations, both
+# databases) and keep MOA_BACKUP_RETENTION. Promotion backups exist to protect
+# one apply and keep MOA_PROMOTION_BACKUP_RETENTION, which is small.
+#
 # Off-host mirrors (scripts/vps/pull-backups.sh) keep their own history and are
 # never touched by this prune. Only complete, non-temp backups are counted, and
 # the backup just written is always among those kept.
+#
+# A backup with no reason in its manifest predates this policy. Those are
+# treated as scheduled, because the conservative reading of an unknown backup
+# is that it is history worth keeping.
+backup_reason() {
+  local manifest="$1/manifest.txt" value=""
+  [ -f "$manifest" ] || { printf 'scheduled\n'; return 0; }
+  value="$(sed -n 's/^reason=//p' "$manifest" | tail -n 1)"
+  case "$value" in
+    promotion) printf 'promotion\n' ;;
+    *) printf 'scheduled\n' ;;
+  esac
+}
+
 prune_old_backups() {
-  local retention="${MOA_BACKUP_RETENTION:-14}"
+  local reason="$1" retention="$2"
   case "$retention" in
     ''|*[!0-9]*) return 0 ;;
   esac
@@ -118,8 +148,14 @@ prune_old_backups() {
     case "$candidate" in
       *.tmp) continue ;;
     esac
-    [ -f "$candidate/data-dir.tar.gz" ] || continue
-    [ -f "$candidate/postgres-dump.sql" ] || continue
+    # An incomplete backup is never counted and never pruned, so it can neither
+    # displace a good backup nor be silently deleted. Name it so it is visible
+    # instead of quietly accumulating forever.
+    if [ ! -f "$candidate/data-dir.tar.gz" ] || [ ! -f "$candidate/postgres-dump.sql" ]; then
+      echo "Skipping incomplete backup (not counted, not pruned): $candidate"
+      continue
+    fi
+    [ "$(backup_reason "$candidate")" = "$reason" ] || continue
     complete+=("$candidate")
   done
 
@@ -131,9 +167,13 @@ prune_old_backups() {
   local remove_count=$(( total - retention ))
   local i
   for (( i = 0; i < remove_count; i++ )); do
-    echo "Pruning old backup (retention=$retention): ${complete[$i]}"
+    echo "Pruning old $reason backup (retention=$retention): ${complete[$i]}"
     rm -rf "${complete[$i]}"
   done
 }
 
-prune_old_backups
+if [ "$REASON" = "promotion" ]; then
+  prune_old_backups promotion "${MOA_PROMOTION_BACKUP_RETENTION:-2}"
+else
+  prune_old_backups scheduled "${MOA_BACKUP_RETENTION:-14}"
+fi
