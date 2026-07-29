@@ -60,8 +60,8 @@ android_release_candidate() {
     log "android: cannot resolve the candidate HEAD; publication blocked" >&2
     return 1
   }
-  if [ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]; then
-    log "android: working tree is not clean; publication blocked" >&2
+  if target_has_dirty_changes android; then
+    log "android: Android release inputs are not clean; publication blocked" >&2
     return 1
   fi
   origin_master="$(git -C "$ROOT_DIR" rev-parse --verify 'refs/remotes/origin/master^{commit}' 2>/dev/null || true)"
@@ -185,9 +185,8 @@ deploy_android() {
   GITHUB_SHA="$candidate_head" \
     ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
     bash "$ROOT_DIR/android_app/deploy/ota/build-ota-artifact.sh"
-  if [ "$(git_head)" != "$candidate_head" ] \
-    || [ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]; then
-    log "android: candidate HEAD or working-tree cleanliness changed during build; publication blocked"
+  if [ "$(git_head)" != "$candidate_head" ] || target_has_dirty_changes android; then
+    log "android: candidate HEAD or Android input cleanliness changed during build; publication blocked"
     return 1
   fi
   log "android: candidate unchanged; syncing exact OTA artifact"

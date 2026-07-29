@@ -41,14 +41,14 @@ Build and publish the current Android OTA through:
 bash scripts/deploy.sh android
 ```
 
-The wrapper fails closed before building. The checkout must be clean,
+The wrapper fails closed before building. Android release inputs must be clean,
 `origin/master` must resolve locally and be an ancestor of the captured full
 HEAD, and the VPS stable manifest's `git_sha` must resolve uniquely and be an
 ancestor of that same HEAD. If the VPS manifest is unavailable, malformed,
 unknown to this clone, or divergent, publication is blocked. Fetch or integrate
 the authoritative history and retry; do not bypass the guard with a newer
 timestamp version code. After building, the wrapper rechecks HEAD and
-cleanliness and publishes only the exact artifact carrying that full SHA.
+Android-input cleanliness and publishes only the exact artifact carrying that full SHA.
 
 This command builds a timestamp-versioned debug APK with the local continuity
 key, publishes it to the VPS OTA store, and installs the same APK over ADB when

@@ -279,11 +279,12 @@ the APK. Stable fallback and the existing digest/signer/install receipt path
 remain the only Android release-transition authorities.
 
 The legacy direct Android publisher is fail-closed while that control-plane
-path is completed. Before it builds, it captures one clean full Git commit and
+path is completed. Before it builds, it captures one full Git commit with clean
+Android release inputs and
 requires both the local `origin/master` authority and the currently deployed
 stable OTA commit to be ancestors. Missing, invalid, ambiguous, or divergent
 authority blocks publication. The built artifact records the full commit SHA;
-the wrapper then rechecks the same HEAD and clean tree before allowing the
+the wrapper then rechecks the same HEAD and clean Android inputs before allowing the
 already-built bytes into the transactional VPS publisher.
 
 CI build evidence, an uploaded artifact, store submission, publication,
