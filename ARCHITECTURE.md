@@ -513,6 +513,18 @@ Hold the orb (push-to-talk)
   -> phone updates transcript/chat and may speak or play the short response
 ```
 
+Streaming sessions also expose an optional version-1 phrase-assist side channel.
+It is off unless the client explicitly enables it, and a client request binds to
+the exact latest gateway transcript revision. The gateway may return one
+transient phrase of at most eight words/64 characters while the turn remains in
+`recording`; speech resumption, revision, commit, cancellation, replacement, or
+disconnect invalidates the generation. This path sees only the current
+normalized transcript snapshot and has no saved profile/conversation context,
+model tools, native search, TTS, turn-commit, action, agent-run, or canonical
+history authority. Its diagnostics contain lifecycle metadata but no transcript,
+suggestion, or content-derived hash. See
+`reference/openspec/changes/live-phrase-assist`.
+
 Chirp 3 uses language-agnostic recognition for both streaming and batch STT.
 The gateway converts the turn-pinned Moa input-language profile into a bounded
 custom transcription prompt that asks for verbatim, non-translated text and
