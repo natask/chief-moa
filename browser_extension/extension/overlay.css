@@ -577,36 +577,6 @@
   transform: translateY(0);
   display: block;
 }
-/* Legacy voice strip. Browser voice renders transcript and assistant text in
-   cue cards above the input, so this top strip stays hidden in all phases. */
-#agee-voice-state {
-  display: none;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--agee-panel-line);
-  background: linear-gradient(180deg, #141419 0%, #0d0d0f 100%);
-}
-#agee-root.agee-voicing #agee-voice-state {
-  display: none;
-}
-/* Status lights are gone: no orb, no glowing dots anywhere in the surface. */
-#agee-orb {
-  display: none;
-}
-#agee-transcript {
-  flex: 1;
-  min-width: 0;
-  font-size: 14.5px;
-  line-height: 1.45;
-  color: #f2f2f2;
-  min-height: 1.45em;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-#agee-transcript.agee-interim {
-  color: #8b8b93;
-}
 /* ---- Composer: pill bar + ghost icon buttons ------------------------------ */
 #agee-bar {
   display: grid;
@@ -616,10 +586,6 @@
   min-height: 54px;
   box-sizing: border-box;
   padding: 11px 14px 11px 16px;
-}
-/* The composer status dot is gone; run state reads from the cue-card text. */
-#agee-dot {
-  display: none;
 }
 #agee-input {
   width: 100%;
@@ -1051,70 +1017,7 @@ button.agee-ui-list-row:hover {
   padding: 6px 8px;
 }
 
-/* ---- Language chip -------------------------------------------------------- */
-/* A short, always-visible readout of what AG currently hears (STT) and
-   speaks (reply) — "Hears en·am · Speaks am". Styled like other muted meta
-   text; hidden (via the `hidden` attribute from content.js) when there is no
-   language data yet rather than showing a blank or "undefined" line. */
-.agee-lang-chip {
-  padding: 4px 16px 0;
-  font-size: 11px;
-  letter-spacing: 0.01em;
-  color: var(--agee-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.agee-lang-chip[hidden] {
-  display: none;
-}
-
-/* Local page grounding stays visible at the top of the compact surface. The
-   canonical conversation remains gateway-owned and is fetched only when the
-   user opens History. */
-#agee-page-context {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  padding: 7px 12px 2px;
-}
-#agee-page-identity {
-  color: var(--agee-muted);
-  flex: 1;
-  font-size: 11px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-#agee-history-button {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: var(--agee-muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 2px 4px;
-}
-#agee-copy-history {
-  appearance: none;
-  background: rgba(74, 155, 255, 0.1);
-  border: 1px solid rgba(74, 155, 255, 0.22);
-  border-radius: 999px;
-  color: #dbeaff;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 3px 8px;
-}
-#agee-copy-history:hover,
-#agee-copy-history:focus-visible,
-#agee-copy-history[aria-expanded="true"] {
-  background: rgba(74, 155, 255, 0.18);
-  border-color: rgba(74, 155, 255, 0.42);
-}
+/* Screen-reader-only text: still used by live status regions in the panel. */
 .agee-visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -1125,70 +1028,6 @@ button.agee-ui-list-row:hover {
   clip: rect(0, 0, 0, 0) !important;
   white-space: nowrap !important;
   border: 0 !important;
-}
-#agee-history-button:hover,
-#agee-history-button:focus-visible,
-#agee-history-button[aria-expanded="true"] {
-  color: var(--agee-text);
-}
-#agee-history-button:disabled {
-  cursor: wait;
-  opacity: 0.6;
-}
-#agee-history[hidden] {
-  display: none;
-}
-#agee-history {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  max-height: 38vh;
-  overflow-y: auto;
-  padding: 4px 12px 8px;
-}
-.agee-history-turn {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  padding: 8px 0;
-}
-.agee-history-turn:empty {
-  display: none;
-}
-.agee-history-turn:first-child {
-  border-top: 0;
-}
-.agee-history-turn p,
-.agee-history-empty {
-  font-size: 12px;
-  line-height: 1.45;
-  margin: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.agee-history-you {
-  align-self: flex-end;
-  max-width: min(88%, 36rem);
-  padding: 7px 10px;
-  border: 1px solid rgba(74, 155, 255, 0.18);
-  border-radius: 12px 12px 4px 12px;
-  background: rgba(74, 155, 255, 0.12);
-  color: #e8f1ff;
-  text-align: left;
-}
-.agee-history-assistant {
-  align-self: flex-start;
-  max-width: min(88%, 36rem);
-  padding: 7px 10px;
-  border: 1px solid var(--agee-card-line);
-  border-radius: 12px 12px 12px 4px;
-  background: rgba(255, 255, 255, 0.055);
-  color: #e7e7ea;
-}
-.agee-history-you:empty,
-.agee-history-assistant:empty,
-.agee-history-empty:empty {
-  display: none;
 }
 
 /* ---- Result stack: cue cards ---------------------------------------------- */
@@ -1683,9 +1522,7 @@ button.agee-ui-list-row:hover {
     opacity: 1;
   }
   .agee-cue .agee-you,
-  .agee-cue-status,
-  .agee-history-you,
-  .agee-history-assistant {
+  .agee-cue-status {
     max-width: 92%;
   }
 }

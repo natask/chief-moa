@@ -167,6 +167,23 @@
   align-items: center;
   pointer-events: none;
 }
+/* Chat sides, kept from the cards the ribbons replaced: what you said reads
+   right, what Ag replied reads left, both centred on the companion between
+   them. Alignment applies only while the line fits — once it is clipped the
+   line fills the viewport and the sliding window owns the offset, so a
+   flex-end box would fight translateX() for the same pixels. */
+#agee-ribbon-you .agee-ribbon-viewport {
+  justify-content: flex-end;
+}
+#agee-ribbon-you .agee-ribbon-line {
+  text-align: right;
+}
+#agee-ribbon-you.agee-ribbon-clipped .agee-ribbon-viewport {
+  justify-content: flex-start;
+}
+#agee-ribbon-reply .agee-ribbon-viewport {
+  justify-content: flex-start;
+}
 .agee-ribbon-clipped .agee-ribbon-viewport {
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
   mask-image: linear-gradient(to right, transparent 0, #000 16px);

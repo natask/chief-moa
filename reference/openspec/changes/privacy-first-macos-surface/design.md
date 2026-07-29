@@ -126,6 +126,19 @@ Adapters remain distinct: macOS AXUIElement, Windows UI Automation, existing
 Android AccessibilityNodeInfo broker, browser DOM/CDP broker, and iOS own-app UI
 plus App Intents/Shortcuts. iOS must not advertise arbitrary cross-app control.
 
+## Browser product handoff
+
+The Mac app and browser extension remain separate products. The Mac command
+panel may list online browser device clients that explicitly advertise
+`browser.tab.open`, let the user choose one, and enqueue one typed URL request
+to that device through the gateway tool-request hub. The extension alone owns
+Chrome permission, validation, execution, and the terminal receipt. The Mac app
+does not import extension UI, page context, browser credentials, or a fallback
+Accessibility implementation for this action. Delegated tabs open in the
+background. The Mac app watches only its stable source-device request stream for
+a short bounded interval and shows queued, running, completed, or failed state;
+completion requires a terminal receipt bound to the selected browser device.
+
 ## Prohibited inheritance from Clicky
 
 Do not copy vendor routes/credentials, proprietary prompts/assets, background

@@ -59,6 +59,65 @@ private let process = ProcessIdentity(bundleID: "com.example.Editor", pid: 42, p
     }
 }
 
+@Test func browserOpenRequestTargetsOnlyTheSelectedExtension() throws {
+    let request = try BrowserOpenRequest(
+        origin: URL(string: "https://moa.example")!,
+        deviceID: "browser-macbook",
+        sessionID: "mac-test",
+        urlText: " https://example.com/path?q=one#private-fragment "
+    )
+    #expect(request.endpoint.absoluteString == "https://moa.example/v1/tool/requests")
+    let raw = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+    #expect(raw["source_surface_type"] as? String == "macos")
+    #expect(raw["source_device_id"] as? String == "mac-test")
+    #expect(raw["target_surface_type"] as? String == "browser_extension")
+    #expect(raw["target_device_id"] as? String == "browser-macbook")
+    #expect(raw["tool"] as? String == "browser.tab.open")
+    #expect(raw["session_id"] as? String == "mac-test")
+    let input = try #require(raw["input"] as? [String: Any])
+    #expect(input["url"] as? String == "https://example.com/path?q=one")
+    #expect(input["background"] as? Bool == true)
+    #expect(throws: BrowserDelegationError.invalidURL) {
+        try BrowserOpenRequest(origin: URL(string: "https://moa.example")!, deviceID: "browser", sessionID: "mac", urlText: "example.com")
+    }
+    #expect(throws: BrowserDelegationError.unsupportedURL) {
+        try BrowserOpenRequest(origin: URL(string: "https://moa.example")!, deviceID: "browser", sessionID: "mac", urlText: "https://user:secret@example.com")
+    }
+}
+
+@Test func browserDeviceRequiresOnlineExtensionAndAdvertisedTool() {
+    let tool = BrowserDevice.Tool(tool: "browser.tab.open")
+    #expect(BrowserDevice(id: "ready", surfaceType: "browser_extension", online: true, localToolManifest: [tool]).canOpenTab)
+    #expect(!BrowserDevice(id: "stale", surfaceType: "browser_extension", online: false, localToolManifest: [tool]).canOpenTab)
+    #expect(!BrowserDevice(id: "phone", surfaceType: "android", online: true, localToolManifest: [tool]).canOpenTab)
+    #expect(!BrowserDevice(id: "missing", surfaceType: "browser_extension", online: true, localToolManifest: []).canOpenTab)
+}
+
+@Test func browserOpenResponseBindsRequestToTargetDevice() throws {
+    let data = Data(#"{"request":{"id":"treq_123","target_device_id":"browser-one"}}"#.utf8)
+    #expect(try BrowserOpenResponseDecoder.decode(data) == BrowserOpenQueueResult(requestID: "treq_123", targetDeviceID: "browser-one"))
+    #expect(throws: BrowserDelegationError.invalidResponse) {
+        try BrowserOpenResponseDecoder.decode(Data(#"{"request":{"id":"treq_123"}}"#.utf8))
+    }
+}
+
+@Test func browserStatusDecoderRequiresBoundTerminalReceipt() throws {
+    let claimed = Data(#"{"requests":[{"id":"treq_123","status":"claimed","target_device_id":"browser-one","latest_receipt":null}]}"#.utf8)
+    #expect(try BrowserOpenStatusDecoder.decode(claimed, requestID: "treq_123", targetDeviceID: "browser-one")?.phase == .running)
+    let completed = Data(#"{"requests":[{"id":"treq_123","status":"completed","target_device_id":"browser-one","latest_receipt":{"ok":true,"summary":"Opened in Chrome","error":"","device_id":"browser-one"}}]}"#.utf8)
+    let terminal = try #require(try BrowserOpenStatusDecoder.decode(completed, requestID: "treq_123", targetDeviceID: "browser-one"))
+    #expect(terminal.phase == .completed)
+    #expect(terminal.summary == "Opened in Chrome")
+    let failed = Data(#"{"requests":[{"id":"treq_123","status":"failed","target_device_id":"browser-one","latest_receipt":{"ok":false,"summary":"","error":"Tab was rejected","device_id":"browser-one"}}]}"#.utf8)
+    let failure = try #require(try BrowserOpenStatusDecoder.decode(failed, requestID: "treq_123", targetDeviceID: "browser-one"))
+    #expect(failure.phase == .failed)
+    #expect(failure.summary == "Tab was rejected")
+    let wrongDevice = Data(#"{"requests":[{"id":"treq_123","status":"completed","target_device_id":"browser-one","latest_receipt":{"ok":true,"summary":"Opened","error":"","device_id":"browser-two"}}]}"#.utf8)
+    #expect(throws: BrowserDelegationError.invalidResponse) {
+        try BrowserOpenStatusDecoder.decode(wrongDevice, requestID: "treq_123", targetDeviceID: "browser-one")
+    }
+}
+
 @Test func boundsRedactAndTruncate() throws {
     let nodes = (0..<150).map { AXNode(id: "n\($0)", parentID: nil, role: "AXTextField", subrole: nil, label: $0 == 0 ? "password secret" : String(repeating: "é", count: 300), enabled: true, focused: false, actions: ["AXPress"]) }
     let result = ObservationBounds.snapshot(nodes); #expect(result.nodes.count <= 128); #expect(result.truncated); #expect(result.nodes[0].label == nil); #expect((result.nodes[1].label?.utf8.count ?? 0) <= 256)
@@ -204,6 +263,23 @@ private actor FakeChatSender: GatewayChatSending {
     }
 }
 
+private actor FakeBrowserSender: BrowserDelegationSending {
+    let devices: [BrowserDevice]
+    private(set) var requests: [BrowserOpenRequest] = []
+    init(devices: [BrowserDevice]) { self.devices = devices }
+    func onlineBrowsers(origin: URL, bearerToken: String) async throws -> [BrowserDevice] { devices }
+    func open(_ request: BrowserOpenRequest, bearerToken: String) async throws -> BrowserOpenQueueResult {
+        requests.append(request)
+        return BrowserOpenQueueResult(requestID: "treq_test", targetDeviceID: devices[0].id)
+    }
+    func waitForTerminal(origin: URL, queued: BrowserOpenQueueResult, sourceDeviceID: String, bearerToken: String,
+                         progress: @escaping @MainActor @Sendable (BrowserHandoffPhase) -> Void) async throws -> BrowserOpenTerminalResult {
+        await progress(.running)
+        return BrowserOpenTerminalResult(requestID: queued.requestID, targetDeviceID: queued.targetDeviceID,
+                                         phase: .completed, summary: "Opened in browser")
+    }
+}
+
 @MainActor @Test func commandModelSendsOneInertTurnAndPreservesGatewayOnlyBoundary() async throws {
     let sender = FakeChatSender()
     let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: sender)
@@ -221,6 +297,23 @@ private actor FakeChatSender: GatewayChatSending {
     #expect(!bodyText.contains("screen"))
     #expect(!bodyText.contains("gateway-token"))
     _ = CommandPaletteView(model: model).body
+}
+
+@MainActor @Test func commandModelDelegatesExplicitURLToSelectedBrowserProduct() async throws {
+    let device = BrowserDevice(id: "browser-one", surfaceType: "browser_extension", online: true,
+                               localToolManifest: [.init(tool: "browser.tab.open")])
+    let browser = FakeBrowserSender(devices: [device])
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender(), browserSender: browser)
+    model.token = "gateway-token"
+    await model.refreshBrowserDevices()
+    #expect(model.browserDevices == [device])
+    #expect(model.selectedBrowserID == "browser-one")
+    model.browserURL = "https://example.com/work"
+    await model.openInBrowser()
+    #expect(model.status == "Opened in browser")
+    #expect(model.browserHandoffPhase == .completed)
+    #expect(model.browserURL.isEmpty)
+    #expect(await browser.requests.count == 1)
 }
 
 @MainActor @Test func macShellSafeStoppedControlsRemainInert() async {
