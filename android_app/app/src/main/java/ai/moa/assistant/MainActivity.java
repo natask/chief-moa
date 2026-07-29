@@ -69,6 +69,9 @@ public final class MainActivity extends Activity {
     private TextView sessionHistoryStatus;
     private LinearLayout sessionHistoryColumn;
     private TextView runsStatus;
+    private TextView intentsStatus;
+    private TextView intentPortfolioStatus;
+    private LinearLayout intentPortfolioColumn;
     private TextView receiptsStatus;
     private TextView settingsStatus;
     private TextView companionStatus;
@@ -255,6 +258,7 @@ public final class MainActivity extends Activity {
 
         sessionsStatus = statRow(card, "Shared session", "Checking...");
         runsStatus = statRow(card, "Runs", "Checking...");
+        intentsStatus = statRow(card, "Intents", "Checking...");
         receiptsStatus = statRow(card, "Receipts", "Checking...");
         settingsStatus = statRow(card, "Settings", settingsSummaryText());
         companionStatus = statRow(card, "Companion", MoaPrefs.companionStatus(this));
@@ -279,6 +283,24 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         card.addView(historyScroll);
         renderSessionHistory(null, "Loading shared history...");
+
+        intentPortfolioStatus = label("Intent portfolio", MoaColors.MUTED, 12, true);
+        intentPortfolioStatus.setPadding(0, dp(14), 0, dp(8));
+        card.addView(intentPortfolioStatus);
+
+        ScrollView intentScroll = new ScrollView(this);
+        intentScroll.setFillViewport(false);
+        intentScroll.setBackground(MoaDrawables.rounded(
+                MoaColors.COMPOSER_BG, dp(14), MoaColors.COMPOSER_BORDER, dp(1)));
+        intentScroll.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(360)));
+        intentPortfolioColumn = new LinearLayout(this);
+        intentPortfolioColumn.setOrientation(LinearLayout.VERTICAL);
+        intentPortfolioColumn.setPadding(dp(12), dp(8), dp(12), dp(12));
+        intentScroll.addView(intentPortfolioColumn, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        card.addView(intentScroll);
+        renderIntentPortfolio(null, "Loading intents...");
 
         Button refresh = secondaryButton("Refresh");
         refresh.setOnClickListener(v -> refreshControlCenter());
@@ -892,7 +914,7 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshControlCenter() {
-        if (sessionsStatus == null || runsStatus == null || receiptsStatus == null) {
+        if (sessionsStatus == null || runsStatus == null || intentsStatus == null || receiptsStatus == null) {
             return;
         }
 
@@ -918,8 +940,14 @@ public final class MainActivity extends Activity {
 
         sessionsStatus.setText("Checking...");
         runsStatus.setText("Checking...");
+        intentsStatus.setText("Checking...");
         sessionsStatus.setTextColor(MoaColors.GOLD);
         runsStatus.setTextColor(MoaColors.GOLD);
+        intentsStatus.setTextColor(MoaColors.GOLD);
+        if (intentPortfolioStatus != null) {
+            intentPortfolioStatus.setText("Loading intents...");
+            intentPortfolioStatus.setTextColor(MoaColors.GOLD);
+        }
         if (sessionHistoryStatus != null) {
             sessionHistoryStatus.setText("Loading shared history...");
             sessionHistoryStatus.setTextColor(MoaColors.GOLD);
@@ -934,12 +962,16 @@ public final class MainActivity extends Activity {
             String sharedSessionId = MoaPrefs.conversationId(this);
             String sessionsLabel = sharedSessionId;
             String runsLabel = "Unavailable";
+            String intentsLabel = "Unavailable";
+            MoaIntentPortfolio fetchedIntents = null;
+            String intentsError = "";
             MoaSessionHistory fetchedHistory = null;
             String historyError = "";
             String fetchedProfileJson = "";
             String fetchedCompanionJson = "";
             int sessionsColor = MoaColors.GOLD;
             int runsColor = MoaColors.GOLD;
+            int intentsColor = MoaColors.GOLD;
             int companionColor = MoaColors.GOLD;
             MoaGatewayClient client = new MoaGatewayClient(gatewayUrl, MoaPrefs.gatewayToken(this));
             try {
@@ -981,6 +1013,15 @@ public final class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
             try {
+                fetchedIntents = MoaIntentPortfolio.from(client.intents(MoaIntentPortfolio.MAX_INTENTS));
+                int count = fetchedIntents.items.size();
+                int active = fetchedIntents.activeCount();
+                intentsLabel = active > 0 ? active + " in progress / " + count + " shown" : count + " shown";
+                intentsColor = MoaColors.OK;
+            } catch (Exception ignored) {
+                intentsError = "Intent portfolio unavailable. The gateway may need an update.";
+            }
+            try {
                 JSONObject profilePayload = client.agentProfile("device", androidDeviceId());
                 JSONObject profile = profilePayload.optJSONObject("profile");
                 if (profile != null) {
@@ -1000,12 +1041,16 @@ public final class MainActivity extends Activity {
             final String nextSharedSessionId = sharedSessionId;
             final String nextSessions = sessionsLabel;
             final String nextRuns = runsLabel;
+            final String nextIntents = intentsLabel;
+            final MoaIntentPortfolio nextIntentPortfolio = fetchedIntents;
+            final String nextIntentsError = intentsError;
             final MoaSessionHistory nextHistory = fetchedHistory;
             final String nextHistoryError = historyError;
             final String nextProfileJson = fetchedProfileJson;
             final String nextCompanionJson = fetchedCompanionJson;
             final int nextSessionsColor = sessionsColor;
             final int nextRunsColor = runsColor;
+            final int nextIntentsColor = intentsColor;
             final int nextCompanionColor = companionColor;
             mainHandler.post(() -> {
                 if (generation != controlCenterGeneration) {
@@ -1028,6 +1073,11 @@ public final class MainActivity extends Activity {
                     runsStatus.setText(nextRuns);
                     runsStatus.setTextColor(nextRunsColor);
                 }
+                if (intentsStatus != null) {
+                    intentsStatus.setText(nextIntents);
+                    intentsStatus.setTextColor(nextIntentsColor);
+                }
+                renderIntentPortfolio(nextIntentPortfolio, nextIntentsError);
                 renderSessionHistory(nextHistory, nextHistoryError);
                 if (settingsStatus != null) {
                     settingsStatus.setText(settingsSummaryText());
@@ -1050,6 +1100,10 @@ public final class MainActivity extends Activity {
             runsStatus.setText("Gateway required");
             runsStatus.setTextColor(MoaColors.GOLD);
         }
+        if (intentsStatus != null) {
+            intentsStatus.setText("Gateway required");
+            intentsStatus.setTextColor(MoaColors.GOLD);
+        }
         if (receiptsStatus != null) {
             receiptsStatus.setText(MoaActionReceiptStore.receipts(this).length() + " local");
             receiptsStatus.setTextColor(MoaColors.OK);
@@ -1062,6 +1116,56 @@ public final class MainActivity extends Activity {
             companionStatus.setTextColor(MoaColors.GOLD);
         }
         renderSessionHistory(null, "Connect the gateway to load shared history.");
+        renderIntentPortfolio(null, "Connect the gateway to load intents.");
+    }
+
+    private void renderIntentPortfolio(MoaIntentPortfolio portfolio, String statusMessage) {
+        if (intentPortfolioColumn == null || intentPortfolioStatus == null) return;
+        String message = statusMessage == null ? "" : statusMessage.trim();
+        intentPortfolioColumn.removeAllViews();
+        if (portfolio == null) {
+            intentPortfolioStatus.setText(message.isEmpty() ? "Intent portfolio unavailable" : message);
+            intentPortfolioStatus.setTextColor(message.isEmpty() ? MoaColors.MUTED : MoaColors.WARN);
+            intentPortfolioColumn.addView(historyPlaceholder("No canonical intents loaded."));
+            return;
+        }
+        intentPortfolioStatus.setText(portfolio.items.isEmpty()
+                ? "Intent portfolio" : portfolio.items.size() + (portfolio.truncated ? "+" : "") + " recent intents");
+        intentPortfolioStatus.setTextColor(portfolio.items.isEmpty() ? MoaColors.MUTED : MoaColors.OK);
+        if (portfolio.items.isEmpty()) {
+            intentPortfolioColumn.addView(historyPlaceholder("No intents captured yet."));
+            return;
+        }
+        for (MoaIntentPortfolio.Item item : portfolio.items) {
+            intentPortfolioColumn.addView(intentPortfolioItemView(item));
+        }
+    }
+
+    private View intentPortfolioItemView(MoaIntentPortfolio.Item item) {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setTag(item.id);
+        container.setPadding(dp(10), dp(10), dp(10), dp(12));
+        container.setBackground(MoaDrawables.rounded(
+                MoaColors.RAISED, dp(12), MoaColors.RAISED_BORDER, dp(1)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(8);
+        container.setLayoutParams(params);
+        TextView metadata = label(item.metadataLine(), item.blockerCount > 0 ? MoaColors.WARN : MoaColors.GOLD, 10, true);
+        metadata.setLetterSpacing(0.06f);
+        container.addView(metadata);
+        TextView objective = label(item.objective, MoaColors.PAPER, 14, true);
+        objective.setPadding(0, dp(5), 0, 0);
+        objective.setTextIsSelectable(true);
+        container.addView(objective);
+        if (!item.nextStep.isEmpty()) {
+            TextView next = label("Next: " + item.nextStep, MoaColors.MUTED, 12, false);
+            next.setPadding(0, dp(5), 0, 0);
+            next.setTextIsSelectable(true);
+            container.addView(next);
+        }
+        return container;
     }
 
     private void renderSessionHistory(MoaSessionHistory history, String statusMessage) {

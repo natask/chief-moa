@@ -1712,6 +1712,11 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   acceptance contract, work tasks, queued/executing runs, exact candidate,
   verification, preview, user acceptance, release receipts, promoted smoke, and
   outcome. A task or terminal run never proves delivery completion by itself.
+  The Android full-app control center reads the authenticated, bounded intent
+  list projection and renders lifecycle, objective, next step, blockers, and
+  linked run count. Android does not derive, mutate, or persist canonical intent
+  state; a missing or older gateway is shown as unavailable instead of being
+  replaced with a phone-local backlog.
 - `broker_event`: one inbound user message stored before routing to sessions,
   workflow packages, chat, voice, or agent runs.
 - `product_event`: one canonical append-only event in the self-hostable event

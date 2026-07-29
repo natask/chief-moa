@@ -44,6 +44,21 @@ The full Android app SHALL expose active and historical home-machine agent runs.
 - **WHEN** a run is completed, failed, timed out, or canceled
 - **THEN** the app shows its final status and output preview
 
+### Requirement: Intent Portfolio Inspection
+The full Android app SHALL expose the gateway-owned canonical intent portfolio
+without creating a second phone-local source of truth.
+
+#### Scenario: Canonical intents exist
+- **WHEN** the user refreshes the full app against a compatible gateway
+- **THEN** the app shows each recent intent's lifecycle, objective, next step,
+  blocker count, and linked run count
+
+#### Scenario: Intent runtime is unavailable
+- **WHEN** the configured gateway is older, unreachable, or does not expose the
+  authenticated intent list projection
+- **THEN** the app reports that the intent portfolio is unavailable
+- **AND** it does not invent or display a phone-local replacement backlog
+
 ### Requirement: Approval And Receipt Inspection
 The full Android app SHALL expose pending approvals and local action receipts.
 

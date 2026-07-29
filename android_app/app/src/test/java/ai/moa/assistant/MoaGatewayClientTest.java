@@ -105,6 +105,17 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void intentsUseAuthenticatedBoundedRuntimeRoute() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject response = client.intents(500);
+
+        assertEquals("intent_1", response.getJSONArray("items").getJSONObject(0).getString("intent_id"));
+        assertEquals("/v1/intent-runtime/intents?limit=100", requests.get(0).target);
+        assertEquals("Bearer secret-token", requests.get(0).authorization);
+    }
+
+    @Test
     public void sessionMessagesUsesBoundedEncodedRouteAndToken() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
 
@@ -240,6 +251,8 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"classification\":\"control\",\"text\":\"\",\"actions\":[{\"type\":\"control\",\"name\":\"stop\"}]}");
         } else if ("/v1/agent/runs".equals(request.path) && "GET".equals(request.method)) {
             return new TestResponse(200, "{\"runs\":[{\"id\":\"run_789\",\"status\":\"running\"}]}");
+        } else if ("/v1/intent-runtime/intents".equals(request.path)) {
+            return new TestResponse(200, "{\"items\":[{\"intent_id\":\"intent_1\",\"lifecycle_state\":\"active\"}]}");
         } else if ("/v1/agent/runs/run_abcbad".equals(request.path)) {
             return new TestResponse(200, "{\"run\":{\"id\":\"run_abcbad\",\"status\":\"completed\"},\"events\":[]}");
         } else if ("/v1/agent/runs/run_parent/followups".equals(request.path)) {

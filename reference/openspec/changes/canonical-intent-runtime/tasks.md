@@ -1,9 +1,9 @@
 ## 1. Domain
 
-- [ ] 1.1 Add the product-events-backed intent reducer and legal transition
+- [x] 1.1 Add the product-events-backed intent reducer and legal transition
   commands.
-- [ ] 1.2 Add typed relations, idempotency, focus push/pop, and restart tests.
-- [ ] 1.3 Add bounded project/intent rehydration with source receipts.
+- [x] 1.2 Add typed relations, idempotency, focus push/pop, and restart tests.
+- [x] 1.3 Add bounded project/intent rehydration with source receipts.
 
 ## 2. Admission and bridges
 
@@ -20,13 +20,16 @@
 
 ## 4. Surface/API
 
-- [ ] 4.1 Add authenticated intent list/detail/rehydration routes.
+- [x] 4.1 Add authenticated intent list/detail/rehydration routes.
 - [ ] 4.2 Add intent/focus/brief events to the bounded Aggie protocol.
 - [ ] 4.3 Carry intent correlation additively on Android/browser turns.
 - [ ] 4.4 Add the mobile multi-agent launcher defined in
       `mobile-agent-launcher-intent.md`: source-linked split preview, named
       parallel runs, direct agent follow-up, durable status, and personal
       segment isolation.
+- [x] 4.5 Add a bounded Android full-app intent portfolio backed by the
+      canonical gateway list projection, including lifecycle, objective, next
+      step, blockers, and linked run count.
 
 ## 5. Verification and release
 

@@ -51,6 +51,8 @@
 - [x] 6.3 Show recent voice turns and active/completed runs.
 - [x] 6.4 Show action receipts and pending approvals.
 - [x] 6.5 Keep all controls usable on a phone without covering text or controls.
+- [x] 6.6 Show the gateway-owned canonical intent portfolio with lifecycle,
+      objective, next step, blockers, and linked run count.
 
 ## 7. Voice Quality Upgrade
 

@@ -153,6 +153,12 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject intents(int limit) throws Exception {
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        String responseText = getText(apiEndpoint("/v1/intent-runtime/intents?limit=" + safeLimit), 15000);
+        return new JSONObject(responseText);
+    }
+
     JSONObject agentRunDetail(String runId) throws Exception {
         String id = safe(runId).replaceAll("[^a-zA-Z0-9_-]", "");
         if (id.isEmpty()) {
