@@ -24,6 +24,11 @@ const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
+const { createVoiceObserverSessionBridge } = require("./voice-observer-plane");
+const {
+  PROVIDER_EVENT_VALUE_MAX_CHARS, cleanError, cleanErrorSummary, elapsedMsSince, normalizeDurationMs,
+  normalizeStageName, sanitizeStageDetails, sanitizeStageTimings, turnErrorReason,
+} = require("./voice-stage-diagnostics");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -31,7 +36,6 @@ const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
 const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
-const PROVIDER_EVENT_ERROR_MAX_CHARS = 240, PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const sessionsDir = path.join(dataDir, "voice-sessions");
@@ -128,6 +132,7 @@ class VoiceSessionConnection {
     this.ttsRetryReceipts = new Map();
     this.turnProgressIntervalMs = normalizeTurnProgressIntervalMs(options.turnProgressIntervalMs);
     this.phraseAssist = createVoicePhraseAssistSessionBridge(this, options, sanitizeId);
+    this.observers = createVoiceObserverSessionBridge(this, options);
   }
 
   startTurnProgress(turn, stage) {
@@ -395,6 +400,7 @@ class VoiceSessionConnection {
       turnRelation: turnRelation?.next || null,
     };
     this.phraseAssist.configureTurn(turn, event.phrase_assist || event.phraseAssist);
+    this.observers.configureTurn(turn, event.voice_observers, turn.effectiveProfile);
     turn.contextPrompt = this.contextPromptForTurn(turn);
     turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
 
@@ -693,6 +699,9 @@ class VoiceSessionConnection {
         const value = String(text || "").trim();
         if (!value) return;
         providerEvents.transcript = value;
+        // Fire-and-forget by contract: note() is synchronous and void, so an
+        // observer can never delay or fail this turn.
+        this.observers.note(turn, value, "partial");
         await this.recordProviderEvent(turn, providerEvents, "transcript_partial", { text: value });
         await this.sendEvent({
           type: "transcript_partial",
@@ -709,6 +718,7 @@ class VoiceSessionConnection {
         if (!value) return;
         providerEvents.transcript = value;
         providerEvents.transcriptFinalSent = true;
+        this.observers.note(turn, value, "final");
         await this.recordProviderEvent(turn, providerEvents, "transcript_final", { text: value });
         await this.sendEvent({
           type: "transcript_final",
@@ -1475,6 +1485,7 @@ class VoiceSessionConnection {
     }
     turn.status = "canceled";
     await this.phraseAssist.stop(turn);
+    this.observers.stop(turn);
     this.stopTurnProgress();
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
@@ -1553,6 +1564,7 @@ class VoiceSessionConnection {
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     if (turn.status !== "recording" && hasPartialEndpointPlayback(turn)) turn.recordedCanonical = false;
     await this.phraseAssist.stop(turn);
+    this.observers.stop(turn);
     turn.status = status;
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
@@ -2005,115 +2017,6 @@ function summarizeVoiceActivity(connections) {
     && summary.active_responding_connections === 0;
   return summary;
 }
-function normalizeStageName(stage) {
-  const value = String(stage || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_.:-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80);
-  return value || "unknown";
-}
-
-function sanitizeStageDetails(details) {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return {};
-  }
-  const output = {};
-  for (const [rawKey, rawValue] of Object.entries(details)) {
-    const key = String(rawKey || "")
-      .trim()
-      .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
-      .slice(0, 80);
-    if (!key || rawValue === undefined || typeof rawValue === "function") {
-      continue;
-    }
-    if (key === "error" || key === "error_summary") {
-      output[key] = cleanErrorSummary(rawValue);
-      continue;
-    }
-    if (typeof rawValue === "number") {
-      if (Number.isFinite(rawValue)) {
-        output[key] = Math.max(0, Math.round(rawValue));
-      }
-      continue;
-    }
-    if (typeof rawValue === "boolean") {
-      output[key] = rawValue;
-      continue;
-    }
-    if (Array.isArray(rawValue)) {
-      output[key] = rawValue
-        .slice(0, 8)
-        .map((item) => String(item || "").replace(/[\r\n]+/g, " ").slice(0, 80));
-      continue;
-    }
-    if (rawValue && typeof rawValue === "object") {
-      output[key] = JSON.stringify(rawValue).replace(/[\r\n]+/g, " ").slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS);
-      continue;
-    }
-    output[key] = String(rawValue || "").replace(/[\r\n]+/g, " ").slice(0, PROVIDER_EVENT_VALUE_MAX_CHARS);
-  }
-  return output;
-}
-
-function normalizeDurationMs(value, startedAtMs) {
-  const explicit = Number(value);
-  if (Number.isFinite(explicit) && explicit >= 0) {
-    return Math.round(explicit);
-  }
-  const started = Number(startedAtMs);
-  if (Number.isFinite(started) && started > 0) {
-    return Math.max(0, Date.now() - started);
-  }
-  return 0;
-}
-
-function elapsedMsSince(iso) {
-  const started = Date.parse(iso || "");
-  if (!Number.isFinite(started)) {
-    return 0;
-  }
-  return Math.max(0, Date.now() - started);
-}
-
-function sanitizeStageTimings(timings) {
-  if (!timings || typeof timings !== "object" || Array.isArray(timings)) {
-    return {};
-  }
-  const output = {};
-  for (const [rawKey, rawValue] of Object.entries(timings)) {
-    const key = String(rawKey || "")
-      .trim()
-      .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
-      .slice(0, 80);
-    const value = Number(rawValue);
-    if (key && Number.isFinite(value) && value >= 0) {
-      output[key] = Math.round(value);
-    }
-  }
-  return output;
-}
-
-function cleanErrorSummary(error) {
-  return cleanError(error).slice(0, PROVIDER_EVENT_ERROR_MAX_CHARS);
-}
-
-function cleanError(error) {
-  return String(error?.message || error || "unknown error").replace(/[\r\n]+/g, " ").slice(0, 500);
-}
-
-function turnErrorReason(error) {
-  const message = cleanError(error).toLowerCase();
-  if (error?.name === "AbortError" || message.includes("timeout") || message.includes("timed out")) {
-    return "timeout";
-  }
-  if (message.includes("no speech") || message.includes("empty audio")) {
-    return "stt_empty";
-  }
-  return "processing_error";
-}
-
 function normalizeTurnProgressIntervalMs(value) {
   const explicit = Number(value);
   if (Number.isFinite(explicit) && explicit >= 0) {
