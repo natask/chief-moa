@@ -103,20 +103,24 @@
 - [x] 10.5 Add gateway APIs for listing active agents/runs/tool executions from any surface.
 - [x] 10.6 Add a first cross-device smoke: browser requests Android to speak a short message; Android validates locally, speaks it, and receipts it through the gateway. Verified with `cd gateway && npm run smoke:device-hub`, plus Android and extension build/verify checks.
 
-## 11. Reviewable Cross-Surface Overlay Controls
+## 11. Reviewable Cross-Surface Overlay Controls (Superseded)
 
-- [x] 11.1 Show `X` and `↑` controls for every tap-started Android voice draft.
-- [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
-      silently committing a draft; keep hold-release as the fast commit path.
+- [x] 11.1 Establish the original `X` and `↑` review-before-send controls. This
+      interaction was superseded and removed by the accepted manual gesture
+      contract in 12.4.
+- [x] 11.2 Establish the original tap-resolution guard. This was superseded by
+      the origin-matched single/double toggle and triple-click cancellation in
+      section 12.
 - [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card
       wholly above the orb, including while the orb moves, repositioning the
       orb down when the measured card plus gap would not otherwise fit.
 - [x] 11.4 Add drag-to-remove plus explicit chat-header and notification Hide actions.
 - [x] 11.5 Verify Android unit tests, `assembleDebug`, and strict OpenSpec validation.
 - [ ] 11.6 Publish the committed Android OTA artifact and verify its update metadata.
-- [x] 11.7 Place Android draft controls beside the orb instead of in the voice card.
-- [x] 11.8 Give the browser voice-first mascot matching side controls and prevent
-      a later mascot click from silently sending the draft.
+- [x] 11.7 Place the original Android draft controls beside the orb instead of in
+      the voice card. These controls were later removed by 12.4.
+- [x] 11.8 Give the original browser voice-first mascot matching side controls.
+      These controls were later removed by 12.4.
 - [x] 11.9 Verify and package the browser extension parity slice.
 - [x] 11.10 Coalesce Android orb, active-card, and draft-control relayouts to
       display frames while dragging; do no relayout before touch slop, keep the
@@ -124,19 +128,20 @@
       flipping the card below), and evaluate the visible bottom remove target
       against the final release position.
 
-Observable acceptance check: with either chat or voice open, drag the orb rapidly
-across and down the display. The orb, the single open card, and any draft controls
-follow together without per-MotionEvent relayout churn; releasing outside the
-bottom target keeps the overlay, while releasing inside stops it.
+Historical acceptance check: with either chat or voice open, drag the orb rapidly
+across and down the display. The orb, the single open card, and the then-current
+draft controls followed together without per-MotionEvent relayout churn;
+releasing outside the bottom target kept the overlay, while releasing inside
+stopped it. Section 12 superseded and removed those draft controls.
 Verified 2026-07-16: Android JVM tests and `assembleDebug` passed; strict
 OpenSpec validation passed. Real-device frame pacing and drop-target feel remain
 the manual QA check.
 
 - [x] 11.11 Replace the physically laggy companion-only drag optimization with
       one bounded compact root containing the companion, current-turn ribbons,
-      and draft controls. Prove that a coalesced moving frame makes exactly one
-      WindowManager layout submission while preserving touch pass-through
-      outside the root, streaming state, removal, and Undo.
+      and the then-current draft controls. Prove that a coalesced moving frame
+      makes exactly one WindowManager layout submission while preserving touch
+      pass-through outside the root, streaming state, removal, and Undo.
 
 Release note: commit `5106d52` produced Android artifact
 `android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact
@@ -162,6 +167,10 @@ signal completed without a client acknowledgement.
       real voice round-trip QA.
 - [ ] 12.7 Publish collision-free Android OTA and browser-extension artifacts,
       then promote only if the no-interruption and rollback gates pass.
+- [x] 12.8 Remove the regressed Android X/Send control path and its orb-x clamp;
+      retain origin-matched gesture disposition, TalkBack Send/Discard actions,
+      and the `Record again` retry path, with JVM regressions for no side controls
+      and stable initial x.
 
 ## 13. Stable Mobile Overlay Presentation
 

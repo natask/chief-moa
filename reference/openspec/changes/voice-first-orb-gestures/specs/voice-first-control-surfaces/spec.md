@@ -37,6 +37,14 @@ toggle capture SHALL be the only toggle gesture that can send it.
 - **THEN** Android cancels it without sending
 - **AND** opens chat with no hot mic
 
+#### Scenario: Android draft state adds no disposition controls
+- **WHEN** Android enters or leaves a voice-first capture state
+- **THEN** no separate X or Send overlay control is attached beside the companion
+- **AND** the state transition does not reserve side-control space or change the
+  companion's settled x coordinate
+- **AND** an active draft remains accessible through independent Send and Discard
+  actions on the companion
+
 #### Scenario: Flag off preserves the legacy contract
 - **WHEN** the voice-first Android flag is disabled
 - **THEN** a single tap opens chat

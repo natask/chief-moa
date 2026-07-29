@@ -25,8 +25,10 @@ Android app
   permissions, approvals, phone-local actions, local action receipts, and
   package-installer handoff for app updates.
 
-  The companion, compact conversation ribbons, and voice-draft controls share
-  one bounded overlay root. A deliberate drag therefore submits one compact
+  The companion and compact conversation ribbons share one bounded overlay
+  root. Voice capture disposition stays on the companion's origin-matched
+  gesture; entering capture creates no separate cancel/send window and reserves
+  no side-control space. A deliberate drag therefore submits one compact
   WindowManager layout per display frame instead of moving several surfaces.
   Transparent space outside the compact root remains pass-through; platform
   builds that expose a precision touch-region hook also exclude gaps between
@@ -538,12 +540,14 @@ echo cancellation remains enabled. The browser reports microphone readiness
 before inviting speech and uses a lower post-onset VAD threshold to preserve
 quiet phrase endings.
 
-Orb gestures (overlay): one single tap opens the chat menu, first-press hold and
-drag repositions the orb without starting voice, and double-click-and-hold is
-the manual push-to-talk path. Recording starts only after the second press is
-held briefly, and release commits the turn without waiting for silence
-detection. Android launcher and standard Assistant/voice-command entry are
-manual toggles: the first invocation starts one latched current-thread capture
+When `voice_first_gestures` is disabled, the legacy orb gestures apply: one
+single tap opens the chat menu, first-press hold and drag repositions the orb
+without starting voice, and double-click-and-hold is the manual push-to-talk
+path. Recording starts only after the second press is held briefly, and release
+commits the turn without waiting for silence detection.
+
+Android launcher and standard Assistant/voice-command entry are manual toggles:
+the first invocation starts one latched current-thread capture
 and the next invocation or matching orb click commits it. They never use silence
 to submit or re-arm after a reply. A still orb hold remains push-to-talk and
 release sends. The browser extension

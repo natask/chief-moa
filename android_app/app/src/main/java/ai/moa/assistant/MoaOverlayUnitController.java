@@ -28,10 +28,10 @@ import java.util.List;
  * persistent transcript line. A ribbon is one line in a viewport that content
  * never resizes.
  *
- * On Android the unit's companion, ribbons, and draft controls share one
- * bounded WindowManager root. Every resting position derives from the companion
- * anchor, and a deliberate drag moves that root once per display frame without
- * detaching gesture views or losing incoming content.
+ * On Android the unit's companion and ribbons share one bounded WindowManager
+ * root. Every resting position derives from the companion anchor, and a
+ * deliberate drag moves that root once per display frame without detaching
+ * gesture views or losing incoming content.
  *
  * {@link OverlayService} keeps the voice session, the composer, and the
  * companion's own gestures; it drives this class with the current turn's text

@@ -165,7 +165,7 @@ No overlay surface SHALL offer a route to settings, modes, or profile changes.
   a run, or changes a setting
 
 ### Requirement: Hands-free capture is bounded
-Continuous capture re-arms the microphone after every turn with no new gesture.
+Continuous capture SHALL re-arm the microphone after every turn with no new gesture.
 That loop SHALL end on its own, both when it stops hearing speech and when it
 has simply run long enough, and leaving it SHALL release the microphone.
 
