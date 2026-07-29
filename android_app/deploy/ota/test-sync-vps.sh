@@ -222,18 +222,20 @@ publish_release() {
   local version_code="$2"
   local published_at="$3"
   local marker="$4"
+  local app_id="${5:-ai.moa.assistant}"
   OTA_MODULE_DIR="$ROOT_DIR/gateway/lib" \
   OTA_DIR="$dir" \
   OTA_VERSION_CODE="$version_code" \
   OTA_PUBLISHED_AT="$published_at" \
   OTA_MARKER="$marker" \
+  OTA_APP_ID="$app_id" \
   node <<'NODE'
 const path = require("node:path");
 const ota = require(path.join(process.env.OTA_MODULE_DIR, "android-ota"));
 ota.publishRelease(process.env.OTA_DIR, {
   apk: Buffer.from(`fake-apk:${process.env.OTA_MARKER}`),
   meta: {
-    app_id: "ai.moa.assistant",
+    app_id: process.env.OTA_APP_ID,
     version_code: Number(process.env.OTA_VERSION_CODE),
     version_name: `0.1.${process.env.OTA_VERSION_CODE}`,
     git_sha: `test-${process.env.OTA_VERSION_CODE}`,
@@ -835,6 +837,56 @@ if run_sync "$local_dir" "$remote_dir" "$case_dir/output" \
 if grep -q '^rsync$' "$FAKE_CALL_LOG"; then exit 1; fi
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
+# A local build whose application id has no configured release channel fails
+# closed before any network contact -- it must not silently fall back to the
+# default (ai.moa.assistant) store or invent a new channel directory from an
+# unrecognized string.
+case_dir="$TMP_DIR/unknown-app-id"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$local_dir" 300 '2026-07-05T00:00:00Z' unknown-300 com.example.unknown
+: > "$FAKE_CALL_LOG"
+if run_sync "$local_dir" "$remote_dir" "$case_dir/output"; then exit 1; fi
+[ ! -s "$FAKE_CALL_LOG" ]
+grep -Fq 'no configured release channel' "$case_dir/output"
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# ag.companion (the renamed app's own clean install; see the
+# rename-product-to-ag OpenSpec change) publishes into
+# "$remote_dir/channels/ag.companion" -- a completely separate release chain,
+# lock, and snapshot history from the ai.moa.assistant store living directly
+# at "$remote_dir". Publishing the new channel must never move, snapshot, or
+# even touch the existing channel's `current` pointer or legacy artifacts.
+case_dir="$TMP_DIR/two-channels"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$remote_dir" 400 '2026-07-01T00:00:00Z' legacy-400 ai.moa.assistant
+legacy_digest_before="$("$FAKE_BIN/sha256sum" "$remote_dir/moa-assistant.apk" | awk '{print $1}')"
+legacy_current_before="$(readlink "$remote_dir/current")"
+publish_release "$local_dir" 401 '2026-07-06T00:00:00Z' companion-401 ag.companion
+run_sync "$local_dir" "$remote_dir" "$case_dir/output"
+[ "$(readlink "$remote_dir/current")" = "$legacy_current_before" ]
+[ "$("$FAKE_BIN/sha256sum" "$remote_dir/moa-assistant.apk" | awk '{print $1}')" = "$legacy_digest_before" ]
+[ ! -e "$remote_dir/.publish-lock" ]
+[ "$(readlink "$remote_dir/channels/ag.companion/current")" = releases/ag.companion-401 ]
+[ -f "$remote_dir/channels/ag.companion/releases/ag.companion-401/moa-assistant.apk" ]
+[ ! -e "$remote_dir/channels/ag.companion/.publish-lock" ]
+assert_no_target_leak "$case_dir/output" "$remote_dir"
+
+# Publishing again to the legacy channel afterward must likewise leave the
+# ag.companion channel's `current` untouched -- independence holds in both
+# directions, not just on the ag.companion channel's first publish.
+companion_current_before="$(readlink "$remote_dir/channels/ag.companion/current")"
+companion_digest_before="$("$FAKE_BIN/sha256sum" "$remote_dir/channels/ag.companion/moa-assistant.apk" | awk '{print $1}')"
+publish_release "$local_dir" 402 '2026-07-07T00:00:00Z' legacy-402 ai.moa.assistant
+run_sync "$local_dir" "$remote_dir" "$case_dir/legacy-output"
+[ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-402 ]
+[ "$(readlink "$remote_dir/channels/ag.companion/current")" = "$companion_current_before" ]
+[ "$("$FAKE_BIN/sha256sum" "$remote_dir/channels/ag.companion/moa-assistant.apk" | awk '{print $1}')" = "$companion_digest_before" ]
+assert_no_target_leak "$case_dir/legacy-output" "$remote_dir"
+
 grep -Fq "docker exec -i \"\$gateway_container\" node -" "$SYNC_SCRIPT" || {
   echo "Public OTA verification must use the running gateway container token" >&2
   exit 1
@@ -857,4 +909,4 @@ grep -Fq 'process.env.MOA_GATEWAY_TOKEN' "$SYNC_SCRIPT" || {
   exit 1
 }
 
-echo "Android OTA VPS publication safety smoke passed (27 fake transport cases + workflow contract)."
+echo "Android OTA VPS publication safety smoke passed (30 fake transport cases + workflow contract)."

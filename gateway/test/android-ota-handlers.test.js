@@ -223,3 +223,133 @@ test("health reports release identity and normalizes rollback availability", (t)
     rollback_available: false,
   });
 });
+
+// A second application id (ag.companion, the renamed app's own clean install)
+// gets its own release chain -- a distinct otaDir, its own `/apps/<id>/...`
+// routes, and its own current/manifest -- that never shares state with the
+// default ai.moa.assistant channel above. These tests use two independent
+// otaDir directories and an androidOta stub that only answers for the dir it
+// was actually called with, so a bug that accidentally shared state (e.g. a
+// missed channel.otaDir threading) would surface as a wrong-manifest failure.
+const OTHER_APP_ID = "ag.companion";
+
+function twoChannelHarness(overrides = {}) {
+  const calls = { events: [], warnings: [] };
+  const otaDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-default-"));
+  const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-other-"));
+  const defaultApkPath = path.join(otaDir, "app.apk");
+  const otherApkPath = path.join(otherDir, "app.apk");
+  fs.writeFileSync(defaultApkPath, "default-apk-body");
+  fs.writeFileSync(otherApkPath, "other-apk-body");
+
+  const manifests = {
+    [otaDir]: {
+      version_code: 12, version_name: "0.1.12", release_id: "default-release-12",
+      built_at: "2026-07-15T00:00:00Z", git_sha: "abc123", rollback_available: false,
+    },
+    [otherDir]: {
+      version_code: 5, version_name: "0.1.5", release_id: "companion-release-5",
+      built_at: "2026-07-20T00:00:00Z", git_sha: "def456", rollback_available: false,
+    },
+  };
+  const apkPaths = { [otaDir]: defaultApkPath, [otherDir]: otherApkPath };
+  let rolledBack = { [otaDir]: false, [otherDir]: false };
+
+  const androidOta = {
+    buildLatestManifest: (dir) => manifests[dir] || null,
+    readCurrentRelease: (dir) => (apkPaths[dir] ? { apk_path: apkPaths[dir] } : null),
+    isValidReleaseId: (id) => typeof id === "string" && id.length > 0,
+    resolveReleaseApkPath: (dir) => apkPaths[dir] || null,
+    rollbackToPreviousRelease: (dir) => {
+      rolledBack[dir] = true;
+      return { ok: true, from_release_id: "x", to_release_id: "y", manifest: manifests[dir] };
+    },
+    ...overrides.androidOta,
+  };
+  const deps = {
+    androidOta,
+    otaDir,
+    channels: { [OTHER_APP_ID]: otherDir },
+    authorized: () => true,
+    sendJson: (response, status, payload) => Object.assign(response, { status, payload }),
+    cleanError: (error) => error.message,
+    externalOriginForRequest: () => "https://gateway.test",
+    recordProductEventBestEffort: (event) => calls.events.push(event),
+    warn: (message) => calls.warnings.push(message),
+    ...overrides,
+    androidOta,
+  };
+  return {
+    handlers: createAndroidOtaHandlers(deps), calls, otaDir, otherDir, manifests, rolledBack,
+    cleanup: () => {
+      fs.rmSync(otaDir, { recursive: true, force: true });
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("an unrecognized application id is rejected rather than falling back to a default store", async (t) => {
+  const state = twoChannelHarness();
+  t.after(state.cleanup);
+  const response = {};
+  const ok = await state.handlers.routeAndroidOta(
+    request("GET"), response, url("/v1/android/updates/apps/not.a.configured.app/latest"),
+  );
+  assert.equal(ok, true);
+  assert.deepEqual(response, { status: 404, payload: { error: "unknown android application id" } });
+});
+
+test("two channels resolve independently and never leak each other's manifest, APK, or rollback state", async (t) => {
+  const state = twoChannelHarness();
+  t.after(state.cleanup);
+
+  const defaultResponse = {};
+  await state.handlers.routeAndroidOta(request("GET"), defaultResponse, url("/v1/android/updates/latest"));
+  assert.equal(defaultResponse.status, 200);
+  assert.equal(defaultResponse.payload.release_id, "default-release-12");
+  assert.equal(defaultResponse.payload.download_url, "https://gateway.test/v1/android/updates/latest.apk");
+
+  const otherResponse = {};
+  await state.handlers.routeAndroidOta(
+    request("GET"), otherResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest`),
+  );
+  assert.equal(otherResponse.status, 200);
+  assert.equal(otherResponse.payload.release_id, "companion-release-5");
+  assert.equal(
+    otherResponse.payload.download_url,
+    `https://gateway.test/v1/android/updates/apps/${OTHER_APP_ID}/latest.apk`,
+  );
+  assert.notEqual(defaultResponse.payload.release_id, otherResponse.payload.release_id);
+
+  // Publishing/rolling back one channel must not touch the other's state.
+  const rollbackResponse = {};
+  await state.handlers.routeAndroidOta(
+    request("POST"), rollbackResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/rollback`),
+  );
+  assert.equal(rollbackResponse.status, 200);
+  assert.equal(state.rolledBack[state.otherDir], true);
+  assert.equal(state.rolledBack[state.otaDir], false);
+  assert.deepEqual(state.calls.events[0].payload, { from_release_id: "x", to_release_id: "y", app_id: OTHER_APP_ID });
+
+  const apkResponse = responseStream();
+  await state.handlers.routeAndroidOta(request("GET"), apkResponse, url("/v1/android/updates/latest.apk"));
+  await finished(apkResponse);
+  assert.equal(apkResponse.body().toString(), "default-apk-body");
+
+  const otherApkResponse = responseStream();
+  await state.handlers.routeAndroidOta(
+    request("GET"), otherApkResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest.apk`),
+  );
+  await finished(otherApkResponse);
+  assert.equal(otherApkResponse.body().toString(), "other-apk-body");
+});
+
+test("health reports each configured channel independently alongside the default", (t) => {
+  const state = twoChannelHarness();
+  t.after(state.cleanup);
+  const health = state.handlers.health();
+  assert.equal(health.release_id, "default-release-12");
+  assert.equal(health.channels[OTHER_APP_ID].release_id, "companion-release-5");
+  assert.equal(health.channels[OTHER_APP_ID].dir, state.otherDir);
+  assert.equal(health.channels[OTHER_APP_ID].endpoint, `/v1/android/updates/apps/${OTHER_APP_ID}/latest`);
+});

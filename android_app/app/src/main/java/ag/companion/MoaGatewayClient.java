@@ -177,8 +177,17 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    // ag.companion is a clean parallel install, not an OTA update path for the
+    // previous ai.moa.assistant app (see the rename-product-to-ag change), so
+    // it resolves updates through its own app-scoped release channel rather
+    // than the legacy unscoped route. That keeps this app from ever being
+    // offered, or offering, a manifest built for a different application id.
+    private String androidUpdatesBase() throws Exception {
+        return "/v1/android/updates/apps/" + urlEncode(BuildConfig.APPLICATION_ID);
+    }
+
     JSONObject latestAndroidUpdate() throws Exception {
-        String responseText = getText(apiEndpoint("/v1/android/updates/latest"), 10000);
+        String responseText = getText(apiEndpoint(androidUpdatesBase() + "/latest"), 10000);
         return new JSONObject(responseText);
     }
 
@@ -277,7 +286,7 @@ final class MoaGatewayClient {
     }
 
     void downloadLatestAndroidUpdate(File destination) throws Exception {
-        downloadFile(apiEndpoint("/v1/android/updates/latest.apk"), destination, 120000);
+        downloadFile(apiEndpoint(androidUpdatesBase() + "/latest.apk"), destination, 120000);
     }
 
     // Download a specific rollback release. The URL comes from the update

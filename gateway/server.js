@@ -241,6 +241,17 @@ const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 // this keeps the durable, queryable history of how behavior was steered over time.
 const PROFILE_HISTORY_FILE = path.join(DATA_DIR, "agent-profile-history.jsonl");
 const ANDROID_OTA_DIR = path.resolve(process.env.ANDROID_OTA_DIR || path.join(DATA_DIR, "android-ota"));
+// ai.moa.assistant (the original app) keeps publishing straight to
+// ANDROID_OTA_DIR, unchanged. ag.companion (the renamed app, a clean parallel
+// install rather than an OTA update of the old one -- see
+// reference/openspec/changes/rename-product-to-ag-and-build-guided-onboarding)
+// gets its own release chain under a "channels/<app_id>" subtree so the two
+// application ids never share one `current` pointer or `latest.json`.
+// android_app/deploy/ota/sync-vps.sh computes the exact same path from the
+// build's own applicationId before it ever touches the store.
+const ANDROID_OTA_CHANNELS = {
+  "ag.companion": path.join(ANDROID_OTA_DIR, "channels", "ag.companion"),
+};
 const MODEL_PROVIDER = String(process.env.MODEL_PROVIDER || "openai-compatible").toLowerCase();
 const MODEL_BASE_URL = stripTrailingSlash(process.env.MODEL_BASE_URL || "https://api.openai.com/v1");
 const MODEL_ID = process.env.MODEL_ID || process.env.VERTEX_MODEL || (MODEL_PROVIDER === "vertex" ? "gemini-3.5-flash" : "gpt-4o-mini");
@@ -338,10 +349,11 @@ fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_RESEARCH_REPORTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
+for (const channelDir of Object.values(ANDROID_OTA_CHANNELS)) fs.mkdirSync(channelDir, { recursive: true });
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const { routeAndroidOta, health: androidOtaHealth } = createAndroidOtaHandlers({
   androidOta, otaDir: ANDROID_OTA_DIR, authorized, sendJson, cleanError,
-  externalOriginForRequest, recordProductEventBestEffort,
+  externalOriginForRequest, recordProductEventBestEffort, channels: ANDROID_OTA_CHANNELS,
 });
 const { routePresentation } = createPresentationHandlers({
   authorized, sendJson, readJsonBody, sanitizeOptionalId, listVoiceTurnsForSession,
