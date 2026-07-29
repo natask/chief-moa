@@ -35,6 +35,83 @@ public protocol GatewayChatSending: Sendable {
     func send(_ request: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply
 }
 
+public protocol BrowserDelegationSending: Sendable {
+    func onlineBrowsers(origin: URL, bearerToken: String) async throws -> [BrowserDevice]
+    func open(_ request: BrowserOpenRequest, bearerToken: String) async throws -> BrowserOpenQueueResult
+    func waitForTerminal(origin: URL, queued: BrowserOpenQueueResult, sourceDeviceID: String, bearerToken: String,
+                         progress: @escaping @MainActor @Sendable (BrowserHandoffPhase) -> Void) async throws -> BrowserOpenTerminalResult
+}
+
+public struct URLSessionBrowserDelegationSender: BrowserDelegationSending {
+    public init() {}
+
+    public func onlineBrowsers(origin: URL, bearerToken: String) async throws -> [BrowserDevice] {
+        let endpoint = try GatewayOrigin.endpoint(origin: origin, path: ["v1", "device-clients"])
+        let data = try await send(endpoint: endpoint, method: "GET", body: nil, bearerToken: bearerToken)
+        guard let list = try? JSONDecoder().decode(BrowserDeviceList.self, from: data) else {
+            throw BrowserDelegationError.invalidResponse
+        }
+        return list.devices.filter(\.canOpenTab)
+    }
+
+    public func open(_ request: BrowserOpenRequest, bearerToken: String) async throws -> BrowserOpenQueueResult {
+        let data = try await send(endpoint: request.endpoint, method: "POST", body: request.body, bearerToken: bearerToken)
+        return try BrowserOpenResponseDecoder.decode(data)
+    }
+
+    public func waitForTerminal(origin: URL, queued: BrowserOpenQueueResult, sourceDeviceID: String, bearerToken: String,
+                                progress: @escaping @MainActor @Sendable (BrowserHandoffPhase) -> Void) async throws -> BrowserOpenTerminalResult {
+        let endpoint = try statusEndpoint(origin: origin, sourceDeviceID: sourceDeviceID)
+        for attempt in 0..<20 {
+            let data = try await send(endpoint: endpoint, method: "GET", body: nil, bearerToken: bearerToken)
+            if let result = try BrowserOpenStatusDecoder.decode(data, requestID: queued.requestID, targetDeviceID: queued.targetDeviceID) {
+                if result.phase == .running {
+                    await progress(.running)
+                } else {
+                    return result
+                }
+            }
+            if attempt < 19 { try await Task.sleep(for: .milliseconds(500)) }
+        }
+        throw BrowserDelegationError.timedOut
+    }
+
+    private func statusEndpoint(origin: URL, sourceDeviceID: String) throws -> URL {
+        let base = try GatewayOrigin.endpoint(origin: origin, path: ["v1", "tool", "requests"])
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw BrowserDelegationError.invalidResponse
+        }
+        components.queryItems = [
+            URLQueryItem(name: "source_device_id", value: sourceDeviceID),
+            URLQueryItem(name: "limit", value: "25"),
+        ]
+        guard let endpoint = components.url else { throw BrowserDelegationError.invalidResponse }
+        return endpoint
+    }
+
+    private func send(endpoint: URL, method: String, body: Data?, bearerToken: String) async throws -> Data {
+        guard !bearerToken.isEmpty else { throw MoaMacError.missingToken }
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = method
+        request.httpBody = body
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        let session = URLSession(configuration: configuration, delegate: NoRedirectDelegate(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw GatewayChatTransportError.invalidHTTPResponse }
+        if http.statusCode == 401 { throw GatewayChatTransportError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else { throw GatewayChatTransportError.server(http.statusCode) }
+        var buffer = BoundedResponseBuffer()
+        for try await byte in bytes { try buffer.append(byte) }
+        return buffer.value
+    }
+}
+
 public struct URLSessionGatewayChatSender: GatewayChatSending {
     public init() {}
     public func send(_ chat: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply {
@@ -73,11 +150,17 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var historyEntries: [GatewayHistoryEntry] = []
     @Published public private(set) var isShowingHistory = false
     @Published public private(set) var historyStatus = ""
+    @Published public var browserURL = ""
+    @Published public var selectedBrowserID = ""
+    @Published public private(set) var browserDevices: [BrowserDevice] = []
+    @Published public private(set) var isDelegatingBrowser = false
+    @Published public private(set) var browserHandoffPhase: BrowserHandoffPhase = .idle
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
     private let voiceController: any VoiceCaptureControlling
     private let historyLoader: any GatewayHistoryLoading
+    private let browserSender: any BrowserDelegationSending
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -87,7 +170,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             store: SystemGatewayConnectionStore(),
             sender: URLSessionGatewayChatSender(),
             voiceController: VoiceCaptureController(),
-            historyLoader: URLSessionGatewayHistoryLoader()
+            historyLoader: URLSessionGatewayHistoryLoader(),
+            browserSender: URLSessionBrowserDelegationSender()
         )
     }
 
@@ -95,12 +179,14 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         store: any GatewayConnectionStore,
         sender: any GatewayChatSending,
         voiceController: (any VoiceCaptureControlling)? = nil,
-        historyLoader: (any GatewayHistoryLoading)? = nil
+        historyLoader: (any GatewayHistoryLoading)? = nil,
+        browserSender: (any BrowserDelegationSending)? = nil
     ) {
         self.store = store
         self.sender = sender
         self.voiceController = voiceController ?? VoiceCaptureController()
         self.historyLoader = historyLoader ?? URLSessionGatewayHistoryLoader()
+        self.browserSender = browserSender ?? URLSessionBrowserDelegationSender()
         origin = store.loadOrigin()
         token = ""
         sessionID = store.loadSessionID()
@@ -127,6 +213,78 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         token = ""
         resetPresentation()
         status = "Disconnected — session credential cleared"
+    }
+
+    public func refreshBrowserDevices() async {
+        guard let url = URL(string: origin), isConfigured else {
+            browserDevices = []
+            selectedBrowserID = ""
+            status = "Connect to your gateway first"
+            return
+        }
+        do {
+            browserDevices = try await browserSender.onlineBrowsers(origin: url, bearerToken: token)
+            if !browserDevices.contains(where: { $0.id == selectedBrowserID }) {
+                selectedBrowserID = browserDevices.first?.id ?? ""
+            }
+            status = browserDevices.isEmpty ? "No online browser extension can open tabs" : "Browser extension ready"
+        } catch GatewayChatTransportError.unauthorized {
+            status = "Gateway rejected the token"
+        } catch {
+            status = "Could not load browser devices"
+        }
+    }
+
+    public func openInBrowser() async {
+        guard !isDelegatingBrowser else { return }
+        isDelegatingBrowser = true
+        defer { isDelegatingBrowser = false }
+        do {
+            guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
+            guard !selectedBrowserID.isEmpty,
+                  browserDevices.contains(where: { $0.id == selectedBrowserID && $0.canOpenTab }) else {
+                throw BrowserDelegationError.noOnlineBrowser
+            }
+            let request = try BrowserOpenRequest(origin: url, deviceID: selectedBrowserID, sessionID: sessionID, urlText: browserURL)
+            let queued = try await browserSender.open(request, bearerToken: token)
+            guard queued.targetDeviceID == selectedBrowserID else { throw BrowserDelegationError.invalidResponse }
+            browserURL = ""
+            browserHandoffPhase = .queued
+            status = "Queued for browser extension"
+            let terminal = try await browserSender.waitForTerminal(
+                origin: url, queued: queued, sourceDeviceID: request.sourceDeviceID, bearerToken: token
+            ) { [weak self] phase in
+                self?.browserHandoffPhase = phase
+                self?.status = phase == .running ? "Browser extension is opening the URL" : self?.status ?? ""
+            }
+            guard terminal.requestID == queued.requestID, terminal.targetDeviceID == selectedBrowserID else {
+                throw BrowserDelegationError.invalidResponse
+            }
+            browserHandoffPhase = terminal.phase
+            if terminal.phase == .completed {
+                status = terminal.summary.isEmpty ? "Browser extension opened the URL" : terminal.summary
+            } else {
+                throw BrowserDelegationError.failed(terminal.summary)
+            }
+        } catch BrowserDelegationError.invalidURL, BrowserDelegationError.unsupportedURL {
+            status = "Enter a complete HTTP or HTTPS URL"
+            browserHandoffPhase = .failed
+        } catch BrowserDelegationError.noOnlineBrowser {
+            status = "Choose an online browser extension"
+            browserHandoffPhase = .failed
+        } catch BrowserDelegationError.timedOut {
+            status = "Browser extension did not finish in time"
+            browserHandoffPhase = .failed
+        } catch BrowserDelegationError.failed(let message) {
+            status = message.isEmpty ? "Browser extension could not open the URL" : message
+            browserHandoffPhase = .failed
+        } catch GatewayChatTransportError.unauthorized {
+            status = "Gateway rejected the token"
+            browserHandoffPhase = .failed
+        } catch {
+            status = "Could not send work to the browser"
+            browserHandoffPhase = .failed
+        }
     }
 
     public func submit() async {
@@ -165,6 +323,10 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         historyEntries = []
         isShowingHistory = false
         historyStatus = ""
+        browserURL = ""
+        browserDevices = []
+        selectedBrowserID = ""
+        browserHandoffPhase = .idle
     }
 
     public func toggleHistory() async {

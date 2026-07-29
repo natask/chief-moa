@@ -130,3 +130,25 @@ receipt sync SHALL be default-off and separately disclosed/bound in approval.
 - **WHEN** the app restarts with a pending receipt lacking a terminal result
 - **THEN** it records/reports an interrupted outcome without replaying the action
 - **AND** raw AX labels, values, or trees are absent from receipt storage
+
+### Requirement: Browser work crosses a typed product boundary
+The macOS surface SHALL treat the browser extension as a separate product and
+SHALL delegate explicit browser work only to an online device client that
+advertises the requested browser-local tool.
+
+#### Scenario: User opens a URL in a connected browser
+- **WHEN** the user enters a complete HTTP or HTTPS URL and selects an online
+      browser extension advertising `browser.tab.open`
+- **THEN** the Mac app queues a typed request bound to that device through the
+      authenticated gateway tool-request hub
+- **AND** the delegated tab opens in the background without taking focus
+- **AND** the Mac app shows queued, running, and terminal state from its bounded
+      source-device request stream
+- **AND** the extension retains sole authority over Chrome execution and its
+      receipt
+
+#### Scenario: No compatible browser is online
+- **WHEN** no online browser extension advertises `browser.tab.open`
+- **THEN** the Mac app reports that no compatible extension is available
+- **AND** it does not fall back to Accessibility, synthetic input, or direct
+      Chrome control
