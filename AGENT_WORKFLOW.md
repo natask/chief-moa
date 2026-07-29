@@ -109,11 +109,7 @@ Verification:
 
 ## Default Next Work
 
-The active implementation path is still the Android core product map:
-
-1. Make Android-created agent runs non-blocking and observable.
-2. Add gateway lifecycle controls and cancellation.
-3. Stabilize session, branch, and voice event identifiers.
-4. Add local phone action approvals and receipts.
-5. Build the full-app control center around sessions, runs, approvals, and
-   settings.
+Use [CORE_PRODUCT_INTENT.md](CORE_PRODUCT_INTENT.md) for the current order of
+work. The earlier Android foundation is implemented. Continue from the open
+acceptance and physical-QA items linked by the core intent instead of repeating
+its completed foundation tasks.
