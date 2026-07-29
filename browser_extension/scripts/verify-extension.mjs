@@ -1092,7 +1092,6 @@ if (
   !/onResolve: \(count\) => resolveVoiceFirstTapChain\(count\)/.test(contentSource) ||
   !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
   !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
-  !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
   !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
   !/count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}ribbons\?\.beginCompose/.test(contentSource)
@@ -1128,6 +1127,29 @@ if (
 // microphone actually coming up.
 if (!/ribbons\?\.setUserPending\(true\)/.test(branchStartBody)) {
   throw new Error("starting a capture must open the caret on the press");
+}
+
+// A click on a listening companion always sends. Provenance-matching made the
+// click a silent no-op for any capture the current page did not start — and a
+// capture outlives its tab, so that was every capture after a navigation.
+const toggleCaptureBody = sourceBetween(
+  contentSource,
+  /function toggleVoiceFirstCapture\(/,
+  /function markGesture\(/,
+  "voice-first capture toggle"
+);
+if (/return "noop"/.test(toggleCaptureBody) || !/commitLiveVoiceTurn\(\)/.test(toggleCaptureBody)) {
+  throw new Error("a click on a listening companion must commit it, never silently do nothing");
+}
+
+// Every resolved gesture leaves a trace on the root element. Without it a
+// gesture that does nothing is indistinguishable from a click that never
+// landed, which is exactly the bug that hid here.
+if (
+  !/root\.dataset\.ageeGesture = /.test(contentSource) ||
+  !/markGesture\(`tap_\$\{count\}`\)/.test(contentSource)
+) {
+  throw new Error("resolved companion gestures must record what they did on #agee-root");
 }
 
 const launcherClickBody = sourceBetween(

@@ -872,6 +872,7 @@
   }
 
   function resolveVoiceFirstTapChain(count) {
+    markGesture(`tap_${count}`);
     if (count === 1) {
       toggleVoiceFirstCapture("single");
       return;
@@ -898,6 +899,7 @@
     primeAudio();
     // The caret opens on the press, not when the microphone finally comes up:
     // that gap is exactly when you wonder whether it heard you.
+    markGesture(`start_${origin}`);
     ribbons?.setUserPending(true);
     const replacement = { kind: freshThread ? "fresh_thread" : "steering",
       turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -927,15 +929,31 @@
 
   function toggleVoiceFirstCapture(origin) {
     if (voiceFirstCaptureActive()) {
-      // Capture toggles are provenance-matched. A single click cannot send a
-      // fresh-thread turn that was intentionally started with a double-click.
-      if (voiceFirstCaptureOrigin !== origin) return "noop";
+      // A click on a listening companion sends what it heard. It used to be
+      // provenance-matched — a single click could only commit a single-started
+      // capture — which made the click a silent no-op for every capture with
+      // any other provenance. A capture outlives the tab that opened it, so
+      // after a navigation the new content script knows a capture is live but
+      // not how it was started, and from then on the companion answered no
+      // click at all. Collisions inside one gesture run are already handled by
+      // resolving the tap chain only after the multi-click window.
       voiceFirstCaptureOrigin = null;
+      markGesture(`commit_${origin}`);
       commitLiveVoiceTurn();
       syncTalkModeUi();
       return "off";
     }
     return startVoiceFirstCapture(origin);
+  }
+
+  // What the companion last did, on the element itself. Gesture bugs are
+  // invisible from the page: when nothing happens there is nothing to read,
+  // and the difference between "the click never landed", "it landed and was
+  // dropped", and "it ran and painted nothing" is the whole diagnosis.
+  function markGesture(name) {
+    if (!root) return;
+    root.dataset.ageeGesture = String(name || "");
+    root.dataset.ageeGestureAt = String(Date.now());
   }
 
   function toggleFreshThreadVoiceCapture() {
