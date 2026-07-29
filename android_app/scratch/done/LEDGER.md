@@ -1,3 +1,4 @@
+- Moved streamed Android assistant audio onto a bounded generation-bound FIFO so socket events stay responsive through playback drain and interruption — agent: Codex/GPT-5 — (this commit)
 - Removed the regressed Android voice-draft X/Send side windows and orb-x clamp, kept Record again on the companion gesture contract, and added stable-position regressions — agent: Codex/GPT-5.6 — this commit
 - Kept single-tap turns on the branch created by double tap across HTTP, streaming, reconnect, and restart; blocked failed fresh-thread fallbacks; and bound automatic follow-ups only to an unambiguous run in that session, branch, and intent — agent: Codex/GPT-5 — fix/session-continuity-scoped-20260726
 - Extracted focused overlay support types so OverlayService returns to its guarded source-size ceiling without changing runtime behavior — agent: Codex/GPT-5 — release/converge-chief-moa-20260725
