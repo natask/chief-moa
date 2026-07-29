@@ -41,3 +41,24 @@ signed URLs, or unredacted provider endpoints in returned diagnostic data.
   redacted before storage or response
 - **AND** diagnosis data exposes only the redacted provider metadata needed for
   debugging
+
+### Requirement: Terminal Voice State Is Monotonic
+Once the gateway has durably recorded a terminal voice outcome, a later
+transport-receipt failure SHALL NOT rewrite that outcome as a provider or
+processing failure.
+
+#### Scenario: Client disconnects after assistant output
+- **WHEN** transcript and assistant output have completed and the gateway has
+  durably recorded the completed turn
+- **AND** the client closes before the final `turn_done` WebSocket receipt can
+  be delivered
+- **THEN** the canonical turn remains `completed`
+- **AND** diagnosis does not add a `processing` fault for the closed socket
+- **AND** the client can recover the durable result from canonical history
+
+#### Scenario: Terminal receipt cannot be delivered
+- **WHEN** a `completed`, `no_speech`, `canceled`, or `error` outcome has been
+  persisted
+- **AND** its terminal WebSocket receipt cannot be delivered
+- **THEN** receipt delivery failure is treated as transport delivery evidence,
+  not as a mutation of the authoritative outcome

@@ -994,7 +994,7 @@ class VoiceSessionConnection {
       });
       turn.status = "no_speech";
       this.stopTurnProgress();
-      await this.sendEvent({
+      await this.sendTurnDone({
         type: "turn_done",
         session_id: turn.sessionId,
         branch_id: turn.branchId,
@@ -1123,7 +1123,7 @@ class VoiceSessionConnection {
     const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
     turn.status = hasPlaybackTail ? "playback" : "completed";
     writeTurnMetadata(turn, { status: "completed", completed_at: nowIso() });
-    await this.sendEvent({
+    await this.sendTurnDone({
       type: "turn_done",
       session_id: turn.sessionId,
       branch_id: turn.branchId,
@@ -1357,7 +1357,8 @@ class VoiceSessionConnection {
   }
 
   async failCommittedTurn(turn, providerEvents, error) {
-    if (!turn) {
+    // A failed terminal receipt cannot rewrite the already-durable outcome.
+    if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
     }
     if (isTurnSupersededError(error)) {

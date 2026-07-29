@@ -229,3 +229,18 @@
       hangover so quiet technical-phrase tails and spelled acronyms are retained.
 - [ ] 19.4 Verify identical browser PCM against the pre-change and candidate
       capture paths, then run one real browser turn before promotion.
+
+## 20. Terminal receipt monotonicity
+
+- [x] 20.1 Audit production voice-session metadata without reading audio or
+      transcript content and identify terminal outcomes rewritten after a
+      WebSocket receipt failure.
+- [x] 20.2 Make `completed` and `no_speech` terminal receipt delivery
+      best-effort after durable persistence and prevent a later catch path from
+      rewriting any terminal turn as `error`.
+- [x] 20.3 Add a deterministic regression that closes the client immediately
+      after assistant output and proves the stored turn remains `completed`
+      without `websocket is not open` provider-fault evidence.
+- [ ] 20.4 Run full gateway checks, isolated preview smoke, and independent
+      review before guarded promotion. Real-phone reproduction remains blocked
+      until an Android device is attached.
