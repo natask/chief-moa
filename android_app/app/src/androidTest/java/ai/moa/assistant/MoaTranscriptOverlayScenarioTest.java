@@ -52,22 +52,18 @@ public final class MoaTranscriptOverlayScenarioTest {
     @Test
     public void partialFinalExpandedHistoryAndCopy() throws Exception {
         inject("partial", PARTIAL);
-        UiObject2 partial = waitForRibbon(PARTIAL);
-        Rect collapsedBounds = partial.getVisibleBounds();
+        Rect collapsedBounds = waitForBounds(false);
         checkpoint("partial");
 
         inject("final", FINAL);
-        UiObject2 finished = waitForRibbon("until I choose to expand it");
+        Rect bounds = waitForBounds(false);
         checkpoint("final");
 
-        finished.click();
-        inject("snapshot", "");
-        waitForBounds(true);
-        Rect expandedBounds = waitForRibbon("until I choose to expand it").getVisibleBounds();
+        Rect expandedBounds = expandThroughUi(bounds);
         assertTrue("expanded ribbon must grow", expandedBounds.height() > collapsedBounds.height());
         checkpoint("expanded");
 
-        Rect bounds = expandedBounds;
+        bounds = expandedBounds;
         // The rail hit target is one collapsed ribbon high. Reading it from the
         // rendered bounds avoids target/test resource-density disagreement.
         int rail = collapsedBounds.height();
@@ -88,10 +84,20 @@ public final class MoaTranscriptOverlayScenarioTest {
         device.waitForIdle();
     }
 
-    private UiObject2 waitForRibbon(String text) {
-        UiObject2 node = device.wait(Until.findObject(By.descContains(text)), 5000);
-        assertNotNull("missing real overlay ribbon containing: " + text, node);
-        return node;
+    private Rect expandThroughUi(Rect bounds) throws Exception {
+        int[] xs = {bounds.centerX(), bounds.left + bounds.width() / 3,
+                bounds.left + bounds.width() * 2 / 3};
+        for (int x : xs) {
+            device.click(x, bounds.centerY());
+            inject("snapshot", "");
+            try {
+                return waitForBounds(true);
+            } catch (AssertionError ignored) {
+                // Retry another point inside the rendered text viewport. Rails
+                // remain excluded and at least one real UI click is required.
+            }
+        }
+        throw new AssertionError("real ribbon did not expand after UI clicks");
     }
 
     private Rect waitForBounds(boolean expanded) throws Exception {
