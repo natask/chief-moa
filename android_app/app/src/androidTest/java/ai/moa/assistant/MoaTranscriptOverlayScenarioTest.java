@@ -27,6 +27,7 @@ import org.junit.runner.RunWith;
 
 import java.io.FileInputStream;
 import java.io.File;
+import java.io.FileWriter;
 import java.nio.charset.StandardCharsets;
 
 @RunWith(AndroidJUnit4.class)
@@ -124,8 +125,10 @@ public final class MoaTranscriptOverlayScenarioTest {
         // shell dumper here tries to register a second service and crashes the
         // active Android 15 instrumentation process.
         device.dumpWindowHierarchy(new File("/sdcard/Download/moa-qa/" + name + ".xml"));
-        shell("sh -c \"echo " + name
-                + " >> /sdcard/Download/moa-qa/interaction-trace.txt\"");
+        try (FileWriter trace = new FileWriter(
+                "/sdcard/Download/moa-qa/interaction-trace.txt", true)) {
+            trace.write(name + "\n");
+        }
     }
 
     private String clipboardText() {
