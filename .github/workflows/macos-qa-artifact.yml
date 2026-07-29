@@ -39,13 +39,13 @@ jobs:
         working-directory: apple_surfaces
         shell: bash
         env:
-          MOA_MAC_BUILD: ${{ github.run_number }}
+          AG_MAC_BUILD: ${{ github.run_number }}
         run: |
           set -euo pipefail
           version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
-          MOA_MAC_VERSION="$version" bash scripts/package-moa-mac.sh
+          AG_MAC_VERSION="$version" bash scripts/package-ag-mac.sh
 
-          archives="$(find dist -maxdepth 1 -type f -name "MoaMac-${version}-${MOA_MAC_BUILD}-*.zip" -print)"
+          archives="$(find dist -maxdepth 1 -type f -name "Ag-${version}-${AG_MAC_BUILD}-*.zip" -print)"
           archive_count="$(printf '%s\n' "$archives" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [[ "$archive_count" != 1 ]]; then
             echo "Expected exactly one versioned QA archive, found $archive_count." >&2
@@ -57,19 +57,19 @@ jobs:
           [[ -f "$checksum" ]] || { echo "Missing checksum: $checksum" >&2; exit 1; }
           (cd dist && shasum -a 256 -c "$(basename "$checksum")")
 
-          app="dist/MoaMac.app"
+          app="dist/Ag.app"
           codesign --verify --deep --strict "$app"
-          bash scripts/scan-moa-mac.sh "$app"
+          bash scripts/scan-ag-mac.sh "$app"
           bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
           bundle_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
-          [[ "$bundle_version" == "$version" && "$bundle_build" == "$MOA_MAC_BUILD" ]]
+          [[ "$bundle_version" == "$version" && "$bundle_build" == "$AG_MAC_BUILD" ]]
 
           digest="$(awk '{print $1}' "$checksum")"
           size="$(stat -f '%z' "$archive")"
-          architectures="$(lipo -archs "$app/Contents/MacOS/MoaMac" | tr ' ' '-')"
+          architectures="$(lipo -archs "$app/Contents/MacOS/Ag" | tr ' ' '-')"
           {
             echo "version=$version"
-            echo "build=$MOA_MAC_BUILD"
+            echo "build=$AG_MAC_BUILD"
             echo "architectures=$architectures"
             echo "archive=apple_surfaces/$archive"
             echo "checksum=apple_surfaces/$checksum"
@@ -77,7 +77,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           {
             echo "### macOS QA artifact"
-            echo "- Version/build: \`$version ($MOA_MAC_BUILD)\`"
+            echo "- Version/build: \`$version ($AG_MAC_BUILD)\`"
             echo "- Architectures: \`$architectures\`"
             echo "- SHA-256: \`$digest\`"
             echo "- Size: $size bytes"
@@ -87,7 +87,7 @@ jobs:
       - name: Upload QA archive and checksum
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: moa-mac-qa-${{ steps.package.outputs.version }}-${{ steps.package.outputs.build }}-${{ steps.package.outputs.architectures }}-${{ github.sha }}
+          name: ag-mac-qa-${{ steps.package.outputs.version }}-${{ steps.package.outputs.build }}-${{ steps.package.outputs.architectures }}-${{ github.sha }}
           if-no-files-found: error
           retention-days: 30
           path: |

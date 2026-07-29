@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-app="${1:-dist/MoaMac.app}"
-binary="$app/Contents/MacOS/MoaMac"
+app="${1:-dist/Ag.app}"
+binary="$app/Contents/MacOS/Ag"
 
 if [ ! -x "$binary" ]; then
-  echo "MoaMac binary not found: $binary" >&2
+  echo "Ag binary not found: $binary" >&2
   exit 2
 fi
 
@@ -17,21 +17,21 @@ if rg -n -i "$persistence_pattern" Sources Resources; then
   echo "Credential persistence API or identifier found in Apple runnable sources/configuration." >&2
   exit 1
 fi
-if rg -n -i "$prohibited_pattern|$credential_pattern" Sources/MoaMac Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI Resources; then
-  echo "Prohibited packaged destination, telemetry, updater, or private API reference found in MoaMac sources." >&2
+if rg -n -i "$prohibited_pattern|$credential_pattern" Sources/Ag Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI Resources; then
+  echo "Prohibited packaged destination, telemetry, updater, or private API reference found in Ag sources." >&2
   exit 1
 fi
-if rg -n -i "$destination_pattern" Sources/MoaMac Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI; then
-  echo "Packaged network destination found in MoaMac sources." >&2
+if rg -n -i "$destination_pattern" Sources/Ag Sources/MoaMacCore Sources/MoaMacShell Sources/MoaMacUI; then
+  echo "Packaged network destination found in Ag sources." >&2
   exit 1
 fi
 if strings "$binary" | rg -n -i "$prohibited_pattern|$destination_pattern|$credential_pattern"; then
-  echo "Prohibited packaged destination, telemetry, updater, or private API reference found in MoaMac binary." >&2
+  echo "Prohibited packaged destination, telemetry, updater, or private API reference found in Ag binary." >&2
   exit 1
 fi
 if strings "$binary" | rg -n -i "$persistence_pattern"; then
-  echo "Credential persistence API or identifier found in MoaMac binary." >&2
+  echo "Credential persistence API or identifier found in Ag binary." >&2
   exit 1
 fi
 
-echo "MoaMac source and binary scan passed"
+echo "Ag source and binary scan passed"

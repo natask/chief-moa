@@ -23,7 +23,7 @@ public struct CommandPaletteView: View {
                     .font(.title2)
                     .foregroundStyle(.purple)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Aggie").font(.headline)
+                    Text("Ag").font(.headline)
                     Text(model.status).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -84,7 +84,7 @@ public struct CommandPaletteView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Ask Aggie anything…", text: $model.prompt, axis: .vertical)
+                TextField("Ask Ag anything…", text: $model.prompt, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .focused($promptFocused)
@@ -135,7 +135,7 @@ public struct CommandPaletteView: View {
 
     private var connectionEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Your Chief Moa gateway").font(.subheadline.weight(.semibold))
+            Text("Your Ag gateway").font(.subheadline.weight(.semibold))
             TextField("Canonical HTTPS gateway origin", text: $model.origin)
                 .textFieldStyle(.roundedBorder)
             SecureField("Gateway session token (memory only)", text: $model.token)

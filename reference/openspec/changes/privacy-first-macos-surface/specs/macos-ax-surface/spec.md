@@ -6,7 +6,7 @@ action and SHALL require a separate visible, one-app, time-bounded product grant
 before reading AX context.
 
 #### Scenario: App starts with OS trust already granted
-- **WHEN** `MoaMac.app` launches while Accessibility trust exists
+- **WHEN** `Ag.app` launches while Accessibility trust exists
 - **THEN** no AX observer or snapshot starts
 - **AND** no network request or login persistence is created
 

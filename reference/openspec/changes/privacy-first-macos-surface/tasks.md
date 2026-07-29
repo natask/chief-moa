@@ -6,7 +6,7 @@
 
 ## 2. Local read-only application
 
-- [x] 2.1 Scaffold an ad-hoc-signed `MoaMac.app` QA bundle, pure core/AX
+- [x] 2.1 Scaffold an ad-hoc-signed `Ag.app` QA bundle, pure core/AX
       packages, and deterministic fake-driven AX fixtures in an isolated
       worktree. Stable Developer ID signing remains a rollout task.
 - [x] 2.2 Add explicit AX trust UI and the memory-only per-app observation grant.

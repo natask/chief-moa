@@ -2,7 +2,7 @@
 
 ## Product shell
 
-`MoaMac` runs as an `LSUIElement` menu-bar application. `Control+Space` uses
+`Ag` runs as an `LSUIElement` menu-bar application. `Control+Space` uses
 the public Carbon hot-key registration API and invokes one app-owned `NSPanel`.
 If that system combination is already reserved, registration falls back to
 `Option+Space` and the command panel shows the shortcut that actually won.

@@ -131,36 +131,36 @@ private final class CommandPanel: NSPanel {
     }
 }
 
-struct MoaMacApp: App {
+struct AgApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("Aggie", systemImage: "sparkles") {
-            Button("Speak with Aggie") { CommandPanelController.shared.invoke() }
+        MenuBarExtra("Ag", systemImage: "sparkles") {
+            Button("Speak with Ag") { CommandPanelController.shared.invoke() }
                 .keyboardShortcut(" ", modifiers: .control)
             SettingsLink { Text("Privacy & Screen Context…") }
             Divider()
-            Button("Quit Moa Mac") { NSApp.terminate(nil) }
+            Button("Quit Ag") { NSApp.terminate(nil) }
         }
         Settings { StatusView() }
     }
 }
 
 @main
-enum MoaMacMain {
+enum AgMain {
     static func main() {
         if CommandLine.arguments.contains("--coverage-smoke") {
-            _ = MoaMacApp().body
+            _ = AgApp().body
             return
         }
-        MoaMacApp.main()
+        AgApp.main()
     }
 }
 #else
 import Foundation
 
 @main
-enum MoaMacUnavailable {
-    static func main() { print("MoaMac requires macOS") }
+enum AgUnavailable {
+    static func main() { print("Ag requires macOS") }
 }
 #endif

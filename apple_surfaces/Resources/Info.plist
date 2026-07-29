@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>MoaMac</string><key>CFBundleIdentifier</key><string>app.agee.moa.mac</string>
-<key>CFBundleName</key><string>MoaMac</string><key>CFBundleDisplayName</key><string>Aggie for Mac</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.1.0</string><key>CFBundleVersion</key><string>1</string><key>LSUIElement</key><true/>
-<key>LSMinimumSystemVersion</key><string>14.0</string><key>NSAccessibilityUsageDescription</key><string>Moa uses Accessibility only for the app and time scope you explicitly grant.</string>
-<key>NSMicrophoneUsageDescription</key><string>Hold the microphone button to send your speech to your configured Chief Moa gateway for transcription.</string>
+<key>CFBundleExecutable</key><string>Ag</string><key>CFBundleIdentifier</key><string>app.agee.moa.mac</string>
+<key>CFBundleName</key><string>Ag</string><key>CFBundleDisplayName</key><string>Ag</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.1.0</string><key>CFBundleVersion</key><string>1</string><key>LSUIElement</key><true/>
+<key>LSMinimumSystemVersion</key><string>14.0</string><key>NSAccessibilityUsageDescription</key><string>Ag uses Accessibility only for the app and time scope you explicitly grant.</string>
+<key>NSMicrophoneUsageDescription</key><string>Hold the microphone button to send your speech to your configured Ag gateway for transcription.</string>
 <key>NSScreenCaptureUsageDescription</key><string>Optional focused-window context is captured only when enabled for an active grant.</string>
 </dict></plist>

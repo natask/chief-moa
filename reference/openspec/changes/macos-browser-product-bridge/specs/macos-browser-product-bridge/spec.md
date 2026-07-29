@@ -10,14 +10,14 @@ local context, execution authority, and release lifecycle.
 
 #### Scenario: Browser product runs without Mac
 
-- **WHEN** the extension is installed and authenticated without `MoaMac.app`
+- **WHEN** the extension is installed and authenticated without `Ag.app`
 - **THEN** browser conversation, page evidence, and locally approved browser
   work remain available
 - **AND** no Mac identity or permission is required
 
 #### Scenario: Mac product runs without extension
 
-- **WHEN** `MoaMac.app` is installed and authenticated without a browser client
+- **WHEN** `Ag.app` is installed and authenticated without a browser client
 - **THEN** Mac conversation and Mac-local capabilities remain available
 - **AND** browser delegation reports unavailable instead of using AX fallback
 

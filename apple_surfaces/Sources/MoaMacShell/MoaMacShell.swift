@@ -122,7 +122,7 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
 @MainActor private final class UIApprover: PreviewApprover, @unchecked Sendable {
     func approve(_ preview: RequestPreview) async throws -> String {
         let alert = NSAlert(); alert.messageText = "Release this exact observation?"
-        alert.informativeText = "POST \(preview.url.absoluteString)\nContent-Type: \(preview.contentType)\nRedirect: error\nBody SHA-256: \(preview.bodySHA256)\n\n\(String(data: preview.body, encoding: .utf8) ?? "")\n\nExcluded: secure/editable values, coordinates, local AX references. Retention is controlled by your Chief Moa server."
+        alert.informativeText = "POST \(preview.url.absoluteString)\nContent-Type: \(preview.contentType)\nRedirect: error\nBody SHA-256: \(preview.bodySHA256)\n\n\(String(data: preview.body, encoding: .utf8) ?? "")\n\nExcluded: secure/editable values, coordinates, local AX references. Retention is controlled by your Ag server."
         alert.addButton(withTitle: "Send exact body"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { throw MoaMacError.cancelled }; return preview.bodySHA256
     }
@@ -179,7 +179,7 @@ struct WorkspaceScope: ObservationScopeValidator, @unchecked Sendable {
         do {
             if let destination { _ = try DestinationPolicy.endpoint(origin: destination) }
             if mode == .trustedServer15m {
-                let alert = NSAlert(); alert.messageText = "Trust this Chief Moa server for 15 minutes?"
+                let alert = NSAlert(); alert.messageText = "Trust this Ag server for 15 minutes?"
                 alert.informativeText = "Origin: \(destination?.absoluteString ?? "invalid")\nEvidence: bounded Accessibility tree and window title\nFocused-window screenshot: \(screenshot ? "included" : "excluded")\nExpires: 15 minutes or immediately on Pause/Stop/scope change."
                 alert.addButton(withTitle: "Trust for 15 minutes"); alert.addButton(withTitle: "Cancel")
                 guard alert.runModal() == .alertFirstButtonReturn else { status = "Start cancelled — no observation or network"; return }

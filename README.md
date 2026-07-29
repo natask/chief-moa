@@ -84,14 +84,18 @@ macOS surface check and unsigned QA artifact:
 ```sh
 cd apple_surfaces
 swift test
-swift build --product MoaMac
-bash scripts/package-moa-mac.sh
+swift build --product Ag
+bash scripts/package-ag-mac.sh
+bash scripts/install-ag-mac.sh
 ```
 
 The package command creates a versioned QA ZIP and SHA-256 under
 `apple_surfaces/dist/`. The app has no packaged gateway: configure the user's
 canonical origin and gateway token from its command panel. This artifact is not
 Developer ID signed or notarized.
+
+The install command installs a verified QA build as `/Applications/Ag.app` only
+when that target is absent. It refuses to overwrite an existing installation.
 
 Packaging does not launch the application or request Accessibility/Screen
 Recording. Real TCC QA and production distribution require an isolated account,
