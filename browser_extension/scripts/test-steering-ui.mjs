@@ -9,16 +9,6 @@ const context = vm.createContext({});
 vm.runInContext(steeringSource, context);
 const helpers = context.AgeeSteeringUi;
 
-assert.equal(
-  helpers.formatPageIdentity({ title: "Project board", hostname: "example.test", pathname: "/projects/7" }),
-  "Project board · example.test/projects/7",
-);
-assert.equal(
-  helpers.formatPageIdentity({ title: "", hostname: "example.test", pathname: "/" }),
-  "example.test",
-);
-assert.ok(!helpers.formatPageIdentity({ title: "x".repeat(100), hostname: "example.test" }).includes("x".repeat(73)));
-
 const oldTurn = {};
 const replacementTurn = {};
 let currentTurn = oldTurn;
@@ -67,71 +57,13 @@ assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);
 assert.match(contentSource, /scheduleCueRetirement\(cueId\)/);
-assert.match(steeringSource, /sendMessage\(\{ cmd: "history" \}\)/);
 
-const attributes = new Map();
-const button = {
-  disabled: false,
-  setAttribute: (name, value) => attributes.set(name, value),
-  removeAttribute: (name) => attributes.delete(name),
-};
-const status = { textContent: "" };
-const view = {
-  hidden: true,
-  children: [],
-  replaceChildren() { this.children = []; },
-  appendChild(child) { this.children.push(child); },
-};
-const fakeDocument = {
-  createElement(tagName) {
-    return {
-      tagName,
-      className: "",
-      textContent: "",
-      children: [],
-      appendChild(child) { this.children.push(child); },
-      get childElementCount() { return this.children.length; },
-    };
-  },
-};
-let copiedText = "";
-let positioned = 0;
-const copyHistoryResult = await helpers.copyTranscriptAndOpenHistory({
-  transcript: "  Current transcript  ",
-  view,
-  button,
-  status,
-  copyText: async (text) => { copiedText = text; return true; },
-  sendMessage: async (message) => {
-    assert.deepEqual({ ...message }, { cmd: "history" });
-    return { ok: true, turns: [{ transcript: "Question", reply: "Answer" }] };
-  },
-  positionPanel: () => { positioned += 1; },
-  document: fakeDocument,
-});
-assert.deepEqual({ ...copyHistoryResult }, { copied: true, historyOpened: true });
-assert.equal(copiedText, "Current transcript");
-assert.equal(view.hidden, false);
-assert.equal(attributes.get("aria-expanded"), "true");
-assert.equal(attributes.has("aria-busy"), false);
-assert.equal(button.disabled, false);
-assert.equal(status.textContent, "Transcript copied. History opened.");
-assert.equal(view.children[0].children[0].className, "agee-history-you");
-assert.equal(view.children[0].children[1].className, "agee-history-assistant");
-assert.equal(positioned, 1);
-
-const partialStatus = { textContent: "" };
-const partialResult = await helpers.copyTranscriptAndOpenHistory({
-  transcript: "Still copy this",
-  view: { ...view, hidden: true },
-  button,
-  status: partialStatus,
-  copyText: async () => true,
-  sendMessage: async () => ({ ok: false, error: "offline" }),
-  positionPanel: () => {},
-  document: fakeDocument,
-});
-assert.deepEqual({ ...partialResult }, { copied: true, historyOpened: false });
-assert.equal(partialStatus.textContent, "Transcript copied, but saved history could not be opened.");
+// The overlay no longer owns a page-identity strip, a Copy button, or an
+// inline history snapshot. History is the side panel's surface and the ribbons
+// own copy, so those helpers are gone rather than merely unused.
+for (const gone of ["formatPageIdentity", "observePageIdentity", "copyTranscriptAndOpenHistory", "toggleHistorySnapshot"]) {
+  assert.equal(typeof helpers[gone], "undefined", `${gone} should be gone from AgeeSteeringUi`);
+}
+assert.doesNotMatch(contentSource, /agee-page-identity|agee-copy-history|agee-history-button|agee-lang-chip|agee-transcript/);
 
 console.log("browser steering UI tests passed");
