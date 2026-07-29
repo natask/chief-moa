@@ -21,9 +21,12 @@ final class MoaAssistantAudioProgressTracker {
 
     void onAssistantAudioSegment(JSONObject event) {
         pendingSegment = parseSegmentMetadata(event);
-        String text = event == null ? "" : event.optString("text", "");
+    }
+
+    private void commitSegmentText(SegmentMetadata segment) {
+        String text = segment == null ? "" : segment.text;
         if (!trim(text).isEmpty()) {
-            int start = pendingSegment == null ? -1 : pendingSegment.textStart;
+            int start = segment.textStart;
             if (start >= 0 && start <= streamedText.length()) {
                 streamedText = streamedText.substring(0, start) + text;
             } else if (streamedText.isEmpty()) {
@@ -47,9 +50,14 @@ final class MoaAssistantAudioProgressTracker {
         if (segment == null || pcmBytes <= 0) {
             return;
         }
+        commitSegmentText(segment);
         int startChar = Math.max(0, segment.textStart);
         int endChar = Math.max(startChar, segment.textEnd);
         segments.add(new SegmentRange(segment.index, startChar, endChar, startByte, emittedPcmBytes));
+    }
+
+    void onAssistantAudioFrameRejected() {
+        pendingSegment = null;
     }
 
     PlaybackProgress snapshot(long playedPcmFrames) {
@@ -118,12 +126,12 @@ final class MoaAssistantAudioProgressTracker {
         }
         int textStart = intValue(event, "text_start", "assistant_text_start", "char_start", "start_char");
         int textEnd = intValue(event, "text_end", "assistant_text_end", "char_end", "end_char");
-        String text = trim(event.optString("text", ""));
+        String text = event.optString("text", "");
         if (textStart < 0) {
             textStart = 0;
         }
-        if (textEnd < textStart && !text.isEmpty()) {
-            textEnd = textStart + text.length();
+        if (textEnd < textStart && !trim(text).isEmpty()) {
+            textEnd = textStart + trim(text).length();
         }
         if (textEnd < textStart) {
             textEnd = textStart;
@@ -131,7 +139,8 @@ final class MoaAssistantAudioProgressTracker {
         return new SegmentMetadata(
                 intValue(event, "segment_index", "index"),
                 textStart,
-                textEnd
+                textEnd,
+                text
         );
     }
 
@@ -172,11 +181,13 @@ final class MoaAssistantAudioProgressTracker {
         final int index;
         final int textStart;
         final int textEnd;
+        final String text;
 
-        SegmentMetadata(int index, int textStart, int textEnd) {
+        SegmentMetadata(int index, int textStart, int textEnd, String text) {
             this.index = index;
             this.textStart = textStart;
             this.textEnd = textEnd;
+            this.text = text;
         }
     }
 

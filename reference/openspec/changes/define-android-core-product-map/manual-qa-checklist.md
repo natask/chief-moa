@@ -13,14 +13,27 @@
   readable at 30% idle opacity.
 - Change Orb size in the full app while the overlay is running.
 - Confirm the existing orb resizes immediately and remains inside the display.
-- Single tap the orb.
-- Confirm the chat menu opens for typed input.
+- Confirm voice-first gestures are enabled.
+- Single-click the idle companion and confirm current-thread capture starts.
+- Confirm no X/Send controls appear and the companion does not shift horizontally.
+- Single-click again and confirm the turn stops and sends exactly once.
+- Double-click the idle companion and confirm fresh-thread capture starts.
+- Confirm a single click does not send that fresh-thread draft, then double-click
+  again and confirm it sends exactly once.
+- Start another draft, triple-click, and confirm capture cancels without sending
+  before chat opens.
 - Press and hold the orb, drag it to a new spot, and release.
-- Confirm the orb moves without opening the transcript overlay or chat menu.
+- Confirm capture cancels without sending and the compact overlay moves without
+  opening a second surface.
 - Confirm hold-drag and drag-to-remove still work at the smaller default size
   and after changing the size.
-- Double-click and hold the orb, speak a short request, and release.
+- Press and hold the still orb, speak a short request, and release.
 - Confirm release submits the turn without waiting for extra silence.
+- With TalkBack enabled, start a reviewable draft and focus the companion.
+- Confirm `Send voice draft` and `Discard voice draft` are independent actions;
+  invoke each in a separate draft and confirm it runs exactly once.
+- Disable voice-first gestures and confirm legacy single-tap chat plus
+  double-click-and-hold push-to-talk still work.
 - Confirm the transcript appears in the overlay/panel history.
 - Confirm the assistant answer appears as text.
 - Confirm `Play spoken replies` is off by default.
@@ -112,7 +125,7 @@
 - With another app foreground, drag the anchored group once from the orb and
   once from the chat/voice header; confirm the card stays wholly above or below
   the orb with a gap.
-- Cancel an active draft from the overlay, close the card while keeping the orb,
+- Triple-click to cancel an active draft, close the card while keeping the orb,
   then Hide or drag to Remove and confirm every overlay window disappears without
   opening the full app.
 - Long-press and copy transcript text without moving the row. Clear selection,

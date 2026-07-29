@@ -205,6 +205,9 @@ function createBrokerLauncher(options) {
       return [blocked];
     }
     try {
+      const linkage = body.broker_launch_linkage && typeof body.broker_launch_linkage === "object"
+        ? body.broker_launch_linkage
+        : {};
       const run = startAgentRun({
         prompt: pack.launcher.prompt,
         harness: pack.launcher.harness,
@@ -214,6 +217,18 @@ function createBrokerLauncher(options) {
         profile_version: event.profile_version || "",
         project_id: event.project_id || "",
         working_dir: body.working_dir || body.cwd || "",
+        branch_id: linkage.branch_id || event.branch_id || "default",
+        intent_id: linkage.intent_id || "",
+        intent_agent_id: linkage.intent_agent_id || "",
+        turn_id: linkage.turn_id || event.source_turn_id || "",
+        broker_event_id: event.id,
+        route_decision_id: decision.id,
+        context_pack_ref: linkage.context_pack_ref || `broker-context-packs/${pack.id}.json`,
+        work_history_run_id: linkage.work_history_run_id || "",
+        work_history_task_id: linkage.task_id || "",
+        acceptance_contract_ref: linkage.acceptance_contract_ref || "",
+        stable_launch_key: `broker:${event.id}`,
+        defer_execution: true,
       });
       const launched = {
         ...resultBase,
@@ -225,19 +240,26 @@ function createBrokerLauncher(options) {
         instruction_file: pack.instruction_file,
         source: run.source,
         created_at: run.created_at,
+        intent_id: run.intent_id || linkage.intent_id || "",
+        work_history_run_id: run.work_history_run_id || linkage.work_history_run_id || "",
+        work_history_task_id: run.work_history_task_id || linkage.task_id || "",
       };
       decision.launch = launched;
       pack.launch_result = launched;
-      appendAgentEvent(run.id, "broker_activated", {
-        broker_event_id: event.id,
-        route_decision_id: decision.id,
-        context_pack_id: pack.id,
-        launcher_profile_id: pack.launcher_profile_id,
-        workflow_directory: pack.workflow_directory,
-        instruction_file: pack.instruction_file,
-        action: decision.action,
-        reason: decision.reason,
-      });
+      const alreadyActivated = readAgentEvents(run.id).some((item) =>
+        item.type === "broker_activated" && item.broker_event_id === event.id);
+      if (!alreadyActivated) {
+        appendAgentEvent(run.id, "broker_activated", {
+          broker_event_id: event.id,
+          route_decision_id: decision.id,
+          context_pack_id: pack.id,
+          launcher_profile_id: pack.launcher_profile_id,
+          workflow_directory: pack.workflow_directory,
+          instruction_file: pack.instruction_file,
+          action: decision.action,
+          reason: decision.reason,
+        });
+      }
       return [launched];
     } catch (error) {
       const failed = { ...resultBase, status: "failed", error: cleanError(error) };

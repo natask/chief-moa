@@ -61,6 +61,9 @@ assert.ok(!hasOperationalWorkContext("what is going on in this world"));
 assert.ok(!isOperationalStatusQuestion("what is going on in this world"));
 assert.ok(!shouldRunAgentFromVoice("what is going on"));
 assert.ok(!shouldRunAgentFromVoice(""));
+assert.ok(!shouldRunAgentFromVoice("Create the Focus playlist"));
+assert.ok(!shouldRunAgentFromVoice("Add this video to the Focus playlist"));
+assert.ok(shouldRunAgentFromVoice("Create a playlist feature in the Android app"));
 assert.ok(isOperationalStatusQuestion("what is going on with the operational systems"));
 assert.ok(isOperationalStatusQuestion("what active runs are there"));
 assert.ok(!isOperationalStatusQuestion("fix the operational systems"));
@@ -80,6 +83,9 @@ assert.strictEqual(classifyVoiceTurn({}, "what is going on in this world"), "cha
 assert.strictEqual(classifyVoiceTurn({}, "what's going on in this world"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on here, what does closing orders only mean?"), "chat");
 assert.strictEqual(classifyVoiceTurn({}, "what is going on?"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "Create the Focus playlist"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "Add this video to the Focus playlist"), "chat");
+assert.strictEqual(classifyVoiceTurn({}, "Create a playlist feature in the Android app"), "agent_run");
 // Explicit language configuration is profile_control. It writes through the
 // gateway profile sanitizer and catalog, not through client-side state.
 assert.strictEqual(classifyVoiceTurn({}, "only speak English and Amharic; don't switch up"), "profile_control");

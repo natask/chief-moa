@@ -28,4 +28,9 @@ public final class MoaOrbPresentationTest {
         assertEquals(997, MoaOrbPresentation.clampWindowPosition(1200, 1080, 67, 16));
         assertEquals(480, MoaOrbPresentation.clampWindowPosition(480, 1080, 67, 16));
     }
+
+    @Test
+    public void initialOrbXUsesTheRightEdgeWithoutDraftControlReservation() {
+        assertEquals(997, MoaOrbWindowSizing.initialX(1080, 67, 16));
+    }
 }

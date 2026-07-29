@@ -105,10 +105,6 @@ public final class OverlayService extends Service {
     // controller inside one bounded WindowManager root.
     private final MoaOverlayUnitController overlayUnit =
             new MoaOverlayUnitController(overlayUnitHost());
-    private TextView voiceCancelControl;
-    private TextView voiceSendControl;
-    private WindowManager.LayoutParams voiceCancelControlParams;
-    private WindowManager.LayoutParams voiceSendControlParams;
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     private AlertDialog toolConfirmationDialog;
     private final MoaToolRequestGate toolRequestGate = new MoaToolRequestGate();
@@ -159,7 +155,6 @@ public final class OverlayService extends Service {
     private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
     private final MoaPushToTalkFinish pushToTalkFinish = new MoaPushToTalkFinish();
-    private boolean forcedReviewableVoiceDraft;
     private boolean recordModeEnabled;
     private MoaVoiceFirstTapResolver.CaptureOrigin manualTapCaptureOrigin =
             MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
@@ -343,7 +338,6 @@ public final class OverlayService extends Service {
         cancelStreamingTurnWatchdog();
         voiceLog.clear();
         removeTranscriptOverlay();
-        removeVoiceDraftControls();
         removePanel();
         removeOrbRemoveTarget();
         if (orbDragFrameCoalescer != null) {
@@ -569,6 +563,7 @@ public final class OverlayService extends Service {
                 this::showOrbRemoveTarget, this::updateOrbDragSurfaces,
                 this::finishOrbDrag
         ));
+        updateOrbVoiceDraftAccessibility();
         orbView.setAlpha(MoaOrbPresentation.IDLE_ALPHA);
         compactOverlayRoot.put(orbView, orbScreenBounds(), true);
         compactOverlayRoot.attach();
@@ -850,17 +845,15 @@ public final class OverlayService extends Service {
             updateOrbRemoveTargetState();
             return;
         }
-        // Anchor the composer FIRST: its always-above rule may push the orb down,
-        // and the draft controls and orb window below must lay out from that
-        // settled position so the whole ensemble moves as one frame. The ribbons
-        // never move the companion; they flip instead.
+        // Anchor the composer FIRST: its always-above rule may push the orb down.
+        // Voice disposition stays on the companion gesture, so entering capture
+        // never reserves side-control space or changes the companion's x position.
+        // The ribbons never move the companion; they flip instead.
         if (composerPanel.view() != null) {
             positionSurfaceNearOrb(composerPanel.view(), composerPanel.params());
         }
-        prepareVoiceDraftControlPositions();
         syncOrbSlot();
         overlayUnit.preparePosition();
-        prepareVoiceDraftControlSlots();
         compactOverlayRoot.commitFrame();
         updateOrbRemoveTargetState();
     }
@@ -977,7 +970,6 @@ public final class OverlayService extends Service {
         composerPanel.detachNow();
         cancelAutoDismiss();
         overlayUnit.detachNow();
-        removeVoiceDraftControls();
         removeOrbRemoveTarget();
         removeOrb();
     }
@@ -1150,110 +1142,8 @@ public final class OverlayService extends Service {
                     || voiceRuntimeState == VoiceRuntimeState.RECOVERING);
     }
 
-    private void updateVoiceDraftControls() {
-        boolean visible = reviewableVoiceDraftActive();
-        if (!visible) {
-            removeVoiceDraftControls();
-            return;
-        }
-        showVoiceDraftControls();
-        if (overlayDragMode.isDragging()) {
-            setDragDependentControlsHidden(true);
-            return;
-        }
-        updateVoiceDraftControlPositions();
-    }
-
-    private void showVoiceDraftControls() {
-        if (!Settings.canDrawOverlays(this) || orbView == null) {
-            return;
-        }
-        int size = dp(44);
-        if (voiceCancelControl == null) {
-            voiceCancelControl = MoaVoiceDraftControls.create(
-                    this, "×", "Cancel voice draft", false, dp(42), dp(1));
-            voiceCancelControl.setOnClickListener(v -> discardVoiceDraft());
-            voiceCancelControlParams = MoaVoiceDraftControls.windowParams(
-                    size, MoaOverlayWindowType.resolve());
-            compactOverlayRoot.put(voiceCancelControl, new Rect(0, 0, size, size), true);
-        }
-        if (voiceSendControl == null) {
-            voiceSendControl = MoaVoiceDraftControls.create(
-                    this, "↑", "Send voice draft", true, dp(42), dp(1));
-            voiceSendControl.setOnClickListener(v -> sendVoiceDraft());
-            voiceSendControlParams = MoaVoiceDraftControls.windowParams(
-                    size, MoaOverlayWindowType.resolve());
-            compactOverlayRoot.put(voiceSendControl, new Rect(0, 0, size, size), true);
-        }
-    }
-
-    private void updateVoiceDraftControlPositions() {
-        prepareVoiceDraftControlPositions();
-        syncOrbSlot();
-        prepareVoiceDraftControlSlots();
-        compactOverlayRoot.commitFrame();
-    }
-
-    private void prepareVoiceDraftControlPositions() {
-        if (voiceCancelControl == null || voiceSendControl == null
-                || voiceCancelControlParams == null || voiceSendControlParams == null
-                || orbView == null || orbParams == null) {
-            return;
-        }
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int controlSize = voiceCancelControlParams.width;
-        int orbSize = orbParams.width > 0 ? orbParams.width : scaledOrbSizePx();
-        int gap = dp(8);
-        int margin = dp(12);
-        int minOrbX = margin + controlSize + gap;
-        int maxOrbX = Math.max(minOrbX, screenWidth - margin - controlSize - gap - orbSize);
-        int safeOrbX = Math.max(minOrbX, Math.min(orbParams.x, maxOrbX));
-        orbParams.x = safeOrbX;
-        int controlY = orbParams.y + (orbSize - controlSize) / 2;
-        controlY = Math.max(margin, Math.min(controlY, screenHeight - controlSize - margin));
-        voiceCancelControlParams.x = orbParams.x - gap - controlSize;
-        voiceCancelControlParams.y = controlY;
-        voiceSendControlParams.x = orbParams.x + orbSize + gap;
-        voiceSendControlParams.y = controlY;
-    }
-
-    private void updatePreparedVoiceDraftControlLayouts() {
-        prepareVoiceDraftControlSlots();
-        compactOverlayRoot.commitFrame();
-    }
-
-    private void prepareVoiceDraftControlSlots() {
-        if (compactOverlayRoot == null) return;
-        if (voiceCancelControl != null && voiceCancelControlParams != null) {
-            compactOverlayRoot.put(voiceCancelControl, new Rect(
-                    voiceCancelControlParams.x, voiceCancelControlParams.y,
-                    voiceCancelControlParams.x + voiceCancelControlParams.width,
-                    voiceCancelControlParams.y + voiceCancelControlParams.height), true);
-        }
-        if (voiceSendControl != null && voiceSendControlParams != null) {
-            compactOverlayRoot.put(voiceSendControl, new Rect(
-                    voiceSendControlParams.x, voiceSendControlParams.y,
-                    voiceSendControlParams.x + voiceSendControlParams.width,
-                    voiceSendControlParams.y + voiceSendControlParams.height), true);
-        }
-    }
-
-    private void removeVoiceDraftControls() {
-        if (compactOverlayRoot != null) {
-            if (voiceCancelControl != null) compactOverlayRoot.removeSlot(voiceCancelControl);
-            if (voiceSendControl != null) compactOverlayRoot.removeSlot(voiceSendControl);
-            compactOverlayRoot.commitFrame();
-        }
-        voiceCancelControl = null;
-        voiceSendControl = null;
-        voiceCancelControlParams = null;
-        voiceSendControlParams = null;
-    }
-
     private void discardVoiceDraft() {
         voiceInvocationLatched = false;
-        forcedReviewableVoiceDraft = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         setContinuousVoiceLoop(false);
@@ -1275,7 +1165,6 @@ public final class OverlayService extends Service {
         }
         voiceInvocationLatched = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
-        forcedReviewableVoiceDraft = false;
         suppressFirstTapTurnEmptyCue = false;
         setContinuousVoiceLoop(false);
         cancelContinuousVoiceRestart();
@@ -1381,10 +1270,10 @@ public final class OverlayService extends Service {
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
         updateVoiceHeaderState();
+        updateOrbVoiceDraftAccessibility();
         // Single choke point for the orb's response state so the lion visibly
         // reflects thinking / responding / error without touching other call
         // sites. The watchdog + error paths become visible here for free.
-        updateVoiceDraftControls();
         if (orbView != null) {
             orbView.setResponseState(orbResponseStateFor(voiceRuntimeState));
         }
@@ -1494,6 +1383,18 @@ public final class OverlayService extends Service {
         } else {
             captureLoop.disarm();
         }
+        updateOrbVoiceDraftAccessibility();
+    }
+
+    private void updateOrbVoiceDraftAccessibility() {
+        if (orbView == null) {
+            return;
+        }
+        boolean active = reviewableVoiceDraftActive();
+        orbView.setVoiceDraftAccessibilityActions(
+                active,
+                active ? this::sendVoiceDraft : null,
+                active ? this::discardVoiceDraft : null);
     }
 
     // A turn "heard speech" when it left a real transcript behind. This reuses the
@@ -1533,7 +1434,6 @@ public final class OverlayService extends Service {
             public void markReadyToRearm() {
                 // A bound, not a lockout: the normal gesture re-arms immediately.
                 manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
-                forcedReviewableVoiceDraft = false;
                 suppressFirstTapTurnEmptyCue = false;
                 setVoiceRuntimeState(VoiceRuntimeState.READY);
                 updateMicState();
@@ -2588,7 +2488,6 @@ public final class OverlayService extends Service {
         discardWarmMic();
         pushToTalkFinish.intentionalCancel();
         pushToTalkVoiceTurn = false;
-        forcedReviewableVoiceDraft = false;
         setContinuousVoiceLoop(false);
         suppressFirstTapTurnEmptyCue = false;
         nextManualVoiceFollowUpRunId = "";
@@ -3486,7 +3385,10 @@ public final class OverlayService extends Service {
 
     private void retryFailedVoiceCapture() {
         voiceFailureRetry.consumeAndRun(streamingVoiceGeneration, () -> {
-            forcedReviewableVoiceDraft = true;
+            // Record again is a reviewable current-thread toggle even when the
+            // experimental preference is off: the companion itself sends on a
+            // matching single click, and triple-click still cancels into chat.
+            manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.CURRENT_THREAD;
             renderVoiceTranscriptRows();
             startReviewableVoiceDraft();
         });

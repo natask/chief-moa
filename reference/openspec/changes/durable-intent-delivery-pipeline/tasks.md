@@ -9,6 +9,11 @@
 - [x] 1.3 Return and expose a `moa.delivery-intent.v1` projection.
 - [x] 1.4 Prove retries create no duplicate intent, task, or run and that no
   claim, execution, deployment request, or promotion occurs.
+- [x] 1.5 Link an explicitly launched broker agent run to the existing intent,
+  task, and work-history run with stable broker/route/context provenance.
+- [x] 1.6 Bridge local and worker-pull terminal results to only the linked intent
+  and work-history run, producing one pending notification while leaving final
+  completion and promotion false.
 
 Acceptance: posting the same explicit work-history turn twice produces one
 durable intent, one linked work task, and one linked queued run. The delivery

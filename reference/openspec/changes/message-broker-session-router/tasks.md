@@ -24,6 +24,12 @@
       `broker_fork_dismissed` run event for each unrelated fork. The dismissal
       never cancels, pauses, or restarts the run. Verified 2026-07-06 with
       `cd gateway && node scripts/smoke-message-broker.js`.
+- [x] 3.4 Make explicit launch retry-safe for stable source identities and link
+      the selected broker event/route/context pack through one canonical intent,
+      task, work-history run, and executable agent run. Terminal results record
+      scoped progress plus one pending notification without claiming delivery
+      completion. Verified 2026-07-28 with `npm run smoke:message-broker`, focused
+      completion-spine tests, and `npm run check`.
 
 ## 4. Workflow Package Invocation
 

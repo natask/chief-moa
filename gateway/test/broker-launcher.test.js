@@ -348,7 +348,7 @@ test("launch handling covers disabled, irrelevant, and blocked requests", () => 
   assert.equal(pack.launch_result, blockedPack[0]);
 }));
 
-test("successful launch binds run, decision, pack, and activation event", () => withFixture(({ calls, launcher }) => {
+test("successful launch binds the canonical completion spine into one deferred run", () => withFixture(({ calls, launcher }) => {
   const route = decision({ action: "create_new_fork", context_pack_id: "pack", launcher_profile_id: "coding" });
   const pack = {
     id: "pack",
@@ -358,7 +358,21 @@ test("successful launch binds run, decision, pack, and activation event", () => 
     instruction_file: "workflow/WORKFLOW.md",
     launcher: { prompt: "prompt", harness: "gemini", source: "custom-source" },
   };
-  const launches = launcher.launchRunsIfRequested(event(), [route], [pack], { launch_agent: true, cwd: "/tmp/work" });
+  const linkage = {
+    intent_id: "intent-1",
+    intent_agent_id: "agent-1",
+    task_id: "task-1",
+    work_history_run_id: "work-run-1",
+    acceptance_contract_ref: "openspec://acceptance",
+    branch_id: "branch-linked",
+    turn_id: "turn-1",
+    context_pack_ref: "broker-context-packs/pack.json",
+  };
+  const launches = launcher.launchRunsIfRequested(event(), [route], [pack], {
+    launch_agent: true,
+    cwd: "/tmp/work",
+    broker_launch_linkage: linkage,
+  });
   assert.equal(launches[0].status, "launched");
   assert.equal(launches[0].agent_run_id, "run-created");
   assert.equal(route.launch, launches[0]);
@@ -366,6 +380,17 @@ test("successful launch binds run, decision, pack, and activation event", () => 
   assert.equal(calls.starts[0].conversation_id, "conversation-1");
   assert.equal(calls.starts[0].session_id, "session-1");
   assert.equal(calls.starts[0].working_dir, "/tmp/work");
+  assert.equal(calls.starts[0].stable_launch_key, "broker:broker-1");
+  assert.equal(calls.starts[0].defer_execution, true);
+  assert.equal(calls.starts[0].intent_id, "intent-1");
+  assert.equal(calls.starts[0].intent_agent_id, "agent-1");
+  assert.equal(calls.starts[0].branch_id, "branch-linked");
+  assert.equal(calls.starts[0].turn_id, "turn-1");
+  assert.equal(calls.starts[0].broker_event_id, "broker-1");
+  assert.equal(calls.starts[0].route_decision_id, "route-1");
+  assert.equal(calls.starts[0].context_pack_ref, "broker-context-packs/pack.json");
+  assert.equal(calls.starts[0].work_history_run_id, "work-run-1");
+  assert.equal(calls.starts[0].work_history_task_id, "task-1");
   assert.deepEqual(calls.events[0].slice(0, 2), ["run-created", "broker_activated"]);
 }));
 

@@ -8,7 +8,9 @@ import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
+import android.os.Bundle;
 import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.LinearInterpolator;
 
 import java.util.Locale;
@@ -34,6 +36,8 @@ import java.util.Locale;
 // most for the voice-first toggle-talk loop, whose on/off states must be
 // obvious.
 final class OrbView extends View {
+    private static final int ACTION_SEND_VOICE_DRAFT = 0x01020021;
+    private static final int ACTION_DISCARD_VOICE_DRAFT = 0x01020022;
     // The lion mark fills its own square frame, so the animal centers on the box.
     private static final float GLYPH_VIEWPORT = 108f;
     private static final float MARK_CX = 54f;
@@ -73,6 +77,9 @@ final class OrbView extends View {
     private int petAccentColor = MoaColors.GOLD;
     private int petRimColor = MoaColors.RAISED_BORDER;
     private String petMotion = "idle";
+    private boolean voiceDraftActionsActive;
+    private Runnable accessibilitySendVoiceDraft;
+    private Runnable accessibilityDiscardVoiceDraft;
 
     OrbView(Context context) {
         super(context);
@@ -95,6 +102,17 @@ final class OrbView extends View {
         petMotionPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         petMotionPaint.setStyle(Paint.Style.STROKE);
         petMotionPaint.setStrokeCap(Paint.Cap.ROUND);
+        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+        setContentDescription("AG companion");
+    }
+
+    void setVoiceDraftAccessibilityActions(boolean active, Runnable send, Runnable discard) {
+        voiceDraftActionsActive = active;
+        accessibilitySendVoiceDraft = active ? send : null;
+        accessibilityDiscardVoiceDraft = active ? discard : null;
+        setContentDescription(active
+                ? "AG companion. Voice draft active."
+                : "AG companion");
     }
 
     void setPetVisualState(MoaPrefs.PetVisualState visual) {
@@ -230,6 +248,36 @@ final class OrbView extends View {
         setGlyphBounds(mark, cx, cy, size);
         mark.setAlpha(255);
         mark.draw(canvas);
+    }
+
+    @Override
+    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(info);
+        info.setClassName("android.widget.Button");
+        info.setClickable(true);
+        if (voiceDraftActionsActive) {
+            info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                    ACTION_SEND_VOICE_DRAFT, "Send voice draft"));
+            info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                    ACTION_DISCARD_VOICE_DRAFT, "Discard voice draft"));
+        }
+    }
+
+    @Override
+    public boolean performAccessibilityAction(int action, Bundle arguments) {
+        if (voiceDraftActionsActive
+                && action == ACTION_SEND_VOICE_DRAFT
+                && accessibilitySendVoiceDraft != null) {
+            accessibilitySendVoiceDraft.run();
+            return true;
+        }
+        if (voiceDraftActionsActive
+                && action == ACTION_DISCARD_VOICE_DRAFT
+                && accessibilityDiscardVoiceDraft != null) {
+            accessibilityDiscardVoiceDraft.run();
+            return true;
+        }
+        return super.performAccessibilityAction(action, arguments);
     }
 
     // Rim color by state. THINKING pulses the hairline toward gold and back;

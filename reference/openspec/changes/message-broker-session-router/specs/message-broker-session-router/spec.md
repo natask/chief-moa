@@ -83,6 +83,20 @@ arrived.
   linked to the route decision and context pack
 - **AND** the launched run records a `broker_activated` event
 
+#### Scenario: Stable explicit launch is retried
+- **GIVEN** a broker launch carries the same stable source turn or message id
+- **WHEN** the client retries that launch
+- **THEN** the gateway returns the original broker event, intent, task,
+  work-history run, and executable agent-run identities
+- **AND** it does not execute a second agent run
+
+#### Scenario: Linked agent run produces a terminal result
+- **WHEN** a local or worker-pull agent run reaches a terminal status
+- **THEN** only its linked work-history run and canonical intent receive progress
+- **AND** the intent receives one durable pending notification
+- **AND** successful harness execution is output proposed for review, not proof
+  that the delivery intent is completed
+
 ### Requirement: Workflow Package Selection
 The broker SHALL be able to select explicit directory-backed workflows when a message
 requires specialized handling.

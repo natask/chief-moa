@@ -21,37 +21,36 @@ The Android app SHALL provide an overlay control that remains available above ot
 ### Requirement: Tap-Based Voice Loop
 The overlay SHALL make the primary voice loop available through simple orb gestures.
 
-#### Scenario: Single tap opens chat menu
-- **WHEN** the user single taps the orb while no command speech is active
-- **THEN** the app opens the chat menu for typed input
-- **AND** it does not start, stop, or submit a voice turn
+#### Scenario: Voice-first single click toggles current-thread capture
+- **WHEN** voice-first gestures are enabled and the user single-clicks the idle orb
+- **THEN** the app starts current-thread capture
+- **WHEN** the user later single-clicks that current-thread capture
+- **THEN** the app stops and sends it exactly once
 
-#### Scenario: Click-and-hold drags orb
-- **WHEN** the user presses the orb, holds, and moves it
-- **THEN** the app repositions the orb
-- **AND** it does not start voice capture or toggle the chat menu
-- **AND** after touch slop Android moves the companion, compact ribbons, and
-  draft controls as one bounded overlay root with exactly one WindowManager
-  layout submission per display frame
+#### Scenario: Voice-first hold is push-to-talk or drag
+- **WHEN** voice-first gestures are enabled and the user holds the still orb
+- **THEN** the app starts current-thread push-to-talk capture
+- **AND** release stops and sends it exactly once
+- **WHEN** movement crosses the drag threshold
+- **THEN** the app cancels capture without sending and repositions the companion
+- **AND** after touch slop Android moves the companion and compact ribbons as one
+  bounded overlay root with exactly one WindowManager layout submission per
+  display frame
 - **AND** transparent space outside that compact root remains touch-pass-through
-- **AND** release or cancellation preserves the latest streamed transcript and
-  voice-control state without creating or reattaching dependent windows
 
-#### Scenario: Double-click-and-hold push-to-talk
-- **WHEN** the user double-clicks and holds the orb while no voice turn is active
-- **THEN** the app starts a push-to-talk voice turn after the second press is held
-- **AND** displays a live transcript overlay
-- **AND** releasing the orb submits the best available speech without waiting
-  for the continuous-loop silence timeout
-- **AND** normal release drains captured audio and commits the owned voice
-  controller exactly once, even if transport activity changes during release
-- **AND** Android gesture cancellation or hold-drag cancellation submits no
-  commit and retains explicit cancel semantics
+#### Scenario: Voice-first double and triple clicks have explicit meanings
+- **WHEN** voice-first gestures are enabled and the user double-clicks the idle orb
+- **THEN** the app starts fresh-thread capture
+- **AND** only a matching later double-click stops and sends it
+- **WHEN** the user triple-clicks while capture is active
+- **THEN** the app cancels without sending and opens chat
 
-#### Scenario: Continuous loop commits after short silence
-- **WHEN** the user starts a continuous voice launch path and speaks a short utterance
-- **THEN** the app auto-submits after a short post-speech silence window
-- **AND** keeps the continuous loop eligible to re-arm after the assistant reply
+#### Scenario: Flag off preserves legacy gestures
+- **WHEN** voice-first gestures are disabled
+- **THEN** a single tap opens chat without starting or submitting voice
+- **AND** double-click-and-hold starts push-to-talk
+- **AND** normal release drains captured audio and commits the owned controller
+  exactly once while cancellation submits no commit
 
 ### Requirement: System Assistant Button Launch
 The Android app SHALL expose the overlay voice loop through standard Android
@@ -143,31 +142,43 @@ surface without reviving an intentionally superseded session.
   a generic voice failure
 - **AND** no retry affordance remains authorized for that superseded session
 
-### Requirement: Reviewable Tap Voice Draft
-When voice-first gestures are enabled, the Android overlay SHALL treat a tap
-voice turn as a reversible draft rather than an implicit submission.
+### Requirement: Manual Voice Draft Disposition
+When voice-first gestures are enabled, the Android overlay SHALL keep voice
+capture disposition on the companion gesture that opened the draft. It SHALL
+NOT add separate cancel or send controls beside the companion. While a draft is
+active, the companion SHALL expose equivalent Send and Discard accessibility
+actions without changing its geometry.
 
-#### Scenario: Tap starts a draft
-- **WHEN** the user taps the idle orb
-- **THEN** the overlay begins voice capture
-- **AND** immediately shows `X` to discard on the left of the orb and `↑` to
-  Send on the right of the orb
-- **AND** those controls remain independent of the transcript card above the orb
+#### Scenario: Single click toggles a current-thread draft
+- **WHEN** the user single-clicks the idle companion
+- **THEN** the overlay begins current-thread voice capture
+- **WHEN** the user later single-clicks that current-thread capture
+- **THEN** Android commits the voice turn exactly once
 
-#### Scenario: User explicitly sends
-- **WHEN** a tap-started draft is active and the user taps `↑`
-- **THEN** Android commits that voice turn exactly once
-- **AND** ends the draft capture loop
+#### Scenario: Double click toggles a fresh-thread draft
+- **WHEN** the user double-clicks the idle companion
+- **THEN** the overlay begins fresh-thread voice capture
+- **WHEN** the user later double-clicks that fresh-thread capture
+- **THEN** Android commits the voice turn exactly once
+- **AND** a colliding single click does not dispose that fresh-thread draft
 
-#### Scenario: User discards
-- **WHEN** a tap-started draft is active and the user taps `X`
-- **THEN** Android cancels capture and discards the draft locally
+#### Scenario: Triple click discards without sending
+- **WHEN** a voice-first draft is active and the user triple-clicks the companion
+- **THEN** Android cancels and discards the draft locally
+- **AND** opens chat with no hot microphone
 - **AND** submits no voice turn
 
-#### Scenario: Orb tap cannot silently send
-- **WHEN** a tap-started draft is active and the user taps the orb again
-- **THEN** Android does not commit the draft
-- **AND** the visible `X` and `↑` controls remain the disposition authority
+#### Scenario: Capture state does not move the companion horizontally
+- **WHEN** a voice-first draft enters listening, recovery, sending, or ready state
+- **THEN** Android does not create separate `X` or Send overlay controls
+- **AND** the state transition does not reserve side-control space or change the
+  companion's settled x coordinate
+
+#### Scenario: TalkBack can dispose an active draft
+- **WHEN** a screen-reader user focuses the companion during a reviewable draft
+- **THEN** the companion exposes independent `Send voice draft` and
+  `Discard voice draft` accessibility actions
+- **AND** those actions disappear when no reviewable draft is active
 
 ### Requirement: Orb-Anchored Mobile Surface
 The Android overlay SHALL keep at most one large interactive card visible and
@@ -260,10 +271,21 @@ of resizing the card for each partial or completed turn.
 #### Scenario: Spoken response follows device playback
 - **WHEN** hosted assistant audio is enabled for a response
 - **THEN** an empty assistant bubble with a blinking caret appears after user commit
+- **AND** Android admits each received PCM frame to a bounded FIFO without blocking the voice socket on device playback
+- **AND** only FIFO-accepted PCM and its matching segment text enter playback-progress mapping
 - **AND** its collapsed text advances from the PCM/text segment ledger according to the AudioTrack playback head, coalesced to display frames
 - **AND** network receipt and provider `audio_done` do not claim that text was heard
+- **AND** disabled, overflowed, closed, or stale-generation PCM cannot advance the collapsed text
 - **AND** expanded view retains the complete display response independently of the shorter spoken response
 - **AND** cancellation, replacement, barge-in, or a stale turn cannot advance the current bubble
+
+#### Scenario: Provider completion drains accepted playback
+- **WHEN** `assistant_audio_done` arrives after zero or more streamed PCM frames
+- **THEN** Android closes FIFO input without blocking the socket callback
+- **AND** preserves FIFO write order before waiting for the AudioTrack playback head
+- **AND** reports device audio done only after every accepted frame drains
+- **AND** treats zero accepted frames as an immediate valid drain
+- **AND** exposes queue overflow or drain timeout as incomplete playback rather than advancing text or starting suffix retry early
 
 #### Scenario: Empty or failed turn removes placeholders
 - **WHEN** a turn ends with no speech, fails, or is intentionally cancelled before text exists

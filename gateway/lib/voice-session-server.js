@@ -23,6 +23,7 @@ const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require(".
 const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
+const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -30,8 +31,7 @@ const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
 const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
-const PROVIDER_EVENT_ERROR_MAX_CHARS = 240;
-const PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
+const PROVIDER_EVENT_ERROR_MAX_CHARS = 240, PROVIDER_EVENT_VALUE_MAX_CHARS = 400;
 function createVoiceSessionServer(options) {
   const dataDir = path.resolve(options?.dataDir || "./data");
   const sessionsDir = path.join(dataDir, "voice-sessions");
@@ -70,6 +70,7 @@ function createVoiceSessionServer(options) {
       toolHandler,
       steeringCoordinator,
       turnProgressIntervalMs: options?.turnProgressIntervalMs,
+      phraseAssistGenerator: options?.phraseAssistGenerator, phraseAssistOptions: options?.phraseAssistOptions,
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
       blobStore: options?.blobStore || null,
     });
@@ -126,6 +127,7 @@ class VoiceSessionConnection {
     this.turnProgressStage = "";
     this.ttsRetryReceipts = new Map();
     this.turnProgressIntervalMs = normalizeTurnProgressIntervalMs(options.turnProgressIntervalMs);
+    this.phraseAssist = createVoicePhraseAssistSessionBridge(this, options, sanitizeId);
   }
 
   startTurnProgress(turn, stage) {
@@ -227,6 +229,7 @@ class VoiceSessionConnection {
       await this.handleCancelTurn(event);
       return;
     }
+    if (await this.phraseAssist.handleEvent(type, event)) return;
     if (type === "playback_progress") {
       await this.handlePlaybackProgress(event);
       return;
@@ -391,6 +394,7 @@ class VoiceSessionConnection {
       syntheticText: "",
       turnRelation: turnRelation?.next || null,
     };
+    this.phraseAssist.configureTurn(turn, event.phrase_assist || event.phraseAssist);
     turn.contextPrompt = this.contextPromptForTurn(turn);
     turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
 
@@ -453,6 +457,7 @@ class VoiceSessionConnection {
       branch_id: branchId,
       turn_id: turnId,
       playback_policy: playbackPolicy,
+      phrase_assist: this.phraseAssist.capability(turn),
       ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
@@ -511,6 +516,7 @@ class VoiceSessionConnection {
     const providerHooks = this.providerHooks(turn, providerEvents);
 
     try {
+      await this.phraseAssist.stop(turn);
       turn.status = "committed";
       turn.captureSummary = captureSummaryForTurn(turn, { inputKind: "audio" });
       turn.transportSummary = transportSummaryForTurn(turn, "audio");
@@ -575,6 +581,7 @@ class VoiceSessionConnection {
     const providerHooks = this.providerHooks(turn, providerEvents);
 
     try {
+      await this.phraseAssist.stop(turn);
       turn.status = "committed";
       turn.syntheticText = text;
       turn.captureSummary = captureSummaryForTurn(turn, { inputKind: "text", textChars: text.length });
@@ -693,6 +700,7 @@ class VoiceSessionConnection {
           branch_id: turn.branchId,
           turn_id: turn.turnId,
           text: value,
+          ...await this.phraseAssist.revisionField(turn, value),
         });
       },
       onTranscriptFinal: async (text) => {
@@ -708,6 +716,7 @@ class VoiceSessionConnection {
           branch_id: turn.branchId,
           turn_id: turn.turnId,
           text: value,
+          ...await this.phraseAssist.revisionField(turn, value),
         });
       },
       onAssistantText: async (text) => {
@@ -1465,6 +1474,7 @@ class VoiceSessionConnection {
       turn.recordedCanonical = false;
     }
     turn.status = "canceled";
+    await this.phraseAssist.stop(turn);
     this.stopTurnProgress();
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);
@@ -1542,6 +1552,7 @@ class VoiceSessionConnection {
     if (turn.ttsRecovery && turn.status === "completed") return releaseTtsRecoveryTurn(this, turn);
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     if (turn.status !== "recording" && hasPartialEndpointPlayback(turn)) turn.recordedCanonical = false;
+    await this.phraseAssist.stop(turn);
     turn.status = status;
     await closeAudioStream(turn);
     await closeAssistantAudioStream(turn);

@@ -68,6 +68,8 @@ function createInitialState(intentId = "") {
     current_run_id: "",
     run_lease_expires_at: "",
     latest_progress: "",
+    notifications: [],
+    pending_notifications: [],
     source_revisions: [],
     outcome: "",
     created_at: "",
@@ -205,6 +207,17 @@ function validateEventForStream(event, state) {
     }
     if (payload.agent_id !== state.owner_agent_id || payload.run_id !== state.current_run_id) {
       return "progress writer does not own the current run";
+    }
+  }
+  if (event.event_type === "intent.notification_created") {
+    if (!text(payload.notification_id, 160) || !text(payload.run_id, 160)) {
+      return "notification requires notification_id and run_id";
+    }
+    if (payload.run_id !== state.current_run_id) {
+      return "notification run does not own the current intent";
+    }
+    if (String(payload.status || "") !== "pending") {
+      return "new intent notification must be pending";
     }
   }
   if (state.exists && TRANSITION_EVENT_TYPES.includes(event.event_type)) {
@@ -358,6 +371,20 @@ function applyIntentEvent(state, event) {
     case "intent.progress_recorded":
       current.latest_progress = text(payload.progress, 2_000);
       break;
+    case "intent.notification_created": {
+      const notification = {
+        notification_id: text(payload.notification_id, 160),
+        run_id: text(payload.run_id, 160),
+        kind: text(payload.kind, 80) || "agent_run_result",
+        status: "pending",
+        summary: text(payload.summary, 2_000),
+        created_at: text(payload.created_at || event.occurred_at, 80),
+        event_id: text(event.event_id, 160),
+      };
+      current.notifications = appendUnique(current.notifications, [notification], MAX_ITEMS.notifications);
+      current.pending_notifications = current.notifications.filter((item) => item.status === "pending");
+      break;
+    }
     case "intent.connected":
       if (payload.relation_type && payload.target_intent_id) {
         current.relations = appendUnique(current.relations, [{

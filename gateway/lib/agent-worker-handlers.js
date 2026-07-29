@@ -4,7 +4,11 @@ function createAgentWorkerHandlers({
   authorizedAgent, agentAuthError, readJsonBody, sendJson,
   workerPull, WorkerPullError, randomId, cleanError, ownerActor,
   readAgentRun, rememberRunOutcome, syncWorkGraphFromRun, appendAgentEvent,
+  recordCanonicalCompletion,
 }) {
+  if (typeof recordCanonicalCompletion !== "function") {
+    throw new TypeError("agent worker handlers require recordCanonicalCompletion");
+  }
   function sendWorkerError(response, error) {
     if (error instanceof WorkerPullError) {
       sendJson(response, error.status, {
@@ -40,16 +44,18 @@ function createAgentWorkerHandlers({
       const auth = workerPull.authenticate(request, "agent_runs:complete");
       const body = await readJsonBody(request);
       const result = workerPull.result(id, body, auth);
-      sendJson(response, 200, result);
       try {
         const run = readAgentRun(id);
         rememberRunOutcome(run);
+        await recordCanonicalCompletion(run);
         syncWorkGraphFromRun(run).catch((error) => {
           appendAgentEvent(id, "work_node_sync_failed", { error: cleanError(error) });
         });
       } catch (error) {
         appendAgentEvent(id, "completion_hooks_failed", { error: cleanError(error) });
+        throw error;
       }
+      sendJson(response, 200, result);
     });
   }
 

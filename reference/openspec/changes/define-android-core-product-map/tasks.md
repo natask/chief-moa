@@ -103,20 +103,24 @@
 - [x] 10.5 Add gateway APIs for listing active agents/runs/tool executions from any surface.
 - [x] 10.6 Add a first cross-device smoke: browser requests Android to speak a short message; Android validates locally, speaks it, and receipts it through the gateway. Verified with `cd gateway && npm run smoke:device-hub`, plus Android and extension build/verify checks.
 
-## 11. Reviewable Cross-Surface Overlay Controls
+## 11. Reviewable Cross-Surface Overlay Controls (Superseded)
 
-- [x] 11.1 Show `X` and `↑` controls for every tap-started Android voice draft.
-- [x] 11.2 Prevent single-, double-, triple-, and fourth-tap resolution from
-      silently committing a draft; keep hold-release as the fast commit path.
+- [x] 11.1 Establish the original `X` and `↑` review-before-send controls. This
+      interaction was superseded and removed by the accepted manual gesture
+      contract in 12.4.
+- [x] 11.2 Establish the original tap-resolution guard. This was superseded by
+      the origin-matched single/double toggle and triple-click cancellation in
+      section 12.
 - [x] 11.3 Keep chat and voice cards mutually exclusive and dock the open card
       wholly above the orb, including while the orb moves, repositioning the
       orb down when the measured card plus gap would not otherwise fit.
 - [x] 11.4 Add drag-to-remove plus explicit chat-header and notification Hide actions.
 - [x] 11.5 Verify Android unit tests, `assembleDebug`, and strict OpenSpec validation.
 - [ ] 11.6 Publish the committed Android OTA artifact and verify its update metadata.
-- [x] 11.7 Place Android draft controls beside the orb instead of in the voice card.
-- [x] 11.8 Give the browser voice-first mascot matching side controls and prevent
-      a later mascot click from silently sending the draft.
+- [x] 11.7 Place the original Android draft controls beside the orb instead of in
+      the voice card. These controls were later removed by 12.4.
+- [x] 11.8 Give the original browser voice-first mascot matching side controls.
+      These controls were later removed by 12.4.
 - [x] 11.9 Verify and package the browser extension parity slice.
 - [x] 11.10 Coalesce Android orb, active-card, and draft-control relayouts to
       display frames while dragging; do no relayout before touch slop, keep the
@@ -124,19 +128,20 @@
       flipping the card below), and evaluate the visible bottom remove target
       against the final release position.
 
-Observable acceptance check: with either chat or voice open, drag the orb rapidly
-across and down the display. The orb, the single open card, and any draft controls
-follow together without per-MotionEvent relayout churn; releasing outside the
-bottom target keeps the overlay, while releasing inside stops it.
+Historical acceptance check: with either chat or voice open, drag the orb rapidly
+across and down the display. The orb, the single open card, and the then-current
+draft controls followed together without per-MotionEvent relayout churn;
+releasing outside the bottom target kept the overlay, while releasing inside
+stopped it. Section 12 superseded and removed those draft controls.
 Verified 2026-07-16: Android JVM tests and `assembleDebug` passed; strict
 OpenSpec validation passed. Real-device frame pacing and drop-target feel remain
 the manual QA check.
 
 - [x] 11.11 Replace the physically laggy companion-only drag optimization with
       one bounded compact root containing the companion, current-turn ribbons,
-      and draft controls. Prove that a coalesced moving frame makes exactly one
-      WindowManager layout submission while preserving touch pass-through
-      outside the root, streaming state, removal, and Undo.
+      and the then-current draft controls. Prove that a coalesced moving frame
+      makes exactly one WindowManager layout submission while preserving touch
+      pass-through outside the root, streaming state, removal, and Undo.
 
 Release note: commit `5106d52` produced Android artifact
 `android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact
@@ -162,6 +167,10 @@ signal completed without a client acknowledgement.
       real voice round-trip QA.
 - [ ] 12.7 Publish collision-free Android OTA and browser-extension artifacts,
       then promote only if the no-interruption and rollback gates pass.
+- [x] 12.8 Remove the regressed Android X/Send control path and its orb-x clamp;
+      retain origin-matched gesture disposition, TalkBack Send/Discard actions,
+      and the `Record again` retry path, with JVM regressions for no side controls
+      and stable initial x.
 
 ## 13. Stable Mobile Overlay Presentation
 
@@ -240,7 +249,11 @@ the installed CLI cannot import its `commander` dependency.
 - [x] 16.5 Add deterministic ordering tests for PCM receipt, audio-done drain
       ownership, immediate turn completion, disabled playback, playback errors,
       post-terminal suppression, and concurrent metrics retention.
-- [ ] 16.6 Establish the real-phone benchmark with repeated audible success,
+- [x] 16.6 Move streamed assistant PCM writes to a bounded generation-scoped
+      FIFO; admit playback text/progress only after queue acceptance and preserve
+      provider/device drain, playback-head reveal, replacement, and TTS retry
+      ordering.
+- [ ] 16.7 Establish the real-phone benchmark with repeated audible success,
       playback-disabled, cancel/replacement, connection-loss, and drain-timeout
       trials against the exact installed APK.
 
@@ -256,3 +269,29 @@ the installed CLI cannot import its `commander` dependency.
 - [x] 17.3 Verify the focused naming assertions plus Android unit tests, lint,
       and debug assembly, then build a local candidate without publishing or
       installing it.
+
+## 18. Model-Driven Android Useful Actions
+
+- [x] 18.1 Prove model-driven Android proposals and durable receipts across
+      typed chat, HTTP voice, cascaded voice, LiveKit reasoning, and legacy
+      native Live for app launch/list, URL opening, dialing, contacts, media,
+      and the fixed accessibility primitives.
+- [x] 18.2 Keep `phone_action` available to both Android and browser native
+      Live turns for explicit cross-device requests; keep multiple-phone
+      selection ambiguous and screen actions without a fresh bound observation
+      fail-closed before queueing.
+- [x] 18.3 Route explicit spoken playlist mutations through the conversational
+      phone-tool loop instead of diverting them to a workstation agent run,
+      while preserving agent routing for playlist implementation work.
+- [ ] 18.4 Complete physical-phone QA for resolved Android handlers, contacts
+      permission, notification-listener access, accessibility approval and
+      package/window binding, and gateway receipt synchronization.
+
+Verification evidence: the deterministic voice-intent classifier smoke and
+`smoke:surface-entrypoints`, `smoke:surface-skills`, and the full gateway check
+pass. The entrypoint smoke claims every queued proposal as the compatible
+Android device, submits the device receipt, and verifies gateway
+acknowledgement. Focused Android action/accessibility/media/receipt unit tests
+and `assembleDebug` also pass. Physical-phone QA remains open and is not
+implied by this deterministic proof. Strict OpenSpec validation remains locally
+blocked because the installed CLI cannot import its `commander` dependency.

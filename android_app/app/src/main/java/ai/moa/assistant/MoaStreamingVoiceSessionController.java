@@ -153,7 +153,6 @@ final class MoaStreamingVoiceSessionController {
             playback = playbackController;
             currentTurnId = turnId;
             keepGoing = assistantAudioStarted
-                    && assistantOutputState.allowsSpeech(currentTurnId)
                     && playbackEnabled && playback != null && callback != null;
             MoaAssistantAudioProgressTracker.PlaybackProgress progress =
                     assistantAudioProgress.snapshot(playback == null ? 0L : playback.playedPcmFrames());
@@ -275,6 +274,7 @@ final class MoaStreamingVoiceSessionController {
             pendingLifecycleAudioReceived = false;
             pendingDeviceAudioDoneTurnId = "";
             playbackDrainGate.reset();
+            playbackDrainGeneration++;
             gatewaySocket = new MoaVoiceGatewaySocket(gatewayUrl, gatewayToken, new SocketCallback());
             gatewaySocket.connect();
         }
@@ -367,6 +367,7 @@ final class MoaStreamingVoiceSessionController {
             socket = gatewaySocket;
             currentTurnId = turnId;
             active = false;
+            playbackDrainGeneration++;
             assistantOutputState.suppressSpeech();
             committed = false;
             assistantAudioStarted = false;
@@ -420,6 +421,7 @@ final class MoaStreamingVoiceSessionController {
             socket = gatewaySocket;
             currentTurnId = turnId;
             active = false;
+            playbackDrainGeneration++;
             assistantOutputState.suppressSpeech();
             committed = false;
             pendingCommitAfterSessionReady = false;
@@ -462,6 +464,7 @@ final class MoaStreamingVoiceSessionController {
             playbackController = null;
             gatewaySocket = null;
             active = false;
+            playbackDrainGeneration++;
             assistantOutputState.suppressSpeech();
             committed = false;
             assistantAudioStarted = false;
@@ -605,6 +608,7 @@ final class MoaStreamingVoiceSessionController {
             currentTurnId = turnId;
             finalPlaybackProgress = assistantAudioProgress.snapshot(playback != null ? playback.playedPcmFrames() : 0L);
             active = false;
+            playbackDrainGeneration++;
             assistantOutputState.suppressSpeech();
             committed = false;
             assistantAudioStarted = false;
@@ -687,20 +691,26 @@ final class MoaStreamingVoiceSessionController {
     }
 
     boolean retryTts(String completedTurnId, String retryId, int fromTextChar) {
+        MoaAudioPlaybackController playback;
+        MoaVoiceGatewaySocket socket;
         synchronized (lock) {
             if (gatewaySocket == null || safe(completedTurnId).isEmpty() || safe(retryId).isEmpty()) {
                 return false;
             }
-            if (playbackController != null) {
-                playbackController.stop();
-            }
+            playback = playbackController;
+            socket = gatewaySocket;
             playbackDrainGeneration++;
             turnId = completedTurnId;
             assistantOutputState.begin(completedTurnId);
             assistantAudioStarted = false;
             assistantAudioProgress.reset();
-            return gatewaySocket.sendTtsRetry(completedTurnId, retryId, fromTextChar);
+            playbackDrainGate.reset();
+            pendingDeviceAudioDoneTurnId = "";
         }
+        if (playback != null) {
+            playback.stop();
+        }
+        return socket.sendTtsRetry(completedTurnId, retryId, fromTextChar);
     }
 
     private void reportError(String message, Throwable error) {
@@ -983,6 +993,7 @@ final class MoaStreamingVoiceSessionController {
                 capture = captureController;
                 playback = playbackController;
                 active = false;
+                playbackDrainGeneration++;
                 assistantOutputState.suppressSpeech();
                 committed = false;
                 assistantAudioStarted = false;
@@ -1107,42 +1118,69 @@ final class MoaStreamingVoiceSessionController {
         public void onAssistantAudio(byte[] pcm) {
             MoaAudioPlaybackController playback;
             String currentTurnId;
+            long currentPlaybackGeneration;
             synchronized (lock) {
                 playback = playbackController;
                 currentTurnId = turnId;
+                currentPlaybackGeneration = playbackDrainGeneration;
                 if (!assistantOutputState.allowsSpeech(currentTurnId)) {
                     return;
                 }
-                assistantAudioProgress.onAssistantAudioFrame(pcm);
-                if (!lifecycleAudioReceived && pcm != null && pcm.length > 0) {
+            }
+            MoaPcmPlaybackQueue.OfferResult offerResult =
+                    playbackEnabled && playback != null
+                            ? playback.enqueue(pcm)
+                            : MoaPcmPlaybackQueue.OfferResult.CLOSED;
+            boolean admitted = false;
+            synchronized (lock) {
+                if (offerResult == MoaPcmPlaybackQueue.OfferResult.ACCEPTED
+                        && playback == playbackController
+                        && currentPlaybackGeneration == playbackDrainGeneration
+                        && assistantOutputState.allowsSpeech(currentTurnId)) {
+                    assistantAudioProgress.onAssistantAudioFrame(pcm);
+                    admitted = true;
+                } else if (playback == playbackController
+                        && currentPlaybackGeneration == playbackDrainGeneration) {
+                    assistantAudioProgress.onAssistantAudioFrameRejected();
+                }
+                if (admitted && !lifecycleAudioReceived && pcm != null && pcm.length > 0) {
                     lifecycleAudioReceived = true;
                     if (lifecycleTrace != null) {
                         lifecycleTrace.resultReceived("assistant_audio");
                     }
                 }
             }
-            if (playbackEnabled && playback != null && !playback.write(pcm)) {
-                reportError("Could not write assistant audio frame to playback.", null);
+            if (admitted) {
+                // This callback now means accepted for device playback, not just
+                // received from the network. It remains prompt because enqueue
+                // does not perform a blocking AudioTrack.write().
+                post(() -> callback.onAssistantAudioChunk(currentTurnId));
             }
-            // Prove liveness on every frame so a mid-stream stall is caught.
-            post(() -> callback.onAssistantAudioChunk(currentTurnId));
         }
 
         @Override
         public void onAssistantAudioDone(String audioTurnId) {
             MoaAudioPlaybackController playbackToDrain;
             boolean deliverImmediately;
+            long currentPlaybackGeneration;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
                 }
                 playbackToDrain = playbackController;
+                currentPlaybackGeneration = playbackDrainGeneration;
                 assistantOutputState.suppressSpeech();
                 deliverImmediately = playbackDrainGate.onProviderAudioDone(playbackEnabled);
                 pendingDeviceAudioDoneTurnId = deliverImmediately ? "" : audioTurnId;
             }
             Log.i(TAG, "providerAssistantAudioDone awaitingDeviceDrain=" + !deliverImmediately);
             mainHandler.post(() -> {
+                synchronized (lock) {
+                    if (currentPlaybackGeneration != playbackDrainGeneration
+                            || playbackToDrain != playbackController) {
+                        return;
+                    }
+                }
                 if (deliverImmediately) {
                     finishDeviceAudioDone(audioTurnId, playbackToDrain);
                 } else {

@@ -735,6 +735,21 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     });
   }
 
+  async function notify(intentId, input = {}) {
+    const notificationId = requireBoundedText(
+      input.notification_id || input.notificationId,
+      MAX_TEXT.id,
+      "notification_id",
+    );
+    return appendIntentEvent(intentId, input, "intent.notification_created", {
+      notification_id: notificationId,
+      run_id: requireBoundedText(input.run_id || input.runId, MAX_TEXT.id, "run_id"),
+      kind: text(input.kind || "agent_run_result", 80),
+      status: "pending",
+      summary: requireBoundedText(input.summary, MAX_TEXT.note, "summary"),
+    });
+  }
+
   async function neglected(input = {}) {
     const result = await list({
       project_id: input.project_id || input.projectId || "",
@@ -764,6 +779,7 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     ingestMessage,
     claim,
     recordProgress,
+    notify,
     neglected,
     limits: {
       list_page_size: 500,

@@ -19,7 +19,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
 /**
- * One WindowManager surface for the companion, ribbons, and draft controls.
+ * One WindowManager surface for the companion and compact ribbons.
  *
  * Children retain screen-space coordinates. {@link #commitFrame()} computes
  * their compact union, lays them out locally, and submits exactly one window

@@ -184,10 +184,14 @@ function deliveryProjection(intent, tasks, runs, acceptanceContractRef) {
     })),
     run_refs: runs.map((run) => ({
       run_id: run.run_id,
+      execution_run_id: run.execution_run_id || "",
       status: run.status,
       intent_revision: run.intent_revision,
     })),
     execution_started: runs.some((run) => !["proposed", "queued"].includes(run.status)),
+    pending_notification_count: Array.isArray(intent.pending_notifications)
+      ? intent.pending_notifications.length
+      : 0,
     promotion_recorded: false,
   };
 }
