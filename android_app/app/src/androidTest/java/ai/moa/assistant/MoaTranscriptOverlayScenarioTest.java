@@ -67,7 +67,7 @@ public final class MoaTranscriptOverlayScenarioTest {
         assertTrue("expanded ribbon must grow", expandedBounds.height() > collapsedBounds.height());
         checkpoint("expanded");
 
-        bounds = expandedBounds;
+        Rect bounds = expandedBounds;
         // The rail hit target is one collapsed ribbon high. Reading it from the
         // rendered bounds avoids target/test resource-density disagreement.
         int rail = collapsedBounds.height();
