@@ -23,10 +23,11 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const MATCH = /^(https|http):\/\/([^/*]+|\*)\/(?:[^\s]*)$/;
 const SECRET_KEY = /^(authorization|cookie|set-cookie|password|passwd|api[-_]?key|access[-_]?token|refresh[-_]?token|client[-_]?secret)$/i;
 const SECRET_TEXT = /(authorization\s*[:=]\s*(?:bearer\s+)?\S+|(?:api[-_]?key|password|passwd|access[-_]?token|refresh[-_]?token|client[-_]?secret|cookie)\s*[:=]\s*\S+|\bsk-[A-Za-z0-9_-]{16,}|\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/gi;
-const EMBEDDED_SECRET = /(?:\b(?:api[-_]?key|password|passwd|access[-_]?token|refresh[-_]?token|client[-_]?secret)\b\s*[:=]\s*["'][^"']{6,}["']|(?:["']authorization["']|\bauthorization\b)\s*[:=]\s*["'](?:bearer\s+)?[^"']{6,}["']|\bsk-[A-Za-z0-9_-]{16,}|\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/i;
+const EMBEDDED_SECRET = /(?:\b(?:api[-_]?key|password|passwd|access[-_]?token|refresh[-_]?token|client[-_]?secret)\b\s*[:=]\s*["'][^"']{6,}["']|(?:["'](?:auth|authorization)["']|\b(?:auth|authorization)\b)\s*[:=]\s*["'](?:bearer\s+)?[^"']{6,}["']|["']bearer\s+[^"']{6,}["']|\bsk-[A-Za-z0-9_-]{16,}|\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/i;
 const EFFECT_CLASSES = ["visual_modification", "browser_automation", "instrumentation", "network_access", "credential_access", "destructive_site_action"];
 const HIGH_RISK_EFFECTS = ["network_access", "credential_access", "destructive_site_action"];
 const EXECUTORS = ["user_scripts_execute", "user_scripts_register", "cdp_runtime_evaluate"];
+const ACTIVE_LOCKS = new Set();
 
 class BrowserProgramValidationError extends Error {
   constructor(code, message, field) {
@@ -315,10 +316,12 @@ function validateDelegatedGrantBindings(grants, context) {
   const sameScope = (grant) => canonicalJson(grant.origins) === canonicalJson(context.target.origins)
     && grant.frame_scope === context.target.frame_scope;
   if (grants.some((grant) => !sameScope(grant))) fail("invalid_grant", "every typed grant must bind the exact target scope", "authority.delegated.grants");
-  const expectedExecutor = context.mode === "persistent" ? "user_scripts_register" : "user_scripts_execute";
+  const allowedExecutors = context.mode === "persistent"
+    ? ["user_scripts_register"]
+    : ["user_scripts_execute", "cdp_runtime_evaluate"];
   const effects = ["unknown_program_effect", ...context.effect.declared_effect_classes];
   const coveringGrant = grants.find((grant) => grant.class === "program_authority" && grant.world === context.world
-    && [expectedExecutor, "cdp_runtime_evaluate"].includes(grant.executor)
+    && allowedExecutors.includes(grant.executor)
     && effects.every((effect) => grant.effect_classes.includes(effect)));
   if (!coveringGrant) {
     fail("invalid_grant", "no program authority grant covers world, executor, scope, and declared effects", "authority.delegated.grants");
@@ -339,10 +342,10 @@ function validateDelegatedGrantBindings(grants, context) {
 
 function validateSourceRiskClaims(source, effect) {
   const signals = [];
-  if (/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(|navigator\s*\.\s*sendBeacon\s*\(|\bheaders\s*\.\s*(?:set|append)\s*\(\s*["']authorization["']/i.test(source)) {
+  if (/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(|navigator\s*\.\s*sendBeacon\s*\(|\bheaders\s*(?:\.\s*(?:set|append)|\[\s*["'](?:set|append)["']\s*\])\s*\(\s*["'](?:auth|authorization)["']/i.test(source)) {
     signals.push("network_access");
   }
-  if (/document\s*(?:\.\s*cookie|\[\s*["']cookie["']\s*\])|cookieStore\s*\.|(?:localStorage|sessionStorage)\s*\.\s*getItem\s*\(\s*["'][^"']*(?:token|password|secret|key)|["']authorization["']\s*:|\bbearer\s*(?:\+|\$\{)/i.test(source)) {
+  if (/document\s*(?:\.\s*cookie|\[\s*["']cookie["']\s*\])|cookieStore\s*\.|(?:(?:window\s*)?(?:\.\s*|\[\s*["'])(?:localStorage|sessionStorage)["']?\s*\]?|(?:localStorage|sessionStorage))\s*(?:\.\s*getItem|\[\s*["']getItem["']\s*\])\s*\(\s*["'][^"']*(?:token|password|secret|key)|(?:["'](?:auth|authorization)["']|\b(?:auth|authorization)\b)\s*:|(?:headers|requestHeaders)\s*(?:\.\s*(?:auth|authorization)|\[\s*["'](?:auth|authorization)["']\s*\])\s*=|(?:headers|requestHeaders)\s*(?:\.\s*(?:set|append)|\[\s*["'](?:set|append)["']\s*\])\s*\(\s*["'](?:auth|authorization)["']|\bbearer\s*(?:\+|\$\{)/i.test(source)) {
     signals.push("credential_access");
   }
   if (/indexedDB\s*\.\s*deleteDatabase\s*\(|\bmethod\s*:\s*["']DELETE["']|(?:localStorage|sessionStorage)\s*\.\s*clear\s*\(/i.test(source)) {
@@ -569,9 +572,19 @@ function cleanRollbackResult(input) {
 
 function validateRevisionLineage(artifact, state) {
   const prior = artifact.rollback.prior_revision;
-  if (artifact.revision > 1 && prior == null) fail("prior_revision_required", "later revisions must name their prior revision", "rollback.prior_revision");
-  if (prior != null && !state.programs[programKey(artifact.artifact_id, prior)]) {
-    fail("prior_revision_not_found", "prior revision must already exist", "rollback.prior_revision");
+  const revisions = Object.values(state.programs)
+    .filter((candidate) => candidate.artifact_id === artifact.artifact_id)
+    .map((candidate) => candidate.revision)
+    .sort((a, b) => a - b);
+  if (!revisions.length) {
+    if (artifact.revision !== 1 || prior != null) {
+      fail("non_contiguous_revision", "the first stored artifact revision must be 1 without a prior revision", "revision");
+    }
+    return;
+  }
+  const latest = revisions[revisions.length - 1];
+  if (artifact.revision !== latest + 1 || prior !== latest) {
+    fail("non_contiguous_revision", "a new revision must immediately follow and bind the latest stored revision", "rollback.prior_revision");
   }
 }
 
@@ -595,8 +608,9 @@ function createInMemoryBrowserProgramAdapter(initial = emptyState()) {
   });
 }
 
-function createFileBrowserProgramAdapter(filePath) {
+function createFileBrowserProgramAdapter(filePath, options = {}) {
   const target = path.resolve(String(filePath || ""));
+  const lockHooks = options.lockHooks || {};
   if (!filePath) fail("invalid_file_path", "filePath is required", "filePath");
   return Object.freeze({
     read() {
@@ -609,44 +623,177 @@ function createFileBrowserProgramAdapter(filePath) {
     },
     transact(mutator) {
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      const release = acquireFileLock(`${target}.lock`);
+      const release = acquireFileLock(`${target}.lock`, lockHooks);
+      let outcome;
+      let committed = false;
+      let committedState;
+      let operationError = null;
       try {
         const current = fs.existsSync(target)
           ? normalizeState(JSON.parse(fs.readFileSync(target, "utf8")))
           : emptyState();
-        const outcome = mutator(copy(current));
-        writeFileState(target, outcome.state);
-        return outcome.result;
+        outcome = mutator(copy(current));
+        committedState = normalizeState(outcome.state);
+        writeFileState(target, committedState);
+        committed = true;
       } catch (error) {
-        if (error instanceof BrowserProgramValidationError) throw error;
-        fail("invalid_store", `browser program transaction failed: ${error.message}`);
-      } finally {
-        release();
+        operationError = error instanceof BrowserProgramValidationError
+          ? error
+          : transactionError("invalid_store", `browser program transaction failed: ${error.message}`, { committed: false });
       }
+      let releaseError = null;
+      try {
+        release();
+      } catch (error) {
+        releaseError = error;
+      }
+      if (releaseError && committed) {
+        let stateConfirmed = false;
+        try {
+          const reloaded = normalizeState(JSON.parse(fs.readFileSync(target, "utf8")));
+          stateConfirmed = canonicalJson(reloaded) === canonicalJson(committedState);
+        } catch (_error) {
+          stateConfirmed = false;
+        }
+        if (stateConfirmed) {
+          throw transactionError("committed_lock_release_failed", `transaction committed but lock release failed: ${releaseError.message}`, {
+            committed: true,
+            state_confirmed: true,
+          });
+        }
+        throw transactionError("committed_state_uncertain", `transaction write completed but durable state could not be confirmed after lock release failed: ${releaseError.message}`, {
+          committed: true,
+          state_confirmed: false,
+        });
+      }
+      if (releaseError) {
+        throw transactionError("uncommitted_lock_release_failed", `transaction did not commit and lock release failed: ${releaseError.message}`, {
+          committed: false,
+          cause_code: operationError && operationError.code,
+        });
+      }
+      if (operationError) {
+        operationError.committed = false;
+        throw operationError;
+      }
+      return outcome.result;
     },
   });
 }
 
-function acquireFileLock(lockPath) {
+function acquireFileLock(lockPath, hooks = {}) {
   const started = Date.now();
-  let descriptor;
-  while (descriptor == null) {
+  while (true) {
+    if (fs.existsSync(`${lockPath}.recovery`)) {
+      if (Date.now() - started >= LOCK_TIMEOUT_MS) fail("store_lock_timeout", "browser program store is busy");
+      waitForLockRetry();
+      continue;
+    }
+    let descriptor;
     try {
       descriptor = fs.openSync(lockPath, "wx", 0o600);
-      fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }));
+      const metadata = {
+        schema: "moa.browser-program-lock.v1",
+        pid: process.pid,
+        acquired_at: new Date().toISOString(),
+        nonce: crypto.randomBytes(16).toString("hex"),
+      };
+      if (hooks.afterOpen) hooks.afterOpen({ lockPath, descriptor, metadata: copy(metadata) });
+      fs.writeFileSync(descriptor, JSON.stringify(metadata));
+      if (hooks.beforeMetadataFsync) hooks.beforeMetadataFsync({ lockPath, descriptor, metadata: copy(metadata) });
+      fs.fsyncSync(descriptor);
+      ACTIVE_LOCKS.add(lockPath);
+      return () => releaseFileLock(lockPath, descriptor, metadata, hooks);
     } catch (error) {
-      if (error.code !== "EEXIST") fail("store_lock_failed", `browser program lock failed: ${error.message}`);
+      if (descriptor != null) {
+        try { fs.closeSync(descriptor); } catch (_closeError) { /* best effort */ }
+        try { fs.unlinkSync(lockPath); } catch (_unlinkError) { /* best effort */ }
+        ACTIVE_LOCKS.delete(lockPath);
+        throw transactionError("store_lock_acquire_failed", `browser program lock metadata was not committed: ${error.message}`, { committed: false });
+      }
+      if (error.code !== "EEXIST") {
+        throw transactionError("store_lock_acquire_failed", `browser program lock failed before commit: ${error.message}`, { committed: false });
+      }
+      recoverFileLockIfSafe(lockPath);
       if (Date.now() - started >= LOCK_TIMEOUT_MS) fail("store_lock_timeout", "browser program store is busy");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_RETRY_MS);
+      waitForLockRetry();
     }
   }
-  return () => {
-    try { fs.closeSync(descriptor); } finally {
-      try { fs.unlinkSync(lockPath); } catch (error) {
-        if (error.code !== "ENOENT") fail("store_lock_release_failed", `browser program lock release failed: ${error.message}`);
-      }
+}
+
+function releaseFileLock(lockPath, descriptor, metadata, hooks) {
+  let closeError = null;
+  try {
+    fs.closeSync(descriptor);
+  } catch (error) {
+    closeError = error;
+  }
+  ACTIVE_LOCKS.delete(lockPath);
+  if (closeError) fail("store_lock_release_failed", `browser program lock close failed: ${closeError.message}`);
+  if (hooks.beforeUnlink) hooks.beforeUnlink({ lockPath, metadata: copy(metadata) });
+  try {
+    const current = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    if (current.nonce !== metadata.nonce || current.pid !== metadata.pid) {
+      fail("store_lock_release_failed", "browser program lock ownership changed before release");
     }
-  };
+    fs.unlinkSync(lockPath);
+  } catch (error) {
+    if (error instanceof BrowserProgramValidationError) throw error;
+    if (error.code !== "ENOENT") fail("store_lock_release_failed", `browser program lock release failed: ${error.message}`);
+  }
+}
+
+function recoverFileLockIfSafe(lockPath) {
+  const recoveryPath = `${lockPath}.recovery`;
+  let recoveryDescriptor;
+  try {
+    recoveryDescriptor = fs.openSync(recoveryPath, "wx", 0o600);
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    return false;
+  }
+  try {
+    let metadata;
+    try {
+      metadata = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    } catch (_error) {
+      return false;
+    }
+    const valid = metadata && metadata.schema === "moa.browser-program-lock.v1"
+      && Number.isSafeInteger(metadata.pid) && metadata.pid > 0
+      && typeof metadata.nonce === "string" && /^[a-f0-9]{32}$/.test(metadata.nonce);
+    if (!valid) return false;
+    const abandonedByThisProcess = metadata.pid === process.pid && !ACTIVE_LOCKS.has(lockPath);
+    if (!abandonedByThisProcess && isProcessAlive(metadata.pid)) return false;
+    try {
+      fs.unlinkSync(lockPath);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  } finally {
+    try { fs.closeSync(recoveryDescriptor); } catch (_error) { /* best effort */ }
+    try { fs.unlinkSync(recoveryPath); } catch (_error) { /* best effort */ }
+  }
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== "ESRCH";
+  }
+}
+
+function waitForLockRetry() {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_RETRY_MS);
+}
+
+function transactionError(code, message, metadata = {}) {
+  const error = new BrowserProgramValidationError(code, message);
+  Object.assign(error, metadata);
+  return error;
 }
 
 function writeFileState(target, next) {

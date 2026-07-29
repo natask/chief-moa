@@ -303,7 +303,7 @@ test("destructive application effects cannot masquerade as visual modification",
   expectCode(() => validateBrowserProgram(standalone), "invalid_standalone_authority");
 });
 
-test("revision lineage is immutable and requires an existing prior revision", () => {
+test("revision lineage is immutable, contiguous, and binds the immediate prior revision", () => {
   const store = createBrowserProgramStore({ adapter: createInMemoryBrowserProgramAdapter() });
   const first = persistentRevision();
   store.propose(first);
@@ -316,10 +316,13 @@ test("revision lineage is immutable and requires an existing prior revision", ()
 
   const missingPrior = persistentRevision({ artifact_id: "script-missing-prior", revision: 2,
     rollback: { prior_revision: 1, capability: "prior_revision", cleanup_entrypoint: null, unavailable_reason: null } });
-  expectCode(() => store.propose(missingPrior), "prior_revision_not_found");
+  expectCode(() => store.propose(missingPrior), "non_contiguous_revision");
   const noPrior = persistentRevision({ artifact_id: "script-no-prior", revision: 2,
     rollback: { prior_revision: null, capability: "unavailable", cleanup_entrypoint: null, unavailable_reason: "No prior" } });
-  expectCode(() => store.propose(noPrior), "prior_revision_required");
+  expectCode(() => store.propose(noPrior), "non_contiguous_revision");
+  const skipped = persistentRevision({ revision: 3, source: "document.body.dataset.revision = '3';",
+    rollback: { prior_revision: 1, capability: "prior_revision", cleanup_entrypoint: null, unavailable_reason: null } });
+  expectCode(() => store.propose(skipped), "non_contiguous_revision");
 });
 
 test("proposal, apply, disable, and rollback receipts ingest idempotently and remain inert", () => {
@@ -446,8 +449,18 @@ test("secret-like source is rejected and receipt results are bounded and redacte
   for (const source of [
     "const api_key='secret-value-123';",
     "fetch('/x', {headers: {authorization: 'Bearer hidden-token'}});",
+    "fetch('/x', {headers: {Auth: 'fixed-secret-value'}});",
+    "const header = 'Bearer fixed-secret-value';",
   ]) expectCode(() => validateBrowserProgram(delegatedProgram({ source })), "credentials_forbidden");
-  for (const source of ["document.cookie", "localStorage.getItem('token')"]) {
+  for (const source of [
+    "document.cookie",
+    "localStorage.getItem('token')",
+    "localStorage['getItem']('password')",
+    "window['sessionStorage']['getItem']('secret')",
+    "headers['Authorization'] = token",
+    "requestHeaders.Auth = token",
+    "const request = { Auth: token }",
+  ]) {
     expectCode(() => validateBrowserProgram(delegatedProgram({ source })), "undeclared_high_risk_effect");
   }
 
@@ -585,6 +598,14 @@ test("MAIN and CDP require independent typed grants with exact scope", () => {
   assert.equal(store.ingestReceipt(receipt(validated, "apply", "applied", { executor: "cdp_runtime_evaluate" })).receipt.executor,
     "cdp_runtime_evaluate");
 
+  const persistentCdp = persistentRevision();
+  persistentCdp.authority.delegated.grants[0].executor = "cdp_runtime_evaluate";
+  persistentCdp.authority.delegated.grants.push({
+    grant_id: "grant-persistent-cdp", class: "executor_authority", world: "USER_SCRIPT", executor: "cdp_runtime_evaluate",
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: [], bridge_capability: null,
+  });
+  expectCode(() => validateBrowserProgram(persistentCdp), "invalid_grant");
+
   const widened = delegatedProgram();
   widened.authority.delegated.grants[0].origins = ["https://other.test"];
   expectCode(() => validateBrowserProgram(widened), "invalid_grant");
@@ -606,6 +627,17 @@ test("opaque source stays unknown and obvious high-risk signals require declarat
     origins: ["https://example.test"], frame_scope: "top", effect_classes: ["network_access"], bridge_capability: null,
   });
   assert.deepEqual(validateBrowserProgram(network).effect.declared_effect_classes, ["network_access"]);
+
+  const credential = delegatedProgram({
+    source: "const token = window['localStorage']['getItem']('access_token'); headers.Auth = token;",
+    effect: { class: "unknown_program_effect", declared_effect_classes: ["credential_access"], operations: ["read_credentials"] },
+  });
+  expectCode(() => validateBrowserProgram(credential), "invalid_grant");
+  credential.authority.delegated.grants.push({
+    grant_id: "grant-credential-effect", class: "high_risk_effect", world: null, executor: null,
+    origins: ["https://example.test"], frame_scope: "top", effect_classes: ["credential_access"], bridge_capability: null,
+  });
+  assert.deepEqual(validateBrowserProgram(credential).effect.declared_effect_classes, ["credential_access"]);
 });
 
 test("append and reload reject chronology and persisted graph fabrication", () => {
@@ -674,6 +706,69 @@ test("file adapter serializes 32 concurrent writers without successful loss", as
   const store = createBrowserProgramStore({ adapter: createFileBrowserProgramAdapter(file) });
   assert.equal(store.list().length, 32);
   assert.equal(new Set(store.list().map((program) => program.artifact_id)).size, 32);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("file adapter cleans an uncommitted lock when metadata fsync fails", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-browser-program-lock-acquire-"));
+  const file = path.join(dir, "store.json");
+  const adapter = createFileBrowserProgramAdapter(file, {
+    lockHooks: { beforeMetadataFsync() { throw new Error("injected metadata fsync failure"); } },
+  });
+  const store = createBrowserProgramStore({ adapter });
+  assert.throws(() => store.propose(delegatedProgram()), (error) => {
+    assert.equal(error.code, "store_lock_acquire_failed");
+    assert.equal(error.committed, false);
+    return true;
+  });
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.existsSync(`${file}.lock`), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("file adapter reports a confirmed commit on release failure and recovers its abandoned lock", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-browser-program-lock-release-"));
+  const file = path.join(dir, "store.json");
+  const first = delegatedProgram();
+  const adapter = createFileBrowserProgramAdapter(file, {
+    lockHooks: { beforeUnlink() { throw new Error("injected lock unlink failure"); } },
+  });
+  const store = createBrowserProgramStore({ adapter });
+  assert.throws(() => store.propose(first), (error) => {
+    assert.equal(error.code, "committed_lock_release_failed");
+    assert.equal(error.committed, true);
+    assert.equal(error.state_confirmed, true);
+    return true;
+  });
+  assert.equal(fs.existsSync(`${file}.lock`), true);
+  const recovered = createBrowserProgramStore({ adapter: createFileBrowserProgramAdapter(file) });
+  assert.equal(recovered.get(first.artifact_id, first.revision).source_sha256, first.source_sha256);
+  const second = delegatedProgram({ artifact_id: "script-after-lock-recovery" });
+  assert.equal(recovered.propose(second).artifact.artifact_id, second.artifact_id);
+  assert.equal(recovered.list().length, 2);
+  assert.equal(fs.existsSync(`${file}.lock`), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("file adapter recovers a lock whose owning process is dead", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-browser-program-dead-lock-"));
+  const file = path.join(dir, "store.json");
+  const child = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+  const deadPid = child.pid;
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+  fs.writeFileSync(`${file}.lock`, JSON.stringify({
+    schema: "moa.browser-program-lock.v1",
+    pid: deadPid,
+    acquired_at: AT,
+    nonce: "a".repeat(32),
+  }), { mode: 0o600 });
+  const store = createBrowserProgramStore({ adapter: createFileBrowserProgramAdapter(file) });
+  assert.equal(store.propose(delegatedProgram()).duplicate, false);
+  assert.equal(fs.existsSync(`${file}.lock`), false);
+  assert.equal(fs.existsSync(`${file}.lock.recovery`), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

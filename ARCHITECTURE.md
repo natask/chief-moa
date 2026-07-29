@@ -456,7 +456,9 @@ by `moa.browser-program.v2`; they do not weaken the declarative tweak contract.
 Each immutable program revision binds complete inspectable source and digest,
 mode, world, exact tab/document/frame/origin scope, execution profile,
 profile-discriminated authority, typed world/executor/origin/frame/effect/bridge
-grants, limits, and rollback metadata.
+grants, limits, and rollback metadata. Revision history is contiguous: revision
+1 has no prior revision, and every later revision increments by one and binds
+the immediately preceding revision.
 Standalone authority binds direct approval and approved source/scope digests
 without fabricated Delegate records. Delegated authority binds the typed
 Delegate role, task, run, envelope, exact grants, and an optional checkpoint
@@ -474,7 +476,10 @@ envelope may preauthorize exact `script.evaluate`/`script.persist` classes, so
 in-envelope hash-bound revisions need no redundant confirmation. Arbitrary-code
 authority, site scope, frame scope, `MAIN`, bridge handlers, and CDP
 `Runtime.evaluate` remain independent visible grants; `MAIN` and CDP are never
-silent fallbacks. Scope/world/bridge widening, origin/document change,
+silent fallbacks. Persistent mode is eligible only for
+`user_scripts_register`; CDP `Runtime.evaluate` is eligible only for immediate
+mode and still requires its separate executor grant. Scope/world/bridge
+widening, origin/document change,
 checkpoints, stale evidence, destructive application effects, or an expired
 envelope pause before execution. Visual hide/detach/insert/restyle/draw effects
 do not become reversible merely because JavaScript performed them, and deleting
@@ -485,7 +490,11 @@ static regular expressions. Gateway artifacts therefore classify every source
 as `unknown_program_effect`, require exact caller-declared effect classes, and
 require independent typed grants for high-risk network, credential, destructive,
 `MAIN`, CDP, and bridge authority. A conservative common-pattern scan rejects
-obvious undeclared risk and apparent embedded secrets, but is only a backstop;
+obvious undeclared risk and apparent embedded secrets, including bracket-form
+storage reads for token/password/secret/key names, `Auth`/`Authorization`
+assignments and header setters, and fixed Bearer literals. Dynamic credential
+access requires both declaration and a high-risk grant; literal secrets are
+rejected and never persisted. This scan is only a backstop;
 the owning extension must still resolve current grants and revalidate the live
 target immediately before use.
 
@@ -1604,7 +1613,12 @@ queues.
   source revisions and inert proposal/audit state, binds receipts to the exact
   standalone or delegated authority variant, and performs no browser execution
   or registration. Its local file adapter serializes writers with an exclusive
-  process lock and fails visibly on lock timeout; relational route integration
+  process lock and fails visibly on lock timeout. Lock metadata is fsynced
+  before mutation, incomplete acquisitions are cleaned without committing, and
+  a release failure after a confirmed state write is returned explicitly as a
+  committed error. A stranded lock is recoverable only when its owner process
+  is dead or when the same process can prove it no longer owns the live lock;
+  relational route integration
   remains the production persistence target. Focused coverage:
   `npm run test:coverage:browser-programs`.
 - `gateway/lib/surface-skills.js`: `resolveTurnSurface` and the per-surface

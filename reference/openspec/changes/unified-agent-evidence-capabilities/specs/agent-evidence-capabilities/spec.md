@@ -140,6 +140,12 @@ extension SHALL revalidate digest, profile-specific authority,
 page/document/frame/origin, permissions, applicable grants/checkpoints, and
 limits immediately before execution or registration.
 Generated code SHALL NOT run in privileged extension code.
+Revision history SHALL be contiguous: revision 1 has no prior revision and each
+later revision SHALL increment by one and bind the immediately preceding stored
+revision. The common-pattern backstop SHALL reject fixed Bearer literals rather
+than retain them and SHALL require declared credential access plus an
+independent high-risk grant for obvious dot/bracket storage reads and
+`Auth`/`Authorization` property or header assignments.
 
 #### Scenario: Program revision changes after approval
 
@@ -168,6 +174,21 @@ Generated code SHALL NOT run in privileged extension code.
 - **THEN** policy classifies it as a destructive application action
 - **AND** it cannot travel under a visual-modification grant
 
+#### Scenario: Program skips a revision
+
+- **WHEN** a proposed revision does not immediately follow and bind the latest
+  stored revision for its artifact
+- **THEN** validation rejects the non-contiguous lineage
+
+#### Scenario: Program contains obvious credential access
+
+- **WHEN** source uses a bracket storage `getItem` token/password/secret/key,
+  assigns an `Auth` or `Authorization` header dynamically, or contains a fixed
+  Bearer literal
+- **THEN** dynamic access requires its credential declaration and independent
+  high-risk grant
+- **AND** a fixed literal secret is rejected and never stored
+
 ### Requirement: Standalone reviewed programs use the safe default profile
 
 `reviewed_standalone_v1` SHALL be default-off, require complete source/hash/scope
@@ -191,6 +212,9 @@ separate visible grants. `MAIN` and CDP SHALL NOT be silent fallbacks. Scope or
 world widening, origin/document change, bridge widening, checkpoints,
 destructive effects, stale evidence, or an expired envelope SHALL pause before
 execution.
+Persistent mode SHALL use `user_scripts_register`; CDP `Runtime.evaluate` SHALL
+be eligible only for immediate mode and SHALL still require its separate exact
+executor grant.
 
 #### Scenario: Delegate generates an in-scope revision
 

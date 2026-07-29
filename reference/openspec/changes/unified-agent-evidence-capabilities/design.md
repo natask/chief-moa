@@ -262,7 +262,12 @@ Every arbitrary source is classified as `unknown_program_effect`; caller-
 declared effect classes and typed grants narrow its intended authority but do
 not prove its complete runtime behavior. Static common-pattern checks are a
 fail-closed backstop for obvious undeclared network, credential, destructive,
-header/Bearer, and embedded-secret cases, not a JavaScript safety proof.
+header/Bearer, and embedded-secret cases, not a JavaScript safety proof. The
+documented backstop includes dot and bracket storage `getItem` reads whose keys
+name token/password/secret/key material, `Auth`/`Authorization` property or
+header-setter assignments, and fixed Bearer literals. Dynamic access must carry
+the declared credential effect plus its independent high-risk grant; fixed
+literal secrets are rejected before storage.
 
 The source digest, exact target, world, profile-discriminated authority,
 permission state, applicable grant/checkpoint state, and resource limits are
@@ -289,10 +294,13 @@ This is the separately opted-in private runtime for a confirmed Delegate task:
 - each revision remains fully inspectable, immutable, hash-bound, locally
   revalidated, and receipted, but does not require a redundant confirmation
   while it remains inside the envelope;
+- revision numbers are contiguous: revision 1 has no prior revision and each
+  subsequent revision binds the immediately preceding stored revision;
 - arbitrary-code authority, site scope, frame scope, `MAIN`, bridge handlers,
   and CDP `Runtime.evaluate` are independent visible grants;
 - `MAIN` or CDP is never a silent fallback from `USER_SCRIPT`; CDP is a distinct
-  executor selected only when its exact grant is current;
+  executor selected only for immediate mode when its exact grant is current,
+  while persistent mode requires `user_scripts_register`;
 - scope/world/bridge widening, an origin/document change, a checkpoint,
   destructive application effect, stale evidence, or an expired envelope pauses
   before execution.
