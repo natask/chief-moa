@@ -117,12 +117,14 @@ final class ApplicationServicesMacAccessibilityPlatform: MacSystemAccessibilityP
                   value.utf8.count <= 4_096 else {
                 throw LocalProgramError.unsupportedAction
             }
+            try validateFocusedWindow()
             succeeded = api.setStringValue(value, attribute: "AXValue", on: handle.element)
         } else {
             guard handle.supportedActions.contains(request.action),
                   let native = Self.nativeAction(request.action) else {
                 throw LocalProgramError.unsupportedAction
             }
+            try validateFocusedWindow()
             succeeded = api.performAction(native, on: handle.element)
         }
         guard succeeded else {
@@ -131,6 +133,19 @@ final class ApplicationServicesMacAccessibilityPlatform: MacSystemAccessibilityP
         handles.removeAll(keepingCapacity: false)
         let material = "\(process.bundleID)|\(process.pid)|\(executionID)|\(sequence)|\(request.handle)|\(request.action)"
         return "ax_\(Self.digest(Data(material.utf8)).prefix(24))"
+    }
+
+    /// Re-read the live focused window at the last possible admission point.
+    /// `SystemMacAccessibilityAuthority` holds its execution lock across this
+    /// check and the following effect, so a cached handle cannot authorize an
+    /// action after focus moved to a different window.
+    private func validateFocusedWindow() throws {
+        guard let boundWindow else { throw LocalProgramError.staleTarget }
+        let application = api.application(pid: process.pid)
+        guard case .element(let focusedWindow)? = api.attribute("AXFocusedWindow", of: application),
+              api.elementsEqual(focusedWindow, boundWindow.element) else {
+            throw LocalProgramError.staleTarget
+        }
     }
 
     private func walk(_ element: any MacAXElement, depth: Int, observationID: String,

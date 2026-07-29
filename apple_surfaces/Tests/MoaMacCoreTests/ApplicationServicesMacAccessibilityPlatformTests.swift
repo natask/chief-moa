@@ -259,4 +259,37 @@ private func makeAXPlatform(window: SyntheticAXElement? = nil)
     }
     _ = node
 }
+
+@Test func injectedAdapterRejectsFocusDriftBeforeEveryMutationWithZeroEffect() throws {
+    let (actionPlatform, actionAPI, actionWindow) = makeAXPlatform()
+    actionWindow.attributes["AXRole"] = .string("AXButton")
+    actionWindow.actions = ["AXPress"]
+    let actionObservation = try actionPlatform.observe(requiredWindowID: nil, now: axFixtureNow)
+    let actionNode = try #require(actionObservation.nodes.first)
+    actionAPI.applicationElement.attributes["AXFocusedWindow"] =
+        .element(SyntheticAXElement("new-focused-window"))
+
+    #expect(throws: LocalProgramError.staleTarget) {
+        try actionPlatform.perform(.init(action: "press", handle: actionNode.handle,
+            observationID: actionObservation.binding.observationID), executionID: "exec-action",
+            sequence: 1, now: axFixtureNow)
+    }
+    #expect(actionAPI.performed.isEmpty)
+    #expect(actionAPI.valuesSet.isEmpty)
+
+    let (valuePlatform, valueAPI, valueWindow) = makeAXPlatform()
+    valueWindow.attributes["AXRole"] = .string("AXTextField")
+    valueWindow.settableValue = true
+    let valueObservation = try valuePlatform.observe(requiredWindowID: nil, now: axFixtureNow)
+    let valueNode = try #require(valueObservation.nodes.first)
+    valueAPI.applicationElement.attributes["AXFocusedWindow"] = .string("not-a-window")
+
+    #expect(throws: LocalProgramError.staleTarget) {
+        try valuePlatform.perform(.init(action: "set_value", handle: valueNode.handle,
+            observationID: valueObservation.binding.observationID, value: "must not be written"),
+            executionID: "exec-value", sequence: 1, now: axFixtureNow)
+    }
+    #expect(valueAPI.performed.isEmpty)
+    #expect(valueAPI.valuesSet.isEmpty)
+}
 #endif
