@@ -87,7 +87,7 @@ run_deploy() {
     FAKE_SYNC_TARGET_RECEIPT="$case_dir/sync-target" \
     FAKE_SYNC_APK="$INSTALL_APK" \
     FAKE_BUILD_SHA_RECEIPT="$case_dir/build-sha" \
-    FAKE_STABLE_SHA="${FAKE_STABLE_SHA:-$(git -C "$ROOT_DIR" rev-parse HEAD)}" \
+    FAKE_STABLE_SHA="${FAKE_STABLE_SHA-$(git -C "$ROOT_DIR" rev-parse HEAD)}" \
     GATEWAY_URL="http://127.0.0.1:1" \
     "$@" \
     /bin/bash "$ROOT_DIR/scripts/deploy.sh" android >"$case_dir/output" 2>&1
