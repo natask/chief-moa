@@ -85,9 +85,9 @@ Verification:
 
 ## 3. Better-Auth, Owner, And Device Tokens
 
-- [ ] 3.1 Add better-auth behind `MOA_AUTH=better-auth`, with Postgres-backed
+- [x] 3.1 Add better-auth behind `MOA_AUTH=better-auth`, with Postgres-backed
   users and sessions in the gateway process.
-- [ ] 3.2 Seed or resolve one owner user for the legacy
+- [x] 3.2 Seed or resolve one owner user for the legacy
   `MOA_GATEWAY_TOKEN` migration path so existing events keep a stable author.
 - [ ] 3.3 Add email/passkey sign-in for the gateway-served UI session.
 - [ ] 3.4 Add device registration start/approval endpoints that mint
@@ -364,8 +364,8 @@ better-auth has not landed, remote modes require the token unconditionally.
 
 ## 3. Better-auth Integration Behind A Flag
 
-- [ ] 3.1 Add better-auth with its Postgres tables behind `MOA_AUTH=better-auth`, keeping `MOA_GATEWAY_TOKEN` working when the flag is off.
-- [ ] 3.2 Seed an owner user and map the existing single token to that owner so pre-auth events keep one stable author.
+- [x] 3.1 Add better-auth with its Postgres tables behind `MOA_AUTH=better-auth`, keeping `MOA_GATEWAY_TOKEN` working when the flag is off.
+- [x] 3.2 Resolve the configured owner account to the existing `owner` author so pre-auth events retain one stable author.
 - [ ] 3.3 Add email and passkey sign-in for the gateway-served UI session.
 - [ ] 3.4 Add a device registration flow that mints a per-device token bound to a user id and device id.
 - [ ] 3.5 Make the voice WebSocket ticket user-scoped: mint a one-use ticket only for an authenticated session or a valid device token.

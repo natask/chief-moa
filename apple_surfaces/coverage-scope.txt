@@ -5,12 +5,14 @@ executable Sources/AggieAppleSurface/ApprovalUXState.swift
 executable Sources/AggieAppleSurface/MacSurfaceAdapter.swift
 executable Sources/AggieAppleSurface/MacUpdateAdapter.swift
 executable Sources/AggieSurfaceApp/AggieSurfaceApp.swift
-executable Sources/MoaMac/main.swift
+executable Sources/Ag/main.swift
+executable Sources/MoaMacCore/BrowserDelegation.swift
 executable Sources/MoaMacCore/GatewayChat.swift
 executable Sources/MoaMacCore/GatewayVoice.swift
 executable Sources/MoaMacCore/MoaMacCore.swift
 executable Sources/MoaMacCore/PanelLayoutPolicy.swift
 executable Sources/MoaMacShell/GatewayChatShell.swift
+executable Sources/MoaMacShell/GatewayHistoryShell.swift
 executable Sources/MoaMacShell/GatewayVoiceShell.swift
 executable Sources/MoaMacShell/MoaMacShell.swift
 ui Sources/AggieSurfaceUI/ApprovalSurfaceView.swift
@@ -25,7 +27,8 @@ operational Package.swift
 operational .gitignore
 operational coverage-scope.txt
 operational scripts/coverage.sh
-operational scripts/package-moa-mac.sh
-operational scripts/scan-moa-mac.sh
+operational scripts/package-ag-mac.sh
+operational scripts/scan-ag-mac.sh
+operational scripts/install-ag-mac.sh
 fixture Resources/Info.plist
 vendor THIRD_PARTY_NOTICES.md

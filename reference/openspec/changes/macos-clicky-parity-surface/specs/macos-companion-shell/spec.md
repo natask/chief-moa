@@ -50,29 +50,31 @@ the returned text as inert presentation data.
 
 ### Requirement: Provider credentials remain outside the Mac client
 
-The macOS surface SHALL store only its gateway connection state. It SHALL NOT
+The macOS surface SHALL store only its Ag account device session and gateway
+origin. It SHALL NOT
 store raw OpenAI, Anthropic, Gemini, Vertex, or integration credentials, and it
 SHALL NOT extract OAuth material from local vendor CLIs.
 
 #### Scenario: User connects the Mac app
 
-- **WHEN** the user activates a gateway origin and bearer token
-- **THEN** the origin may be stored in app preferences and the bearer token
-  remains only in process memory until disconnect or app termination
+- **WHEN** the user signs in through the browser-backed device flow
+- **THEN** the origin may be stored in app preferences and the revocable Ag
+  device session is stored in the macOS Keychain
 - **AND** no provider key or vendor CLI OAuth token is requested or persisted
 
-### Requirement: Apple clients prohibit credential persistence
+### Requirement: Apple clients narrowly persist the Ag device session
 
-The macOS surface SHALL default every credential field to empty and SHALL NOT
-invoke a credential persistence API or command. Non-secret origins and session
-identifiers MAY remain in app preferences.
+The macOS surface SHALL NOT persist gateway infrastructure tokens, provider
+credentials, or integration credentials. It MAY use one dedicated Keychain
+generic-password item for the revocable Ag account device session. Non-secret
+origins and session identifiers MAY remain in app preferences.
 
 #### Scenario: A new process starts or the user disconnects
 
 - **WHEN** the app starts, explicitly disconnects, stops the proactive surface,
   or terminates
-- **THEN** no prior bearer token is restored
-- **AND** the in-memory token is empty after disconnect or stop
+- **THEN** the Ag device session is restored only from its dedicated Keychain item
+- **AND** explicit sign-out deletes that item and clears the in-memory session
 
 ### Requirement: Voice capture provides local, non-retained level feedback
 

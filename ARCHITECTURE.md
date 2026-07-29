@@ -62,9 +62,9 @@ Native desktop surfaces
   grants, local redaction, outbound preview, native action validation and
   approval, semantic execution, and canonical local receipts. macOS and Windows
   use separate supported platform adapters and never inherit authority merely
-  from sharing an Aggie session. `MoaMac` may release bounded AX context and an
+  from sharing an Ag session. `Ag` may release bounded AX context and an
   independently enabled focused-window screenshot only to the user's configured
-  Aggie gateway during an explicit visible grant.
+  Ag gateway during an explicit visible grant.
 
 Website
   Owns: the public marketing surface and static account/customization tools
@@ -87,7 +87,7 @@ Moa Gateway
   same gateway product-event substrate. It is not a separate intent product or
   JSON store. A stable intent identity relates user-confirmed objective,
   provenance, sensitivity, owner, agents, runs, artifacts, progress and durable
-  user pings. MoaMac, Android, browser, web/ag.app and future iPhone surfaces
+  user pings. Ag on Mac, Android, browser, web/ag.app and future iPhone surfaces
   consume the same `/v1/intent-plane` contract and preserve those canonical
   identities when handing work across surfaces. Inferred intentions require
   explicit user confirmation before admission, and plane records grant no
@@ -465,7 +465,7 @@ build is compilation evidence only and does not establish device behavior,
 security, accessibility, energy use, signing or production readiness. Permanent
 companion versus seamless-assistant UX remains an explicit product decision.
 
-The macOS-only `MoaMac` product adds the native proactive surface:
+The macOS-only `Ag` product adds the native proactive surface:
 
 ```text
 explicit app launch, menu-bar Speak, or Control-Space
@@ -523,7 +523,7 @@ are wired and audited. The current ad-hoc-signed QA bundle is compilation and
 package evidence only; it has not been launched or TCC-tested and is not a
 production signing/notarization artifact.
 
-`MoaMac` has one singleton compact invocation panel. Explicit app launch, the
+`Ag` has one singleton compact invocation panel. Explicit app launch, the
 registered global shortcut, or the menu-bar Speak action shows that panel and
 starts one latched literal voice capture. Repeating the summon commits the same
 capture; it never hides an active microphone session. Explicit dismissal
@@ -2210,7 +2210,7 @@ queues.
   transport, turn storage, transcript events, and assistant audio events.
 - `gateway/lib/voice-providers.js`: Swappable streaming voice
   provider package boundary, currently loopback and Gemini Live.
-- `apple_surfaces/Sources/MoaMac/main.swift`: menu-bar lifecycle, global
+- `apple_surfaces/Sources/Ag/main.swift`: menu-bar lifecycle, global
   Control-Space registration, and floating command-panel ownership.
 - `apple_surfaces/Sources/MoaMacCore/GatewayChat.swift`: bounded canonical
   macOS chat request and inert reply decoding.

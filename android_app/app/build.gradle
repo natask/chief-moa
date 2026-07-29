@@ -179,3 +179,23 @@ dependencies {
     testImplementation 'org.json:json:20240303'
     testImplementation 'org.robolectric:robolectric:4.14.1'
 }
+
+// The repo-wide source-size ceiling is defined in scripts/source-size-policy.js
+// and is NOT specific to the gateway. It used to be reachable only through the
+// gateway's own test suite, so an Android-only change never ran it and the
+// first signal came at merge time with master already red. Three files breached
+// it that way in three days, all of them Android.
+//
+// Running it here puts the check in front of the lane most likely to trip it.
+// It is a pure function over `git ls-files` plus line counts -- no network, no
+// build -- so attaching it to assembleDebug costs effectively nothing.
+tasks.register('verifySourceSizePolicy', Exec) {
+    description = 'Fail if any production source exceeds its line ceiling.'
+    group = 'verification'
+    workingDir = rootProject.projectDir.parentFile
+    commandLine 'node', 'scripts/source-size-policy.js'
+}
+
+tasks.matching { it.name == 'assembleDebug' }.configureEach {
+    dependsOn 'verifySourceSizePolicy'
+}

@@ -14,7 +14,7 @@ fi
 
 swift test --enable-code-coverage
 swift build --enable-code-coverage --product AggieSurfaceApp
-swift build --enable-code-coverage --product MoaMac
+swift build --enable-code-coverage --product Ag
 
 architecture="$(swift -print-target-info | sed -n 's/.*"triple": "\([^-]*\)-.*/\1/p' | head -1)"
 build_dir=".build/${architecture}-apple-macosx/debug"
@@ -23,17 +23,17 @@ profile="${build_dir}/codecov/default.profdata"
 combined_profile="${build_dir}/codecov/apple-combined.profdata"
 report="${build_dir}/apple-production-coverage.txt"
 
-rm -f "${build_dir}/codecov/aggie-app.profraw" "${build_dir}/codecov/moa-mac.profraw"
+rm -f "${build_dir}/codecov/aggie-app.profraw" "${build_dir}/codecov/ag-mac.profraw"
 LLVM_PROFILE_FILE="${build_dir}/codecov/aggie-app.profraw" "${build_dir}/AggieSurfaceApp" --coverage-smoke
-LLVM_PROFILE_FILE="${build_dir}/codecov/moa-mac.profraw" "${build_dir}/MoaMac" --coverage-smoke
+LLVM_PROFILE_FILE="${build_dir}/codecov/ag-mac.profraw" "${build_dir}/Ag" --coverage-smoke
 xcrun llvm-profdata merge -sparse "$profile" \
-  "${build_dir}/codecov/aggie-app.profraw" "${build_dir}/codecov/moa-mac.profraw" \
+  "${build_dir}/codecov/aggie-app.profraw" "${build_dir}/codecov/ag-mac.profraw" \
   -o "$combined_profile"
 
 objects=(
   "$test_binary"
   -object "${build_dir}/AggieSurfaceApp"
-  -object "${build_dir}/MoaMac"
+  -object "${build_dir}/Ag"
 )
 
 xcrun llvm-cov report "${objects[@]}" -instr-profile "$combined_profile" \

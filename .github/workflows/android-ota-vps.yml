@@ -94,16 +94,24 @@ jobs:
           MOA_ANDROID_VERSION_NAME="0.1.$version_code" \
           bash android_app/deploy/ota/build-ota-artifact.sh
 
+          # The expected application id is derived from build.gradle, the same
+          # source of truth build-ota-artifact.sh itself reads, so an intentional
+          # package-id migration cannot desync a literal baked into this workflow.
           node <<'NODE'
           const crypto = require("node:crypto");
           const fs = require("node:fs");
           const path = require("node:path");
 
+          const gradle = fs.readFileSync("android_app/app/build.gradle", "utf8");
+          const match = gradle.match(/^\s*applicationId\s+['"]([A-Za-z0-9_.]+)['"]/m);
+          if (!match) throw new Error("could not derive applicationId from android_app/app/build.gradle");
+          const expectedAppId = match[1];
+
           const dir = process.env.ANDROID_OTA_OUT_DIR;
           const manifest = JSON.parse(fs.readFileSync(path.join(dir, "latest.json"), "utf8"));
           const apk = fs.readFileSync(path.join(dir, manifest.apk));
           const digest = crypto.createHash("sha256").update(apk).digest("hex");
-          if (manifest.app_id !== "ag.companion") throw new Error("unexpected Android application id");
+          if (manifest.app_id !== expectedAppId) throw new Error("unexpected Android application id");
           if (!Number.isSafeInteger(manifest.version_code) || manifest.version_code <= 0) {
             throw new Error("invalid Android version code");
           }
@@ -311,8 +319,17 @@ jobs:
             exit 1
           fi
 
+          # The expected application id comes from build.gradle -- the same source
+          # build-ota-artifact.sh itself reads -- so the identity check tracks a
+          # deliberate package-id migration instead of asserting a stale literal.
+          expected_app_id="$(sed -nE "s/^[[:space:]]*applicationId[[:space:]]+['\"]([A-Za-z0-9_.]+)['\"].*/\1/p" android_app/app/build.gradle | head -n 1)"
+          if [[ ! "$expected_app_id" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]]; then
+            echo "Could not derive a valid applicationId from android_app/app/build.gradle." >&2
+            exit 1
+          fi
+
           badging="$("$aapt" dump badging "$apk" | head -n 1)"
-          [[ "$badging" == *"package: name='ai.moa.assistant'"* ]] || {
+          [[ "$badging" == *"package: name='$expected_app_id'"* ]] || {
             echo "Signed APK package id verification failed." >&2
             exit 1
           }
@@ -321,13 +338,13 @@ jobs:
             exit 1
           }
 
-          node - "$manifest" "$apk" <<'NODE'
+          node - "$manifest" "$apk" "$expected_app_id" <<'NODE'
           const crypto = require("node:crypto");
           const fs = require("node:fs");
-          const [manifestPath, apkPath] = process.argv.slice(2);
+          const [manifestPath, apkPath, expectedAppId] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
           const apk = fs.readFileSync(apkPath);
-          if (manifest.app_id !== "ai.moa.assistant") throw new Error("unexpected Android application id");
+          if (manifest.app_id !== expectedAppId) throw new Error("unexpected Android application id");
           if (manifest.version_code !== Number(process.env.MOA_ANDROID_VERSION_CODE)) {
             throw new Error("OTA version code mismatch");
           }

@@ -28,7 +28,7 @@
     "test:browser-context": "node scripts/test-browser-context-adapter.mjs",
     "test:unit": "node --test scripts/test-*.mjs",
     "test:coverage": "node scripts/coverage-extension.mjs",
-    "verify": "npm run test:unit && node scripts/verify-extension.mjs",
+    "verify": "node ../scripts/source-size-policy.js && npm run test:unit && node scripts/verify-extension.mjs",
     "package": "node scripts/package-extension.mjs",
     "deploy:browser": "node scripts/poke-dev-reload.mjs"
   },

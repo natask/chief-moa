@@ -1,0 +1,50 @@
+name: Source size policy
+
+# Deliberately UNFILTERED by path.
+#
+# This policy is repo-wide, but until now it was only reachable through
+# `gateway/npm run check`, which only runs from the gateway deploy workflow,
+# which is path-filtered to gateway/**. An Android-only or extension-only
+# change therefore never ran it -- not in CI, not locally -- and the first
+# signal arrived when someone happened to run the gateway suite at merge time,
+# by which point master was already red and every unrelated release was blocked.
+#
+# Three files breached the ceiling in three days that way. The instrument was
+# fine; it was pointed at the wrong lane. So this job runs on every pull request
+# and every push, for every surface, with no filter. It is a pure function over
+# `git ls-files` plus line counts -- no build, no network, sub-second -- so
+# running it always costs effectively nothing.
+#
+# scripts/source-size-policy.js is the canonical definition. The gateway test is
+# one caller of it, not the home of the rule.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit production source sizes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Audit production source sizes
+        shell: bash
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+        run: |
+          set -euo pipefail
+          # No dependency install: the script intentionally uses only Node
+          # built-ins and git, so it can run in front of every surface.
+          node scripts/source-size-policy.js

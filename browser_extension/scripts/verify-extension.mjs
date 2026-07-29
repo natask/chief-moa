@@ -172,7 +172,8 @@ if (
 if (
   packageJson.scripts?.["test:unit"] !== "node --test scripts/test-*.mjs" ||
   packageJson.scripts?.["test:coverage"] !== "node scripts/coverage-extension.mjs" ||
-  packageJson.scripts?.verify !== "npm run test:unit && node scripts/verify-extension.mjs"
+  packageJson.scripts?.verify
+    !== "node ../scripts/source-size-policy.js && npm run test:unit && node scripts/verify-extension.mjs"
 ) {
   throw new Error("verification must run every focused unit script and expose the production coverage ratchet");
 }

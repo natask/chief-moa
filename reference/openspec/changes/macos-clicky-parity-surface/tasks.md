@@ -10,10 +10,12 @@
       fail closed.
 - [x] 1.5 Add a static Apple-source gate that rejects credential persistence
       APIs, service labels, and generic-password commands.
+- [x] 1.6 Replace the pasted gateway token with browser-backed Ag device sign-in
+      and one narrowly scoped macOS Keychain session item.
 
 ## 2. QA artifact
 
-- [x] 2.1 Build and test `MoaMac`, scan for packaged destinations/provider
+- [x] 2.1 Build and test `Ag`, scan for packaged destinations/provider
       credentials, and create a versioned ad-hoc-signed ZIP plus SHA-256.
 - [x] 2.2 Add macOS CI for the exact build/test/package/scan path.
 - [ ] 2.3 Install the QA bundle only when it will not disturb an existing app or

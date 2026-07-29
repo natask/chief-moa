@@ -16,7 +16,7 @@ Mac app.
 
 ## What Changes
 
-- Establish `MoaMac` and the browser extension as separately installable,
+- Establish `Ag` and the browser extension as separately installable,
   separately usable products with distinct identities, onboarding, UI,
   permissions, release artifacts, and local authority.
 - Keep the Mac interaction a native compact companion. Do not embed the

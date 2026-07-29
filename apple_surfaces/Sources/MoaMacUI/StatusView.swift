@@ -12,7 +12,7 @@ public struct StatusView: View {
         _model = StateObject(wrappedValue: model)
     }
     public var body: some View { Form {
-        Text("Moa Mac").font(.title); Text(model.status); Text("Scope: \(model.appName)")
+        Text("Ag").font(.title); Text(model.status); Text("Scope: \(model.appName)")
         HStack { Button("Select frontmost app") { model.selectFrontmost() }; Button("Enable Accessibility") { model.requestAccessibility() }; Button("Enable Screen Recording") { model.requestScreenRecording() } }
         TextField("Canonical gateway origin (no default)", text: $model.origin).textFieldStyle(.roundedBorder)
         Picker("Release", selection: $model.mode) { Text("Local only").tag(ReleaseMode.localOnly); Text("Ask each time").tag(ReleaseMode.askEachTime); Text("Trust server for 15m").tag(ReleaseMode.trustedServer15m) }

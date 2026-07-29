@@ -2,7 +2,7 @@
 
 ## Why
 
-`MoaMac.app` already proves a privacy-scoped Accessibility observation and
+`Ag.app` already proves a privacy-scoped Accessibility observation and
 focused-window capture boundary, but it is not yet an everyday companion. The
 next product slice needs the interaction that makes Clicky useful: a quiet
 menu-bar application, a system-wide summon gesture, a compact command surface,
@@ -11,7 +11,7 @@ other surfaces.
 
 ## What Changes
 
-- Turn `MoaMac` into a menu-bar application with no persistent Dock presence.
+- Turn `Ag` into a menu-bar application with no persistent Dock presence.
 - Add a global `Control+Space` summon shortcut and one compact floating command
   panel for voice capture and typed turns. App launch and first summon begin
   latched capture; the next summon commits it.

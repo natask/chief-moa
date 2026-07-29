@@ -90,6 +90,7 @@ const {
 } = require("./lib/capture-blocks");
 const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
 const { resolveRemoteMode } = require("./lib/remote-mode");
+const { createBetterAuthRuntime } = require("./lib/better-auth-runtime");
 const { buildIdentity } = require("./lib/build-identity");
 const { createWorkHistoryStore } = require("./lib/work-history");
 const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
@@ -179,6 +180,7 @@ const { createExaSearchTool } = require("./lib/exa-search");
 //   hosted     self-host plus per-user accounts and backup expectations
 // Mode sets defaults only; each default stays overridable by its own env var.
 const runtimeMode = resolveRemoteMode(process.env);
+const betterAuthRuntime = createBetterAuthRuntime(process.env);
 const BUILD_IDENTITY = buildIdentity(process.env);
 if (!runtimeMode.valid) {
   console.error(`Gateway configuration error: ${runtimeMode.issues.join("; ")}`);
@@ -233,6 +235,8 @@ const GATEWAY_CONSOLE_PATH = path.join(GATEWAY_DIR, "public", "console.html");
 // Reads the /v1/account-connections endpoints with the gateway token; it never
 // receives or displays raw provider credentials.
 const CREDENTIAL_PANEL_PATH = path.join(GATEWAY_DIR, "public", "credential-panel.html");
+const SIGN_IN_PATH = path.join(GATEWAY_DIR, "public", "sign-in.html");
+const DEVICE_AUTH_PATH = path.join(GATEWAY_DIR, "public", "device.html");
 // Projects store. A project is a named working directory the agent operates in.
 // Flat JSON file next to the run store -- same durability model, no database.
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
@@ -241,6 +245,17 @@ const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 // this keeps the durable, queryable history of how behavior was steered over time.
 const PROFILE_HISTORY_FILE = path.join(DATA_DIR, "agent-profile-history.jsonl");
 const ANDROID_OTA_DIR = path.resolve(process.env.ANDROID_OTA_DIR || path.join(DATA_DIR, "android-ota"));
+// ai.moa.assistant (the original app) keeps publishing straight to
+// ANDROID_OTA_DIR, unchanged. ag.companion (the renamed app, a clean parallel
+// install rather than an OTA update of the old one -- see
+// reference/openspec/changes/rename-product-to-ag-and-build-guided-onboarding)
+// gets its own release chain under a "channels/<app_id>" subtree so the two
+// application ids never share one `current` pointer or `latest.json`.
+// android_app/deploy/ota/sync-vps.sh computes the exact same path from the
+// build's own applicationId before it ever touches the store.
+const ANDROID_OTA_CHANNELS = {
+  "ag.companion": path.join(ANDROID_OTA_DIR, "channels", "ag.companion"),
+};
 const MODEL_PROVIDER = String(process.env.MODEL_PROVIDER || "openai-compatible").toLowerCase();
 const MODEL_BASE_URL = stripTrailingSlash(process.env.MODEL_BASE_URL || "https://api.openai.com/v1");
 const MODEL_ID = process.env.MODEL_ID || process.env.VERTEX_MODEL || (MODEL_PROVIDER === "vertex" ? "gemini-3.5-flash" : "gpt-4o-mini");
@@ -338,10 +353,11 @@ fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_RESEARCH_REPORTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
 fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
+for (const channelDir of Object.values(ANDROID_OTA_CHANNELS)) fs.mkdirSync(channelDir, { recursive: true });
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const { routeAndroidOta, health: androidOtaHealth } = createAndroidOtaHandlers({
   androidOta, otaDir: ANDROID_OTA_DIR, authorized, sendJson, cleanError,
-  externalOriginForRequest, recordProductEventBestEffort,
+  externalOriginForRequest, recordProductEventBestEffort, channels: ANDROID_OTA_CHANNELS,
 });
 const { routePresentation } = createPresentationHandlers({
   authorized, sendJson, readJsonBody, sanitizeOptionalId, listVoiceTurnsForSession,
@@ -877,6 +893,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    if (await betterAuthRuntime.route(request, response, url)) return;
+    await betterAuthRuntime.attachPrincipal(request);
     if (await voiceModeHandlers(request, response, url)) return;
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
       sendGatewayUi(response);
@@ -890,6 +908,15 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && (url.pathname === "/credentials" || url.pathname === "/credential-panel")) {
       sendStaticHtml(response, CREDENTIAL_PANEL_PATH);
+      return;
+    }
+
+    if (betterAuthRuntime.enabled && request.method === "GET" && url.pathname === "/sign-in") {
+      sendStaticHtml(response, SIGN_IN_PATH);
+      return;
+    }
+    if (betterAuthRuntime.enabled && request.method === "GET" && url.pathname === "/device") {
+      sendStaticHtml(response, DEVICE_AUTH_PATH);
       return;
     }
 
@@ -12863,6 +12890,7 @@ function firstForwardedValue(header) {
 }
 
 function authorized(request) {
+  if (request.moaAuthPrincipal?.user_id) return true;
   if (!MOA_GATEWAY_TOKEN) {
     return runtimeMode.protectedRoutesOpenWithoutToken;
   }
@@ -12969,6 +12997,7 @@ function externalOriginForRequest(request) {
 }
 
 function authorizedAgent(request) {
+  if (request.moaAuthPrincipal?.user_id) return true;
   if (!MOA_GATEWAY_TOKEN) {
     return !runtimeMode.remote && ALLOW_AGENT_WITHOUT_TOKEN;
   }

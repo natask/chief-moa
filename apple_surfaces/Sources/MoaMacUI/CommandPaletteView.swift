@@ -23,7 +23,7 @@ public struct CommandPaletteView: View {
                     .font(.title2)
                     .foregroundStyle(.purple)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Aggie").font(.headline)
+                    Text("Ag").font(.headline)
                     Text(model.status).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -84,7 +84,7 @@ public struct CommandPaletteView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Ask Aggie anything…", text: $model.prompt, axis: .vertical)
+                TextField("Ask Ag anything…", text: $model.prompt, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .focused($promptFocused)
@@ -135,22 +135,14 @@ public struct CommandPaletteView: View {
 
     private var connectionEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Your Chief Moa gateway").font(.subheadline.weight(.semibold))
-            TextField("Canonical HTTPS gateway origin", text: $model.origin)
-                .textFieldStyle(.roundedBorder)
-            SecureField("Gateway session token (memory only)", text: $model.token)
-                .textFieldStyle(.roundedBorder)
+            Text("Your Ag account").font(.subheadline.weight(.semibold))
+            Text(model.isConfigured ? "Signed in on this Mac" : "Sign in once. Ag keeps this Mac connected securely.")
+                .font(.caption).foregroundStyle(.secondary)
             HStack {
-                Text("Token stays in memory and is cleared on disconnect or app exit.")
-                    .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Button("Disconnect") {
+                if model.isConfigured { Button("Sign out") {
                     Task { await model.disconnect() }
-                }
-                Button("Use for this session") {
-                    if model.useConnectionForSession() { editingConnection = false }
-                    promptFocused = true
-                }
+                } } else { Button("Sign in") { Task { await model.signIn() } } }
             }
         }
         .padding(12)

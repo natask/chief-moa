@@ -11,7 +11,7 @@ authority rather than artificially removing the capability.
 
 ## What Changes
 
-- Define `MoaMac.app` as an Aggie-compatible macOS surface and the sole owner of
+- Define `Ag.app` as the Ag-compatible macOS surface and the sole owner of
   Accessibility permission, product observation grants, local redaction,
   outbound preview, approvals, semantic execution, and canonical receipts.
 - Use public `AXUIElement`/`AXObserver` for semantic context and actions, plus an
@@ -39,7 +39,7 @@ authority rather than artificially removing the capability.
 
 ## Impact
 
-This change now creates a buildable unsigned `MoaMac.app` candidate, pure Swift
+This change now creates a buildable unsigned `Ag.app` candidate, pure Swift
 core/AX/capture adapters, strict self-hosted proactive gateway route, and tests.
 Production promotion remains blocked until stable signing/notarization,
 rollback, isolated TCC QA, gateway preview/backup evidence, and

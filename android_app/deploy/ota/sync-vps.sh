@@ -24,8 +24,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LOCAL_OTA_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/gateway/data/android-ota}"
 DEPLOY_TARGETS_FILE="${MOA_DEPLOY_TARGETS_FILE:-$ROOT_DIR/scripts/deploy-targets.json}"
 HOST="${MOA_VPS_SSH:-}"
-# Host-side path of the gateway container's /data named volume.
-REMOTE_OTA_DIR="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
+# Host-side path of the gateway container's /data named volume. This is the
+# store's base directory: the ai.moa.assistant (legacy/default) channel lives
+# directly at this path, unchanged. Any other app id gets its own isolated
+# subtree under "$REMOTE_OTA_BASE_DIR/channels/<app_id>/" so two application
+# ids never share one `current` pointer or `latest.json` -- see the channel
+# routing block below, after the local release facts (including the app id
+# actually being published) have been read and validated.
+REMOTE_OTA_BASE_DIR="${MOA_VPS_OTA_DIR:-/var/lib/docker/volumes/chief-moa_moa-gateway-data/_data/android-ota}"
 REMOTE_PUBLIC_GATEWAY_URL="${MOA_VPS_PUBLIC_GATEWAY_URL:-}"
 SNAPSHOT_RETENTION="${MOA_OTA_SNAPSHOT_RETENTION:-5}"
 # Secondary signal only (see the lock-reclaim comment below): how long a
@@ -93,12 +99,15 @@ if [ "${#SSH_HOST}" -gt 253 ] \
   echo "The VPS host must use normalized DNS labels." >&2
   exit 1
 fi
-if [[ ! "$REMOTE_OTA_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] \
-  || [[ "$REMOTE_OTA_DIR" == *"//"* ]] \
-  || [[ "$REMOTE_OTA_DIR" == *"/../"* ]] \
-  || [[ "$REMOTE_OTA_DIR" == *"/./"* ]] \
-  || [[ "$REMOTE_OTA_DIR" == */.. ]] \
-  || [[ "$REMOTE_OTA_DIR" == */. ]]; then
+remote_ota_dir_is_safe() {
+  [[ "$1" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+    && [[ "$1" != *"//"* ]] \
+    && [[ "$1" != *"/../"* ]] \
+    && [[ "$1" != *"/./"* ]] \
+    && [[ "$1" != */.. ]] \
+    && [[ "$1" != */. ]]
+}
+if ! remote_ota_dir_is_safe "$REMOTE_OTA_BASE_DIR"; then
   echo "The remote OTA directory must be a normalized absolute path." >&2
   exit 1
 fi
@@ -227,6 +236,32 @@ if [[ ! "$RELEASE_ID" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] \
   || [[ ! "$VERSION_NAME" =~ ^[A-Za-z0-9._+-]+$ ]] \
   || [[ ! "$GIT_SHA" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "Local OTA store validation returned unsafe release facts." >&2
+  exit 1
+fi
+
+# Each known application id gets its own release channel so two apps never
+# share one `current` pointer or `latest.json`. ai.moa.assistant is the
+# original/default channel and keeps publishing straight to the store's base
+# directory -- byte-for-byte the same location this script has always used --
+# so that channel, and the phone running it today, are never touched by this
+# routing. Any other application id is confined to its own named subtree.
+# This is an explicit allowlist, not a passthrough of an arbitrary string into
+# a filesystem path: a build with an unrecognized application id fails closed
+# here rather than silently creating a new channel directory.
+case "$APP_ID" in
+  ai.moa.assistant)
+    REMOTE_OTA_DIR="$REMOTE_OTA_BASE_DIR"
+    ;;
+  ag.companion)
+    REMOTE_OTA_DIR="$REMOTE_OTA_BASE_DIR/channels/ag.companion"
+    ;;
+  *)
+    echo "Local OTA build has an application id ($APP_ID) with no configured release channel." >&2
+    exit 1
+    ;;
+esac
+if ! remote_ota_dir_is_safe "$REMOTE_OTA_DIR"; then
+  echo "The computed channel OTA directory must be a normalized absolute path." >&2
   exit 1
 fi
 
@@ -869,7 +904,15 @@ const headers = { authorization: `Bearer ${token}` };
 
 async function main() {
   const requestOptions = () => ({ headers, signal: AbortSignal.timeout(10000) });
-  const manifestResponse = await fetch(`${base}/v1/android/updates/latest`, requestOptions());
+  // ai.moa.assistant is the original/default channel and stays on the
+  // unscoped route, byte-for-byte the same endpoint this verifier has always
+  // called. Any other application id is verified through its own app-scoped
+  // route so a device running one app can never be confirmed against, or
+  // served, another app's manifest/APK.
+  const updatesBase = appId === "ai.moa.assistant"
+    ? `${base}/v1/android/updates`
+    : `${base}/v1/android/updates/apps/${encodeURIComponent(appId)}`;
+  const manifestResponse = await fetch(`${updatesBase}/latest`, requestOptions());
   if (!manifestResponse.ok) process.exit(1);
   const manifest = await manifestResponse.json();
   const expectedSize = Number(apkSizeText);
@@ -882,7 +925,7 @@ async function main() {
     || manifest.version_name !== versionName
     || manifest.git_sha !== gitSha) process.exit(1);
 
-  const apkResponse = await fetch(`${base}/v1/android/updates/latest.apk`, requestOptions());
+  const apkResponse = await fetch(`${updatesBase}/latest.apk`, requestOptions());
   if (!apkResponse.ok) process.exit(1);
   const apk = Buffer.from(await apkResponse.arrayBuffer());
   if (apk.length !== expectedSize
