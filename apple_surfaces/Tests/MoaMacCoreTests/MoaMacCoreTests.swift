@@ -158,7 +158,7 @@ func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
 
 #if os(macOS)
 @MainActor @Test func macShellSafeStoppedControlsRemainInert() async {
-    let model = SurfaceModel()
+    let model = SurfaceModel(tokenLoader: { nil })
     #expect(model.paused)
     model.resume()
     await model.pause()
@@ -229,7 +229,7 @@ func localSuggestionCoversButtonAndGenericWindows(role: String) async throws {
 
     let identity = ProcessIdentity(bundleID: "test.coverage", pid: ProcessInfo.processInfo.processIdentifier,
                                    processStart: NSRunningApplication.current.launchDate ?? now, signingIdentity: "test:coverage")
-    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App")
+    let model = SurfaceModel(selectedIdentity: identity, appName: "Coverage App", tokenLoader: { nil })
     model.saveToken()
     #expect(model.status == "Token save failed")
     model.mode = .askEachTime
