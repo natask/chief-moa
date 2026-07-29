@@ -10,6 +10,7 @@ function resolveRemoteMode(env = process.env) {
   const databaseConfigured = Boolean(String(env.DATABASE_URL || "").trim());
   const tokenConfigured = Boolean(String(env.MOA_GATEWAY_TOKEN || "").trim());
   const futureAuthEnabled = Boolean(authMode) && !TOKEN_AUTH_MODES.has(authMode);
+  const betterAuthEnabled = authMode === "better-auth";
   const issues = [];
 
   if (!VALID_MODES.has(mode)) {
@@ -20,6 +21,11 @@ function resolveRemoteMode(env = process.env) {
   }
   if (remote && !tokenConfigured && !futureAuthEnabled) {
     issues.push(`${mode} mode requires MOA_GATEWAY_TOKEN unless MOA_AUTH enables a future auth mode`);
+  }
+  if (betterAuthEnabled) {
+    for (const name of ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "BETTER_AUTH_OWNER_EMAIL", "DATABASE_URL"]) {
+      if (!String(env[name] || "").trim()) issues.push(`${name} is required when MOA_AUTH=better-auth`);
+    }
   }
   if (remote && env.ALLOW_AGENT_WITHOUT_TOKEN === "1") {
     issues.push(`${mode} mode cannot use ALLOW_AGENT_WITHOUT_TOKEN=1`);
@@ -39,6 +45,7 @@ function resolveRemoteMode(env = process.env) {
     tokenConfigured,
     authMode: authMode || "gateway-token",
     futureAuthEnabled,
+    betterAuthEnabled,
     authConfigured,
     workerPullDefault: remote,
     protectedRoutesOpenWithoutToken: !remote && !tokenConfigured,
@@ -50,6 +57,7 @@ function resolveRemoteMode(env = process.env) {
         auth_configured: authConfigured,
         token_auth_configured: tokenConfigured,
         future_auth_enabled: futureAuthEnabled,
+        better_auth_enabled: betterAuthEnabled,
         database_required: remote,
         database_configured: databaseConfigured,
         trust_proxy: this.trustProxy,

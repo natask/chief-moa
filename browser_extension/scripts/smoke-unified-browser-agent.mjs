@@ -297,11 +297,11 @@ function installProgressRecorderExpr() {
 function submitTypedExpr(instruction) {
   return `
     (() => {
-      const input = document.querySelector("#agee-input");
-      if (!input) return false;
-      input.value = ${JSON.stringify(instruction)};
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+      if (!buffer) return false;
+      buffer.textContent = ${JSON.stringify(instruction)};
+      buffer.dispatchEvent(new Event("input", { bubbles: true }));
+      buffer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
       return true;
     })()
   `;
@@ -311,7 +311,7 @@ function latestResultExpr() {
   return `
     (() => {
       const log = document.querySelector("#agee-log");
-      const input = document.querySelector("#agee-input");
+      const buffer = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
       // A turn is terminal when it lands on done/error, whether it kept a card
       // (approval, dictation copy, recovery) or read only in the reply ribbon.
       const terminal = [...document.querySelectorAll(".agee-cue-done, .agee-cue-error, .agee-done, .agee-error")].pop();
@@ -322,7 +322,7 @@ function latestResultExpr() {
           ? (terminal.classList.contains("agee-cue-error") || terminal.classList.contains("agee-error") ? "error" : "done")
           : recorded.kind,
         text: terminal ? (terminal.textContent || "") : recorded.text,
-        draft: input ? input.value : "",
+        draft: buffer ? buffer.textContent : "",
         logVisible: log ? getComputedStyle(log).display !== "none" : false,
         progress: window.__ageeProgressTexts || [],
         pageResult: document.querySelector("#results")?.textContent || "",
@@ -412,7 +412,7 @@ async function main() {
       })
     `);
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
-    await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-input"))`);
+    await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-ribbon-you .agee-ribbon-text"))`);
     const contentCtx = await resolveContentContext(pageCdp, isolatedContexts);
     await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
     await evaluate(pageCdp, submitTypedExpr("explain summarize this page"), { contextId: contentCtx });

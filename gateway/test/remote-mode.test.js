@@ -24,7 +24,7 @@ test("local defaults are loopback, open without a token, and database-optional",
   });
   assert.deepEqual(result.health(), {
     mode: "local", remote: false, auth_mode: "gateway-token", auth_configured: false,
-    token_auth_configured: false, future_auth_enabled: false, database_required: false,
+    token_auth_configured: false, future_auth_enabled: false, better_auth_enabled: false, database_required: false,
     database_configured: false, trust_proxy: false, default_host: "127.0.0.1",
     worker_pull_default: false,
   });
@@ -70,7 +70,12 @@ test("remote token configuration is valid and trust proxy can be disabled", () =
 });
 
 test("future auth satisfies remote auth while token aliases do not", () => {
-  const future = resolveRemoteMode({ MOA_MODE: "hosted", DATABASE_URL: "db", MOA_AUTH: "better-auth" });
+  const future = resolveRemoteMode({
+    MOA_MODE: "hosted", DATABASE_URL: "postgres://db", MOA_AUTH: "better-auth",
+    BETTER_AUTH_SECRET: "a-secure-secret-that-is-at-least-32-characters",
+    BETTER_AUTH_URL: "https://api.agee.app",
+    BETTER_AUTH_OWNER_EMAIL: "owner@example.com",
+  });
   assert.equal(future.valid, true);
   assert.equal(future.futureAuthEnabled, true);
   assert.equal(future.authConfigured, true);
@@ -83,6 +88,14 @@ test("future auth satisfies remote auth while token aliases do not", () => {
     assert.equal(result.authConfigured, false);
     assert.match(result.issues.join(" "), /MOA_GATEWAY_TOKEN/);
   }
+});
+
+test("better-auth mode fails closed without its secret and public origin", () => {
+  const result = resolveRemoteMode({ MOA_MODE: "hosted", DATABASE_URL: "postgres://db", MOA_AUTH: "better-auth" });
+  assert.equal(result.valid, false);
+  assert.match(result.issues.join(" "), /BETTER_AUTH_SECRET/);
+  assert.match(result.issues.join(" "), /BETTER_AUTH_URL/);
+  assert.match(result.issues.join(" "), /BETTER_AUTH_OWNER_EMAIL/);
 });
 
 test("remote mode rejects the local token bypass even when otherwise configured", () => {

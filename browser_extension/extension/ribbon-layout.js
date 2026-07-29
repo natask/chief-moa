@@ -36,7 +36,27 @@
     const rect = launcherRect || { left: 0, right: 0, top: 0, bottom: 0, width: 0 };
     const width = Number(ribbonWidth) || 0;
     const centerX = rect.left + (rect.width || 0) / 2;
-    const left = clamp(centerX - width / 2, edge, Math.max(edge, viewportWidth - width - edge));
+    // The two boxes hang off the companion's centre line in opposite
+    // directions: what you said starts at the line and runs right, what Ag
+    // replied ends at the line and runs left. The line is the seam, so the pair
+    // reads as one exchange pivoting on the companion rather than as two bars
+    // stacked on top of each other. Clamping can pull a box off the line near a
+    // viewport edge — staying on screen wins over staying on the seam.
+    const minX = edge;
+    const maxX = Math.max(edge, viewportWidth - width - edge);
+    const clampX = (value) => clamp(value, minX, maxX);
+    // Near a viewport edge the preferred side does not fit. Mirror to the other
+    // side of the same line rather than sliding the box off it: the seam is the
+    // point of the layout, and a mirrored box still starts (or ends) exactly on
+    // the companion. Only a viewport narrower than one box breaks the seam, and
+    // then staying on screen wins.
+    const onSeam = (preferred, mirrored) => {
+      if (preferred >= minX && preferred <= maxX) return preferred;
+      if (mirrored >= minX && mirrored <= maxX) return mirrored;
+      return clampX(preferred);
+    };
+    const youLeft = onSeam(centerX, centerX - width);
+    const replyLeft = onSeam(centerX - width, centerX);
 
     const aboveTop = rect.top - gap - height;
     const belowSecondBottom = rect.bottom + gap * 2 + height * 2;
@@ -57,7 +77,8 @@
     return {
       flip,
       stackAbove,
-      left,
+      youLeft,
+      replyLeft,
       youTop,
       replyTop,
       // Applied instead of youTop when not flipped, so the upper ribbon grows up.

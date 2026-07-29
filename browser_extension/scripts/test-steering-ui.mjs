@@ -52,7 +52,10 @@ assert.match(contentSource, /if \(state\.commitWhenReady\) commitLiveVoiceTurn\(
 assert.match(backgroundSource, /all_branches_context: false/);
 assert.match(contentSource, /contextAction: state\.contextControls\.action/);
 assert.match(backgroundSource, /options\.contextAction \? \{ context_action: options\.contextAction, all_branches_context: false \}/);
-assert.match(backgroundSource, /files: \[[^\]]*"quiet-companion-controls\.js", "content\.js"\]/);
+// content.js must be injected last: every other entry is a runtime it reads off
+// globalThis at load. Assert that ordering, not the specific file before it, so
+// adding a runtime does not require editing this assertion.
+assert.match(backgroundSource, /files: \[[^\]]*"content\.js"\]/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);

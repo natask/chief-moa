@@ -11,20 +11,27 @@ const ruleIn = (source, selector) => {
 };
 const ruleFor = (selector) => ruleIn(css, selector);
 
-// The turn reads in the two ribbons around the companion: what you said above,
-// what Ag replied below, opposite sides, centred on the mark between them.
-test("the two ribbons take opposite chat sides", () => {
-  assert.match(ruleIn(ribbons, "#agee-ribbon-you .agee-ribbon-viewport"), /justify-content:\s*flex-end/);
-  assert.match(ruleIn(ribbons, "#agee-ribbon-you .agee-ribbon-line"), /text-align:\s*right/);
-  assert.match(ruleIn(ribbons, "#agee-ribbon-reply .agee-ribbon-viewport"), /justify-content:\s*flex-start/);
+// Chat sides are geometry (ribbon-layout.js), not text alignment: both lines
+// stay left-anchored inside their own box so the sliding window owns the offset.
+test("both lines stay anchored for the sliding window", () => {
+  assert.match(
+    ruleIn(ribbons, "#agee-ribbon-you .agee-ribbon-viewport,\n#agee-ribbon-reply .agee-ribbon-viewport"),
+    /justify-content:\s*flex-start/,
+  );
 });
 
-// A clipped line is owned by the sliding window, which anchors it left and
-// moves it with translateX. Alignment must step out of the way there.
-test("a clipped user ribbon returns to the sliding window's anchor", () => {
+// Text mode is the same box with a caret in it, never a second surface.
+test("the you-line is the text input", () => {
+  const rule = ruleIn(ribbons, ".agee-ribbon-composing .agee-ribbon-text");
+  assert.match(rule, /caret-color/);
+  assert.match(rule, /cursor:\s*text/);
+});
+
+// An opened box is capped at five lines: it is still sitting on the page.
+test("an opened box shows at most five lines", () => {
   assert.match(
-    ruleIn(ribbons, "#agee-ribbon-you.agee-ribbon-clipped .agee-ribbon-viewport"),
-    /justify-content:\s*flex-start/,
+    ruleIn(ribbons, ".agee-ribbon-expanded .agee-ribbon-viewport"),
+    /max-height:\s*calc\(5 \* var\(--agee-ribbon-line-h\)\)/,
   );
 });
 

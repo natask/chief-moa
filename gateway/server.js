@@ -90,6 +90,7 @@ const {
 } = require("./lib/capture-blocks");
 const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
 const { resolveRemoteMode } = require("./lib/remote-mode");
+const { createBetterAuthRuntime } = require("./lib/better-auth-runtime");
 const { buildIdentity } = require("./lib/build-identity");
 const { createWorkHistoryStore } = require("./lib/work-history");
 const { createWorkHistoryHandlers } = require("./lib/work-history-handlers");
@@ -179,6 +180,7 @@ const { createExaSearchTool } = require("./lib/exa-search");
 //   hosted     self-host plus per-user accounts and backup expectations
 // Mode sets defaults only; each default stays overridable by its own env var.
 const runtimeMode = resolveRemoteMode(process.env);
+const betterAuthRuntime = createBetterAuthRuntime(process.env);
 const BUILD_IDENTITY = buildIdentity(process.env);
 if (!runtimeMode.valid) {
   console.error(`Gateway configuration error: ${runtimeMode.issues.join("; ")}`);
@@ -233,6 +235,8 @@ const GATEWAY_CONSOLE_PATH = path.join(GATEWAY_DIR, "public", "console.html");
 // Reads the /v1/account-connections endpoints with the gateway token; it never
 // receives or displays raw provider credentials.
 const CREDENTIAL_PANEL_PATH = path.join(GATEWAY_DIR, "public", "credential-panel.html");
+const SIGN_IN_PATH = path.join(GATEWAY_DIR, "public", "sign-in.html");
+const DEVICE_AUTH_PATH = path.join(GATEWAY_DIR, "public", "device.html");
 // Projects store. A project is a named working directory the agent operates in.
 // Flat JSON file next to the run store -- same durability model, no database.
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
@@ -906,6 +910,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    if (await betterAuthRuntime.route(request, response, url)) return;
+    await betterAuthRuntime.attachPrincipal(request);
     if (await voiceModeHandlers(request, response, url)) return;
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
       sendGatewayUi(response);
@@ -919,6 +925,15 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && (url.pathname === "/credentials" || url.pathname === "/credential-panel")) {
       sendStaticHtml(response, CREDENTIAL_PANEL_PATH);
+      return;
+    }
+
+    if (betterAuthRuntime.enabled && request.method === "GET" && url.pathname === "/sign-in") {
+      sendStaticHtml(response, SIGN_IN_PATH);
+      return;
+    }
+    if (betterAuthRuntime.enabled && request.method === "GET" && url.pathname === "/device") {
+      sendStaticHtml(response, DEVICE_AUTH_PATH);
       return;
     }
 
@@ -12892,6 +12907,7 @@ function firstForwardedValue(header) {
 }
 
 function authorized(request) {
+  if (request.moaAuthPrincipal?.user_id) return true;
   if (!MOA_GATEWAY_TOKEN) {
     return runtimeMode.protectedRoutesOpenWithoutToken;
   }
@@ -12998,6 +13014,7 @@ function externalOriginForRequest(request) {
 }
 
 function authorizedAgent(request) {
+  if (request.moaAuthPrincipal?.user_id) return true;
   if (!MOA_GATEWAY_TOKEN) {
     return !runtimeMode.remote && ALLOW_AGENT_WITHOUT_TOKEN;
   }

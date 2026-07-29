@@ -919,7 +919,12 @@ class CascadedVoiceProvider {
         // pipeline; the leading [style: ...] line arrives before any prose so
         // every chunk can carry the style prompt.
         ...(pipeline ? {
-          on_speak_delta: (delta) => pipeline.pushDelta(delta),
+          // Second consumer of the same tap: the client's reply ribbon. Fire and
+          // forget, so a slow client broadcast never stalls the TTS pipeline.
+          on_speak_delta: (delta) => {
+            pipeline.pushDelta(delta);
+            Promise.resolve(hooks.onAssistantTextDelta?.(delta)).catch(() => {});
+          },
           on_speak_style: (style) => pipeline.setStyle(style),
           // Gateway-produced interim speech (tool-call acknowledgment): spoken
           // NOW as its own chunk, not buffered by the sentence chunker.

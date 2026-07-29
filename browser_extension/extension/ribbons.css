@@ -21,6 +21,7 @@
   /* geometry */
   --agee-ribbon-w: clamp(232px, 44vw, 340px);
   --agee-ribbon-h: 28px;
+  --agee-ribbon-line-h: 18px;
   --agee-ribbon-pad-x: 10px;
   --agee-ribbon-gap: 8px;
   --agee-ribbon-dot: 5px;
@@ -40,6 +41,8 @@
   --agee-ribbon-plate-drag: rgba(14, 15, 18, 0.5);
   --agee-ribbon-hairline: rgba(255, 255, 255, 0.14);
   --agee-ribbon-scrim: rgba(18, 19, 23, 0.92);
+  --agee-ribbon-scrim-ink: #f7f7f8;
+  --agee-ribbon-scrim-shadow: 0 2px 8px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
   --agee-ribbon-halo: 0 1px 2px rgba(0, 0, 0, 0.72), 0 0 8px rgba(0, 0, 0, 0.45);
   --agee-ribbon-shadow: 0 8px 28px rgba(0, 0, 0, 0.46), 0 1px 2px rgba(0, 0, 0, 0.34);
   --agee-ribbon-menu-bg: rgba(18, 19, 23, 0.86);
@@ -71,7 +74,9 @@
   --agee-ribbon-plate: rgba(252, 252, 253, 0.76);
   --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.54);
   --agee-ribbon-hairline: rgba(0, 0, 0, 0.1);
-  --agee-ribbon-scrim: rgba(18, 19, 23, 0.92);
+  --agee-ribbon-scrim: rgba(252, 252, 253, 0.92);
+  --agee-ribbon-scrim-ink: #141519;
+  --agee-ribbon-scrim-shadow: 0 2px 8px rgba(16, 18, 24, 0.16), inset 0 0 0 1px rgba(0, 0, 0, 0.1);
   --agee-ribbon-halo: 0 1px 2px rgba(255, 255, 255, 0.88), 0 0 8px rgba(255, 255, 255, 0.62);
   --agee-ribbon-shadow: 0 8px 28px rgba(16, 18, 24, 0.14), 0 1px 2px rgba(16, 18, 24, 0.1);
   --agee-ribbon-menu-bg: rgba(252, 252, 253, 0.88);
@@ -167,22 +172,31 @@
   align-items: center;
   pointer-events: none;
 }
-/* Chat sides, kept from the cards the ribbons replaced: what you said reads
-   right, what Ag replied reads left, both centred on the companion between
-   them. Alignment applies only while the line fits — once it is clipped the
-   line fills the viewport and the sliding window owns the offset, so a
-   flex-end box would fight translateX() for the same pixels. */
-#agee-ribbon-you .agee-ribbon-viewport {
-  justify-content: flex-end;
-}
-#agee-ribbon-you .agee-ribbon-line {
-  text-align: right;
-}
-#agee-ribbon-you.agee-ribbon-clipped .agee-ribbon-viewport {
-  justify-content: flex-start;
-}
+/* Chat sides are geometry, not text alignment: ribbon-layout.js hangs the
+   you-box off the companion's centre line to the right and the reply-box off
+   the same line to the left. Both lines stay left-anchored inside their own box
+   so the sliding window can own the horizontal offset with translateX(); the
+   newest character is always at the box's right edge, which for the reply is
+   the seam next to the companion. */
+#agee-ribbon-you .agee-ribbon-viewport,
 #agee-ribbon-reply .agee-ribbon-viewport {
   justify-content: flex-start;
+}
+
+/* Text mode: the you-line IS the input. Same box, same window, same pixels —
+   the only difference is a caret and a hit region that accepts a click. */
+.agee-ribbon-composing .agee-ribbon-text {
+  pointer-events: auto;
+  outline: none;
+  min-width: 1px;
+  caret-color: var(--agee-ribbon-accent);
+  cursor: text;
+}
+.agee-ribbon-composing {
+  pointer-events: auto;
+}
+.agee-ribbon-composing .agee-ribbon-viewport {
+  pointer-events: auto;
 }
 .agee-ribbon-clipped .agee-ribbon-viewport {
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
@@ -198,7 +212,7 @@
   height: 18px;
   border-radius: 999px;
   background: var(--agee-ribbon-scrim);
-  color: #f7f7f8;
+  color: var(--agee-ribbon-scrim-ink);
   font-size: 12px;
   line-height: 15px;
   text-align: center;
@@ -209,7 +223,7 @@
   will-change: transform;
   transition: transform var(--agee-ribbon-dur-slide) linear;
   font-size: 13px;
-  line-height: 18px;
+  line-height: var(--agee-ribbon-line-h);
   font-weight: 450;
   letter-spacing: 0.005em;
   font-variant-numeric: tabular-nums;
@@ -226,8 +240,8 @@
   background: var(--agee-ribbon-scrim);
   padding: 2px 7px;
   border-radius: 999px;
-  color: #f7f7f8;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: var(--agee-ribbon-scrim-ink);
+  box-shadow: var(--agee-ribbon-scrim-shadow);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   transition: background-color var(--agee-ribbon-dur-solidify) var(--agee-ribbon-ease-out);
@@ -244,6 +258,39 @@
 }
 .agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
 .agee-ribbon-mute .agee-ribbon-line { color: var(--agee-ribbon-muted); }
+
+/* Pending: the ribbon is live and waiting, with nothing to say yet. Three dots
+   on the same scrim the text will use, so when the first word lands the plate
+   is already there and only its contents change — no pop, no reflow. */
+.agee-ribbon-pending .agee-ribbon-line::before {
+  content: "";
+  display: inline-block;
+  width: 34px;
+  height: 6px;
+  vertical-align: 1px;
+  background:
+    radial-gradient(circle 3px at 5px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat,
+    radial-gradient(circle 3px at 17px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat,
+    radial-gradient(circle 3px at 29px 50%, currentColor 96%, transparent) 0 0/34px 6px no-repeat;
+  animation: agee-ribbon-pending 1400ms ease-in-out infinite;
+}
+/* An empty glyph run has no box, so the pending ribbon supplies its own scrim.
+   Same colour and radius as .agee-ribbon-text: the plate does not change when
+   the dots become words. */
+.agee-ribbon-pending .agee-ribbon-text {
+  background: var(--agee-ribbon-scrim);
+  box-shadow: var(--agee-ribbon-scrim-shadow);
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--agee-ribbon-scrim-ink);
+}
+@keyframes agee-ribbon-pending {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agee-ribbon-pending .agee-ribbon-line::before { animation: none; opacity: 0.6; }
+}
 
 .agee-ribbon-caret {
   display: inline-block;
@@ -429,7 +476,10 @@
    touching it, and it collapses the moment they are not. */
 .agee-ribbon.agee-ribbon-expanded {
   height: auto;
-  max-height: min(112px, 30vh);
+  /* Five lines, exactly: 5 x the 18px line box plus the 5px padding either
+     side. An opened box is the read-it-all state, but it is still a box on top
+     of the user's page — five lines is as much page as it may ever cover. */
+  max-height: calc(5 * var(--agee-ribbon-line-h) + 10px);
   align-items: flex-start;
   padding-top: 5px;
   padding-bottom: 5px;
@@ -437,7 +487,7 @@
 }
 .agee-ribbon-expanded .agee-ribbon-viewport {
   height: auto;
-  max-height: min(102px, 28vh);
+  max-height: calc(5 * var(--agee-ribbon-line-h));
   overflow-y: auto;
   overflow-x: hidden;
   align-items: flex-start;

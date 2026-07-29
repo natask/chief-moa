@@ -21,16 +21,37 @@ const place = (rect, width = 340) => L.ribbonPlacement({
   launcherRect: rect, viewportWidth: 1000, viewportHeight: 800, ribbonWidth: width,
 });
 
-test("both ribbons centre on the companion and share one left edge", () => {
-  const result = place(launcher(400));
-  // companion centre 631 - half of 340 = 461
-  assert.equal(result.left, 461);
+// The companion's centre line is the seam: what you said starts on it and runs
+// right, what Ag replied ends on it and runs left.
+test("the boxes hang off the companion centre line in opposite directions", () => {
+  const rect = launcher(400);
+  const result = place(rect);
+  const centre = rect.left + rect.width / 2; // 631
+  assert.equal(result.youLeft, centre, "you-box left edge sits on the centre line");
+  assert.equal(result.replyLeft + 340, centre, "reply-box right edge sits on the centre line");
   assert.equal(result.flip, false);
 });
 
-test("the unit is clamped inside the viewport rather than spilling", () => {
-  assert.equal(place(launcher(400, 970)).left, 1000 - 340 - L.EDGE);
-  assert.equal(place(launcher(400, -30)).left, L.EDGE);
+// Near an edge the preferred side does not fit, so the box mirrors to the other
+// side of the same line. It never slides off the companion.
+test("a box that cannot fit mirrors across the line instead of drifting", () => {
+  const right = launcher(400, 900);
+  const rightCentre = right.left + right.width / 2;
+  assert.equal(place(right).youLeft + 340, rightCentre, "you-box mirrors to the left of the line");
+  assert.equal(place(right).replyLeft + 340, rightCentre, "reply-box keeps its own side");
+
+  const left = launcher(400, 10);
+  const leftCentre = left.left + left.width / 2;
+  assert.equal(place(left).replyLeft, leftCentre, "reply-box mirrors to the right of the line");
+  assert.equal(place(left).youLeft, leftCentre, "you-box keeps its own side");
+});
+
+test("a viewport narrower than one box falls back to staying on screen", () => {
+  const result = L.ribbonPlacement({
+    launcherRect: launcher(400, 300), viewportWidth: 320, viewportHeight: 800, ribbonWidth: 340,
+  });
+  assert.equal(result.youLeft, L.EDGE);
+  assert.equal(result.replyLeft, L.EDGE);
 });
 
 test("the upper ribbon is bottom-anchored so expanding grows upward", () => {

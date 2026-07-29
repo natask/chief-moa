@@ -24,7 +24,6 @@
     launcher,
     quietControls,
     panel,
-    input,
     voiceButton,
     recordButton,
     stopButton,
@@ -343,7 +342,6 @@
         <div id="agee-ui-surface" aria-live="polite"></div>
         <div id="agee-log" aria-hidden="true"></div>
         <div id="agee-bar">
-          <textarea id="agee-input" rows="1" placeholder="Ask Ag" autocomplete="off" spellcheck="true"></textarea>
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
           <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
@@ -353,7 +351,6 @@
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
     panel = root.querySelector("#agee-panel");
-    input = root.querySelector("#agee-input");
     voiceButton = root.querySelector("#agee-voice");
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
@@ -391,26 +388,6 @@
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
     window.addEventListener("resize", handleViewportResize);
-
-    input.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        const text = input.value.trim();
-        if (!text) return;
-        // The composer is a draft buffer. Fire the message without clearing the
-        // field so whatever the user was typing stays visible while it streams.
-        submitInstruction(text);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeTextSurface();
-      }
-    });
-    input.addEventListener("input", () => {
-      resizeInput();
-      setSurfacePhase("editing");
-    });
 
     voiceButton.addEventListener("click", (e) => {
       e.preventDefault();
@@ -548,9 +525,14 @@
   }
 
   function setVoiceRepliesEnabled(enabled) {
+    const wasEnabled = voiceRepliesEnabled;
     voiceRepliesEnabled = enabled !== false;
     for (const state of liveVoiceStates) { state.assistantSpeechSuppressed = !voiceRepliesEnabled; if (!voiceRepliesEnabled) state.pendingAssistantAudioSegments.length = 0; }
-    if (!voiceRepliesEnabled) stopSpeaking(); safeStorageLocalSet({ ageeVoiceRepliesEnabled: voiceRepliesEnabled }).catch(() => {});
+    if (!voiceRepliesEnabled) stopSpeaking();
+    // Voice back on speaks the reply being read, from the top. Newest turn only:
+    // replaying an older one would talk over the conversation the user is in.
+    else if (!wasEnabled) restartAssistantPlayback([...liveVoiceStates].at(-1));
+    safeStorageLocalSet({ ageeVoiceRepliesEnabled: voiceRepliesEnabled }).catch(() => {});
   }
 
   function restoreLauncherPosition() {
@@ -761,7 +743,10 @@
       lastLauncherTap = null;
       if (tap) {
         cancelGestureVoiceWarmup();
-        openTextSurface({ fresh: false });
+        // A tap on the companion puts the caret in the you-line immediately.
+        // The buffer is the overlay, so there is nothing to wait for and no
+        // panel to raise over the page.
+        ribbons?.beginCompose();
       }
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
@@ -940,7 +925,7 @@
       // Chat must never inherit a hot microphone or commit a pending capture.
       cancelGestureVoiceWarmup();
       if (liveVoice && listening) cancelTalkMode();
-      openTextSurface({ fresh: false });
+      ribbons?.beginCompose();
       return;
     }
     cancelGestureVoiceWarmup();
@@ -1043,7 +1028,6 @@
     if (open) {
       positionPanel(); // anchor the surface to the mark, not a fixed corner
       if (!was) chime("wake");
-      setTimeout(() => input.focus(), 0);
     }
   }
 
@@ -1063,8 +1047,21 @@
       // History is a separate surface, not overlay content. The side panel
       // already hydrates from the canonical gateway session projection.
       openHistory: () => safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false })),
+      // Text mode types into the you-line. Submitting it is an ordinary turn.
+      onSubmitText: (text) => submitInstruction(text),
+      finalizeUserTranscriptForCopy: finalizeCaptureForCopy,
     });
   }
+
+  // Copy on a live capture finalizes the utterance WITHOUT sending it.
+  // Ordering and the never-commit rule live in capture-copy-disposition.js.
+  const captureCopy = AgeeCaptureCopyDisposition.create({
+    isCapturing: () => Boolean(liveVoice) && listening,
+    cancelCapture: () => stopAllLiveVoiceTurns("cancel"),
+    onIdle: () => setAgentState("idle"),
+    copyTranscript: () => ribbons?.copyUserTranscript(),
+  });
+  const finalizeCaptureForCopy = () => captureCopy.requestFinalize();
 
   // Anchor the panel to the floating mark so the input opens right where the
   // agent is. It opens above the mark and grows upward (its bottom stays pinned
@@ -1106,21 +1103,12 @@
       safeStorageLocalSet({ ageeLauncherHidden: false }).catch(() => {});
     }
     toggle(true);
-    if (fresh) {
-      setInputText("");
-      setSurfacePhase("editing");
-    }
-    setTimeout(() => input.focus(), 0);
+    if (fresh) setSurfacePhase("editing");
   }
 
   function closeTextSurface() {
     toggle(false);
     if (surfacePhase !== "pending") setSurfacePhase("idle");
-  }
-
-  function toggleTextSurface() {
-    if (open) closeTextSurface();
-    else openTextSurface({ fresh: false });
   }
 
   function setSurfacePhase(next) {
@@ -1129,9 +1117,6 @@
     for (const phase of ["idle", "editing", "pending", "result", "error"]) {
       root.classList.toggle(`agee-phase-${phase}`, phase === next);
     }
-    // The composer stays editable through every phase. Answers live in the cue
-    // cards above, never in the input, so a running turn never locks typing.
-    if (input) input.readOnly = false;
     syncAvatarBehaviorTrigger();
   }
 
@@ -1142,25 +1127,6 @@
     if (!root || !log) return;
     const hasVisibleWork = log.children.length > 0;
     root.classList.toggle("agee-has-log", hasVisibleWork);
-  }
-
-  function setInputText(text, { select = false } = {}) {
-    if (!input) return;
-    input.value = String(text || "");
-    resizeInput();
-    if (select) {
-      setTimeout(() => {
-        input.focus();
-        input.select();
-      }, 0);
-    }
-  }
-
-  function resizeInput() {
-    if (!input) return;
-    input.style.height = "auto";
-    const max = Math.max(96, Math.round(window.innerHeight * 0.32));
-    input.style.height = `${Math.min(input.scrollHeight || 0, max)}px`;
   }
 
   function askInlineConfirm(text) {
@@ -1615,11 +1581,7 @@
       return;
     }
     if (action === "command.open") {
-      openTextSurface({ fresh: false });
-      if (input) {
-        if (resolvedPrompt) setInputText(resolvedPrompt, { select: true });
-        input.focus();
-      }
+      ribbons?.beginCompose({ text: resolvedPrompt });
       return;
     }
     if (action === "page.describe") {
@@ -2516,7 +2478,6 @@
     // the mode, show it in the result stack, and never run a gateway turn.
     if (maybeHandleContextSlashCommand(instruction)) {
       setSurfacePhase("editing");
-      input.focus();
       return;
     }
     // Fast local stop path for typed input: a whole-utterance "stop / shut up /
@@ -2532,7 +2493,6 @@
       stopSpeaking();
       updateCue(cueId, "", "done");
       setSurfacePhase("editing");
-      input.focus();
       return;
     }
     const role = AgeeSteeringUi.roleForInstruction(instruction);
@@ -2556,7 +2516,6 @@
       setTranscript(displayText);
       setAgentState("thinking");
     }
-    input.focus();
     const context = consumeContextControls();
     safeRuntimeSendMessage({
       cmd: "run",
@@ -2603,6 +2562,9 @@
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
+    // Reacts to the microphone, not the transcriber.
+    ribbons?.setUserPending(next === "listening");
+    ribbons?.setReplyPending(next === "thinking");
     if (next === "idle") setTranscript("");
     // Every stop/error/teardown path lands here, so the talk-mode ring can
     // never outlive conversation mode.
@@ -2807,6 +2769,8 @@
       playedAssistantAudioSegments: [],
       playbackProgressSent: false,
       assistantText: "",
+      // Accumulated deltas: a preview. assistant_text replaces it and is the record.
+      assistantStreamText: "",
       transcript: "",
       gatewayRouted: false,
       incognito: context.action === "incognito",
@@ -2945,10 +2909,23 @@
       }
       return;
     }
+    // Render as the model writes. Only emitted when the reasoner streams, so
+    // non-streaming providers still land on assistant_text below with no gap.
+    if (msg.type === "assistant_text_delta") {
+      const delta = String(msg.delta || "");
+      if (!delta || state.assistantSpeechSuppressed) return;
+      state.assistantStreamText += delta;
+      if (isCurrentTurn) {
+        setAgentState("speaking");
+        setReplyRibbon(state.assistantStreamText, { streaming: true });
+      }
+      return;
+    }
     if (msg.type === "assistant_text") {
       const text = String(msg.text || "").trim();
       if (!text) return;
       state.assistantText = text;
+      state.assistantStreamText = text;
       const displayText = state.assistantSpeechSuppressed
         ? AgeeSteeringUi.formatSteeredAssistantText(text, state.steeringBoundaryText)
         : text;
@@ -3041,9 +3018,10 @@
     }
   }
 
-  function playLiveAssistantPcm(state, buffer) {
+  function playLiveAssistantPcm(state, buffer, { replay = false } = {}) {
     if (!buffer || !buffer.byteLength) return;
     if (!isLiveVoiceStateActive(state)) return;
+    if (!replay) AgeeAssistantAudioReplay.retainFrame(state, buffer);
     if (state.assistantSpeechSuppressed || !voiceRepliesEnabled) return;
     primeAudio();
     if (!audioCtx) return;
@@ -3075,9 +3053,23 @@
       }
     };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
-    recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, rate);
+    // The segment ledger records the LIVE pass (it feeds the stored interruption
+    // cutoff), so a replay must not rewrite it.
+    if (!replay) recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, rate);
     source.start(startAt);
     state.playbackTime = startAt + audioBuffer.duration / rate;
+  }
+
+  function restartAssistantPlayback(state) {
+    primeAudio();
+    const restarted = AgeeAssistantAudioReplay.restart(state, {
+      isActive: isLiveVoiceStateActive,
+      stop: stopLivePlayback,
+      currentTime: () => audioCtx?.currentTime,
+      play: (target, frame) => playLiveAssistantPcm(target, frame, { replay: true }),
+    });
+    if (restarted) setAgentState("speaking");
+    return restarted;
   }
 
   async function commitLiveVoiceTurn(state = liveVoice) {
@@ -4149,13 +4141,13 @@
         beginVoiceHotkey(e);
         return;
       }
-      // ⌘, → text command field.
+      // ⌘, → the same unit, in text mode: the caret lands in the you-line.
       if (isTextHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
         lastLocalTextHotkeyAt = Date.now();
-        openTextSurface({ fresh: false });
+        ribbons?.beginCompose();
         return;
       }
     },
@@ -4365,12 +4357,13 @@
         return true;
       case "toggle":
         if (!(msg.source === "command" && commandEchoIsRecent("text"))) {
-          toggleTextSurface();
+          ribbons?.beginCompose();
         }
         reply({ ok: true });
         return true;
       case "open":
-        openTextSurface({ fresh: false });
+        if (!root) build();
+        ribbons?.beginCompose();
         reply({ ok: true });
         return true;
       case "toggleVoice":

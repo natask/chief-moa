@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import AppKit
 import MoaMacCore
 import SwiftUI
 
@@ -161,6 +162,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     private let voiceController: any VoiceCaptureControlling
     private let historyLoader: any GatewayHistoryLoading
     private let browserSender: any BrowserDelegationSending
+    private let deviceAuthorizer: any DeviceAuthorizing
+    private let deviceSessionStore: any DeviceSessionStoring
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -172,6 +175,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             voiceController: VoiceCaptureController(),
             historyLoader: URLSessionGatewayHistoryLoader(),
             browserSender: URLSessionBrowserDelegationSender()
+            , deviceAuthorizer: URLSessionDeviceAuthorizer(), deviceSessionStore: KeychainDeviceSessionStore()
         )
     }
 
@@ -180,19 +184,45 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         sender: any GatewayChatSending,
         voiceController: (any VoiceCaptureControlling)? = nil,
         historyLoader: (any GatewayHistoryLoading)? = nil,
-        browserSender: (any BrowserDelegationSending)? = nil
+        browserSender: (any BrowserDelegationSending)? = nil,
+        deviceAuthorizer: (any DeviceAuthorizing)? = nil,
+        deviceSessionStore: (any DeviceSessionStoring)? = nil
     ) {
         self.store = store
         self.sender = sender
         self.voiceController = voiceController ?? VoiceCaptureController()
         self.historyLoader = historyLoader ?? URLSessionGatewayHistoryLoader()
         self.browserSender = browserSender ?? URLSessionBrowserDelegationSender()
-        origin = store.loadOrigin()
-        token = ""
+        self.deviceAuthorizer = deviceAuthorizer ?? URLSessionDeviceAuthorizer()
+        self.deviceSessionStore = deviceSessionStore ?? KeychainDeviceSessionStore()
+        let savedOrigin = store.loadOrigin()
+        origin = savedOrigin.isEmpty ? "https://api.agee.app" : savedOrigin
+        token = self.deviceSessionStore.load()
         sessionID = store.loadSessionID()
     }
 
     public var isConfigured: Bool { !origin.isEmpty && !token.isEmpty }
+
+    public func signIn() async {
+        do {
+            guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
+            try store.saveOrigin(origin)
+            status = "Opening Ag sign in…"
+            let authorization = try await deviceAuthorizer.begin(origin: url)
+            guard NSWorkspace.shared.open(authorization.verificationURL) else { throw DeviceAuthorizationError.invalidResponse }
+            status = "Finish signing in in your browser…"
+            let deviceToken = try await deviceAuthorizer.poll(origin: url, authorization: authorization)
+            try deviceSessionStore.save(deviceToken)
+            token = deviceToken
+            status = "Signed in to Ag"
+        } catch DeviceAuthorizationError.denied {
+            status = "Sign in was denied"
+        } catch DeviceAuthorizationError.expired {
+            status = "Sign in expired — try again"
+        } catch {
+            status = "Could not sign in to Ag"
+        }
+    }
 
     @discardableResult public func useConnectionForSession() -> Bool {
         do {
@@ -211,6 +241,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         voiceReleaseRequested = false
         await voiceController.cancel()
         token = ""
+        try? deviceSessionStore.clear()
         resetPresentation()
         status = "Disconnected — session credential cleared"
     }
@@ -229,7 +260,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             }
             status = browserDevices.isEmpty ? "No online browser extension can open tabs" : "Browser extension ready"
         } catch GatewayChatTransportError.unauthorized {
-            status = "Gateway rejected the token"
+            status = "Your Ag session expired — sign in again"
         } catch {
             status = "Could not load browser devices"
         }
@@ -279,7 +310,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             status = message.isEmpty ? "Browser extension could not open the URL" : message
             browserHandoffPhase = .failed
         } catch GatewayChatTransportError.unauthorized {
-            status = "Gateway rejected the token"
+            status = "Your Ag session expired — sign in again"
             browserHandoffPhase = .failed
         } catch {
             status = "Could not send work to the browser"
@@ -306,7 +337,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         } catch GatewayChatError.promptTooLarge {
             status = "That message is too large"
         } catch MoaMacError.missingToken {
-            status = "Add your gateway token"
+            status = "Sign in to Ag first"
         } catch MoaMacError.invalidDestination {
             status = "Use a canonical HTTPS gateway origin"
         } catch {
@@ -395,7 +426,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         } catch VoiceCaptureError.microphoneDenied {
             voiceState.apply(.permissionDenied)
         } catch MoaMacError.missingToken {
-            voiceState.apply(.failed("Add your gateway origin and token first"))
+            voiceState.apply(.failed("Sign in to Ag first"))
         } catch MoaMacError.invalidDestination {
             voiceState.apply(.failed("Use a canonical HTTPS gateway origin"))
         } catch {

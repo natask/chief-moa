@@ -114,6 +114,7 @@ public final class OverlayService extends Service {
     private String voiceUserTranscript = "";
     private String voiceAssistantTranscript = "";
     private boolean voiceUserTranscriptFinal;
+    private boolean copyUserTranscriptWhenFinal;
     private final MoaLiveConversationState liveConversation = new MoaLiveConversationState();
     private boolean currentStreamingAssistantRecorded;
     private String sessionSpeakLanguage = "";
@@ -1054,6 +1055,23 @@ public final class OverlayService extends Service {
             }
 
             @Override
+            public boolean finalizeUserTranscriptForCopy() {
+                if (voiceUserTranscriptFinal) {
+                    return false;
+                }
+                boolean captureActive = voiceInvocationLatched
+                        || reviewableVoiceDraftActive()
+                        || streamingVoiceActive()
+                        || voiceController.isCommandListening();
+                if (!captureActive) {
+                    return false;
+                }
+                copyUserTranscriptWhenFinal = true;
+                sendVoiceDraft();
+                return true;
+            }
+
+            @Override
             public void onWentDormant() {
                 removeTranscriptOverlay();
             }
@@ -1101,6 +1119,7 @@ public final class OverlayService extends Service {
     }
 
     private void discardVoiceDraft() {
+        copyUserTranscriptWhenFinal = false;
         voiceInvocationLatched = false;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
@@ -1168,9 +1187,13 @@ public final class OverlayService extends Service {
         voiceUserTranscriptFinal = isFinal;
         if (!overlayUnit.isShowing()) {
             showTranscriptOverlay(value);
-            return;
+        } else {
+            renderVoiceTranscriptRows();
         }
-        renderVoiceTranscriptRows();
+        if (isFinal && copyUserTranscriptWhenFinal) {
+            copyUserTranscriptWhenFinal = false;
+            overlayUnit.copyUserTranscript();
+        }
     }
 
     private void updateVoiceAssistantTranscript(String text) {
@@ -2743,6 +2766,7 @@ public final class OverlayService extends Service {
     }
 
     private void cancelStreamingVoice() {
+        copyUserTranscriptWhenFinal = false;
         liveConversation.clear();
         pushToTalkVoiceTurn = false;
         setContinuousVoiceLoop(false);
