@@ -22,10 +22,16 @@ final class MoaOrbWindowSizing {
                 android.graphics.PixelFormat.TRANSLUCENT
         );
         params.gravity = Gravity.TOP | Gravity.START;
-        params.x = context.getResources().getDisplayMetrics().widthPixels
-                - size - dp(context, edgeMarginDp);
+        params.x = initialX(
+                context.getResources().getDisplayMetrics().widthPixels,
+                size,
+                dp(context, edgeMarginDp));
         params.y = dp(context, 164);
         return params;
+    }
+
+    static int initialX(int displayWidth, int size, int edgeMargin) {
+        return displayWidth - size - edgeMargin;
     }
 
     static void resize(
