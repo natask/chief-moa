@@ -28,10 +28,12 @@
   const LINGER_REPLY = 9000;
   const LINGER_ERROR = 14000;
   const PROXIMITY = 72;
-  // Reading pace for the reply line, in characters per second, and the tick it
-  // is applied on. ~45 c/s is a shade faster than comfortable silent reading,
-  // so the line stays ahead of the eye without ever looking stalled.
-  const REVEAL_CPS = 45;
+  // Reading pace for the reply line, in rendered glyphs per second, and the
+  // tick it is applied on. Counted in grapheme clusters, not code units, so a
+  // syllabic script (Amharic carries far more meaning per glyph than Latin)
+  // arrives at a readable rate rather than flashing past — and so a reveal can
+  // never cut a cluster in half.
+  const REVEAL_CPS = 26;
   const REVEAL_TICK_MS = 40;
   // However far behind the reveal falls, it is caught up within this window.
   const REVEAL_CATCHUP_MS = 2500;
@@ -108,6 +110,8 @@
         // Copy, the variants and the expanded view all read `target` — pacing is
         // a reading aid, never a claim that Ag said less than it did.
         target: "",
+        targetGraphemes: [],
+        revealIndex: 0,
         revealTimer: null,
         truncated: false,
         expanded: false,
@@ -191,6 +195,8 @@
       ribbon.chosenVariant = "";
       ribbon.buffer = "";
       ribbon.target = "";
+      ribbon.targetGraphemes = [];
+      ribbon.revealIndex = 0;
       ribbon.truncated = false;
       ribbon.textEl.textContent = "";
       ribbon.lineEl.style.transform = "translateX(0px)";
@@ -236,12 +242,15 @@
       ribbon.el.classList.toggle("agee-ribbon-mute", tone === "mute");
       // Unpaced text lands whole: the user's own transcript, where partials
       // rewrite themselves and pacing would fight the correction.
+      ribbon.targetGraphemes = TextModel.graphemes(ribbon.target);
       if (!paced || !ribbon.target.startsWith(ribbon.buffer)) {
         stopReveal(ribbon);
         ribbon.buffer = ribbon.target;
+        ribbon.revealIndex = ribbon.targetGraphemes.length;
         render(ribbon);
         return;
       }
+      ribbon.revealIndex = Math.min(ribbon.revealIndex, ribbon.targetGraphemes.length);
       scheduleReveal(ribbon);
       render(ribbon);
     }
@@ -258,7 +267,7 @@
     // a long reply that landed at once catches up fast rather than trickling
     // out for a minute, and is always fully shown within REVEAL_CATCHUP_MS.
     function revealStep(ribbon) {
-      const remaining = ribbon.target.length - ribbon.buffer.length;
+      const remaining = ribbon.targetGraphemes.length - ribbon.revealIndex;
       if (remaining <= 0) {
         stopReveal(ribbon);
         // Catching up is what ends the turn's visible work: an endTurn that
@@ -275,7 +284,8 @@
       const catchUpCps = remaining / (REVEAL_CATCHUP_MS / 1000);
       const cps = Math.max(REVEAL_CPS, catchUpCps);
       const step = Math.max(1, Math.round((cps * REVEAL_TICK_MS) / 1000));
-      ribbon.buffer = ribbon.target.slice(0, ribbon.buffer.length + step);
+      ribbon.revealIndex = Math.min(ribbon.targetGraphemes.length, ribbon.revealIndex + step);
+      ribbon.buffer = ribbon.targetGraphemes.slice(0, ribbon.revealIndex).join("");
       render(ribbon);
       ribbon.revealTimer = setTimeout(() => revealStep(ribbon), REVEAL_TICK_MS);
     }
@@ -298,6 +308,7 @@
       stopReveal(ribbon);
       if (ribbon.buffer !== ribbon.target) {
         ribbon.buffer = ribbon.target;
+        ribbon.revealIndex = ribbon.targetGraphemes.length;
         render(ribbon);
       }
       if (ribbon.lingerAfterReveal) {
@@ -569,6 +580,10 @@
       });
       you.el.style.left = `${place.youLeft}px`;
       reply.el.style.left = `${place.replyLeft}px`;
+      // Anchor each line to the edge that sits on the companion, so the words
+      // hug it from whichever side the box ended up on.
+      you.el.dataset.ageeSeam = place.youSeam;
+      reply.el.dataset.ageeSeam = place.replySeam;
       if (place.youAnchor === "top") {
         you.el.style.top = `${place.youTop}px`;
         you.el.style.bottom = "auto";

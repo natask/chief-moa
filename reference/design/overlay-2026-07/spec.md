@@ -147,6 +147,17 @@ it. Only a viewport narrower than one box breaks the seam, and there staying on
 screen wins. Both lines stay left-anchored *inside* their own box so the sliding
 window keeps ownership of the horizontal offset (§4).
 
+**The words are anchored to the seam edge, not the box.** Revised again the
+same day, after the first build shipped and looked wrong: a box whose right
+edge sits on the line still renders its text left-anchored inside 340px, so a
+short line ends up a third of a screen away from the companion and the unit
+reads as floating. Each box therefore reports which of its edges landed on the
+line (`youSeam`/`replySeam`), and the text inside is anchored to that edge — the
+words always sit against the companion, from whichever side. Anchoring applies
+only while the line fits; once it is clipped the line fills the box and the
+sliding window owns the offset. The speaker dot hangs off the opposite edge, so
+nothing is ever drawn between the words and the mark.
+
 Ribbons are laid out relative to the companion and then clamped:
 
 1. Compute `youLeft = companionCenterX` and `replyLeft = companionCenterX -
@@ -230,10 +241,15 @@ target   // everything the ribbon has been given
 buffer   // the prefix it has actually shown
 ```
 
-`buffer` advances toward `target` on a timer:
+`buffer` advances toward `target` on a timer, counted in grapheme clusters, not
+code units. Two reasons, both load-bearing: a syllabic script carries far more
+meaning per glyph than Latin, so a code-unit rate that reads well in English
+flashes past in Amharic; and slicing a string by code-unit index can cut a
+combining sequence or a surrogate pair in half and paint a broken glyph for a
+frame.
 
 ```text
-REVEAL_CPS        = 45      // characters per second, ordinary pace
+REVEAL_CPS        = 26      // GRAPHEME CLUSTERS per second, ordinary pace
 REVEAL_TICK_MS    = 40      // timer granularity
 REVEAL_CATCHUP_MS = 2500    // whatever the backlog, it is caught up within this
 step = max(1, round(max(REVEAL_CPS, backlog / (REVEAL_CATCHUP_MS/1000)) * REVEAL_TICK_MS/1000))

@@ -52,6 +52,24 @@
     return { buffer: graphemeTail(value, BUFFER_MAX_CHARS), truncated: true };
   }
 
+  // Split into grapheme clusters once, so a paced reveal can advance one
+  // rendered glyph at a time. Slicing a JS string by code-unit index can cut an
+  // Ethiopic combining sequence or a surrogate pair in half and paint a broken
+  // glyph for a frame; Amharic replies made that visible.
+  function graphemes(text) {
+    const value = String(text || "");
+    if (!value) return [];
+    if (segmenter === null) {
+      segmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+        ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+        : false;
+    }
+    if (!segmenter) return [...value];
+    const parts = [];
+    for (const part of segmenter.segment(value)) parts.push(part.segment);
+    return parts;
+  }
+
   // What the collapsed ribbon renders.
   function windowFor(buffer) {
     return graphemeTail(buffer, WINDOW_CHARS);
@@ -165,6 +183,7 @@
     emptyVariants,
     graphemeTail,
     mergeVariants,
+    graphemes,
     overflowFor,
     shouldAdoptPresentationText,
     variantRows,

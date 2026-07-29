@@ -181,7 +181,8 @@ surfaces, so this is a parity debt, not a backlog idea.
 | Rule | Browser | Android | Owed |
 |---|---|---|---|
 | Seam: you-box left edge on the companion centre line, reply-box right edge on it, mirroring near an edge | done (`ribbon-layout.js` `ribbonPlacement`, unit-tested) | not started — both ribbons still centre on the orb | port the `onSeam(preferred, mirrored)` rule into `MoaOrbOverlayGeometry` and cover it in `MoaOrbOverlayGeometryTest` |
-| Reading pace: `target`/`buffer` split, 45 c/s, 2.5s catch-up, reply only, copy reads `target` | done (`ribbon-runtime.js`) | not started — a whole reply still lands at once | port the reveal timer into the ribbon view; keep it off the user line |
+| Words anchored to the seam edge (and the speaker dot to the opposite one) | done (`youSeam`/`replySeam` + `[data-agee-seam]` CSS) | not started | anchor the ribbon text to the seam edge; without this the seam alone looks worse than centring |
+| Reading pace: `target`/`buffer` split, 26 grapheme clusters/s, 2.5s catch-up, reply only, copy reads `target` | done (`ribbon-runtime.js`) | not started — a whole reply still lands at once | port the reveal timer into the ribbon view; keep it off the user line |
 | A turn is not visually over until the reveal is (parked linger) | done | not started | same lane as the reveal timer |
 | Text mode is the you-line, not a panel | done (`beginCompose`) | not started — `showPanel` still raises the composer | make the user ribbon editable; leave `panelView` for approvals/notes |
 | Copy during live capture finalizes WITHOUT sending | done (`finalizeUserTranscriptForCopy` cancels, never commits) | **diverges** — `OverlayService` requests *commit*, which sends the turn | change the Android path to cancel-and-copy; the user's rule is "copy must not send" |
