@@ -222,7 +222,7 @@ if [[ ! "$RELEASE_ID" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] \
   || [[ ! "$APK_SIZE" =~ ^[0-9]+$ ]] \
   || [[ ! "$RELEASE_META_SHA256" =~ ^[a-f0-9]{64}$ ]] \
   || [[ ! "$LATEST_SHA256" =~ ^[a-f0-9]{64}$ ]] \
-  || [[ "$APP_ID" != "ai.moa.assistant" ]] \
+  || [[ "$APP_ID" != "ai.moa.assistant" && "$APP_ID" != "ag.companion" ]] \
   || [[ ! "$VERSION_CODE" =~ ^[0-9]+$ ]] \
   || [[ ! "$VERSION_NAME" =~ ^[A-Za-z0-9._+-]+$ ]] \
   || [[ ! "$GIT_SHA" =~ ^[A-Za-z0-9._-]+$ ]]; then
@@ -833,7 +833,7 @@ public_gateway_url="${10}"
 [[ "$release_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || exit 1
 [[ "$apk_sha" =~ ^[a-f0-9]{64}$ ]] || exit 1
 [[ "$apk_size" =~ ^[0-9]+$ ]] || exit 1
-[ "$app_id" = ai.moa.assistant ] || exit 1
+[ "$app_id" = ai.moa.assistant ] || [ "$app_id" = ag.companion ] || exit 1
 [[ "$version_code" =~ ^[0-9]+$ ]] || exit 1
 [[ "$version_name" =~ ^[A-Za-z0-9._+-]+$ ]] || exit 1
 [[ "$git_sha" =~ ^[A-Za-z0-9._-]+$ ]] || exit 1
