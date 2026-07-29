@@ -546,6 +546,14 @@
         viewportHeight: win.innerHeight,
         launcherWidth: rect?.width || 0,
         launcherHeight: rect?.height || 0,
+        // The SAME gap position() lays the bubbles out with. The rim is drawn
+        // outside the launcher's box, where getBoundingClientRect cannot see
+        // it, so the gap has to carry it — and if only one of these two calls
+        // carries it, the drag boundary and the space budget disagree by
+        // exactly that outset, which is the thing this file's own comment says
+        // must never happen. The companion could then be dropped where its
+        // bubble no longer fits, and the bubble ran off the top of the screen.
+        gap: Layout.GAP + rimOutset(),
       }));
     }
 
