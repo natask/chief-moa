@@ -24,8 +24,6 @@
   --agee-ribbon-line-h: 18px;
   --agee-ribbon-pad-x: 10px;
   --agee-ribbon-gap: 8px;
-  --agee-ribbon-dot: 5px;
-  --agee-ribbon-dot-offset: 10px;
   --agee-ribbon-edge: 16px;
 
   /* colour — dark (default) */
@@ -137,29 +135,6 @@
   transform: translateY(-4px);
 }
 
-/* Speaker dot: the only always-on ribbon chrome, and the only way to tell the
-   two streams apart without labels. */
-.agee-ribbon-dot {
-  position: absolute;
-  left: calc(-1 * var(--agee-ribbon-dot-offset));
-  top: 50%;
-  width: var(--agee-ribbon-dot);
-  height: var(--agee-ribbon-dot);
-  margin-top: calc(-0.5 * var(--agee-ribbon-dot));
-  border-radius: 50%;
-  transition: transform var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out);
-}
-#agee-ribbon-you .agee-ribbon-dot { background: var(--agee-ribbon-you); }
-#agee-ribbon-reply .agee-ribbon-dot { background: var(--agee-ribbon-agent); }
-#agee-root.agee-state-listening #agee-ribbon-you .agee-ribbon-dot,
-#agee-root.agee-state-speaking #agee-ribbon-reply .agee-ribbon-dot {
-  animation: agee-ribbon-dot-pulse 1.2s ease-in-out infinite;
-}
-@keyframes agee-ribbon-dot-pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.35); }
-}
-
 /* Viewport: the anti-reflow guarantee. Fixed box, hidden overflow, one nowrap
    line inside translated so the newest character stays pinned right. */
 .agee-ribbon-viewport {
@@ -195,15 +170,6 @@
 .agee-ribbon[data-agee-seam="right"] .agee-ribbon-line {
   text-align: right;
 }
-/* The speaker dot hangs off the edge AWAY from the companion. On the seam side
-   it would sit between the words and the mark, or collide with the mark itself.
-   The default left position is already the far edge for a box that ends on the
-   line; a box that starts on the line needs it flipped. */
-.agee-ribbon[data-agee-seam="left"] .agee-ribbon-dot {
-  left: auto;
-  right: calc(-1 * var(--agee-ribbon-dot-offset));
-}
-
 /* Text mode: the you-line IS the input. Same box, same window, same pixels —
    the only difference is a caret and a hit region that accepts a click. */
 .agee-ribbon-composing .agee-ribbon-text {
@@ -528,10 +494,7 @@
   box-shadow: none;
 }
 .agee-ribbon-expanded .agee-ribbon-viewport::after { display: none; }
-.agee-ribbon-expanded .agee-ribbon-dot {
-  top: 14px;
-}
-.agee-ribbon-expanded .agee-ribbon-copy {
+.agee-ribbon-expanded .agee-ribbon-expanded .agee-ribbon-copy {
   position: sticky;
   top: 0;
 }
