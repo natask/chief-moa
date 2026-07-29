@@ -105,6 +105,16 @@
       target still resolves, unreadable metadata keeps a release, and the live
       release and `current` pointer are re-checked afterwards. Covered in
       `android_app/deploy/ota/test-sync-vps.sh`.
+- [x] 3.7 Make the 24-hour GCS blob spool janitor verify each exact remote
+      object immediately before reclaiming its local durability copy. The
+      in-memory upload marker is only a scheduling hint; reclamation requires a
+      fresh object metadata read and a matching byte size and MD5 digest for an
+      unchanged local inode. Missing, corrupt, or unverifiable objects remain
+      local and are queued for repair.
+      Acceptance: replacing an uploaded GCS object with same-size corrupt bytes
+      cannot make the janitor delete the good local spool; the object is
+      repaired, freshly re-verified, and only then reclaimed. Covered in
+      `gateway/test/blob-store.test.js`.
 
 ## 4. The Plane
 

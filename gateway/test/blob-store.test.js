@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -22,7 +23,7 @@ const FAKE_TOKEN_SOURCE = {
 // options.failUploads makes the next N uploads return 500 (retry testing).
 function startFakeGcs(options = {}) {
   const objects = new Map(); // name -> { bytes, contentType }
-  const state = { failUploads: Number(options.failUploads || 0), uploads: 0 };
+  const state = { failUploads: Number(options.failUploads || 0), uploads: 0, stats: 0 };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     const sendJson = (status, payload) => {
@@ -63,7 +64,13 @@ function startFakeGcs(options = {}) {
           response.end(object.bytes);
           return;
         }
-        return sendJson(200, { name, size: String(object.bytes.length), contentType: object.contentType });
+        state.stats += 1;
+        return sendJson(200, {
+          name,
+          size: String(object.bytes.length),
+          contentType: object.contentType,
+          md5Hash: crypto.createHash("md5").update(object.bytes).digest("base64"),
+        });
       }
       if (request.method === "DELETE") {
         if (!object) return sendJson(404, { error: "not found" });
@@ -272,6 +279,39 @@ test("janitor re-enqueues unuploaded spool files and prunes confirmed old ones",
   assert.ok(!fs.existsSync(orphan));
   // The bucket copy is untouched and reads still work.
   assert.deepStrictEqual(await store.readBytes("audio-notes/orphan.pcm"), Buffer.from("orphan-bytes"));
+
+  await fake.close();
+});
+
+test("janitor freshly verifies each GCS object digest before reclaiming a 24-hour spool", async () => {
+  const fake = await startFakeGcs();
+  const dataDir = tempDataDir();
+  const store = gcsStore(dataDir, fake.endpoint, { BLOB_SPOOL_MAX_AGE_MS: "86400000" });
+  const key = "voice-sessions/s1/t1.user.pcm";
+  const local = store.localPath(key);
+
+  await store.put(key, Buffer.from("original"), { contentType: "audio/L16" });
+  await store.flush();
+
+  // Replacing the object with same-size bytes reproduces the unsafe case:
+  // the process still has an `uploaded` marker, and a size-only check would
+  // accept the corrupt object and delete the only good local copy.
+  fake.objects.set(key, { bytes: Buffer.from("corrupt!"), contentType: "audio/L16" });
+  const ancient = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  fs.utimesSync(local, ancient, ancient);
+  const statsBefore = fake.state.stats;
+
+  await store.sweepSpool();
+  assert.ok(fs.existsSync(local), "mismatched GCS object must keep the local durability copy");
+  assert.ok(fake.state.stats > statsBefore, "reclamation must make a fresh per-object GCS metadata request");
+
+  // The mismatch is queued for repair. Only a later sweep, after the repaired
+  // object is freshly verified, may reclaim the old local spool.
+  await store.flush();
+  assert.deepStrictEqual(fake.objects.get(key).bytes, Buffer.from("original"));
+  await store.sweepSpool();
+  assert.ok(!fs.existsSync(local));
+  assert.deepStrictEqual(await store.readBytes(key), Buffer.from("original"));
 
   await fake.close();
 });

@@ -83,6 +83,13 @@ Moa Gateway
   companion manifests, pet manifests, engine-served browser customizations, and
   signed Android APK update artifacts.
 
+  With `BLOB_STORE=gcs`, voice and note media first land in a local durability
+  spool and upload asynchronously. The 24-hour spool janitor treats an upload
+  result or in-memory marker as insufficient deletion evidence: immediately
+  before reclaiming each local file it reads that exact GCS object's metadata
+  and matches size and MD5 against the unchanged local inode. Missing,
+  mismatched, or unverifiable objects remain local and are queued for repair.
+
   The Chief Moa persistent intent plane is an authenticated projection over the
   same gateway product-event substrate. It is not a separate intent product or
   JSON store. A stable intent identity relates user-confirmed objective,

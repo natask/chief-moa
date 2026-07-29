@@ -19,6 +19,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { Readable } = require("node:stream");
 const { createGoogleTokenSource } = require("./google-auth");
 
@@ -311,22 +312,40 @@ function createBlobStore(options = {}) {
             continue;
           }
           if (now - stats.mtimeMs < JANITOR_MIN_AGE_MS) continue;
-          let confirmedAt = uploaded.get(key) || 0;
-          if (!confirmedAt) {
-            const remote = await gcs.stat(key);
-            if (remote && remote.size === stats.size) {
-              confirmedAt = now;
-              uploaded.set(key, confirmedAt);
-            } else {
+          const reclaimable = spoolMaxAgeMs > 0 && now - stats.mtimeMs > spoolMaxAgeMs;
+          if (reclaimable) {
+            // `uploaded` is only an in-memory scheduling hint. The object may
+            // have been removed or replaced after this process uploaded it,
+            // and a restart can reconstruct that hint from size alone. Before
+            // deleting the durability-floor spool, verify this exact local
+            // file against fresh metadata for this exact GCS object. MD5 is
+            // required because size alone cannot detect same-size corruption.
+            const verification = await verifyReclaimableObject(gcs, key, path.join(dataDir, key), stats);
+            if (!verification.verified) {
+              uploaded.delete(key);
               enqueueUpload(key, contentTypeForKey(key));
               continue;
             }
-          }
-          if (spoolMaxAgeMs > 0 && now - stats.mtimeMs > spoolMaxAgeMs) {
             try {
+              const current = fs.statSync(path.join(dataDir, key));
+              if (!sameFile(current, verification.localStats)) {
+                uploaded.delete(key);
+                enqueueUpload(key, contentTypeForKey(key));
+                continue;
+              }
               fs.unlinkSync(path.join(dataDir, key));
               uploaded.delete(key);
             } catch {}
+            continue;
+          }
+
+          if (!uploaded.has(key)) {
+            const remote = await gcs.stat(key);
+            if (remote && remote.size === stats.size) {
+              uploaded.set(key, now);
+            } else {
+              enqueueUpload(key, contentTypeForKey(key));
+            }
           }
         }
       }
@@ -457,6 +476,7 @@ function createGcsClient(options = {}) {
       size: Number(body.size || 0),
       contentType: String(body.contentType || ""),
       generation: String(body.generation || ""),
+      md5Hash: String(body.md5Hash || ""),
     };
   }
 
@@ -498,6 +518,48 @@ function createGcsClient(options = {}) {
   }
 
   return { bucket, prefix, endpoint, upload, stat, readStream, readBytes, delete: deleteObject };
+}
+
+async function verifyReclaimableObject(gcs, key, filePath, expectedStats) {
+  let handle;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+    const before = await handle.stat();
+    if (!sameFile(before, expectedStats)) return { verified: false };
+
+    const hash = crypto.createHash("md5");
+    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk);
+
+    const after = await handle.stat();
+    if (!sameFile(after, before)) return { verified: false };
+    const digest = hash.digest("base64");
+
+    // Fetch metadata after hashing so this per-object check sits immediately
+    // before reclamation rather than before a potentially long local read.
+    const remote = await gcs.stat(key);
+    if (!remote || remote.size !== after.size || !remote.md5Hash) {
+      return { verified: false };
+    }
+    const final = await handle.stat();
+    if (!sameFile(final, after)) return { verified: false };
+    return {
+      verified: digest === remote.md5Hash,
+      localStats: final,
+    };
+  } catch {
+    return { verified: false };
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+function sameFile(left, right) {
+  return Boolean(left && right)
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
 }
 
 function* walkBlobFiles(dir, root) {

@@ -19,6 +19,11 @@ const path = require("node:path");
 const HTTP_OTA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-http-"));
 const GATEWAY_TOKEN = "test-ota-gateway-token";
 process.env.ANDROID_OTA_DIR = HTTP_OTA_DIR;
+// Keep server.js's staged-cutover fallback inside the fixture too. Otherwise a
+// populated checkout-level gateway/data/android-ota store wins while the fresh
+// primary fixture is still empty at module load, and HTTP tests mutate or read
+// real local release artifacts instead of their isolated store.
+process.env.ANDROID_OTA_LEGACY_DIR = HTTP_OTA_DIR;
 process.env.MOA_GATEWAY_TOKEN = GATEWAY_TOKEN;
 
 const androidOta = require("../lib/android-ota");
