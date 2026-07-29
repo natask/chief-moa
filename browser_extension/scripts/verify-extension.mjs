@@ -1563,25 +1563,85 @@ if (
   throw new Error("the ribbon palette must flip whole with the sampled page theme, and the palette check must stay in test:unit");
 }
 
-// The sliding window is the hard cap: a bounded tail of the buffer is rendered
-// inside a fixed viewport and the line is translated so the newest character
-// stays pinned right. Growing, wrapping, or resizing the box is a regression.
+// It is a bubble (overlay-2026-07-28 section 5). Text WRAPS; the hard cap is
+// the five-line height, not a refusal to wrap. The sliding window is deleted,
+// and it must stay deleted — a rendered tail inside a wrapping box would drop
+// the top of a turn that is still on screen, silently.
 if (
-  !/const WINDOW_CHARS = \d+;/.test(ribbonWindowSource) ||
-  !/const BUFFER_MAX_CHARS = \d+;/.test(ribbonWindowSource) ||
-  !/function graphemeTail\(/.test(ribbonWindowSource) ||
-  !/graphemeTail\(buffer, WINDOW_CHARS\)/.test(ribbonWindowSource) ||
-  !/return Math\.min\(0, inner - line\);/.test(ribbonWindowSource) ||
-  !/translateX\(\$\{overflow\}px\)/.test(ribbonRuntimeSource)
+  /const WINDOW_CHARS\b|\bwindowFor\(|\boverflowFor\(/.test(ribbonWindowSource) ||
+  /translateX|TextModel\.windowFor|TextModel\.overflowFor/.test(ribbonRuntimeSource) ||
+  /white-space:\s*pre;/.test(ribbonsCssSource)
 ) {
-  throw new Error("the ribbons must render a bounded tail window and slide instead of growing");
+  throw new Error("the sliding window is gone: no WINDOW_CHARS, no translateX, no white-space: pre");
 }
+// The whole turn is still bounded, just in the layout instead of the model:
+// 8000 retained chars for copy and expand, five rendered lines, 240px opened.
 if (
+  !/const BUFFER_MAX_CHARS = 8000;/.test(ribbonWindowSource) ||
+  !/function graphemeTail\(/.test(ribbonWindowSource) ||
+  !/--agee-ribbon-w:\s*clamp\(260px, 40vw, 380px\);/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-lines:\s*5;/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-line-h:\s*20px;/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-radius:\s*14px;/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-expanded-h:\s*240px;/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon\s*\{[^}]*max-height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\)/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-viewport\s*\{[^}]*overflow:\s*hidden;/.test(ribbonsCssSource) ||
-  !/\.agee-ribbon-line\s*\{[^}]*white-space:\s*pre;/.test(ribbonsCssSource) ||
-  !/\.agee-ribbon\s*\{[^}]*height:\s*var\(--agee-ribbon-h\);/.test(ribbonsCssSource)
+  !/\.agee-ribbon-line\s*\{[^}]*white-space:\s*pre-wrap;/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-line\s*\{[^}]*font-size:\s*14px;/.test(ribbonsCssSource)
 ) {
-  throw new Error("ribbon geometry must be fixed: one nowrap line inside a height-locked hidden viewport");
+  throw new Error("bubble geometry must be the Android numbers: 260-380px wide, 5 lines of 20px, radius 14, 240px opened, 8000-char buffer");
+}
+// Streaming is one rAF-coalesced append into a text node. innerHTML on model
+// output would be an injection surface; textContent per frame would tear the
+// paragraph down and rebuild it on every token.
+if (
+  !/function writeText\(ribbon, next\)/.test(ribbonRuntimeSource) ||
+  !/node\.appendData\(next\.slice\(current\.length\)\)/.test(ribbonRuntimeSource) ||
+  !/requestAnimationFrame\(paint\)/.test(ribbonRuntimeSource) ||
+  /\.innerHTML\s*=/.test(ribbonRuntimeSource)
+) {
+  throw new Error("a stream must append to one text node inside a single rAF-coalesced write, never innerHTML");
+}
+// Tail-pinned: new text at the bottom, the oldest line off the top under the
+// fade. The fade is vertical — a horizontal one is the sliding window again.
+if (
+  !/function pinToTail\(ribbon\)/.test(ribbonRuntimeSource) ||
+  !/viewport\.scrollTop = viewport\.scrollHeight;/.test(ribbonRuntimeSource) ||
+  !/classList\.toggle\("agee-ribbon-clipped", overflowing && !ribbon\.expanded\)/.test(ribbonRuntimeSource) ||
+  !/\.agee-ribbon-clipped \.agee-ribbon-viewport\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-fade:\s*12px;/.test(ribbonsCssSource)
+) {
+  throw new Error("the bubble must pin to its tail and fade the oldest line off the top");
+}
+// The caret is the first "it is hearing me" signal: it appears when capture
+// opens, before any word arrives. 2x16px in the accent, 1060ms blink.
+if (
+  !/\.agee-ribbon-caret\s*\{[^}]*width:\s*2px;[^}]*height:\s*16px;/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-caret\s*\{[^}]*background:\s*var\(--agee-ribbon-accent\);/.test(ribbonsCssSource) ||
+  !/animation: agee-ribbon-caret 1060ms/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-pending \.agee-ribbon-caret/.test(ribbonsCssSource)
+) {
+  throw new Error("the receiving bubble must carry a 2x16px accent caret blinking at 1060ms from the moment capture opens");
+}
+// Interim transcript is a hypothesis and reads as one, then hardens on final.
+// Both ends of that are palette tokens, so it flips with the page like
+// everything else.
+if (
+  !/#agee-ribbon-you\.agee-ribbon-streaming \.agee-ribbon-line \{ color: var\(--agee-ribbon-muted\); \}/.test(ribbonsCssSource) ||
+  !/#agee-root\[data-agee-unit="engaged"\] \.agee-ribbon-line \{ color: var\(--agee-ribbon-ink\); \}/.test(ribbonsCssSource) ||
+  !/setStreaming\(you, !!interim\)/.test(ribbonRuntimeSource)
+) {
+  throw new Error("an interim transcript must render muted and harden to full ink on final");
+}
+// One plate, always (section 5.2). The per-glyph scrim is what smeared into a
+// ragged black band, so the tokens that fed it are gone along with the rules.
+if (
+  /--agee-ribbon-scrim/.test(ribbonsCssSource) ||
+  /box-decoration-break\s*:/.test(ribbonsCssSource) ||
+  /\.agee-ribbon-text\s*\{[^}]*background:/.test(ribbonsCssSource) ||
+  /\.agee-ribbon-line\s*\{[^}]*text-shadow:/.test(ribbonsCssSource)
+) {
+  throw new Error("the plate is the legibility mechanism: no per-glyph scrim, no text halo on the run");
 }
 
 // The plate is permanent and the copy rail is always reachable: a click changes
@@ -1608,19 +1668,19 @@ if (
   throw new Error("dragging any ribbon must move the whole unit through the companion anchor");
 }
 
-// Tap expands the bounded bar to the full text AND reveals the copy rail in
-// the same gesture. Expanded is height-capped, wraps instead of sliding, and
-// is released by latch expiry so the overlay is never left occluding — except
-// while a caret is in the buffer, which no timer may interrupt.
+// Tap expands the bubble past its five collapsed lines to the whole turn,
+// inside a 240px scroll, and reveals the copy rail in the same gesture. Latch
+// expiry releases it so the overlay is never left occluding — except while a
+// caret is in the buffer, which no timer may interrupt.
 if (
   !/function expand\(ribbon\)/.test(ribbonRuntimeSource) ||
   !/function collapse\(ribbon\)/.test(ribbonRuntimeSource) ||
   !/engage\(true\);\s*\n\s*toggleExpanded\(ribbon\);/.test(ribbonRuntimeSource) ||
   !/latchTimer = setTimeout\(\(\) => \{[\s\S]{0,120}unlatch\(\);\s*\}, LATCH_MS\);/.test(ribbonRuntimeSource) ||
-  !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*max-height:/.test(ribbonsCssSource) ||
-  !/\.agee-ribbon-expanded \.agee-ribbon-line\s*\{[^}]*white-space:\s*pre-wrap;/.test(ribbonsCssSource)
+  !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*max-height:\s*calc\(var\(--agee-ribbon-expanded-h\)/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon-expanded \.agee-ribbon-viewport\s*\{[^}]*overflow-y:\s*auto;/.test(ribbonsCssSource)
 ) {
-  throw new Error("a ribbon tap must expand the bounded bar to the full text and reveal the copy rail");
+  throw new Error("a ribbon tap must expand the bubble to the whole turn inside the 240px scroll and reveal the copy rail");
 }
 // The expanded bar grows AWAY from the companion, so the companion never moves
 // and the page never reflows: the upper ribbon is bottom-anchored, always. It

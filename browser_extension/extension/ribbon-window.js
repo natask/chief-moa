@@ -1,22 +1,22 @@
-// Ribbon text model: the sliding window and the copy-variant selection.
-// Contract: reference/design/overlay-2026-07/spec.md sections 4 and 7.4.
+// Ribbon text model: the bounded turn buffer and the copy-variant selection.
+// Contract: reference/design/overlay-2026-07-28/spec.md sections 5 and 5.1,
+// and overlay-2026-07 section 7.4 for the variants.
 //
-// Pure. No DOM, no timers, no extension APIs. This is the half of the ribbon
-// design that has to be exactly right — the bounded tail window is what stops
-// overlay text from covering the page — so it is isolated and unit-tested
+// Pure. No DOM, no timers, no extension APIs. This is the half of the bubble
+// design that has to be exactly right, so it is isolated and unit-tested
 // directly (scripts/test-ribbon-window.mjs) instead of only through the
 // real-browser smoke.
+//
+// There is no rendered window any more. WINDOW_CHARS, windowFor and overflowFor
+// existed to keep a single unwrapping line inside a fixed 28px box by sliding
+// it under a clip; a bubble that wraps to five lines and pins to its tail bounds
+// the same thing in the layout, where it belongs. What survives is the buffer
+// cap: the whole turn is retained for copy and expand, just not without limit.
 (function initAgeeRibbonWindow(global) {
   "use strict";
 
-  // A hard cap on the rendered node, not the visual window. The visual window
-  // is geometric (see overflowFor) and adapts to font metrics, script, and
-  // ribbon width; 140 clusters comfortably exceeds what 340px of 13px text can
-  // show in any supported script, so the geometric rule always governs what is
-  // visible and this only bounds DOM cost.
-  const WINDOW_CHARS = 140;
   // Per-turn retained text, used by copy. Bounded so a long turn cannot grow
-  // memory without limit.
+  // memory without limit. Same number as Android's BUFFER_MAX_CHARS.
   const BUFFER_MAX_CHARS = 8000;
 
   let segmenter = null;
@@ -68,20 +68,6 @@
     const parts = [];
     for (const part of segmenter.segment(value)) parts.push(part.segment);
     return parts;
-  }
-
-  // What the collapsed ribbon renders.
-  function windowFor(buffer) {
-    return graphemeTail(buffer, WINDOW_CHARS);
-  }
-
-  // How far the line slides so the newest character stays pinned at the right
-  // inner edge. Zero while the text fits, so short text does not drift.
-  function overflowFor(viewportInnerWidth, lineWidth) {
-    const inner = Number(viewportInnerWidth);
-    const line = Number(lineWidth);
-    if (!Number.isFinite(inner) || !Number.isFinite(line)) return 0;
-    return Math.min(0, inner - line);
   }
 
   // ---- Copy variants ------------------------------------------------------
@@ -171,7 +157,6 @@
   }
 
   global.AgeeRibbonWindow = Object.freeze({
-    WINDOW_CHARS,
     BUFFER_MAX_CHARS,
     VARIANT_RANK,
     VARIANT_LABELS,
@@ -184,10 +169,8 @@
     graphemeTail,
     mergeVariants,
     graphemes,
-    overflowFor,
     shouldAdoptPresentationText,
     variantRows,
     variantText,
-    windowFor,
   });
 })(globalThis);

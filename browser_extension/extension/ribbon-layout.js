@@ -10,14 +10,16 @@
   "use strict";
 
   const EDGE = 16;   // minimum distance from any viewport edge
-  const GAP = 8;     // companion <-> ribbon
-  const HEIGHT = 28; // collapsed ribbon height
+  const GAP = 8;     // companion <-> bubble
+  // One line of the bubble: the 20px line box plus 8px padding either side.
+  const HEIGHT = 36;
   // The room a stream must have before the companion may sit somewhere. These
-  // are the numbers the drag boundary is derived from.
-  const MIN_BUBBLE_W = 232;
-  const MIN_BUBBLE_H = 28;
+  // are the numbers the drag boundary is derived from, and they are the floor
+  // of the bubble's own clamp (spec section 5: clamp(260px, 40vw, 380px)).
+  const MIN_BUBBLE_W = 260;
+  const MIN_BUBBLE_H = 36;
   const MIN_WIDTH = 120;  // narrower than this and a line of text is unreadable
-  const MIN_HEIGHT = 28;  // one line; the floor a box may be squeezed to
+  const MIN_HEIGHT = 36;  // one line; the floor a box may be squeezed to
 
   const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
 
@@ -182,10 +184,11 @@
     return Math.hypot(dx, dy) < radius;
   }
 
-  // The ambient state paints no plate, so the glyphs sit directly on page
-  // content and prefers-color-scheme alone is wrong on a light page in a dark
-  // OS. Returns relative luminance 0..1, or null when the colour is absent or
-  // too transparent to be what the user actually sees.
+  // The plate is translucent and the shadow falls on page content, so
+  // prefers-color-scheme alone is wrong on a light page in a dark OS: what
+  // matters is what is actually behind the unit. Returns relative luminance
+  // 0..1, or null when the colour is absent or too transparent to be what the
+  // user actually sees.
   function relativeLuminance(color) {
     const match = String(color || "").match(/rgba?\(([^)]+)\)/);
     if (!match) return null;
