@@ -144,6 +144,74 @@
 
     const isLive = (ribbon) => !!ribbon?.el?.classList.contains("agee-ribbon-live");
 
+    // ---- Scrollback -------------------------------------------------------
+    // Hovering the unit and scrolling walks back through finished turns, in
+    // place. The overlay still holds no conversation — this is a bounded ring
+    // of what these two boxes have already shown, so the gesture costs nothing
+    // and cannot become a chat log. Scrolling past the newest returns to live.
+    const HISTORY_MAX = 20;
+    const history = [];
+    let historyIndex = -1;
+    let liveFrame = null;
+
+    const snapshot = (ribbon) => ({
+      target: ribbon.target || ribbon.buffer,
+      variants: { ...ribbon.variants },
+      skillName: ribbon.skillName,
+    });
+
+    function restoreRibbon(ribbon, snap) {
+      if (!snap?.target) return retire(ribbon);
+      setText(ribbon, snap.target);
+      ribbon.variants = { ...snap.variants };
+      ribbon.skillName = snap.skillName;
+    }
+
+    // Called when a turn finishes, so the ring holds completed exchanges only.
+    function recordTurn() {
+      const frame = { you: snapshot(you), reply: snapshot(reply) };
+      if (!frame.you.target && !frame.reply.target) return;
+      history.push(frame);
+      if (history.length > HISTORY_MAX) history.shift();
+      historyIndex = -1;
+      liveFrame = null;
+    }
+
+    // Any new text pulls the unit back to the live turn: a reply must never
+    // land silently while the user is reading something older.
+    function returnToLive() {
+      if (historyIndex < 0) return;
+      historyIndex = -1;
+      liveFrame = null;
+      root.classList.remove("agee-ribbons-history");
+    }
+
+    // dir +1 walks older, -1 walks newer. -1 is the live turn.
+    function stepHistory(dir) {
+      if (!history.length) return false;
+      if (historyIndex < 0) liveFrame = { you: snapshot(you), reply: snapshot(reply) };
+      const next = Math.max(-1, Math.min(historyIndex + dir, history.length - 1));
+      if (next === historyIndex) return false;
+      historyIndex = next;
+      const frame = historyIndex < 0 ? liveFrame : history[history.length - 1 - historyIndex];
+      restoreRibbon(you, frame.you);
+      restoreRibbon(reply, frame.reply);
+      root.classList.toggle("agee-ribbons-history", historyIndex >= 0);
+      // Browsing counts as using the unit, so it stays up while reading.
+      engage(true);
+      return true;
+    }
+
+    for (const ribbon of [you, reply]) {
+      ribbon.el.addEventListener("wheel", (event) => {
+        // Only claim the wheel when there is somewhere to go; otherwise the
+        // page must scroll normally under the pointer.
+        if (!history.length) return;
+        if (!stepHistory(event.deltaY < 0 ? 1 : -1)) return;
+        event.preventDefault();
+      }, { passive: false });
+    }
+
     // ---- Rendering --------------------------------------------------------
     // One write per animation frame, so a token-per-event stream cannot thrash
     // layout. Only transform animates while streaming; never width or height.
@@ -911,6 +979,7 @@
       setUser(text, { interim = false } = {}) {
         const value = String(text || "");
         if (value) {
+          returnToLive();
           // A real turn taking the line ends text mode: one buffer, one owner.
           // Otherwise the caret would sit in a node the transcript is trying to
           // rewrite, and the line would freeze on whatever was typed.
@@ -953,6 +1022,7 @@
       setReply(text, { tone = "", streaming = false } = {}) {
         const value = String(text || "").trim();
         if (!value) return;
+        returnToLive();
         setPending(reply, false);
         setText(reply, value, { tone, paced: true });
         setStreaming(reply, streaming || reply.buffer !== reply.target);
@@ -973,6 +1043,7 @@
       // still revealing keeps its caret and parks the linger until the last
       // word is on screen — the turn is over for the gateway, not for the eye.
       endTurn({ spoken = true, error = false } = {}) {
+        recordTurn();
         setStreaming(you, false);
         startLinger(you, LINGER_YOU);
         const replyLinger = error || spoken === false ? LINGER_ERROR : LINGER_REPLY;
