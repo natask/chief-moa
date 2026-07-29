@@ -51,3 +51,11 @@
       live Accessibility grants or applications.
 - [ ] 5.3 Promote only after preview, rollback, compatibility, idle-session, and
       smoke evidence passes.
+
+## 6. Separate browser product handoff
+
+- [x] 6.1 Add an explicit URL action to the Mac command panel that targets a
+      selected online browser device advertising `browser.tab.open` through the
+      gateway tool-request hub, opens without stealing focus, and follows the
+      bound request through queued/running/terminal receipt state with typed
+      request/response tests.

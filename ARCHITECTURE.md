@@ -156,6 +156,30 @@ storage never move to the gateway. Every side effect still becomes a bound
 proposal that the owning gateway/device policy revalidates, approves, executes,
 and receipts.
 
+## macOS-browser product bridge
+
+The native Mac companion and browser extension are separate products. Each is
+installable and useful without the other, has its own UI and release artifact,
+and retains its own platform identity, context, permissions, approvals, and
+execution authority. They share gateway-owned work identities and receipts,
+not UI code, transient UI state, local permission state, or platform-local
+context.
+
+A Mac-originated browser action crosses only the authenticated device-client and
+tool-request bridge. The first slice names one compatible browser device and a
+bounded user-confirmed URL. It remains a proposal until the selected extension
+claims it, revalidates current browser state and local policy, executes, and
+posts a terminal receipt. The gateway routes and persists this lifecycle; it
+never performs the browser effect. Argument digests, bounded expiry,
+cancellation, and request-level idempotency are staged bridge hardening, not
+authority implied by this first slice.
+
+An absent, stale, disconnected, incompatible, or declining extension is a
+visible blocked or terminal state. The gateway never silently retargets the
+request, and the Mac app never substitutes Accessibility-driven Chrome
+automation. A different browser device or execution path requires a new
+explicit user choice.
+
 ## Surface-program boundary
 
 Agents may compose work through `surface_program.v1`, which carries two

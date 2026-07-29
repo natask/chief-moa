@@ -50,6 +50,8 @@ public struct CommandPaletteView: View {
                 history
             }
 
+            browserHandoff
+
             if !model.reply.isEmpty {
                 ScrollView {
                     Text(model.reply)
@@ -123,7 +125,7 @@ public struct CommandPaletteView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(16)
-        .frame(minWidth: 480, maxWidth: 480, minHeight: 220, maxHeight: 320, alignment: .top)
+        .frame(minWidth: 480, maxWidth: 480, minHeight: 300, maxHeight: 420, alignment: .top)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.16)))
         .animation(.snappy(duration: 0.22), value: model.voiceState.phase)
@@ -187,6 +189,67 @@ public struct CommandPaletteView: View {
         }
         .padding(10)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var browserHandoff: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Open in browser", systemImage: "safari")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Find extension") { Task { await model.refreshBrowserDevices() } }
+                    .buttonStyle(.plain)
+            }
+            HStack(spacing: 8) {
+                TextField("Web address", text: $model.browserURL)
+                    .textFieldStyle(.roundedBorder)
+                if model.browserDevices.count > 1 {
+                    Picker("Browser", selection: $model.selectedBrowserID) {
+                        ForEach(model.browserDevices) { device in Text(device.id).tag(device.id) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 150)
+                }
+                Button {
+                    Task { await model.openInBrowser() }
+                } label: {
+                    if model.isDelegatingBrowser { ProgressView().controlSize(.small) }
+                    else { Image(systemName: "arrow.up.forward.app") }
+                }
+                .disabled(model.isDelegatingBrowser || model.selectedBrowserID.isEmpty || model.browserURL.isEmpty)
+                .help("Ask the selected browser extension to open this URL")
+            }
+            Text("The extension owns Chrome access. The Mac app sends only this URL through your gateway.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if model.browserHandoffPhase != .idle {
+                Label(browserPhaseLabel, systemImage: browserPhaseIcon)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(model.browserHandoffPhase == .failed ? .red : .secondary)
+            }
+        }
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var browserPhaseLabel: String {
+        switch model.browserHandoffPhase {
+        case .idle: "Ready"
+        case .queued: "Queued for the selected extension"
+        case .running: "Extension is opening the URL"
+        case .completed: "Extension completed the handoff"
+        case .failed: "Browser handoff failed"
+        }
+    }
+
+    private var browserPhaseIcon: String {
+        switch model.browserHandoffPhase {
+        case .idle: "circle"
+        case .queued: "clock"
+        case .running: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .completed: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        }
     }
 
     private func send() {
