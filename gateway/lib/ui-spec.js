@@ -35,14 +35,14 @@ const KNOWN_ACTIONS = [
 ];
 
 // The default surface every client gets before the user customizes anything.
-// It describes A.G.'s command panel declaratively: talk, type, run.
+// It describes Ag's command panel declaratively: talk, type, run.
 function defaultSpec() {
   return {
     version: SPEC_VERSION,
     surfaces: [
       {
         id: "command-panel",
-        title: "A.G.",
+        title: "Ag",
         components: [],
         controls: [
           { type: "button", id: "talk", label: "Talk", action: "voice.toggle" },

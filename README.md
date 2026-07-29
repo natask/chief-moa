@@ -1,12 +1,10 @@
-# Chief Moa
+# Ag
 
-Chief Moa is the cross-platform product and family of user-owned surfaces for
-delegated work. **Aggie** is the canonical personal-agent identity and
-cross-surface session/routing contract; **A.G.** is a presentation/spoken alias.
-Android, browser, and future macOS/Windows/iOS clients are permission-scoped Moa
-surfaces. The gateway routes Aggie turns, model calls, memory, and agent runs.
+Ag is a personal AI companion across Android, browser, and future
+macOS/Windows/iOS surfaces. Each surface is permission-scoped. The gateway
+routes Ag turns, model calls, memory, and agent runs.
 
-Chief Moa treats model output as a proposal. The owning Surface checks the
+Ag treats model output as a proposal. The owning Surface checks the
 proposal before any platform-local action runs.
 
 ## Start here
@@ -24,14 +22,14 @@ proposal before any platform-local action runs.
 
 ## Components
 
-- `android_app`: native Android overlay assistant.
+- `android_app`: native Android companion.
 - `browser_extension`: Chrome extension thin client.
 - `gateway`: self-hosted gateway for model routing, storage, voice, and agent
   runs.
 - `release_control_plane`: persistent release authority contract and domain
   model above applications, clients, and build/QA runners.
-- `apple_surfaces`: shared Aggie authority library plus the native menu-bar
-  `MoaMac` voice/typed companion, privacy-scoped observation/suggestion surface,
+- `apple_surfaces`: shared compatibility authority library plus the native
+  menu-bar voice/typed companion, privacy-scoped observation/suggestion surface,
   and ad-hoc-signed QA bundle tooling.
 
 ## Common commands

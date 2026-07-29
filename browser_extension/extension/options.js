@@ -301,11 +301,11 @@ document.getElementById("testGateway").addEventListener("click", async () => {
     const text = await resp.text();
     data = parseJsonOrNull(text);
     if (!data) {
-      flash(`The URL responded, but it is not a healthy Moa gateway (${url}).`, false);
+      flash(`The URL responded, but it is not a healthy Ag gateway (${url}).`, false);
       return;
     }
     if (!resp.ok || !data.ok) {
-      flash(`The URL responded, but it is not a healthy Moa gateway (${resp.status}).`, false);
+      flash(`The URL responded, but it is not a healthy Ag gateway (${resp.status}).`, false);
       return;
     }
   } catch (err) {
@@ -396,7 +396,7 @@ grantMicEl.addEventListener("click", async () => {
         autoGainControl: true,
       },
     });
-    flashMic("Microphone granted to AG ✓");
+    flashMic("Microphone granted to Ag ✓");
     renderMicrophoneRecoveryState("granted");
   } catch (err) {
     flashMic(`Microphone blocked: ${String(err.message || err)}`, false);

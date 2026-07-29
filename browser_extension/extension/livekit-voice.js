@@ -96,7 +96,7 @@ async function ensureOffscreenLivekitDocument() {
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_LIVEKIT_DOCUMENT,
     reasons: ["USER_MEDIA", "WEB_RTC"],
-    justification: "AG captures microphone audio and runs a WebRTC session to the configured LiveKit voice transport (experimental).",
+    justification: "Ag captures microphone audio and runs a WebRTC session to the configured LiveKit voice transport (experimental).",
   });
 }
 

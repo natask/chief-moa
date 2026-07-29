@@ -49,7 +49,7 @@
   function template() {
     return [
       ribbonMarkup("agee-ribbon-you", "you", "What you said. Tap to expand and copy, hold for options, double tap for history."),
-      ribbonMarkup("agee-ribbon-reply", "reply", "AG&apos;s reply. Tap to expand and copy, hold for options, double tap for history."),
+      ribbonMarkup("agee-ribbon-reply", "reply", "Ag&apos;s reply. Tap to expand and copy, hold for options, double tap for history."),
       '<div id="agee-ribbon-menu" role="menu" aria-label="Ribbon options"></div>',
       '<div id="agee-copy-menu" role="menu" aria-label="Choose which version to copy"></div>',
     ].join("\n");

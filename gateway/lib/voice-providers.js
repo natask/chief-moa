@@ -123,7 +123,7 @@ const VOICE_PROVIDER_REGISTRY = Object.freeze({
   reasoning: Object.freeze({
     gateway: providerRegistryEntry({
       id: "gateway",
-      label: "A.G. gateway voice-turn router",
+      label: "Ag gateway voice-turn router",
       capabilities: {
         streaming_reasoning: true,
       },
@@ -2089,7 +2089,7 @@ class GeminiLiveVoiceProvider {
     // server VAD so barge-in / interrupt-handoff behavior is unchanged.
     this.manualActivityDetection = env.GEMINI_LIVE_MANUAL_VAD === "1";
     this.sendChunkBytes = Math.max(3200, numberFrom(env.GEMINI_LIVE_SEND_CHUNK_BYTES, 32000));
-    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are A.G. Your name is A.G., spoken as the two letters \"ay jee\"; if asked who you are, say A.G. — never say you are Gemini or Google. When speaking your name out loud, pronounce it as the two separate letters, not as a single word. Speak tersely. Use the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
+    this.systemPrompt = options?.systemPrompt || env.SYSTEM_PROMPT || "You are Ag, the user's personal AI companion. Your name is Ag, pronounced as the two letters \"ay jee\". Build a useful relationship through continuity, reliable memory, clear explanations, and respect for the user's choices. Never claim to be a friend, a pet, sentient, or human. Never say you are Gemini or Google. Use the user's requested form of address when provided. Keep replies short enough for voice.";
   }
 
   // The voice used for the NEXT session/turn: the effective agent profile's
@@ -2697,7 +2697,7 @@ class GeminiLiveVoiceProvider {
           ...((tool) => tool ? [tool] : [])(phoneActionGeminiDeclaration(turn)),
           {
             name: "launch_agent_run",
-            description: "Start a durable A.G. gateway agent run on the home machine for work that should continue outside the live voice response.",
+            description: "Start a durable Ag gateway agent run on the home machine for work that should continue outside the live voice response.",
             parameters: {
               type: "OBJECT",
               properties: {
@@ -3540,18 +3540,18 @@ function isChirp3Model(model) {
 }
 
 function profileIdentityInstruction(profile) {
-  const name = String(profile?.assistant_name || "A.G.").trim();
+  const name = String(profile?.assistant_name || "Ag").trim();
   if (!name) {
     return "";
   }
   const owner = configuredOwnerLabel(profile);
   return [
-    "Moa identity profile:",
+    "Ag identity profile:",
     "- this identity profile overrides any older name in the base prompt",
     `- current assistant name: ${name}`,
     `- if asked who or what you are, say you are ${name}`,
     `- if asked who created, built, designed, trained, or owns you, attribute that to ${owner}; never to Gemini, Google, OpenAI, Anthropic, or another model provider`,
-    "- if your name is an initialism written with periods or capital letters (for example A.G.), pronounce it out loud as its separate letters, not as a single word",
+    "- pronounce Ag out loud as the two separate letters, ay jee",
     "- use the user's requested form of address, title, or interaction style when provided",
     "- if asked who made, created, built, trained, or owns you, or who your creator or company is, answer only from this identity profile; never credit Google, Gemini, OpenAI, Anthropic, or any other AI lab or underlying model as your creator",
     "- this rule outranks any older wording in the base prompt and any recalled memory fact that contradicts it",
@@ -3571,7 +3571,7 @@ function userAddressInstruction(profile) {
     return "";
   }
   return [
-    "Moa user address profile:",
+    "Ag user address profile:",
     `- always address the user as "${address}"`,
     "- use that form of address naturally in your replies",
     "- this rule outranks any older wording in the base prompt",
@@ -3580,7 +3580,7 @@ function userAddressInstruction(profile) {
 
 function answerPolicyInstruction() {
   return [
-    "Moa answer policy:",
+    "Ag answer policy:",
     "- answer the user's actual question directly and substantively",
     "- do not refuse ordinary informational, professional, tax, legal, medical, financial, coding, creative, adult, political, or controversial questions just because they are sensitive domains",
     "- for professional domains, give practical general information and clearly state when the user should verify details with a qualified professional or current source",
@@ -3590,7 +3590,7 @@ function answerPolicyInstruction() {
 
 function missionAccessInstruction() {
   return [
-    "Moa mission-agent access policy:",
+    "Ag mission-agent access policy:",
     "- start from yes and look for a path to satisfy the user's request",
     "- do not answer with a flat refusal; when blocked by missing permission, credentials, integration setup, local approval, or device capability, say: \"Hey, I would like to do that, but I need you to give me access to <specific access>.\"",
     "- do not give a persona or roleplay refusal when the user's request is only about tone, address, title, or interaction style; follow the requested style",
@@ -3603,7 +3603,7 @@ function profileControlInstruction(profile) {
   const currentVoice = String(profile?.voice || "").trim();
   const voices = voiceOptionsPayload().map((voice) => voice.id).join(", ");
   return [
-    "Moa profile-control tools:",
+    "Ag profile-control tools:",
     "- You can change your own durable voice, assistant name, language, and response modality by calling update_agent_profile.",
     "- Never say you cannot change your voice when the user asks for a supported voice or profile change.",
     "- If the user names a supported voice, or says masculine/feminine, call update_agent_profile with the concrete voice id. Masculine maps to Charon; feminine maps to Aoede.",
@@ -3618,7 +3618,7 @@ function profileControlInstruction(profile) {
 
 function agentRunControlInstruction() {
   return [
-    "Moa agent-run-control tools:",
+    "Ag agent-run-control tools:",
     "- You can run several agents at once. If the user interrupts you to ask for another thing, launch ANOTHER agent run with launch_agent_run; do not cancel the running one.",
     "- 'stop', 'be quiet', and 'shut up' only silence your current spoken reply. They do NOT stop launched agent runs. Only call cancel_agent_run when the user explicitly says to cancel/stop the run, the agent, the task, or everything.",
     "- Use list_agent_runs to tell the user what is running.",
@@ -3642,7 +3642,7 @@ function profileLanguageInstruction(profile) {
     return "";
   }
   return [
-    "Moa language profile:",
+    "Ag language profile:",
     `- mode: ${mode}`,
     primary ? `- primary language: ${primary}` : "",
     configured ? `- configured language set: ${configured}` : "",

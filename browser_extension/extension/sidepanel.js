@@ -1,4 +1,4 @@
-// AG side panel — the extension-owned agent surface. Runs as an extension
+// Ag side panel — the extension-owned companion surface. Runs as an extension
 // page so it renders on every tab (chrome:// pages included) and persists
 // across tab switches. All gateway traffic goes through the background service
 // worker over a long-lived port; mic capture happens in the background's
@@ -333,10 +333,10 @@ function ensurePort() {
   port.onMessage.addListener(onPortMessage);
   port.onDisconnect.addListener(() => {
     port = null;
-    for (const [, entry] of pending) entry.reject(new Error("AG background restarted."));
+    for (const [, entry] of pending) entry.reject(new Error("Ag background restarted."));
     pending.clear();
-    if (turn) failTurn(turn, "AG background restarted mid-turn. Try again.");
-    showHistoryError("Saved history may be stale while AG reconnects.");
+    if (turn) failTurn(turn, "Ag background restarted mid-turn. Try again.");
+    showHistoryError("Saved history may be stale while Ag reconnects.");
     scheduleReconnect();
   });
   return port;
@@ -366,7 +366,7 @@ function request(msg, timeoutMs = 20000) {
     const reqId = nextReqId++;
     const timer = setTimeout(() => {
       pending.delete(reqId);
-      reject(new Error("AG background did not respond."));
+      reject(new Error("Ag background did not respond."));
     }, timeoutMs);
     pending.set(reqId, {
       resolve: (value) => {
@@ -473,7 +473,7 @@ function renderHistory(messages) {
     item.dataset.speaker = message.speaker;
     const speaker = document.createElement("div");
     speaker.className = "speaker";
-    speaker.textContent = message.speaker === "assistant" ? "AG" : "you";
+    speaker.textContent = message.speaker === "assistant" ? "Ag" : "you";
     const body = document.createElement("div");
     body.className = "body";
     body.textContent = message.text;
@@ -758,12 +758,12 @@ function handleVoiceEvent(payload) {
     const text = String(msg.text || "").trim();
     if (!text) return;
     state.replyText = text;
-    setStatus("AG is replying.", "speaking");
+    setStatus("Ag is replying.", "speaking");
     updateCard(state, { reply: text });
     return;
   }
   if (msg.type === "assistant_audio_start") {
-    setStatus("AG is speaking.", "speaking");
+    setStatus("Ag is speaking.", "speaking");
     const rate = Number(msg.playback_rate);
     playbackRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
     playbackTime = Math.max(audioCtx?.currentTime || 0, playbackTime || 0) + 0.04;
@@ -935,14 +935,14 @@ async function floatOut() {
   for (const style of document.querySelectorAll("style")) {
     pipWindow.document.head.append(style.cloneNode(true));
   }
-  pipWindow.document.title = "AG";
+  pipWindow.document.title = "Ag";
   // Moving (adopting) the nodes keeps element references and listeners alive.
   pipWindow.document.body.append(...document.body.children);
   attachHoldKeyHandlers(pipWindow.document);
   pipWindow.addEventListener("pagehide", restoreFromFloat);
   const note = document.createElement("p");
   note.className = "floating-note";
-  note.textContent = "AG is floating in an always-on-top window. Keep this panel open while it floats; close the floating window to bring AG back here.";
+  note.textContent = "Ag is floating in an always-on-top window. Keep this panel open while it floats; close the floating window to bring Ag back here.";
   document.body.append(note);
   floatBtn.textContent = "Unfloat";
 }

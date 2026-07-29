@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>A.G. Console</title>
+  <title>Ag Console</title>
   <style>
     :root {
       color-scheme: light;
@@ -146,7 +146,7 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="brand"><span class="mark"></span><h1>A.G. Console</h1></div>
+    <div class="brand"><span class="mark"></span><h1>Ag Console</h1></div>
     <div class="row">
       <span class="pill"><span class="dot" id="healthDot"></span><span id="healthLabel">checking…</span></span>
       <span class="pill" id="projectLabel">no project</span>
@@ -351,7 +351,7 @@
         history.replaceState(null, "", projectUrl(id));
       }
       $("projectLabel").textContent = p ? p.name : "no project";
-      document.title = p ? `${p.name} · A.G. Console` : "A.G. Console";
+      document.title = p ? `${p.name} · Ag Console` : "Ag Console";
       $("input").disabled = false;
       $("send").disabled = false;
       $("brief").hidden = !p;

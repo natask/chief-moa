@@ -1,5 +1,5 @@
 const FILE_ACCESS_INSTRUCTION =
-  "Chrome must grant AG access to local files. Open chrome://extensions, find AG, choose Details, turn on “Allow access to file URLs”, then retry. AG cannot enable this permission for you.";
+  "Chrome must grant Ag access to local files. Open chrome://extensions, find Ag, choose Details, turn on “Allow access to file URLs”, then retry. Ag cannot enable this permission for you.";
 
 function isFileUrl(value) {
   try {

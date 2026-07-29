@@ -11,7 +11,7 @@ export function parseVoiceSamplerAction(action) {
     const id = String(voice?.id || "").trim();
     if (!id || id.length > MAX_VOICE_ID || !SAFE_VOICE_ID.test(id)) continue;
     const supplied = String(voice?.sample_text || "").trim();
-    const text = (supplied || `This is ${id}. This is a Moa voice sample.`).slice(0, MAX_SAMPLE_TEXT);
+    const text = (supplied || `This is ${id}. This is an Ag voice sample.`).slice(0, MAX_SAMPLE_TEXT);
     samples.push({ voice: id, text });
   }
   return samples;

@@ -797,7 +797,7 @@ async function assertProviderSessionConfig(dataDir) {
     "session-config must carry the durable assistant name in the system instruction",
   );
   assert.ok(
-    systemText.includes("Moa language profile"),
+    systemText.includes("Ag language profile"),
     "session-config must carry the durable language profile in the system instruction",
   );
   assert.ok(

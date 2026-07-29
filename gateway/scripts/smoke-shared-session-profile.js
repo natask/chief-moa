@@ -150,17 +150,17 @@ async function assertLivePromptAddress() {
 
     const prompt = provider.effectiveSystemPrompt(agentProfile.effective());
     assertIdentityAttribution(prompt, "master");
-    assertAddressAfterIdentity(prompt, "Moa identity profile:");
+    assertAddressAfterIdentity(prompt, "Ag identity profile:");
 
     const catalog = createCompanionCatalogStore({ dataDir: liveDataDir });
     const companionPatch = catalog.preview({ companion_id: "shigmi-scout" }).profile_overrides;
     agentProfile.patch(companionPatch, { source: "smoke", reason: "companion:shigmi-scout" });
     assert.equal(agentProfile.effective().user_address, "master");
-    assertAddressAfterIdentity(provider.effectiveSystemPrompt(agentProfile.effective()), "Moa identity profile:");
+    assertAddressAfterIdentity(provider.effectiveSystemPrompt(agentProfile.effective()), "Ag identity profile:");
 
     agentProfile.reset({ source: "smoke", reason: "reset" });
     assert.equal(agentProfile.effective().user_address, "master");
-    assertAddressAfterIdentity(provider.effectiveSystemPrompt(agentProfile.effective()), "Moa identity profile:");
+    assertAddressAfterIdentity(provider.effectiveSystemPrompt(agentProfile.effective()), "Ag identity profile:");
   } finally {
     if (previousAddress === undefined) {
       delete process.env.MOA_USER_ADDRESS;

@@ -771,7 +771,7 @@ function normalizeProfile(defaults) {
   const languagePrimary = picked.language_primary || picked.language || "en-US";
   return {
     system_prompt: picked.system_prompt || "",
-    assistant_name: picked.assistant_name || normalizeAssistantName("A.G."),
+    assistant_name: picked.assistant_name || normalizeAssistantName("Ag"),
     user_address: picked.user_address || normalizeUserAddress(process.env.MOA_USER_ADDRESS) || "master",
     user_name: picked.user_name || normalizeUserAddress(process.env.MOA_USER_NAME) || "",
     user_nickname: picked.user_nickname || normalizeUserAddress(process.env.MOA_USER_NICKNAME) || "",
@@ -906,7 +906,7 @@ function safeSystemPromptForProvider(profile, fallback = "") {
 }
 
 function withRequiredVoiceStyle(prompt, fallback = "") {
-  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are A.G.";
+  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are Ag, the user's personal AI companion.";
   const lower = value.toLowerCase();
   const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
   if (hasTerseStyle && hasAddressPreferenceRule(lower)) {

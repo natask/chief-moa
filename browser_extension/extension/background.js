@@ -171,15 +171,15 @@ function formatGatewayHttpError(cfg, path, resp, text) {
   const voiceRoute = path.startsWith("/v1/voice/");
 
   if ((resp.status === 401 || resp.status === 403) && path === "/v1/voice/session-ticket") {
-    return `Gateway reachable at ${gatewayUrl}, but the voice ticket was denied (${resp.status}). Check the device token in AG Options.`;
+    return `Gateway reachable at ${gatewayUrl}, but the voice ticket was denied (${resp.status}). Check the device token in Ag Options.`;
   }
   if (resp.status === 401 || resp.status === 403) {
     if (staleOrLocal) {
       return `Gateway reachable at ${gatewayUrl}, but the saved token may belong to a different gateway. Confirm the stable VPS URL, then re-register or paste a fresh token. ${diagnostic.message}`;
     }
     return cfg.gatewayToken
-      ? `Gateway reachable at ${gatewayUrl}, but the saved token was rejected (${resp.status}). Re-register this browser or paste a fresh token in AG Options.`
-      : `Gateway reachable at ${gatewayUrl}, but this route requires a device token (${resp.status}). Add the Gateway token in AG Options.`;
+      ? `Gateway reachable at ${gatewayUrl}, but the saved token was rejected (${resp.status}). Re-register this browser or paste a fresh token in Ag Options.`
+      : `Gateway reachable at ${gatewayUrl}, but this route requires a device token (${resp.status}). Add the Gateway token in Ag Options.`;
   }
   if (resp.status === 404 && voiceRoute) {
     return `Gateway reachable at ${gatewayUrl}, but voice routes are not deployed at this URL (${path} returned 404).`;
@@ -204,7 +204,7 @@ async function callGateway(cfg, path, {
   maxResponseBytes = 0,
 } = {}) {
   if (!cfg.gatewayUrl) {
-    throw new Error("No gateway URL set. Open AG Options and set the Agent gateway URL.");
+    throw new Error("No gateway URL set. Open Ag Options and set the companion gateway URL.");
   }
   const headers = { "content-type": "application/json" };
   if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
@@ -512,7 +512,7 @@ function sanitizeActiveCompanionPetRecord(record) {
   return {
     id: companionId,
     companion_id: companionId,
-    companion_name: name || "AG companion",
+    companion_name: name || "Ag companion",
     companion_summary: shortPetString(record.companion_summary || record.summary, 180),
     source: shortPetString(record.source, 40),
     pet: {
@@ -769,7 +769,7 @@ async function executeBrowserToolRequest(request) {
       return {
         ok: true,
         summary: fileAccess.allowed
-          ? "AG may navigate browser tabs to file URLs."
+          ? "Ag may navigate browser tabs to file URLs."
           : fileAccess.instruction,
         result: { file_scheme_access: fileAccess },
         local_receipt: { tool, success: true },
@@ -2401,7 +2401,7 @@ async function ensureOffscreenVoiceDocument() {
     creatingOffscreenVoiceDocument = chrome.offscreen.createDocument({
       url: OFFSCREEN_VOICE_DOCUMENT,
       reasons: ["USER_MEDIA", "DISPLAY_MEDIA"],
-      justification: "AG captures microphone audio (voice, notes) and user-picked screen video (video notes) from the extension origin and sends them to the configured gateway.",
+      justification: "Ag captures microphone audio (voice, notes) and user-picked screen video (video notes) from the extension origin and sends them to the configured gateway.",
     }).finally(() => {
       creatingOffscreenVoiceDocument = null;
     });
@@ -2466,12 +2466,12 @@ function extensionMicCaptureMessage(error, code = error?.code) {
   const detail = String(error?.message || error || "").trim();
   const suffix = detail ? ` (${detail})` : "";
   if (code === "offscreen_runtime_unavailable") {
-    return `AG could not start its microphone runtime. Reload the AG extension, then start voice again.${suffix}`;
+    return `Ag could not start its microphone runtime. Reload the Ag extension, then start voice again.${suffix}`;
   }
   if (code === "microphone_permission_denied") {
-    return `Chrome denied AG microphone access. The error is shown here first; when you are ready, ask AG to open Settings or open the AG toolbar icon > Options, click "Grant microphone", and allow access. You can also open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, and set Microphone to Allow.${suffix}`;
+    return `Chrome denied Ag microphone access. The error is shown here first; when you are ready, ask Ag to open Settings or open the Ag toolbar icon > Options, click "Grant microphone", and allow access. You can also open chrome://extensions/?id=${chrome.runtime.id}, choose Details or Site settings, and set Microphone to Allow.${suffix}`;
   }
-  return `AG could not start microphone capture. Check that a microphone is connected and available, then try again.${suffix}`;
+  return `Ag could not start microphone capture. Check that a microphone is connected and available, then try again.${suffix}`;
 }
 
 async function openOptionsForTarget(target) {
@@ -3716,7 +3716,7 @@ async function confirmNavigation(tabId, url) {
   try {
     const response = await ask(tabId, {
       cmd: "confirm",
-      text: `Allow AG to navigate from ${from || "this page"} to ${to}?`,
+      text: `Allow Ag to navigate from ${from || "this page"} to ${to}?`,
     });
     return response?.ok === true;
   } catch {
@@ -3936,7 +3936,7 @@ async function describePage(tabId, controller, cueId) {
     // Thin client: page description is produced by the user's gateway. There is
     // no in-browser model path.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the AG toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the Ag toolbar icon → Options and set the companion gateway URL." });
       return;
     }
     await runBrowserAgentTurn(
@@ -3981,7 +3981,7 @@ async function runAgent(tabId, instruction, controller, cueId, contextControls =
     // Thin client: every model-backed turn is handled by the user's gateway.
     // Deterministic local browser commands above require no model/provider key.
     if (!cfg.gatewayUrl) {
-      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the AG toolbar icon → Options and set the Agent gateway URL." });
+      send(tabId, { cmd: "error", cueId, text: "No gateway URL set. Click the Ag toolbar icon → Options and set the companion gateway URL." });
       return;
     }
     if (await maybeAnswerProfileQuery(tabId, instruction, cfg, signal, cueId)) {
@@ -5066,7 +5066,7 @@ async function handlePanelRequest(msg) {
     }
     const cfg = await getConfig();
     if (!cfg.gatewayUrl) {
-      return { ok: false, error: "No gateway URL set. Open AG Options and configure the Agent gateway URL." };
+      return { ok: false, error: "No gateway URL set. Open Ag Options and configure the companion gateway URL." };
     }
     await ensureContent(tab.id);
     const cueId = nextCueId(msg.cueId || `panel_${Date.now().toString(36)}`);

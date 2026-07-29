@@ -33,7 +33,7 @@ test("defaults and exported declarative vocabulary are stable and cloned", () =>
   assert.deepEqual(COMPONENT_TYPES, ["card", "list", "map", "stat"]);
   assert.ok(KNOWN_ACTIONS.includes("noop"));
   first.surfaces[0].title = "changed";
-  assert.equal(defaultSpec().surfaces[0].title, "A.G.");
+  assert.equal(defaultSpec().surfaces[0].title, "Ag");
 });
 
 test("store replaces atomically, clones reads, reloads, and resets", (t) => {
