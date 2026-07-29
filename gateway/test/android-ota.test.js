@@ -539,3 +539,49 @@ test("GET latest manifest includes rollback metadata over HTTP", async () => {
     /^https?:\/\/[^/]+\/v1\/android\/updates\/releases\/ai\.moa\.assistant-10\.apk$/,
   );
 });
+
+// The OTA store is written by the host publisher over SSH, so parts of it
+// carry the publisher's uid and a restrictive mode. On 2026-07-29 a
+// publisher-created `channels/` directory (root, 0700) made the gateway's
+// boot-time mkdirSync throw EACCES at module top level, crash-looping the
+// production container and returning 502 to every request for ~30 minutes.
+test("a publisher-owned OTA directory degrades the channel instead of the gateway", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-perms-"));
+
+  const fresh = path.join(root, "channels", "ag.companion");
+  const created = androidOta.ensurePublisherOwnedDir(fresh);
+  assert.equal(created.ready, true);
+  assert.equal(created.reason, "");
+  assert.equal(fs.existsSync(fresh), true);
+
+  // Re-running against an existing directory stays a no-op success.
+  assert.equal(androidOta.ensurePublisherOwnedDir(fresh).ready, true);
+
+  // Now make the parent unreadable the way the publisher does (0700, not ours).
+  const locked = path.join(root, "locked");
+  fs.mkdirSync(locked, { recursive: true });
+  fs.chmodSync(locked, 0o000);
+  try {
+    const blocked = androidOta.ensurePublisherOwnedDir(path.join(locked, "ag.companion"));
+    assert.equal(blocked.ready, false);
+    assert.match(blocked.reason, /^EACCES: /);
+    assert.match(blocked.reason, /owned by the OTA publisher/);
+  } finally {
+    fs.chmodSync(locked, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-permission directory failure still throws", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moa-ota-notdir-"));
+  const file = path.join(root, "not-a-directory");
+  fs.writeFileSync(file, "x");
+  // ENOTDIR means the data volume itself is wrong; booting past that would
+  // hide a much worse problem than one unavailable OTA channel.
+  assert.throws(() => androidOta.ensurePublisherOwnedDir(path.join(file, "child")), (error) => {
+    assert.notEqual(error.code, "EACCES");
+    assert.notEqual(error.code, "EPERM");
+    return true;
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});

@@ -348,8 +348,12 @@ fs.mkdirSync(BROKER_EVENTS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_CONTEXT_PACKS_DIR, { recursive: true });
 fs.mkdirSync(BROKER_RESEARCH_REPORTS_DIR, { recursive: true });
 fs.mkdirSync(VOICE_FRAMES_DIR, { recursive: true });
-fs.mkdirSync(ANDROID_OTA_DIR, { recursive: true });
-for (const channelDir of Object.values(ANDROID_OTA_CHANNELS)) fs.mkdirSync(channelDir, { recursive: true });
+// Best-effort, not fatal: the OTA store is written by the host publisher and
+// may carry its uid/mode. See ensurePublisherOwnedDir in lib/android-ota.js.
+for (const otaDir of [ANDROID_OTA_DIR, ...Object.values(ANDROID_OTA_CHANNELS)]) {
+  const ensured = androidOta.ensurePublisherOwnedDir(otaDir);
+  if (!ensured.ready) console.error(`[android-ota] ${ensured.reason}`);
+}
 fs.mkdirSync(CHAT_TURNS_DIR, { recursive: true });
 const { routeAndroidOta, health: androidOtaHealth } = createAndroidOtaHandlers({
   androidOta, otaDir: ANDROID_OTA_DIR, authorized, sendJson, cleanError,
