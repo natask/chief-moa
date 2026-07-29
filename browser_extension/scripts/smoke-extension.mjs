@@ -526,6 +526,24 @@ async function main() {
               youLive: ribbonYou.classList.contains("agee-ribbon-live"),
               editable: youTextEl?.getAttribute("contenteditable") || "",
               caretInYouLine: document.activeElement === youTextEl,
+              // Typing wears the same box as a spoken turn: one line, the plate
+              // it already had, and a send where the copy button sits.
+              sendDisplay: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-send")).display,
+              composeCopyDisplay: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-copy")).display,
+              composeEmpty: ribbonYou.classList.contains("agee-ribbon-empty"),
+              // The send rides the rail at the trailing edge, after the text
+              // viewport, on the same 28px line. (The box itself is clamped to
+              // the space between the seam and the viewport edge, so its right
+              // edge is not a fixed reference here.)
+              sendInsideBox: (() => {
+                const send = ribbonYou.querySelector(".agee-ribbon-send").getBoundingClientRect();
+                const viewportRect = ribbonYou.querySelector(".agee-ribbon-viewport").getBoundingClientRect();
+                return send.width > 0
+                  && send.top >= youRect.top - 1
+                  && send.bottom <= youRect.bottom + 1
+                  && send.left >= viewportRect.right - 1;
+              })(),
+              youHeight: Math.round(youRect.height),
               // The companion's centre line is the seam both boxes hang off.
               companionCentreX: Math.round(launcherRect.left + launcherRect.width / 2),
               youLeftX: Math.round(youRect.left),
@@ -554,6 +572,17 @@ async function main() {
     // A companion click puts the caret in the you-line immediately. No panel.
     if (!overlayMetrics.composing || !overlayMetrics.youLive || !overlayMetrics.caretInYouLine) {
       throw new Error(`companion click did not open the typing buffer: ${JSON.stringify(overlayMetrics)}`);
+    }
+    // The typing box is the ribbon: one line, send at the trailing edge, and no
+    // copy button on a line that has not been said yet.
+    if (overlayMetrics.sendDisplay === "none"
+      || overlayMetrics.composeCopyDisplay !== "none"
+      || overlayMetrics.sendInsideBox !== true
+      || overlayMetrics.youHeight !== 28) {
+      throw new Error(`the typing box does not carry a send on one line: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (overlayMetrics.composeEmpty !== true) {
+      throw new Error(`an empty typing box did not mark itself empty: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.editable !== "plaintext-only") {
       throw new Error(`the you-line is not an editable buffer: ${JSON.stringify(overlayMetrics)}`);

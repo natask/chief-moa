@@ -187,6 +187,54 @@
 .agee-ribbon-composing .agee-ribbon-viewport {
   pointer-events: auto;
 }
+/* While composing, the rail carries a send instead of a copy: there is nothing
+   to copy out of a line you have not said yet, and the box needs a visible way
+   to commit for anyone who does not know Enter sends. */
+.agee-ribbon-send {
+  appearance: none;
+  flex: 0 0 auto;
+  display: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 6px;
+  margin-right: -4px;
+  border: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--agee-ribbon-accent);
+  color: #17130a;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    opacity var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out),
+    transform var(--agee-ribbon-dur-fast) var(--agee-ribbon-ease-out);
+}
+.agee-ribbon-composing .agee-ribbon-send { display: grid; }
+.agee-ribbon-composing .agee-ribbon-copy { display: none; }
+.agee-ribbon-send svg { width: 15px; height: 15px; }
+.agee-ribbon-send:hover { transform: translateY(-1px); }
+.agee-ribbon-send:focus-visible { outline: 2px solid var(--agee-ribbon-accent); outline-offset: 2px; }
+.agee-ribbon-composing.agee-ribbon-empty .agee-ribbon-send {
+  opacity: 0.4;
+  cursor: default;
+}
+/* The prompt is painted by the viewport, not by the editable node: text inside
+   the contenteditable would sit in front of the caret. */
+.agee-ribbon-composing.agee-ribbon-empty .agee-ribbon-viewport::before {
+  content: "Ask Ag\2026";
+  position: absolute;
+  left: 0;
+  font-size: 13px;
+  line-height: var(--agee-ribbon-line-h);
+  color: var(--agee-ribbon-muted);
+  text-shadow: var(--agee-ribbon-halo);
+  pointer-events: none;
+}
+.agee-ribbon-composing.agee-ribbon-empty[data-agee-seam="right"] .agee-ribbon-viewport::before {
+  left: auto;
+  right: 0;
+}
 .agee-ribbon-clipped .agee-ribbon-viewport {
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
   mask-image: linear-gradient(to right, transparent 0, #000 16px);

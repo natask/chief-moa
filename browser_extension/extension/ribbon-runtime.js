@@ -42,13 +42,21 @@
   const COPY_GLYPH = '<svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
   const CHECK_GLYPH = '<svg class="agee-ribbon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>';
   const CHEVRON_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"/></svg>';
+  const SEND_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V6"/><path d="M6 12l6-6 6 6"/></svg>';
 
+  // The send button rides the same rail the copy button sits in, and only on
+  // the you-ribbon: while composing it takes copy's place, so the box you type
+  // in is the box you already know, with a send where copy was.
   function ribbonMarkup(id, kind, label) {
+    const send = kind === "you"
+      ? `<button class="agee-ribbon-send" type="button" tabindex="-1" aria-label="Send">${SEND_GLYPH}</button>`
+      : "";
     return `
       <div class="agee-ribbon" id="${id}" data-agee-ribbon="${kind}" role="button" tabindex="0" aria-label="${label}">
         <div class="agee-ribbon-viewport"><div class="agee-ribbon-line" aria-live="polite"><span class="agee-ribbon-text"></span><i class="agee-ribbon-caret" aria-hidden="true"></i></div></div>
         <button class="agee-ribbon-copy" type="button" tabindex="-1" aria-label="Copy ${kind === "you" ? "what you said" : "the reply"}">${COPY_GLYPH}${CHECK_GLYPH}</button>
         <button class="agee-ribbon-copy agee-ribbon-chevron" type="button" tabindex="-1" aria-label="Choose which version to copy" aria-haspopup="menu">${CHEVRON_GLYPH}</button>
+        ${send}
         <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
       </div>`;
   }
@@ -103,6 +111,7 @@
         viewportEl: el.querySelector(".agee-ribbon-viewport"),
         copyEl: el.querySelector(".agee-ribbon-copy:not(.agee-ribbon-chevron)"),
         chevronEl: el.querySelector(".agee-ribbon-chevron"),
+        sendEl: el.querySelector(".agee-ribbon-send"),
         buffer: "",
         // What the ribbon has been given, which is not always what it has shown
         // yet: `buffer` is the revealed prefix and `target` is the whole reply.
@@ -127,6 +136,17 @@
         event.preventDefault();
         event.stopPropagation();
         copy(ribbon);
+      });
+      // preventDefault keeps the caret in the editable line: a press that stole
+      // focus would drop the selection before the click that sends lands.
+      ribbon.sendEl?.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      ribbon.sendEl?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        submitComposed();
       });
       ribbon.chevronEl?.addEventListener("pointerdown", (event) => event.stopPropagation());
       ribbon.chevronEl?.addEventListener("click", (event) => {
@@ -427,7 +447,15 @@
       holdOpen();
       engage(true);
       if (text) setComposedText(text);
+      markComposeEmpty();
       focusCompose();
+    }
+
+    // An empty compose line has nothing to read, so the box shows what it is
+    // for and dims the send. The prompt is painted by the viewport, never by
+    // the editable node — text inside it would sit before the caret.
+    function markComposeEmpty() {
+      you.el.classList.toggle("agee-ribbon-empty", !composedText());
     }
 
     // Prefill, used by the agent-authored quick actions that used to drop a
@@ -439,6 +467,7 @@
       const overflow = TextModel.overflowFor(you.viewportEl.clientWidth, you.lineEl.scrollWidth);
       you.lineEl.style.transform = `translateX(${overflow}px)`;
       you.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+      markComposeEmpty();
     }
 
     function focusCompose() {
@@ -456,7 +485,7 @@
     function endCompose({ clearText = false } = {}) {
       if (!composing) return;
       composing = false;
-      you.el.classList.remove("agee-ribbon-composing");
+      you.el.classList.remove("agee-ribbon-composing", "agee-ribbon-empty");
       you.textEl.removeAttribute("contenteditable");
       you.textEl.removeAttribute("role");
       you.textEl.removeAttribute("aria-label");
@@ -490,6 +519,7 @@
       const overflow = TextModel.overflowFor(you.viewportEl.clientWidth, you.lineEl.scrollWidth);
       you.lineEl.style.transform = `translateX(${overflow}px)`;
       you.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+      markComposeEmpty();
     });
 
     you.textEl.addEventListener("keydown", (event) => {
