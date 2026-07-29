@@ -19,6 +19,7 @@
 
   const TextModel = global.AgeeRibbonWindow;
   const Layout = global.AgeeRibbonLayout;
+  const Report = global.AgeeRibbonGeometryReport;
 
   const HOLD_MS = 340;
   const MULTITAP_MS = 260;
@@ -85,6 +86,10 @@
       // can keep a dev reload from landing on top of it.
       onComposeStateChange = () => {},
       finalizeUserTranscriptForCopy = () => false,
+      // Handed the whole bounded ring whenever it grows, so the host can
+      // persist it: the band is intermittent and the page it appeared on is
+      // usually gone by the time anyone goes looking.
+      onGeometryBreach = () => {},
       doc = global.document,
       win = global,
     } = deps || {};
@@ -99,6 +104,8 @@
     let pendingUserCopy = false;
     let presentationCue = "";
     let themeTimer = null;
+    let geometryBreaches = [];
+    let geometryAuditPending = false;
 
     const menuEl = root.querySelector("#agee-ribbon-menu");
     const copyMenuEl = root.querySelector("#agee-copy-menu");
@@ -687,7 +694,13 @@
     // ---- Placement --------------------------------------------------------
     function position() {
       const rect = launcher.getBoundingClientRect();
-      if (!rect.width && !rect.height) return;
+      if (!rect.width && !rect.height) {
+        // The companion has no box, so there is nothing to lay the streams out
+        // from and none of the geometry below is written. Whatever the boxes
+        // are showing right now, nothing is bounding them — record it.
+        auditGeometry({ positioned: false, cap: 0, rect });
+        return;
+      }
       // Derived, never measured. position() writes these widths, so reading the
       // element back would feed its own output in and collapse the box a little
       // further on every pass. Mirrors the CSS clamp for --agee-ribbon-w.
@@ -719,6 +732,47 @@
       reply.el.style.top = `${place.replyTop}px`;
       reply.el.style.bottom = "auto";
       root.classList.toggle("agee-ribbons-cramped", place.youCramped || place.replyCramped);
+      auditGeometry({ positioned: true, cap: width, rect });
+    }
+
+    // ---- Geometry self-report ---------------------------------------------
+    // The overlay intermittently paints a dark band the width of the page. It
+    // happens on the user's pages, not a fixture, and a screenshot cannot say
+    // which of three things went wrong — so the overlay measures its own paint
+    // against what the layout promised and writes down every breach. The
+    // measurement is deferred to the next frame because the widths written
+    // just above have not been laid out yet when position() returns.
+    function auditGeometry({ positioned, cap, rect }) {
+      if (!Report || geometryAuditPending) return;
+      geometryAuditPending = true;
+      const run = () => {
+        geometryAuditPending = false;
+        for (const ribbon of [you, reply]) {
+          // A box nobody can see has no geometry worth judging.
+          if (!ribbon.el.classList.contains("agee-ribbon-live")) continue;
+          const breach = Report.inspect({
+            id: ribbon.el.id,
+            positioned,
+            boxWidth: ribbon.el.getBoundingClientRect().width,
+            runWidth: ribbon.lineEl?.scrollWidth,
+            maxWidth: cap,
+            viewportWidth: win.innerWidth,
+            launcherWidth: rect?.width,
+            launcherHeight: rect?.height,
+            theme: root.dataset.ageeRibbonTheme || "",
+            text: (ribbon.target || ribbon.buffer || "").length,
+          });
+          if (!breach) continue;
+          geometryBreaches = Report.append(geometryBreaches, breach, { at: Date.now() });
+          // On the element, so it is readable from the page console without
+          // any extension context — that is where the user is when they see it.
+          root.dataset.ageeGeometry = Report.format(breach);
+          root.dataset.ageeGeometryCount = String(geometryBreaches.length);
+          try { onGeometryBreach(geometryBreaches); } catch {}
+        }
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+      else run();
     }
 
     // The ambient glyphs sit directly on page content, so sample what is

@@ -1040,6 +1040,7 @@
       // Optional by contract (see compose-heartbeat.js): a hard reference here takes every gesture down with it.
       onComposeStateChange: globalThis.AgeeComposeHeartbeat?.create?.({ write: safeStorageLocalSet }),
       finalizeUserTranscriptForCopy: finalizeCaptureForCopy,
+      onGeometryBreach: (list) => safeStorageLocalSet({ ageeOverlayGeometryBreaches: list }).catch(() => {}),
     });
   }
 
