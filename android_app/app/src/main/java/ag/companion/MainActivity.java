@@ -872,7 +872,7 @@ public final class MainActivity extends Activity {
     private void capturePreferredYoutubeFixture() {
         String packageName = MoaPrefs.preferredYoutubePackage(this);
         try {
-            PackageInfo info = getPackageManager().getPackageInfo(packageName, signatureFlags());
+            PackageInfo info = getPackageManager().getPackageInfo(packageName, MoaUpdateArtifact.signatureFlags());
             long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
                     ? info.getLongVersionCode() : info.versionCode;
             String signer = String.join(",", new TreeSet<>(signatureDigests(info)));
@@ -1330,8 +1330,8 @@ public final class MainActivity extends Activity {
             gatewayStatus.setText("Checking local dev URL...");
             gatewayStatus.setTextColor(MoaColors.WARN);
         }
-        final String healthUrl = gatewayEndpoint(gatewayUrl, "/health");
-        final String authProbeUrl = gatewayEndpoint(gatewayUrl, "/v1/sessions?limit=1");
+        final String healthUrl = MoaUpdateArtifact.gatewayEndpoint(gatewayUrl, "/health");
+        final String authProbeUrl = MoaUpdateArtifact.gatewayEndpoint(gatewayUrl, "/v1/sessions?limit=1");
         final String gatewayToken = MoaPrefs.gatewayToken(this);
 
         new Thread(() -> {
@@ -1744,7 +1744,7 @@ public final class MainActivity extends Activity {
             throw new IllegalStateException("rollback APK checksum mismatch");
         }
 
-        PackageInfo archive = packageInfoForArchive(apk);
+        PackageInfo archive = MoaUpdateArtifact.packageInfoForArchive(getPackageManager(), apk);
         if (archive == null || !getPackageName().equals(archive.packageName)) {
             throw new IllegalStateException("rollback APK package mismatch");
         }
@@ -1757,7 +1757,7 @@ public final class MainActivity extends Activity {
 
         PackageInfo installed = getPackageManager().getPackageInfo(
                 getPackageName(),
-                signatureFlags()
+                MoaUpdateArtifact.signatureFlags()
         );
         if (!signatureDigests(installed).equals(signatureDigests(archive))) {
             throw new IllegalStateException("rollback APK signer mismatch");
@@ -1777,7 +1777,7 @@ public final class MainActivity extends Activity {
             throw new IllegalStateException("APK checksum mismatch");
         }
 
-        PackageInfo archive = packageInfoForArchive(apk);
+        PackageInfo archive = MoaUpdateArtifact.packageInfoForArchive(getPackageManager(), apk);
         if (archive == null || !getPackageName().equals(archive.packageName)) {
             throw new IllegalStateException("APK package mismatch");
         }
@@ -1791,88 +1791,31 @@ public final class MainActivity extends Activity {
 
         PackageInfo installed = getPackageManager().getPackageInfo(
                 getPackageName(),
-                signatureFlags()
+                MoaUpdateArtifact.signatureFlags()
         );
         if (!signatureDigests(installed).equals(signatureDigests(archive))) {
             throw new IllegalStateException("APK signer mismatch");
         }
     }
 
-    private PackageInfo packageInfoForArchive(File apk) {
-        return getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), signatureFlags());
-    }
-
-    private int signatureFlags() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-                ? PackageManager.GET_SIGNING_CERTIFICATES
-                : PackageManager.GET_SIGNATURES;
-    }
-
     private Set<String> signatureDigests(PackageInfo info) throws Exception {
-        Signature[] signatures;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            signatures = info.signingInfo == null ? null : info.signingInfo.getApkContentsSigners();
-        } else {
-            signatures = info.signatures;
-        }
-        if (signatures == null || signatures.length == 0) {
-            throw new IllegalStateException("APK signer missing");
-        }
-        Set<String> digests = new HashSet<>();
-        for (Signature signature : signatures) {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] bytes = digest.digest(signature.toByteArray());
-            StringBuilder hex = new StringBuilder(bytes.length * 2);
-            for (byte value : bytes) {
-                hex.append(String.format("%02x", value));
-            }
-            digests.add(hex.toString());
-        }
-        return digests;
+        return MoaUpdateArtifact.signatureDigests(info);
     }
 
     private File updateApkFile() {
-        File dir = new File(getCacheDir(), "updates");
-        dir.mkdirs();
-        return new File(dir, MoaApkProvider.APK_NAME);
+        return MoaUpdateArtifact.updateApkFile(getCacheDir());
     }
 
     private long currentVersionCode() throws Exception {
-        PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            return info.getLongVersionCode();
-        }
-        return info.versionCode;
+        return MoaUpdateArtifact.currentVersionCode(getPackageManager(), getPackageName());
     }
 
     private String currentVersionName() throws Exception {
-        PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-        return info.versionName == null ? "" : info.versionName;
+        return MoaUpdateArtifact.currentVersionName(getPackageManager(), getPackageName());
     }
 
     private String sha256Hex(File file) throws Exception {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] buffer = new byte[32 * 1024];
-        try (FileInputStream input = new FileInputStream(file)) {
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                digest.update(buffer, 0, read);
-            }
-        }
-        byte[] bytes = digest.digest();
-        StringBuilder hex = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            hex.append(String.format("%02x", value & 0xff));
-        }
-        return hex.toString();
-    }
-
-    private String gatewayEndpoint(String gatewayUrl, String path) {
-        String base = gatewayUrl == null ? "" : gatewayUrl.trim();
-        while (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
-        }
-        return base + path;
+        return MoaUpdateArtifact.sha256Hex(file);
     }
 
     LinearLayout card() {
