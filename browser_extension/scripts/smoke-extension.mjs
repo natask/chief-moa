@@ -540,18 +540,19 @@ async function main() {
               // both lines lost their caret without anything failing.
               caretGlyphDisplay: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-caret")).display,
               // The send rides the rail at the trailing edge, after the text
-              // viewport, on the same 28px line. (The box itself is clamped to
-              // the space between the seam and the viewport edge, so its right
-              // edge is not a fixed reference here.)
+              // viewport, on the same 28px line — and inside the box, which the
+              // companion's drag bounds now guarantee is wide enough to hold it.
               sendInsideBox: (() => {
                 const send = ribbonYou.querySelector(".agee-ribbon-send").getBoundingClientRect();
                 const viewportRect = ribbonYou.querySelector(".agee-ribbon-viewport").getBoundingClientRect();
                 return send.width > 0
                   && send.top >= youRect.top - 1
                   && send.bottom <= youRect.bottom + 1
-                  && send.left >= viewportRect.right - 1;
+                  && send.left >= viewportRect.right - 1
+                  && send.right <= youRect.right + 1;
               })(),
               youHeight: Math.round(youRect.height),
+              youWidth: Math.round(youRect.width),
               // The companion's centre line is the seam both boxes hang off.
               companionCentreX: Math.round(launcherRect.left + launcherRect.width / 2),
               youLeftX: Math.round(youRect.left),
@@ -588,6 +589,11 @@ async function main() {
       || overlayMetrics.sendInsideBox !== true
       || overlayMetrics.youHeight !== 28) {
       throw new Error(`the typing box does not carry a send on one line: ${JSON.stringify(overlayMetrics)}`);
+    }
+    // The companion may only sit where both streams keep their minimum room, so
+    // a box narrow enough to squeeze the rail off its own end cannot happen.
+    if (!(overlayMetrics.youWidth >= 232)) {
+      throw new Error(`the companion was placed where its box cannot fit: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.composeEmpty !== true) {
       throw new Error(`an empty typing box did not mark itself empty: ${JSON.stringify(overlayMetrics)}`);

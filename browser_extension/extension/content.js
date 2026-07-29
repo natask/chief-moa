@@ -537,9 +537,9 @@
 
   function restoreLauncherPosition() {
     safeStorageLocalGet({ ageeLauncherPosition: null }).then(({ ageeLauncherPosition }) => {
-      if (!launcher || !ageeLauncherPosition) return;
-      const { x, y } = ageeLauncherPosition;
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      if (!launcher) return;
+      const { x, y } = ageeLauncherPosition || {};
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return reclampLauncher(); // no stored spot: bound the CSS default
       placeLauncher(x, y, false);
     }).catch(() => {});
   }
@@ -579,8 +579,8 @@
   function placeLauncher(x, y, persist) {
     if (!launcher) return;
     const rect = launcher.getBoundingClientRect();
-    const nextX = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
-    const nextY = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+    // Bounded by where both streams still fit, not just by the viewport edge.
+    const { left: nextX, top: nextY } = ribbons?.clampLauncherInto(x, y, rect) || { left: x, top: y };
     launcher.style.left = `${nextX}px`;
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";

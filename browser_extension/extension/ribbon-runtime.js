@@ -425,6 +425,20 @@
       else if (!ribbon.buffer) retire(ribbon);
     }
 
+    // Where the companion is ALLOWED to sit: only where both streams still have
+    // their minimum room. The rule lives in ribbon-layout.js next to the tokens
+    // the boxes are laid out from, so the two can never disagree — a companion
+    // dropped in a corner used to leave its box 29px wide with the send button
+    // hanging off the end. Applied on every placement, drag and resize alike.
+    function clampLauncherInto(x, y, rect) {
+      return Layout.clampLauncher(x, y, Layout.launcherBounds({
+        viewportWidth: win.innerWidth,
+        viewportHeight: win.innerHeight,
+        launcherWidth: rect?.width || 0,
+        launcherHeight: rect?.height || 0,
+      }));
+    }
+
     // ---- Compose ----------------------------------------------------------
     // Text mode is the same box, editable. Clicking the companion puts the
     // caret in the you-line and typing runs the identical sliding window the
@@ -1036,6 +1050,8 @@
         if (on) endCompose();
         setPending(you, on);
       },
+
+      clampLauncherInto,
 
       // Text mode: the you-line becomes the buffer you type into.
       beginCompose,
