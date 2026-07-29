@@ -26,6 +26,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.FileInputStream;
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 
 @RunWith(AndroidJUnit4.class)
@@ -103,7 +104,10 @@ public final class MoaTranscriptOverlayScenarioTest {
     private void checkpoint(String name) throws Exception {
         shell("mkdir -p /sdcard/Download/moa-qa");
         shell("screencap -p /sdcard/Download/moa-qa/" + name + ".png");
-        shell("uiautomator dump /sdcard/Download/moa-qa/" + name + ".xml");
+        // Reuse instrumentation's UiAutomation connection. Starting the legacy
+        // shell dumper here tries to register a second service and crashes the
+        // active Android 15 instrumentation process.
+        device.dumpWindowHierarchy(new File("/sdcard/Download/moa-qa/" + name + ".xml"));
         shell("sh -c \"echo " + name
                 + " >> /sdcard/Download/moa-qa/interaction-trace.txt\"");
     }
