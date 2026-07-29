@@ -157,7 +157,7 @@ function createWorkHistoryStore({ events }) {
       created_from_turn_id: text(input.created_from_turn_id, 160),
       route_decision_id: text(input.route_decision_id, 160),
       context_pack_ref: text(input.context_pack_ref, 400),
-      profile_version: text(input.profile_version, 160), intent_id: text(input.intent_id, 160), intent_revision: integer(input.intent_revision), acceptance_contract_ref: text(input.acceptance_contract_ref, 400), workspace_base: plain(input.workspace_base),
+      profile_version: text(input.profile_version, 160), intent_id: text(input.intent_id, 160), intent_revision: integer(input.intent_revision), acceptance_contract_ref: text(input.acceptance_contract_ref, 400), ...(input.workspace_base ? { workspace_base: plain(input.workspace_base) } : {}),
       created_at: now,
     };
     if (!run.objective) {

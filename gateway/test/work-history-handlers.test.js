@@ -173,6 +173,21 @@ test("oldest-run claim cannot bypass pinned modification base verification", asy
   assert.equal(harness.calls.some(([name]) => name === "claimRun"), false);
 });
 
+test("oldest-run claim skips pinned modification work and claims ordinary queued work", async () => {
+  const harness = makeHarness({ workHistory: {
+    statusSummary: async () => ({ ...structuredClone(EMPTY_SUMMARY), queued: [{ run_id: "wr_fix" }, { run_id: "wr_ordinary" }] }),
+    runDetail: async (id) => ({ run: id === "wr_fix"
+      ? { run_id: id, workspace_base: { ref: "origin/master", commit: "a".repeat(40) } }
+      : { run_id: id } }),
+    claimRun: async (body) => ({ run: { run_id: body.run_id }, claim_id: "claim_ordinary" }),
+  } });
+  const response = await route(harness, "POST", "/v1/work-history/runs/claim", { worker_id: "worker_1" });
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.run.run_id, "wr_ordinary");
+  const claim = harness.calls.find(([name]) => name === "claimRun");
+  assert.equal(claim[1].run_id, "wr_ordinary");
+});
+
 test("candidate evidence admission accepts only owner or preview-worker authority", async () => {
   const owner = makeHarness();
   let response = await route(owner, "POST", "/v1/work-history/modification-requests/mreq%201/candidate-evidence", { schema: "android_candidate_evidence.v1" });

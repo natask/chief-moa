@@ -86,10 +86,17 @@ function createWorkHistoryHandlers(deps) {
         const body = await readJsonBody(request);
         if (!body.run_id) {
           const summary = await workHistory.statusSummary();
+          let pinnedQueued = false;
           for (const queued of summary.queued || []) {
             const detail = await workHistory.runDetail(queued.run_id);
-            if (detail?.run?.workspace_base) throw new Error("run_id, base_ref, and resolved_base_commit are required while a pinned modification run is queued");
+            if (detail?.run?.workspace_base?.ref && detail.run.workspace_base.commit) {
+              pinnedQueued = true;
+              continue;
+            }
+            body.run_id = queued.run_id;
+            break;
           }
+          if (!body.run_id && pinnedQueued) throw new Error("run_id, base_ref, and resolved_base_commit are required to claim pinned modification work");
         }
         if (body.run_id) {
           const detail = await workHistory.runDetail(body.run_id);
