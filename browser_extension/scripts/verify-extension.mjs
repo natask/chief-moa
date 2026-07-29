@@ -1084,19 +1084,50 @@ if (!/voiceButton\.addEventListener\("click"[\s\S]{0,220}openTextSurface\(\{\s*f
 const voiceFirstTapBody = sourceBetween(
   contentSource,
   /function handleVoiceFirstTap\(/,
-  /function armVoiceFirstChainReset\(/,
+  /function resolveVoiceFirstTapChain\(/,
   "voice-first tap chain"
 );
 if (
-  !/armVoiceFirstChainReset\(\(\) => resolveVoiceFirstTapChain\(chain\)\)/.test(voiceFirstTapBody) ||
+  !/voiceFirstChain\?\.tap\(e, chainCount\)/.test(voiceFirstTapBody) ||
+  !/onResolve: \(count\) => resolveVoiceFirstTapChain\(count\)/.test(contentSource) ||
   !/function toggleVoiceFirstCapture\(/.test(contentSource) ||
   !/function toggleFreshThreadVoiceCapture\(/.test(contentSource) ||
   !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
   !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
-  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}ribbons\?\.beginCompose/.test(contentSource)
+  !/count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}ribbons\?\.beginCompose/.test(contentSource)
 ) {
   throw new Error("voice-first gestures must defer collision-safe single/double/triple actions and preserve fresh-thread capture provenance");
+}
+
+// Branching is the point of the double-click: it takes the microphone and
+// nothing else. Taking every in-flight turn down with it is the regression
+// that made "ask a second thing" kill the answer you were waiting for.
+const freshThreadBody = sourceBetween(
+  contentSource,
+  /function toggleFreshThreadVoiceCapture\(/,
+  /function cancelOpenCaptures\(/,
+  "fresh-thread capture"
+);
+const branchStartBody = sourceBetween(
+  contentSource,
+  /function startVoiceFirstCapture\(/,
+  /function toggleVoiceFirstCapture\(/,
+  "voice-first capture start"
+);
+if (
+  /cancelTalkMode\(\)|stopAllLiveVoiceTurns\(/.test(freshThreadBody) ||
+  /stopAllLiveVoiceTurns\(/.test(branchStartBody) ||
+  !/else cancelOpenCaptures\(replacement\)/.test(branchStartBody) ||
+  !/state\.committed === true\) continue/.test(contentSource)
+) {
+  throw new Error("a branching capture must cancel only open captures, never a committed turn");
+}
+
+// The caret is the answer to "is it hearing me", so it cannot wait on the
+// microphone actually coming up.
+if (!/ribbons\?\.setUserPending\(true\)/.test(branchStartBody)) {
+  throw new Error("starting a capture must open the caret on the press");
 }
 
 const launcherClickBody = sourceBetween(

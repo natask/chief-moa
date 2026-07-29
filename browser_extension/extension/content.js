@@ -76,8 +76,6 @@
   const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
   const VOICE_FIRST_HOLD_MS = 260;
   let voiceFirstGestures = false;
-  let voiceFirstHoldTimer = null;
-  let voiceFirstTapChain = null;
   let voiceFirstHoldStartedTurn = false;
   // Preserve how the active capture was admitted so another double-click can
   // send a double-started turn, while a double-click during a single-started
@@ -824,104 +822,65 @@
   }
 
   // ---- Voice-first gesture machine (flag-gated) --------------------------
-  // Chain membership is decided at press-down (up-to-down window, same as the
-  // legacy isLauncherSecondTap), so a pending single-tap resolution never
-  // fires in the middle of a double- or triple-click.
+  // The chain bookkeeping lives in voice-first-tap-chain.js; what a run of
+  // clicks MEANS lives here, because that needs the voice machine.
+  const voiceFirstChain = globalThis.AgeeVoiceFirstTapChain?.create({
+    windowMs: LAUNCHER_DOUBLE_CLICK_MS,
+    slopPx: LAUNCHER_DOUBLE_CLICK_SLOP,
+    holdMs: VOICE_FIRST_HOLD_MS,
+    onHold: (pointerId) => startVoiceFirstHold(pointerId),
+    onResolve: (count) => resolveVoiceFirstTapChain(count),
+  });
+
   function beginVoiceFirstPress(e) {
-    clearVoiceFirstHoldTimer();
-    const chain = voiceFirstTapChain;
-    const withinWindow =
-      chain &&
-      e.timeStamp - chain.lastTime >= 0 &&
-      e.timeStamp - chain.lastTime <= LAUNCHER_DOUBLE_CLICK_MS;
-    const dx = chain ? e.clientX - chain.x : 0;
-    const dy = chain ? e.clientY - chain.y : 0;
-    const withinSlop = chain && dx * dx + dy * dy <= LAUNCHER_DOUBLE_CLICK_SLOP * LAUNCHER_DOUBLE_CLICK_SLOP;
-    if (withinWindow && withinSlop) {
-      if (chain.timer) {
-        clearTimeout(chain.timer);
-        chain.timer = null;
-      }
-      if (dragState) dragState.chainCount = chain.count;
-    } else {
-      resetVoiceFirstTapChain();
-    }
-    const pointerId = e.pointerId;
-    voiceFirstHoldTimer = setTimeout(() => {
-      voiceFirstHoldTimer = null;
-      if (!dragState || dragState.pointerId !== pointerId || dragState.moved || holdToTalkActive) return;
-      // A still hold is push-to-talk: a manual turn, committed on release.
-      // Holding while talk mode is already listening rides that session, so
-      // the release commits the current conversation turn.
-      resetVoiceFirstTapChain();
-      holdToTalkActive = true;
-      holdToTalkPointerId = pointerId;
-      voiceFirstHoldStartedTurn = false;
-      if (!(liveVoice && listening)) {
-        if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel");
-        stopSpeaking();
-        voiceFirstHoldStartedTurn = true;
-        voiceFirstCaptureOrigin = "hold";
-        startLiveVoiceTurn({
-          preserveAssistantPlayback: assistantSpeechOverlap === true,
-          conversation: false,
-          autoCommit: false,
-          openText: false,
-        });
-      }
-    }, VOICE_FIRST_HOLD_MS);
+    const joined = voiceFirstChain?.press(e) || 0;
+    if (joined && dragState) dragState.chainCount = joined;
+  }
+
+  // A still hold is push-to-talk: a manual turn, committed on release. Holding
+  // while talk mode is already listening rides that session, so the release
+  // commits the current conversation turn.
+  function startVoiceFirstHold(pointerId) {
+    if (!dragState || dragState.pointerId !== pointerId || dragState.moved || holdToTalkActive) return;
+    holdToTalkActive = true;
+    holdToTalkPointerId = pointerId;
+    voiceFirstHoldStartedTurn = false;
+    if (liveVoice && listening) return;
+    cancelOpenCaptures();
+    if (assistantSpeechOverlap !== true) stopSpeaking();
+    voiceFirstHoldStartedTurn = true;
+    voiceFirstCaptureOrigin = "hold";
+    ribbons?.setUserPending(true);
+    startLiveVoiceTurn({
+      preserveAssistantPlayback: assistantSpeechOverlap === true,
+      conversation: false,
+      autoCommit: false,
+      openText: false,
+    });
   }
 
   function clearVoiceFirstHoldTimer() {
-    if (voiceFirstHoldTimer) {
-      clearTimeout(voiceFirstHoldTimer);
-      voiceFirstHoldTimer = null;
-    }
+    voiceFirstChain?.clearHoldTimer();
   }
 
   function resetVoiceFirstTapChain() {
-    if (voiceFirstTapChain?.timer) clearTimeout(voiceFirstTapChain.timer);
-    voiceFirstTapChain = null;
+    voiceFirstChain?.reset();
   }
 
   function handleVoiceFirstTap(e, chainCount) {
-    const count = chainCount + 1;
-    resetVoiceFirstTapChain();
-    const chain = {
-      count,
-      lastTime: e.timeStamp,
-      x: e.clientX,
-      y: e.clientY,
-      timer: null,
-    };
-    voiceFirstTapChain = chain;
-    // Resolve only after the multi-click window. In particular, a single click
-    // that would send an active capture waits long enough for a second or third
-    // click to supersede it, so double/triple collisions never send by accident.
-    armVoiceFirstChainReset(() => resolveVoiceFirstTapChain(chain));
+    voiceFirstChain?.tap(e, chainCount);
   }
 
-  function armVoiceFirstChainReset(onExpire) {
-    const chain = voiceFirstTapChain;
-    if (!chain) return;
-    chain.timer = setTimeout(() => {
-      chain.timer = null;
-      if (voiceFirstTapChain === chain) voiceFirstTapChain = null;
-      if (typeof onExpire === "function") onExpire();
-    }, LAUNCHER_DOUBLE_CLICK_MS);
-  }
-
-  function resolveVoiceFirstTapChain(chain) {
-    if (!chain) return;
-    if (chain.count === 1) {
+  function resolveVoiceFirstTapChain(count) {
+    if (count === 1) {
       toggleVoiceFirstCapture("single");
       return;
     }
-    if (chain.count === 2) {
+    if (count === 2) {
       toggleFreshThreadVoiceCapture();
       return;
     }
-    if (chain.count === 3) {
+    if (count === 3) {
       // Chat must never inherit a hot microphone or commit a pending capture.
       cancelGestureVoiceWarmup();
       if (liveVoice && listening) cancelTalkMode();
@@ -937,21 +896,24 @@
 
   function startVoiceFirstCapture(origin, { freshThread = false } = {}) {
     primeAudio();
+    // The caret opens on the press, not when the microphone finally comes up:
+    // that gap is exactly when you wonder whether it heard you.
+    ribbons?.setUserPending(true);
     const replacement = { kind: freshThread ? "fresh_thread" : "steering",
       turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       boundaryId: `steer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}` };
     if (origin === "single") beginCurrentThreadSteeringCapture(replacement);
-    else {
-      if (liveVoiceStates.size > 0) stopAllLiveVoiceTurns("cancel", replacement);
-      stopSpeaking();
-    }
+    else cancelOpenCaptures(replacement);
     if (freshThread) {
       newThreadArmed = true;
       newThreadLabel = "";
     }
     voiceFirstCaptureOrigin = origin;
     startLiveVoiceTurn({
+      // Single click steers the turn it interrupts, so that turn's voice stops.
+      // A branch runs alongside it: the earlier reply keeps speaking.
       suppressAssistantPlayback: origin === "single",
+      preserveAssistantPlayback: origin !== "single",
       conversation: false,
       autoCommit: false,
       openText: false,
@@ -985,8 +947,21 @@
     }
     // A double-click supersedes a current-thread capture without sending it,
     // then starts the new-thread capture. A second double-click sends that turn.
-    if (voiceFirstCaptureActive()) cancelTalkMode();
     return startVoiceFirstCapture("double", { freshThread: true });
+  }
+
+  // Cancel only the captures whose microphone is still open. A committed turn
+  // belongs to the gateway now: it keeps streaming, keeps speaking, and keeps
+  // the agent state it owns. That is the whole difference between branching
+  // and interrupting, and stopAllLiveVoiceTurns cannot express it — using it
+  // here is what made a double-click kill the answer you were waiting for.
+  function cancelOpenCaptures(replacement = null) {
+    for (const state of [...liveVoiceStates]) {
+      if (state.committed === true) continue;
+      stopLiveVoiceState(state, "cancel", replacement);
+      if (liveVoice === state) liveVoice = null;
+    }
+    setVoiceState(false);
   }
 
   function cancelTalkMode() {

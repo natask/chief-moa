@@ -52,6 +52,7 @@
         "launcher-removal-runtime.js",
         "browser-command-transcript-runtime.js",
         "document-context.js",
+        "voice-first-tap-chain.js",
         "ribbon-window.js",
         "ribbon-layout.js",
         "ribbon-runtime.js",
