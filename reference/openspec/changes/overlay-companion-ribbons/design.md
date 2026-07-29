@@ -169,4 +169,4 @@ still reposition normally.
 Panel-header drag now matches orb and ribbon drag: each raw `ACTION_MOVE` stores
 only the newest clamped companion anchor and requests the shared
 `MoaFrameCoalescer`. The frame callback remains the sole submitter for the orb,
-panel, ribbons, draft controls, and remove-target state.
+panel, ribbons, and remove-target state.
