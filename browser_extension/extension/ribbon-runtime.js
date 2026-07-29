@@ -28,6 +28,13 @@
   const LINGER_REPLY = 9000;
   const LINGER_ERROR = 14000;
   const PROXIMITY = 72;
+  // Reading pace for the reply line, in characters per second, and the tick it
+  // is applied on. ~45 c/s is a shade faster than comfortable silent reading,
+  // so the line stays ahead of the eye without ever looking stalled.
+  const REVEAL_CPS = 45;
+  const REVEAL_TICK_MS = 40;
+  // However far behind the reveal falls, it is caught up within this window.
+  const REVEAL_CATCHUP_MS = 2500;
   const THEME_SAMPLE_DEBOUNCE_MS = 250;
 
   const COPY_GLYPH = '<svg class="agee-ribbon-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
@@ -62,6 +69,10 @@
       placeLauncher,
       copyText,
       openHistory,
+      // Text mode submits through the host: the runtime owns presentation, not
+      // conversation. Copy on a live capture asks the host to finalize it.
+      onSubmitText = () => {},
+      finalizeUserTranscriptForCopy = () => false,
       doc = global.document,
       win = global,
     } = deps || {};
@@ -72,6 +83,8 @@
     let latchTimer = null;
     let pointerNear = false;
     let menuOwner = null;
+    let composing = false;
+    let pendingUserCopy = false;
     let presentationCue = "";
     let themeTimer = null;
 
@@ -90,12 +103,19 @@
         copyEl: el.querySelector(".agee-ribbon-copy:not(.agee-ribbon-chevron)"),
         chevronEl: el.querySelector(".agee-ribbon-chevron"),
         buffer: "",
+        // What the ribbon has been given, which is not always what it has shown
+        // yet: `buffer` is the revealed prefix and `target` is the whole reply.
+        // Copy, the variants and the expanded view all read `target` — pacing is
+        // a reading aid, never a claim that Ag said less than it did.
+        target: "",
+        revealTimer: null,
         truncated: false,
         expanded: false,
         variants: TextModel.emptyVariants(),
         skillName: "",
         chosenVariant: "",
         lingerTimer: null,
+        lingerAfterReveal: 0,
         copyTimer: null,
         renderPending: false,
       };
@@ -129,11 +149,16 @@
       ribbon.renderPending = true;
       const paint = () => {
         ribbon.renderPending = false;
-        ribbon.variants.literal = ribbon.buffer;
+        ribbon.variants.literal = ribbon.target || ribbon.buffer;
+        // The caret lives in this node while composing; rewriting it would move
+        // the caret to the start on every keystroke.
+        if (composing && ribbon === you) return;
         if (ribbon.expanded) {
-          // Expanded shows the whole buffer, wrapped inside the height cap.
-          // The sliding window is a collapsed-state rule only.
-          ribbon.textEl.textContent = ribbon.buffer;
+          // Expanded shows everything Ag has said, wrapped inside the five-line
+          // cap. Opening a ribbon is the "show me all of it now" gesture, so it
+          // reads the target, not the paced prefix. The sliding window and the
+          // pacing are both collapsed-state rules.
+          ribbon.textEl.textContent = ribbon.target || ribbon.buffer;
           ribbon.lineEl.style.transform = "translateX(0px)";
           ribbon.el.classList.remove("agee-ribbon-clipped");
           return;
@@ -159,10 +184,13 @@
     function clear(ribbon) {
       if (!ribbon) return;
       collapse(ribbon);
+      stopReveal(ribbon);
+      ribbon.lingerAfterReveal = 0;
       ribbon.variants = TextModel.emptyVariants();
       ribbon.skillName = "";
       ribbon.chosenVariant = "";
       ribbon.buffer = "";
+      ribbon.target = "";
       ribbon.truncated = false;
       ribbon.textEl.textContent = "";
       ribbon.lineEl.style.transform = "translateX(0px)";
@@ -182,26 +210,102 @@
       syncState();
     }
 
-    function push(ribbon, delta) {
+    function push(ribbon, delta, { paced = false } = {}) {
       if (!ribbon || !delta) return;
       open(ribbon);
-      const next = TextModel.appendDelta(ribbon.buffer, delta);
-      ribbon.buffer = next.buffer;
+      const next = TextModel.appendDelta(ribbon.target, delta);
+      ribbon.target = next.buffer;
       ribbon.truncated = ribbon.truncated || next.truncated;
-      render(ribbon);
+      if (!paced) {
+        ribbon.buffer = ribbon.target;
+        render(ribbon);
+        return;
+      }
+      scheduleReveal(ribbon);
     }
 
-    function setText(ribbon, text, { tone = "" } = {}) {
+    function setText(ribbon, text, { tone = "", paced = false } = {}) {
       if (!ribbon) return;
       const value = String(text || "");
       if (!value) return retire(ribbon);
       open(ribbon);
       const bounded = TextModel.boundBuffer(value);
-      ribbon.buffer = bounded.buffer;
+      ribbon.target = bounded.buffer;
       ribbon.truncated = bounded.truncated;
       ribbon.el.classList.toggle("agee-ribbon-warn", tone === "warn");
       ribbon.el.classList.toggle("agee-ribbon-mute", tone === "mute");
+      // Unpaced text lands whole: the user's own transcript, where partials
+      // rewrite themselves and pacing would fight the correction.
+      if (!paced || !ribbon.target.startsWith(ribbon.buffer)) {
+        stopReveal(ribbon);
+        ribbon.buffer = ribbon.target;
+        render(ribbon);
+        return;
+      }
+      scheduleReveal(ribbon);
       render(ribbon);
+    }
+
+    // ---- Paced reveal -----------------------------------------------------
+    // A reply that arrives whole — a text-only turn, a provider that does not
+    // stream, a burst of buffered deltas — used to appear as one block of text
+    // that is already gone by the time you look at it. Reveal it at reading
+    // pace instead, so the line always moves and can be followed. This is
+    // presentation only: `target` is the whole reply from the moment it lands,
+    // so copy, expand and the variants are never short-changed.
+    //
+    // The rate scales with the backlog. Ordinary streaming reads at REVEAL_CPS;
+    // a long reply that landed at once catches up fast rather than trickling
+    // out for a minute, and is always fully shown within REVEAL_CATCHUP_MS.
+    function revealStep(ribbon) {
+      const remaining = ribbon.target.length - ribbon.buffer.length;
+      if (remaining <= 0) {
+        stopReveal(ribbon);
+        // Catching up is what ends the turn's visible work: an endTurn that
+        // arrived mid-reveal parked its linger here so the last words are not
+        // wiped a frame after they appear.
+        if (ribbon.lingerAfterReveal) {
+          const ms = ribbon.lingerAfterReveal;
+          ribbon.lingerAfterReveal = 0;
+          setStreaming(ribbon, false);
+          startLinger(ribbon, ms);
+        }
+        return;
+      }
+      const catchUpCps = remaining / (REVEAL_CATCHUP_MS / 1000);
+      const cps = Math.max(REVEAL_CPS, catchUpCps);
+      const step = Math.max(1, Math.round((cps * REVEAL_TICK_MS) / 1000));
+      ribbon.buffer = ribbon.target.slice(0, ribbon.buffer.length + step);
+      render(ribbon);
+      ribbon.revealTimer = setTimeout(() => revealStep(ribbon), REVEAL_TICK_MS);
+    }
+
+    function scheduleReveal(ribbon) {
+      if (ribbon.revealTimer) return;
+      ribbon.revealTimer = setTimeout(() => revealStep(ribbon), REVEAL_TICK_MS);
+    }
+
+    function stopReveal(ribbon) {
+      if (!ribbon) return;
+      clearTimeout(ribbon.revealTimer);
+      ribbon.revealTimer = null;
+    }
+
+    // Touching a ribbon means "show me all of it now". Any pending reveal is
+    // finished immediately rather than made to race the user's attention.
+    function revealAll(ribbon) {
+      if (!ribbon) return;
+      stopReveal(ribbon);
+      if (ribbon.buffer !== ribbon.target) {
+        ribbon.buffer = ribbon.target;
+        render(ribbon);
+      }
+      if (ribbon.lingerAfterReveal) {
+        const ms = ribbon.lingerAfterReveal;
+        ribbon.lingerAfterReveal = 0;
+        setStreaming(ribbon, false);
+        startLinger(ribbon, ms);
+      }
     }
 
     const setStreaming = (ribbon, on) => ribbon?.el?.classList.toggle("agee-ribbon-streaming", !!on);
@@ -219,6 +323,100 @@
       if (on) open(ribbon);
       else if (!ribbon.buffer) retire(ribbon);
     }
+
+    // ---- Compose ----------------------------------------------------------
+    // Text mode is the same box, editable. Clicking the companion puts the
+    // caret in the you-line and typing runs the identical sliding window the
+    // transcript uses, so there is one buffer and one place to look for what
+    // you are about to say — never a second surface stacked over the page.
+    //
+    // While composing, render() must not write textContent: the caret lives in
+    // that node and rewriting it would move the caret to the start on every
+    // keystroke. Only the window transform is recomputed.
+    function beginCompose() {
+      if (composing) return;
+      composing = true;
+      stopReveal(you);
+      setPending(you, false);
+      open(you);
+      you.el.classList.add("agee-ribbon-composing");
+      you.textEl.setAttribute("contenteditable", "plaintext-only");
+      you.textEl.setAttribute("role", "textbox");
+      you.textEl.setAttribute("aria-label", "Type to Ag");
+      holdOpen();
+      engage(true);
+      focusCompose();
+    }
+
+    function focusCompose() {
+      try {
+        you.textEl.focus({ preventScroll: true });
+        const range = doc.createRange();
+        range.selectNodeContents(you.textEl);
+        range.collapse(false);
+        const selection = win.getSelection?.();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      } catch {}
+    }
+
+    function endCompose({ clearText = false } = {}) {
+      if (!composing) return;
+      composing = false;
+      you.el.classList.remove("agee-ribbon-composing");
+      you.textEl.removeAttribute("contenteditable");
+      you.textEl.removeAttribute("role");
+      you.textEl.removeAttribute("aria-label");
+      try { you.textEl.blur(); } catch {}
+      if (clearText) retire(you);
+      else render(you);
+    }
+
+    function composedText() {
+      return String(you.textEl.textContent || "").trim();
+    }
+
+    function submitComposed() {
+      const text = composedText();
+      if (!text) {
+        endCompose({ clearText: true });
+        return;
+      }
+      you.target = text;
+      you.buffer = text;
+      endCompose();
+      onSubmitText(text);
+    }
+
+    you.textEl.addEventListener("input", () => {
+      if (!composing) return;
+      you.target = String(you.textEl.textContent || "");
+      you.buffer = you.target;
+      // Keep the newest character pinned at the visible edge, exactly as the
+      // streaming window does, without touching the node the caret sits in.
+      const overflow = TextModel.overflowFor(you.viewportEl.clientWidth, you.lineEl.scrollWidth);
+      you.lineEl.style.transform = `translateX(${overflow}px)`;
+      you.el.classList.toggle("agee-ribbon-clipped", overflow < 0);
+    });
+
+    you.textEl.addEventListener("keydown", (event) => {
+      if (!composing) return;
+      event.stopPropagation();
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        submitComposed();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        endCompose({ clearText: true });
+        unlatch();
+      }
+    });
+
+    // A press inside the editable line is a caret placement, not a ribbon
+    // gesture: it must not start a drag or open the hold menu.
+    you.textEl.addEventListener("pointerdown", (event) => {
+      if (composing) event.stopPropagation();
+    });
 
     function startLinger(ribbon, ms) {
       if (!ribbon || !isLive(ribbon)) return;
@@ -250,6 +448,8 @@
       ribbon.expanded = true;
       ribbon.el.classList.add("agee-ribbon-expanded");
       holdOpen();
+      // Opening the box is the "all of it, now" gesture.
+      revealAll(ribbon);
       render(ribbon);
     }
 
@@ -265,6 +465,17 @@
 
     async function copy(ribbon, key) {
       if (!ribbon) return false;
+      // Copy on a live capture is also a disposition: it finalizes what has
+      // been said so far and does NOT send it. The host stops the capture
+      // without producing a turn, then calls copyUserTranscript() with the
+      // settled text — so the clipboard never gets a half-formed hypothesis and
+      // the model never gets a turn the user only meant to paste somewhere.
+      if (ribbon === you && !key && finalizeUserTranscriptForCopy()) {
+        pendingUserCopy = true;
+        revealAll(you);
+        engage(true);
+        return true;
+      }
       const variant = key || TextModel.defaultVariant(ribbon);
       // Choosing a variant is sticky for this turn only. A durable preference
       // is profile state and the agent owns that, not the overlay.
@@ -301,8 +512,13 @@
       latched = true;
       // Latch expiry is a full release: it collapses an expanded ribbon and
       // closes any open menu, so the overlay is never left occluding the page
-      // after the user has stopped touching it.
-      latchTimer = setTimeout(() => unlatch(), LATCH_MS);
+      // after the user has stopped touching it. Text mode is exempt — a caret
+      // in the buffer means the user is mid-sentence, and a timer must never
+      // take the line out from under them.
+      latchTimer = setTimeout(() => {
+        if (composing) return engage(true);
+        unlatch();
+      }, LATCH_MS);
     }
 
     function release() {
@@ -315,6 +531,9 @@
     function unlatch() {
       latched = false;
       clearTimeout(latchTimer);
+      // Clicking away, or Escape, ends text mode: the buffer is an engaged
+      // state, so releasing the unit releases the caret with it.
+      endCompose();
       closeMenu();
       closeCopyMenu();
       collapse(you);
@@ -333,8 +552,8 @@
         viewportHeight: win.innerHeight,
         ribbonWidth: width,
       });
-      you.el.style.left = `${place.left}px`;
-      reply.el.style.left = `${place.left}px`;
+      you.el.style.left = `${place.youLeft}px`;
+      reply.el.style.left = `${place.replyLeft}px`;
       if (place.youAnchor === "top") {
         you.el.style.top = `${place.youTop}px`;
         you.el.style.bottom = "auto";
@@ -661,6 +880,10 @@
       setUser(text, { interim = false } = {}) {
         const value = String(text || "");
         if (value) {
+          // A real turn taking the line ends text mode: one buffer, one owner.
+          // Otherwise the caret would sit in a node the transcript is trying to
+          // rewrite, and the line would freeze on whatever was typed.
+          endCompose();
           // First real text ends the pending state: the dots are replaced by
           // the words, in the same ribbon, with no reflow.
           setPending(you, false);
@@ -673,37 +896,61 @@
 
       // Open the you-ribbon before any transcript exists. Called when capture
       // opens so the unit reacts to the microphone, not to the transcriber.
-      setUserPending: (on) => setPending(you, on),
+      setUserPending(on) {
+        if (on) endCompose();
+        setPending(you, on);
+      },
+
+      // Text mode: the you-line becomes the buffer you type into.
+      beginCompose,
+      endCompose,
+      isComposing: () => composing,
+
+      // Complete a copy that was deferred while the capture finalized.
+      copyUserTranscript() {
+        if (!pendingUserCopy) return Promise.resolve(false);
+        pendingUserCopy = false;
+        return copy(you, TextModel.defaultVariant(you));
+      },
       // Same for the reply side: the gap between committing a turn and the
       // first reply delta is where "is it thinking?" lives.
       setReplyPending: (on) => setPending(reply, on),
 
-      // The lower ribbon is the assistant response stream.
+      // The lower ribbon is the assistant response stream, revealed at reading
+      // pace. A provider that streams and one that answers in a single block
+      // therefore look the same on screen: a line that fills in.
       setReply(text, { tone = "", streaming = false } = {}) {
         const value = String(text || "").trim();
         if (!value) return;
         setPending(reply, false);
-        setText(reply, value, { tone });
-        setStreaming(reply, streaming);
+        setText(reply, value, { tone, paced: true });
+        setStreaming(reply, streaming || reply.buffer !== reply.target);
       },
 
       pushUser: (delta) => push(you, delta),
-      pushReply: (delta) => push(reply, delta),
+      pushReply: (delta) => push(reply, delta, { paced: true }),
       setReplyStreaming: (on) => setStreaming(reply, on),
 
       copyLatest() {
-        if (you.buffer) return copy(you);
-        if (reply.buffer) return copy(reply);
+        if (you.target) return copy(you);
+        if (reply.target) return copy(reply);
         return Promise.resolve(false);
       },
 
       // Freeze both ribbons and start their linger timers. A reply the device
-      // never spoke has to be read, so it stays up materially longer.
+      // never spoke has to be read, so it stays up materially longer. A reply
+      // still revealing keeps its caret and parks the linger until the last
+      // word is on screen — the turn is over for the gateway, not for the eye.
       endTurn({ spoken = true, error = false } = {}) {
         setStreaming(you, false);
-        setStreaming(reply, false);
         startLinger(you, LINGER_YOU);
-        startLinger(reply, error || spoken === false ? LINGER_ERROR : LINGER_REPLY);
+        const replyLinger = error || spoken === false ? LINGER_ERROR : LINGER_REPLY;
+        if (reply.revealTimer) {
+          reply.lingerAfterReveal = replyLinger;
+          return;
+        }
+        setStreaming(reply, false);
+        startLinger(reply, replyLinger);
       },
 
       // The ribbons render the worker-owned active turn, so switching tabs or
@@ -729,11 +976,12 @@
           ribbon.variants = merged.variants;
           if (merged.skillName !== null) ribbon.skillName = merged.skillName;
         }
-        if (TextModel.shouldAdoptPresentationText(you.buffer, presentation.user_text, isOwner)) {
+        if (TextModel.shouldAdoptPresentationText(you.target, presentation.user_text, isOwner)) {
+          endCompose();
           setText(you, presentation.user_text);
         }
-        if (TextModel.shouldAdoptPresentationText(reply.buffer, presentation.response_text, isOwner)) {
-          setText(reply, presentation.response_text, { tone: status === "error" ? "warn" : "" });
+        if (TextModel.shouldAdoptPresentationText(reply.target, presentation.response_text, isOwner)) {
+          setText(reply, presentation.response_text, { tone: status === "error" ? "warn" : "", paced: true });
         }
         setStreaming(you, status === "listening");
         setStreaming(reply, status === "responding" || status === "running");

@@ -1,3 +1,4 @@
+- Hung the two boxes off the companion's centre line, revealed replies at reading pace, and made a click on the companion put the caret straight into the you-line buffer — agent: claude/opus-5 — lane/sliding-window-20260729
 - Fixed the ribbon scrim staying dark on light pages and wrote the overlay v2 design contract (companion state rim, capture capsule, wrapping bubbles ported from Android) — agent: claude/opus-5 — ab20f4a1
 - Stripped the overlay down to the companion and its two ribbons (no page strip, history button, language chip or voice strip), stopped voice gestures raising the composer, and made every manual capture end only when the user ends it — agent: claude/opus-5 — lane/overlay-clean-20260728
 - Kept Copy and voice reply on/off beside the browser companion with immediate local audio stop — agent: codex/gpt-5 — feat: quiet companion controls

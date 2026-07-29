@@ -571,8 +571,20 @@ const textHotkeyBody = sourceBetween(
   /\/\/ ---- Perception/,
   "text hotkey handler"
 );
-if (!/openTextSurface\(\{\s*fresh:\s*false\s*\}\)/.test(textHotkeyBody) || /toggleVoice|toggleTextSurface\(\)/.test(textHotkeyBody)) {
-  throw new Error("Cmd/Ctrl+Comma must match launcher single-click: open text only, preserving drafts and never starting voice");
+// Text mode is the same unit with a caret in the you-line, so Cmd/Ctrl+Comma
+// and a companion single-click do the identical thing: open the buffer. Neither
+// starts voice and neither raises a panel.
+if (!/ribbons\?\.beginCompose\(\)/.test(textHotkeyBody) || /toggleVoice|toggleTextSurface\(\)/.test(textHotkeyBody)) {
+  throw new Error("Cmd/Ctrl+Comma must match a companion single-click: put the caret in the you-line, never start voice");
+}
+const launcherTapBody = sourceBetween(
+  contentSource,
+  /function scheduleLauncherTap\(/,
+  /function cancelLauncherTap\(/,
+  "launcher tap handler"
+);
+if (!/ribbons\?\.beginCompose\(\)/.test(launcherTapBody)) {
+  throw new Error("a companion single-click must open the typing buffer in the you-line");
 }
 
 if (
@@ -1081,7 +1093,7 @@ if (
   !/voiceFirstCaptureOrigin !== origin[\s\S]{0,40}return "noop"/.test(contentSource) ||
   !/voiceFirstCaptureOrigin === "double"/.test(contentSource) ||
   !/startVoiceFirstCapture\("double", \{ freshThread: true \}\)/.test(contentSource) ||
-  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}openTextSurface/.test(contentSource)
+  !/chain\.count === 3[\s\S]{0,180}cancelTalkMode\(\)[\s\S]{0,100}ribbons\?\.beginCompose/.test(contentSource)
 ) {
   throw new Error("voice-first gestures must defer collision-safe single/double/triple actions and preserve fresh-thread capture provenance");
 }
@@ -1525,12 +1537,13 @@ if (
 
 // Tap expands the bounded bar to the full text AND reveals the copy rail in
 // the same gesture. Expanded is height-capped, wraps instead of sliding, and
-// is released by latch expiry so the overlay is never left occluding.
+// is released by latch expiry so the overlay is never left occluding — except
+// while a caret is in the buffer, which no timer may interrupt.
 if (
   !/function expand\(ribbon\)/.test(ribbonRuntimeSource) ||
   !/function collapse\(ribbon\)/.test(ribbonRuntimeSource) ||
   !/engage\(true\);\s*\n\s*toggleExpanded\(ribbon\);/.test(ribbonRuntimeSource) ||
-  !/latchTimer = setTimeout\(\(\) => unlatch\(\), LATCH_MS\);/.test(ribbonRuntimeSource) ||
+  !/latchTimer = setTimeout\(\(\) => \{[\s\S]{0,120}unlatch\(\);\s*\}, LATCH_MS\);/.test(ribbonRuntimeSource) ||
   !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*max-height:/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-expanded \.agee-ribbon-line\s*\{[^}]*white-space:\s*pre-wrap;/.test(ribbonsCssSource)
 ) {
@@ -1557,9 +1570,10 @@ if (
   throw new Error("the copy rail must offer literal/corrected/polished with an available-variant default");
 }
 // The literal transcript is a derived-revision parent and is never mutated:
-// copy only ever reads, and `literal` tracks the live buffer.
+// copy only ever reads, and `literal` tracks the whole text the ribbon was
+// given — the paced reveal is presentation, so copy is never short-changed.
 if (
-  !/ribbon\.variants\.literal = ribbon\.buffer;/.test(ribbonRuntimeSource) ||
+  !/ribbon\.variants\.literal = ribbon\.target \|\| ribbon\.buffer;/.test(ribbonRuntimeSource) ||
   /ribbon\.buffer = TextModel\.variantText\(/.test(ribbonRuntimeSource)
 ) {
   throw new Error("copying a derived variant must never overwrite the literal transcript");

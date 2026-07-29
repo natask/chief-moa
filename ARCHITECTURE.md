@@ -644,8 +644,15 @@ status projection are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface is the companion between two ribbons: what the user said
-reads in one line above the mark, what Ag replied in one line below it, opposite
-chat sides and centred on the mark. A ribbon paints no surface, never wraps and
+reads in one line above the mark, what Ag replied in one line below it. The
+companion's centre line is the seam — the user box's left edge sits on it and
+the reply box's right edge sits on it, so the pair pivots on the companion and
+which side a line hangs tells you who is speaking. The reply is revealed at
+reading pace (~45 characters a second, always caught up within 2.5s) so a
+provider that answers in one block looks the same as one that streams, and a
+turn is not visually finished until the last character is on screen. Text mode
+is the same buffer: a click on the companion puts a caret in the user line, and
+the panel is never raised for typing or talking. A ribbon paints no surface, never wraps and
 never reflows the page, so a spoken turn cannot cover what the user is reading.
 The overlay carries nothing else — no page-identity strip, no history list, no
 language chip, no voice strip. The panel is a composer for typed input only, and

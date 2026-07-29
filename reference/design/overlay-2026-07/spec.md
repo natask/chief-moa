@@ -131,10 +131,27 @@ The unit's anchor point is the **companion centre**. Stored position is the
 companion's own x/y, exactly as today (`ageeLauncherPos` / `orbParams.x/y`), so
 existing persistence needs no migration.
 
+**The companion's vertical centre line is the seam.** Revised 2026-07-29, and
+normative for every surface:
+
+- the **you-box** hangs off that line to the **right**: its LEFT edge sits on
+  `companionCenterX`;
+- the **reply-box** hangs off the same line to the **left**: its RIGHT edge sits
+  on `companionCenterX`.
+
+The pair therefore pivots on the companion instead of reading as two bars
+stacked on one another, and which side a line is on tells you who is speaking
+before you read a word. Near a viewport edge the preferred side does not fit; a
+box then **mirrors to the other side of the same line** rather than sliding off
+it. Only a viewport narrower than one box breaks the seam, and there staying on
+screen wins. Both lines stay left-anchored *inside* their own box so the sliding
+window keeps ownership of the horizontal offset (§4).
+
 Ribbons are laid out relative to the companion and then clamped:
 
-1. Compute `ribbonX = clamp(companionCenterX - ribbonW/2, edgeMargin,
-   viewportW - ribbonW - edgeMargin)`.
+1. Compute `youLeft = companionCenterX` and `replyLeft = companionCenterX -
+   ribbonW`, each mirrored across the seam if it does not fit, then clamped to
+   `[edgeMargin, viewportW - ribbonW - edgeMargin]`.
 2. If `companionTop - gap - ribbonH < edgeMargin + safeAreaTop`, the top ribbon
    **flips** below the companion and the reply ribbon flips below it — both
    ribbons stay in their you-then-reply reading order, they just move as a pair.
@@ -201,6 +218,75 @@ SLIDE_MS          = 90      // translateX transition
   "Copied (from the last 8,000 characters)".
 - When a turn ends, the buffer is frozen and remains copyable through the
   ribbon's linger window (§5). The next turn's first delta clears it.
+
+## 4.1 Reading pace — the line must always be moving
+
+Normative for every surface. A reply that arrives whole (a text-only turn, a
+provider that does not stream, a burst of buffered deltas) must NOT appear as
+one block. Each ribbon keeps two strings:
+
+```text
+target   // everything the ribbon has been given
+buffer   // the prefix it has actually shown
+```
+
+`buffer` advances toward `target` on a timer:
+
+```text
+REVEAL_CPS        = 45      // characters per second, ordinary pace
+REVEAL_TICK_MS    = 40      // timer granularity
+REVEAL_CATCHUP_MS = 2500    // whatever the backlog, it is caught up within this
+step = max(1, round(max(REVEAL_CPS, backlog / (REVEAL_CATCHUP_MS/1000)) * REVEAL_TICK_MS/1000))
+```
+
+Rules:
+
+- **Pacing is presentation only.** `target` is the whole reply from the moment
+  it lands. Copy, the copy-variant rail and the opened view all read `target`,
+  never `buffer`. The overlay must never imply Ag said less than it did.
+- **Only the reply line is paced.** The user line renders its transcript
+  immediately: partial hypotheses rewrite themselves, and pacing would fight the
+  correction.
+- **Touching a box finishes the reveal at once.** Opening it is the "all of it,
+  now" gesture.
+- **A turn is not visually over until the reveal is.** If `turn_done` arrives
+  mid-reveal, the caret stays and the linger timer is parked until the last
+  character is on screen. A reply must never be wiped a frame after it appears.
+- This is what makes a spoken reply and a silent one look the same: with voice
+  off, the text still arrives at a pace a person can read.
+
+## 4.2 Text mode is the same buffer
+
+Normative for every surface. There is no separate composer for ordinary typing.
+A single click/tap on the companion puts a caret in the **you-line**, which
+becomes an editable single-line buffer running the identical sliding window the
+transcript uses:
+
+- one buffer, one place to look for what you are about to say;
+- Enter submits it as an ordinary turn; Escape ends text mode and clears;
+- a real turn taking the line (a capture opening, a transcript arriving, a
+  presentation adopting user text) ends text mode — one owner at a time;
+- a caret in the buffer is an engaged state and is exempt from the latch
+  timeout: a timer must never take the line out from under someone mid-sentence.
+  Clicking away or Escape releases it.
+
+The panel (browser `#agee-panel` / Android `panelView`) survives only as the
+approval and notes surface. No gesture that starts voice or text may raise it.
+
+## 4.3 Copy is a disposition, not just a clipboard write
+
+Copy pressed while a capture is live **finalizes what has been said so far and
+does not send it**: the capture stops, no turn is created, and the clipboard
+receives the settled transcript. This is what makes the overlay usable for
+dictating into another app. After a turn has ended, Copy is an immediate local
+clipboard action as before.
+
+## 4.4 An opened box shows at most five lines
+
+Opening a box (tap/click) shows the whole of `target`, wrapped, capped at five
+line boxes and scrollable past that. The same cap applies to both boxes. An
+opened box is still sitting on the user's page; five lines is as much of it as
+the overlay may ever cover.
 
 # 5. Opacity states
 

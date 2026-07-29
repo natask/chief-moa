@@ -470,11 +470,22 @@ async function main() {
             }
             const launcherRect = launcher.getBoundingClientRect();
             const birdRect = bird.getBoundingClientRect();
+            // The panel is the approval/notes surface now; a companion click no
+            // longer opens it. Show it just long enough to measure that it is
+            // still compact when something does open it.
+            const wasOpen = root.classList.contains("agee-open");
+            root.classList.add("agee-open");
             const panelRect = panel.getBoundingClientRect();
             const voiceRect = voice.getBoundingClientRect();
+            const panelStyle = { voice: getComputedStyle(voice).fontSize };
+            const panelOverflowX = panel.scrollWidth > panel.clientWidth + 1;
+            const inputOverflowX = input.scrollWidth > input.clientWidth + 1;
+            if (!wasOpen) root.classList.remove("agee-open");
+            const youRect = ribbonYou.getBoundingClientRect();
+            const replyRect = ribbonReply.getBoundingClientRect();
+            const youTextEl = ribbonYou.querySelector(".agee-ribbon-text");
             const stopStyle = getComputedStyle(stop);
             const logStyle = getComputedStyle(log);
-            const voiceStyle = getComputedStyle(voice);
             return {
               ok: true,
               rootCount: document.querySelectorAll("#agee-root").length,
@@ -489,12 +500,23 @@ async function main() {
               viewportWidth: window.innerWidth,
               voiceWidth: Math.round(voiceRect.width),
               voiceHeight: Math.round(voiceRect.height),
-              voiceFontSize: voiceStyle.fontSize,
+              voiceFontSize: panelStyle.voice,
               stopDisplayWhenIdle: stopStyle.display,
               logDisplay: logStyle.display,
-              panelOverflowX: panel.scrollWidth > panel.clientWidth + 1,
-              inputOverflowX: input.scrollWidth > input.clientWidth + 1,
+              panelOverflowX,
+              inputOverflowX,
               activeInput: document.activeElement === input,
+              // Text mode: the caret goes into the you-line, not a panel.
+              composing: ribbonYou.classList.contains("agee-ribbon-composing"),
+              youLive: ribbonYou.classList.contains("agee-ribbon-live"),
+              editable: youTextEl?.getAttribute("contenteditable") || "",
+              caretInYouLine: document.activeElement === youTextEl,
+              // The companion's centre line is the seam both boxes hang off.
+              companionCentreX: Math.round(launcherRect.left + launcherRect.width / 2),
+              youLeftX: Math.round(youRect.left),
+              youRightX: Math.round(youRect.right),
+              replyLeftX: Math.round(replyRect.left),
+              replyRightX: Math.round(replyRect.right),
               youRibbonJustify: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-viewport")).justifyContent,
               replyRibbonJustify: getComputedStyle(ribbonReply.querySelector(".agee-ribbon-viewport")).justifyContent,
             };
@@ -514,9 +536,32 @@ async function main() {
     ) {
       throw new Error(`desktop mascot is not compact: ${JSON.stringify(overlayMetrics)}`);
     }
-    if (!overlayMetrics.open || !overlayMetrics.activeInput) throw new Error(`overlay did not open and focus input: ${JSON.stringify(overlayMetrics)}`);
-    if (overlayMetrics.youRibbonJustify !== "flex-end" || overlayMetrics.replyRibbonJustify !== "flex-start") {
-      throw new Error(`ribbons did not take opposite chat sides: ${JSON.stringify(overlayMetrics)}`);
+    // A companion click puts the caret in the you-line immediately. No panel.
+    if (!overlayMetrics.composing || !overlayMetrics.youLive || !overlayMetrics.caretInYouLine) {
+      throw new Error(`companion click did not open the typing buffer: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (overlayMetrics.editable !== "plaintext-only") {
+      throw new Error(`the you-line is not an editable buffer: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (overlayMetrics.open) {
+      throw new Error(`typing raised the old panel instead of the buffer: ${JSON.stringify(overlayMetrics)}`);
+    }
+    // Both boxes hang off the companion's centre line. Near a viewport edge a
+    // box mirrors to the other side of that line, so an edge landing on the
+    // seam — either edge — is the contract.
+    const onSeam = (a, b) => Math.abs(a - b) <= 1;
+    if (!onSeam(overlayMetrics.youLeftX, overlayMetrics.companionCentreX)
+      && !onSeam(overlayMetrics.youRightX, overlayMetrics.companionCentreX)) {
+      throw new Error(`you-box is not attached to the companion centre line: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (!onSeam(overlayMetrics.replyRightX, overlayMetrics.companionCentreX)
+      && !onSeam(overlayMetrics.replyLeftX, overlayMetrics.companionCentreX)) {
+      throw new Error(`reply-box is not attached to the companion centre line: ${JSON.stringify(overlayMetrics)}`);
+    }
+    // Chat sides are geometry, asserted on the seam below. Both lines stay
+    // left-anchored inside their own box so the sliding window owns the offset.
+    if (overlayMetrics.youRibbonJustify !== "flex-start" || overlayMetrics.replyRibbonJustify !== "flex-start") {
+      throw new Error(`ribbon lines are not anchored for the sliding window: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.panelWidth > Math.min(540, overlayMetrics.viewportWidth - 24) + 1) {
       throw new Error(`overlay panel exceeded compact width: ${JSON.stringify(overlayMetrics)}`);
@@ -607,10 +652,11 @@ async function main() {
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
-            const input = document.querySelector("#agee-input");
-            if (input) {
-              input.value = "shortcut draft";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
+            // A draft typed into the buffer, exactly as a user would leave one.
+            const youText = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+            if (youText) {
+              youText.textContent = "shortcut draft";
+              youText.dispatchEvent(new Event("input", { bubbles: true }));
             }
             window.__ageeShortcutSmoke = { calls: [], seq: 0 };
             window.__ageeShortcutSmokeOrig = chrome.runtime.sendMessage.bind(chrome.runtime);
@@ -669,12 +715,16 @@ async function main() {
 	            target: { tabId },
 	            func: () => {
               const root = document.querySelector("#agee-root");
-              const input = document.querySelector("#agee-input");
+              const you = document.querySelector("#agee-ribbon-you");
+              const youText = you?.querySelector(".agee-ribbon-text");
               const calls = window.__ageeShortcutSmoke?.calls || [];
               return {
                 open: root?.classList.contains("agee-open") || false,
-                focusedInput: document.activeElement === input,
-                inputValue: input?.value || "",
+                // Text mode is the you-line with a caret in it, so "did the
+                // shortcut land" is asked of the buffer, not of a panel.
+                composing: you?.classList.contains("agee-ribbon-composing") || false,
+                caretInBuffer: document.activeElement === youText,
+                bufferValue: youText?.textContent || "",
                 listening: document.querySelector("#agee-voice")?.classList.contains("listening") || false,
                 calls,
               };
@@ -764,9 +814,9 @@ async function main() {
 	    const commandControlsBefore = shortcutVoice?.commandHoldBeforeRelease?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
 	    const commandControlsAfter = shortcutVoice?.commandHoldReleased?.calls?.filter((call) => call.cmd === "voiceSessionControl" && call.message?.type === "commit_turn") || [];
 	    if (
-	      !shortcutVoice?.comma?.open ||
-	      !shortcutVoice?.comma?.focusedInput ||
-	      shortcutVoice?.comma?.inputValue !== "shortcut draft" ||
+	      !shortcutVoice?.comma?.composing ||
+	      !shortcutVoice?.comma?.caretInBuffer ||
+	      shortcutVoice?.comma?.bufferValue !== "shortcut draft" ||
       (shortcutVoice?.comma?.calls || []).some((call) => call.cmd === "voiceSessionStart") ||
       tapStarts.length !== 1 ||
       tapStarts[0]?.autoCommit !== false ||
@@ -807,6 +857,15 @@ async function main() {
             key: "Escape", bubbles: true, cancelable: true,
           })),
         });
+        // Leave text mode first: a caret in the buffer is an engaged state, and
+        // engaged is exactly the state this step is checking is absent.
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })),
+        });
+        // Let the release settle: the companion cross-fades back to ambient and
+        // this step measures that opacity exactly.
+        await sleep(420);
         await chrome.tabs.sendMessage(tabId, {
           cmd: "browserAgentOwnerChanged",
           owner: { tab_id: tabId, cue_id: "ribbon-smoke-cue", status: "responding" },

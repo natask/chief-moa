@@ -169,3 +169,27 @@ design.
 Verification stays the repo default: `cd browser_extension && npm run verify &&
 npm run smoke` for the browser lane, `cd android_app && ANDROID_HOME="$HOME/Library/Android/sdk"
 ./gradlew assembleDebug` plus `MoaOrbOverlayGeometryTest` for the Android lane.
+
+# 2026-07-29 revision: what Android still owes
+
+The browser landed the revised contract (spec §3.1 seam, §4.1 reading pace,
+§4.2 text mode, §4.3 copy disposition, §4.4 five-line cap). Android implements
+the same rules or the surfaces have diverged. Nothing here is optional and
+nothing here is browser-specific — the user asked for one interface across
+surfaces, so this is a parity debt, not a backlog idea.
+
+| Rule | Browser | Android | Owed |
+|---|---|---|---|
+| Seam: you-box left edge on the companion centre line, reply-box right edge on it, mirroring near an edge | done (`ribbon-layout.js` `ribbonPlacement`, unit-tested) | not started — both ribbons still centre on the orb | port the `onSeam(preferred, mirrored)` rule into `MoaOrbOverlayGeometry` and cover it in `MoaOrbOverlayGeometryTest` |
+| Reading pace: `target`/`buffer` split, 45 c/s, 2.5s catch-up, reply only, copy reads `target` | done (`ribbon-runtime.js`) | not started — a whole reply still lands at once | port the reveal timer into the ribbon view; keep it off the user line |
+| A turn is not visually over until the reveal is (parked linger) | done | not started | same lane as the reveal timer |
+| Text mode is the you-line, not a panel | done (`beginCompose`) | not started — `showPanel` still raises the composer | make the user ribbon editable; leave `panelView` for approvals/notes |
+| Copy during live capture finalizes WITHOUT sending | done (`finalizeUserTranscriptForCopy` cancels, never commits) | **diverges** — `OverlayService` requests *commit*, which sends the turn | change the Android path to cancel-and-copy; the user's rule is "copy must not send" |
+| Opened box capped at five lines | done (CSS `calc(5 * line-h)`) | not started | apply the same cap to the expanded ribbon view |
+
+Android's advantage worth porting the other way: it waits for the provider's
+final transcript before writing the clipboard, so the copy is authoritative
+rather than a partial hypothesis. The browser cannot do that today without
+sending the turn (`transcription_only` is a session-start flag, not a mid-turn
+one). Reconciling that needs a gateway change — a commit that returns the final
+transcript and runs no model — and is the one item here that is not client-only.

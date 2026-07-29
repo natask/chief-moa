@@ -33,6 +33,7 @@
     pendingConfirm = null,
     open = false,
     liveVoice = null,
+    pendingCopyAfterCapture = false,
     surfacePhase = "idle",
     listening = false,
     ambientState = "off",
@@ -766,7 +767,10 @@
       lastLauncherTap = null;
       if (tap) {
         cancelGestureVoiceWarmup();
-        openTextSurface({ fresh: false });
+        // A tap on the companion puts the caret in the you-line immediately.
+        // The buffer is the overlay, so there is nothing to wait for and no
+        // panel to raise over the page.
+        ribbons?.beginCompose();
       }
     }, LAUNCHER_DOUBLE_CLICK_MS);
   }
@@ -945,7 +949,7 @@
       // Chat must never inherit a hot microphone or commit a pending capture.
       cancelGestureVoiceWarmup();
       if (liveVoice && listening) cancelTalkMode();
-      openTextSurface({ fresh: false });
+      ribbons?.beginCompose();
       return;
     }
     cancelGestureVoiceWarmup();
@@ -1068,7 +1072,30 @@
       // History is a separate surface, not overlay content. The side panel
       // already hydrates from the canonical gateway session projection.
       openHistory: () => safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false })),
+      // Text mode types into the you-line. Submitting it is an ordinary turn.
+      onSubmitText: (text) => submitInstruction(text),
+      finalizeUserTranscriptForCopy: finalizeCaptureForCopy,
     });
+  }
+
+  // Copy on a live capture finalizes the utterance WITHOUT sending it: the
+  // capture stops, no turn is created, and the transcript stays on screen to be
+  // pasted wherever the user wanted it. Returns true when the copy must wait
+  // for that stop to settle, which is what defers the clipboard write.
+  function finalizeCaptureForCopy() {
+    if (!liveVoice || !listening) return false;
+    pendingCopyAfterCapture = true;
+    // Cancel, never commit: committing is what would send the turn to the model.
+    stopAllLiveVoiceTurns("cancel");
+    setAgentState("idle");
+    // The last transcript we hold is already rendered in the you-line; hand the
+    // copy back on the next frame so it reads the settled text.
+    setTimeout(() => {
+      if (!pendingCopyAfterCapture) return;
+      pendingCopyAfterCapture = false;
+      ribbons?.copyUserTranscript();
+    }, 120);
+    return true;
   }
 
   // Anchor the panel to the floating mark so the input opens right where the
@@ -4187,13 +4214,13 @@
         beginVoiceHotkey(e);
         return;
       }
-      // ⌘, → text command field.
+      // ⌘, → the same unit, in text mode: the caret lands in the you-line.
       if (isTextHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (!root) build();
         lastLocalTextHotkeyAt = Date.now();
-        openTextSurface({ fresh: false });
+        ribbons?.beginCompose();
         return;
       }
     },
@@ -4408,7 +4435,8 @@
         reply({ ok: true });
         return true;
       case "open":
-        openTextSurface({ fresh: false });
+        if (!root) build();
+        ribbons?.beginCompose();
         reply({ ok: true });
         return true;
       case "toggleVoice":
