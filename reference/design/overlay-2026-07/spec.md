@@ -1,7 +1,10 @@
 ---
 title: Overlay redesign — Companion + Ribbons
 date: 2026-07-27
-status: design-contract
+status: superseded-in-part
+superseded_by: reference/design/overlay-2026-07-28/spec.md — §2.1 (ribbon
+  internals), §4 (sliding window) and §5 (ambient paints no plate) are replaced
+  by the bubble contract. §3, §6, §7 and §8 remain authoritative.
 surfaces: android_app (OverlayService), browser_extension (content.js, overlay.css)
 supersedes_visually: the cue-card stack (.agee-cue), the voice transcript card
   (OverlayService.showTranscriptCard), the panel-as-default-open behaviour
