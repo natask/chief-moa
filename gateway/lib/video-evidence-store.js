@@ -97,41 +97,19 @@ function normalizeState(value) {
 function assertClaimGraph(records, actualClaims) {
   const expected = { evidence_id: {}, blob_ref: {}, sha256: {} };
   for (const [recordKey, record] of Object.entries(records)) {
-    if (!plainObject(record) || record.request_id !== recordKey || !plainObject(record.turn)) {
-      throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} has invalid identity`);
-    }
+    const lifecycle = deriveVideoEvidenceRecordLifecycle(recordKey, record);
     const owner = {
       request_id: recordKey,
       turn_id: requiredStoredText(record.turn.turn_id, `${recordKey}.turn_id`),
       session_id: requiredStoredText(record.turn.session_id, `${recordKey}.session_id`),
     };
-    const evidence = record.evidence;
-    const evidenceRequired = ["uploaded", "attached", "processed", "deleted"].includes(record.status);
-    if (!evidence) {
-      if (evidenceRequired) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} lost required evidence`);
-      continue;
-    }
-    if (!plainObject(evidence)) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} evidence is invalid`);
-    const receipts = Array.isArray(record.receipts) ? record.receipts : [];
-    if (!receipts.some((receipt) => receipt?.event === "uploaded")) {
-      throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} evidence lacks an upload receipt`);
-    }
+    const evidence = lifecycle.evidence;
+    if (!evidence) continue;
     const evidenceId = requiredStoredText(evidence.evidence_id, `${recordKey}.evidence_id`);
     const sha256 = requiredStoredText(evidence.sha256, `${recordKey}.sha256`);
-    let blobRef;
-    if (record.status === "deleted") {
-      if (evidence.deleted !== true || evidence.blob_ref !== null || !plainObject(record.deletion)) {
-        throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} has an invalid deletion tombstone`);
-      }
-      blobRef = requiredStoredText(record.deletion.deleted_blob_ref, `${recordKey}.deleted_blob_ref`);
-      requiredStoredText(record.deletion.blob_delete_receipt_ref, `${recordKey}.blob_delete_receipt_ref`);
-      if (receipts.at(-1)?.event !== "deleted") {
-        throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} deletion receipt continuity is broken`);
-      }
-    } else {
-      if (evidence.deleted === true) throw storeError("VIDEO_EVIDENCE_STORE_SEMANTIC_CORRUPT", `record ${recordKey} has an unexpected deletion tombstone`);
-      blobRef = requiredStoredText(evidence.blob_ref, `${recordKey}.blob_ref`);
-    }
+    const blobRef = lifecycle.status === "deleted"
+      ? requiredStoredText(lifecycle.deletion.deleted_blob_ref, `${recordKey}.deleted_blob_ref`)
+      : requiredStoredText(evidence.blob_ref, `${recordKey}.blob_ref`);
     addExpectedClaim(expected.evidence_id, evidenceId, owner, "evidence_id");
     addExpectedClaim(expected.blob_ref, blobRef, owner, "blob_ref");
     addExpectedClaim(expected.sha256, sha256, owner, "sha256");
@@ -141,6 +119,227 @@ function assertClaimGraph(records, actualClaims) {
       throw storeError("VIDEO_EVIDENCE_STORE_CLAIM_GRAPH_CORRUPT", `${key} claims do not exactly match persisted record ownership`);
     }
   }
+}
+
+function deriveVideoEvidenceRecordLifecycle(recordKey, record) {
+  if (!plainObject(record) || record.request_id !== recordKey || !plainObject(record.turn)) {
+    throw storeError("VIDEO_EVIDENCE_STORE_LIFECYCLE_CORRUPT", `record ${recordKey} has invalid identity`);
+  }
+  requiredStoredText(record.turn.turn_id, `${recordKey}.turn_id`);
+  requiredStoredText(record.turn.session_id, `${recordKey}.session_id`);
+  requiredStoredText(record.turn.surface_id, `${recordKey}.surface_id`);
+  const createdAt = requiredIso(record.created_at, `${recordKey}.created_at`);
+  if (!Array.isArray(record.receipts)) throw storeError("VIDEO_EVIDENCE_STORE_LIFECYCLE_CORRUPT", `record ${recordKey} receipts are invalid`);
+  const derived = {
+    status: "proposed",
+    version: 1,
+    updated_at: createdAt,
+    capture: null,
+    evidence: null,
+    attached_at: null,
+    processing: null,
+    failure: null,
+    deletion: null,
+  };
+  const receiptIds = new Set();
+  for (const receipt of record.receipts) {
+    if (!plainObject(receipt)) throw lifecycleError(recordKey, "receipt is invalid");
+    const receiptId = requiredStoredText(receipt.receipt_id, `${recordKey}.receipt_id`);
+    if (receiptIds.has(receiptId)) throw lifecycleError(recordKey, "receipt identity was replayed in history");
+    receiptIds.add(receiptId);
+    const event = requiredStoredText(receipt.event, `${recordKey}.receipt.event`);
+    const at = requiredIso(receipt.at, `${recordKey}.${event}.at`);
+    if (Date.parse(at) < Date.parse(derived.updated_at)) throw lifecycleError(recordKey, "receipt timestamps are reordered");
+    assertLifecycleTransition(recordKey, derived.status, event, Boolean(derived.evidence));
+    applyLifecycleReceipt(recordKey, record, derived, receipt, event, at);
+    derived.status = event;
+    derived.version += 1;
+    derived.updated_at = at;
+  }
+  if (record.status !== derived.status || record.version !== derived.version || record.updated_at !== derived.updated_at) {
+    throw lifecycleError(recordKey, "status, version, or updated_at differs from receipt replay");
+  }
+  for (const field of ["capture", "evidence", "attached_at", "processing", "failure", "deletion"]) {
+    if (canonical(record[field] ?? null) !== canonical(derived[field])) {
+      throw lifecycleError(recordKey, `${field} differs from receipt replay`);
+    }
+  }
+  assertIdempotencyProjection(recordKey, record.idempotency, record.receipts);
+  return clone(derived);
+}
+
+function assertLifecycleTransition(recordKey, from, event, hasEvidence) {
+  const allowed = {
+    proposed: ["user_started", "failed"],
+    user_started: ["captured", "failed"],
+    captured: ["uploaded", "failed"],
+    uploaded: ["attached", "failed", "deleted"],
+    attached: ["processed", "failed", "deleted"],
+    processed: ["deleted"],
+    failed: hasEvidence ? ["deleted"] : [],
+    deleted: [],
+  };
+  if (!allowed[from]?.includes(event)) throw lifecycleError(recordKey, `impossible ${from} -> ${event} receipt sequence`);
+}
+
+function applyLifecycleReceipt(recordKey, record, derived, receipt, event, at) {
+  if (["user_started", "captured", "uploaded", "attached", "deleted"].includes(event)) {
+    assertSurfaceReceiptProjection(recordKey, record, receipt);
+  }
+  if (event === "captured") derived.capture = requiredSnapshot(receipt.capture, recordKey, "capture");
+  if (event === "uploaded") {
+    const evidence = requiredSnapshot(receipt.evidence, recordKey, "evidence");
+    if (!derived.capture
+      || evidence.subject !== derived.capture.capture_scope
+      || evidence.duration_seconds !== derived.capture.duration_seconds
+      || evidence.has_audio !== derived.capture.has_audio) {
+      throw lifecycleError(recordKey, "uploaded evidence differs from captured receipt");
+    }
+    derived.evidence = evidence;
+  }
+  if (event === "attached") {
+    const binding = requiredSnapshot(receipt.attachment_binding, recordKey, "attachment_binding");
+    assertAttachmentProjection(recordKey, record, derived.evidence, binding);
+    if (receipt.attached_at !== at) throw lifecycleError(recordKey, "attached timestamp differs from receipt");
+    derived.attached_at = receipt.attached_at;
+  }
+  if (event === "processed") {
+    if (receipt.authority_verifier_accepted !== true) throw lifecycleError(recordKey, "provider verifier acceptance is missing");
+    const provider = requiredSnapshot(receipt.provider_binding, recordKey, "provider_binding");
+    assertProviderProjection(recordKey, record, derived.evidence, provider);
+    const processing = requiredSnapshot(receipt.processing, recordKey, "processing");
+    if (processing.provider_receipt_ref !== provider.receipt_ref
+      || processing.provider !== provider.provider
+      || processing.model !== provider.model
+      || processing.evidence_id !== derived.evidence?.evidence_id
+      || processing.evidence_sha256 !== derived.evidence?.sha256
+      || processing.processed_at !== at) {
+      throw lifecycleError(recordKey, "processing fields differ from provider receipt binding");
+    }
+    derived.processing = processing;
+  }
+  if (event === "failed") {
+    const failure = requiredSnapshot(receipt.failure, recordKey, "failure");
+    if (failure.failed_at !== at) throw lifecycleError(recordKey, "failure timestamp differs from receipt");
+    derived.failure = failure;
+  }
+  if (event === "deleted") {
+    if (!derived.evidence || receipt.blob_authority_verifier_accepted !== true) throw lifecycleError(recordKey, "deletion authority or evidence is missing");
+    const blob = requiredSnapshot(receipt.blob_delete_binding, recordKey, "blob_delete_binding");
+    const deletion = requiredSnapshot(receipt.deletion, recordKey, "deletion");
+    const tombstone = requiredSnapshot(receipt.deleted_evidence, recordKey, "deleted_evidence");
+    if (blob.evidence_id !== derived.evidence.evidence_id
+      || blob.blob_ref !== derived.evidence.blob_ref
+      || blob.sha256 !== derived.evidence.sha256
+      || blob.deleted !== true
+      || deletion.deleted_blob_ref !== blob.blob_ref
+      || deletion.blob_delete_receipt_ref !== blob.receipt_ref
+      || deletion.deleted_at !== at
+      || tombstone.evidence_id !== derived.evidence.evidence_id
+      || tombstone.sha256 !== derived.evidence.sha256
+      || tombstone.blob_ref !== null
+      || tombstone.deleted !== true) {
+      throw lifecycleError(recordKey, "deletion fields differ from blob receipt binding");
+    }
+    derived.evidence = tombstone;
+    derived.deletion = deletion;
+  }
+}
+
+function assertSurfaceReceiptProjection(recordKey, record, receipt) {
+  if (receipt.assertion_kind !== "surface_user_action" || receipt.authority_verifier_accepted !== true) {
+    throw lifecycleError(recordKey, "Surface verifier acceptance is missing");
+  }
+  const expected = {
+    request_id: recordKey,
+    turn_id: record.turn.turn_id,
+    session_id: record.turn.session_id,
+    surface_id: record.turn.surface_id,
+  };
+  assertExactProjection(recordKey, receipt.turn_binding, expected, "Surface turn binding");
+}
+
+function assertAttachmentProjection(recordKey, record, evidence, binding) {
+  if (!evidence) throw lifecycleError(recordKey, "attachment lacks uploaded evidence");
+  const expected = {
+    turn_id: record.turn.turn_id,
+    session_id: record.turn.session_id,
+    branch: record.turn.branch,
+    role: record.turn.role,
+    original_query: record.turn.original_query,
+    query_revision: record.turn.query_revision,
+    source: record.turn.source,
+    surface_id: record.turn.surface_id,
+    delegation_envelope_id: record.turn.delegation_envelope_id,
+    capability_snapshot_id: record.capability_snapshot?.id,
+    capability_snapshot_digest: record.capability_snapshot?.digest,
+    provider: record.provider_support?.provider,
+    provider_model: record.provider_support?.model,
+    provider_direct_video_input: record.provider_support?.direct_video_input,
+    provider_posture_digest: record.provider_support?.posture_digest,
+    evidence_id: evidence.evidence_id,
+    blob_ref: evidence.blob_ref,
+    evidence_sha256: evidence.sha256,
+  };
+  assertExactProjection(recordKey, binding, expected, "attachment binding");
+}
+
+function assertProviderProjection(recordKey, record, evidence, binding) {
+  if (!evidence) throw lifecycleError(recordKey, "provider processing lacks attached evidence");
+  const expected = {
+    assertion_kind: "provider_processing",
+    request_id: recordKey,
+    turn_id: record.turn.turn_id,
+    session_id: record.turn.session_id,
+    evidence_id: evidence.evidence_id,
+    blob_ref: evidence.blob_ref,
+    sha256: evidence.sha256,
+    provider: record.provider_support?.provider,
+    model: record.provider_support?.model,
+    direct_video_input: record.provider_support?.direct_video_input,
+    direct_video_received: true,
+    capability_snapshot_id: record.capability_snapshot?.id,
+    capability_snapshot_digest: record.capability_snapshot?.digest,
+    provider_posture_digest: record.provider_support?.posture_digest,
+  };
+  assertExactProjection(recordKey, binding, expected, "provider binding");
+  requiredStoredText(binding.receipt_ref, `${recordKey}.provider_receipt_ref`);
+}
+
+function assertExactProjection(recordKey, actual, expected, label) {
+  if (!plainObject(actual)) throw lifecycleError(recordKey, `${label} is missing`);
+  for (const [key, value] of Object.entries(expected)) {
+    if (actual[key] !== value) throw lifecycleError(recordKey, `${label} ${key} differs from the record envelope`);
+  }
+}
+
+function assertIdempotencyProjection(recordKey, idempotency, receipts) {
+  if (!plainObject(idempotency)) throw lifecycleError(recordKey, "idempotency projection is invalid");
+  const expectedIds = receipts.map((receipt) => receipt.receipt_id).sort();
+  if (canonical(Object.keys(idempotency).sort()) !== canonical(expectedIds)) {
+    throw lifecycleError(recordKey, "idempotency projection differs from receipt identities");
+  }
+  for (const receipt of receipts) {
+    const entry = idempotency[receipt.receipt_id];
+    if (!plainObject(entry) || entry.target !== receipt.event || !String(entry.fingerprint || "").trim()) {
+      throw lifecycleError(recordKey, "idempotency transition differs from receipt history");
+    }
+  }
+}
+
+function requiredSnapshot(value, recordKey, field) {
+  if (!plainObject(value)) throw lifecycleError(recordKey, `${field} snapshot is missing`);
+  return clone(value);
+}
+
+function requiredIso(value, field) {
+  const text = String(value || "");
+  if (!Number.isFinite(Date.parse(text))) throw storeError("VIDEO_EVIDENCE_STORE_LIFECYCLE_CORRUPT", `${field} is not a timestamp`);
+  return new Date(text).toISOString();
+}
+
+function lifecycleError(recordKey, message) {
+  return storeError("VIDEO_EVIDENCE_STORE_LIFECYCLE_CORRUPT", `record ${recordKey}: ${message}`);
 }
 
 function addExpectedClaim(index, identity, owner, kind) {

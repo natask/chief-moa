@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { deriveVideoEvidenceRecordLifecycle } = require("./video-evidence-store");
 
 // This module does not authenticate routes, devices, providers, or blob stores.
 // Receipt fields are assertions until the caller's injected authorityVerifier
@@ -151,8 +152,9 @@ function createVideoEvidenceContinuationCore(options = {}) {
   function createContinuation(requestId) {
     return inspect(({ records }) => {
       const record = requireRecord(records, requestId);
+      const lifecycle = deriveVideoEvidenceRecordLifecycle(record.request_id, record);
       rejectExpired(record);
-      if (record.status !== "attached") throw invalidTransition(record.status, "continuation");
+      if (!["attached", "processed"].includes(lifecycle.status)) throw invalidTransition(lifecycle.status, "continuation");
       if (!record.turn.original_query.trim()) throw contractError("blank_original_query", "continuation query cannot be blank");
       return {
       schema: "moa.reasoning-turn.v2",
@@ -289,7 +291,7 @@ function createVideoEvidenceContinuationCore(options = {}) {
       ...patch,
       status: target,
       version: record.version + 1,
-      receipts: [...record.receipts, sanitizeReceipt(value, target, at)],
+      receipts: [...record.receipts, sanitizeReceipt(value, target, at, record, patch)],
       idempotency: { ...record.idempotency, [receiptId]: { target, fingerprint } },
       updated_at: at,
     };
@@ -475,7 +477,14 @@ function requireTrustedSurfaceReceipt(record, receipt, event, verifier) {
 }
 
 function assertBinding(record, binding) {
-  const expected = {
+  const expected = attachmentBinding(record);
+  for (const [key, value] of Object.entries(expected)) {
+    if (binding[key] !== value) throw contractError("turn_binding_mismatch", `attachment ${key} does not match the originating turn`);
+  }
+}
+
+function attachmentBinding(record) {
+  return {
     turn_id: record.turn.turn_id,
     session_id: record.turn.session_id,
     branch: record.turn.branch,
@@ -495,9 +504,6 @@ function assertBinding(record, binding) {
     blob_ref: record.evidence.blob_ref,
     evidence_sha256: record.evidence.sha256,
   };
-  for (const [key, value] of Object.entries(expected)) {
-    if (binding[key] !== value) throw contractError("turn_binding_mismatch", `attachment ${key} does not match the originating turn`);
-  }
 }
 
 function assetClaim(record) {
@@ -581,7 +587,7 @@ function assertMonotonicReceiptTime(record, receiptAt, currentTime) {
   }
 }
 
-function sanitizeReceipt(value, event, at) {
+function sanitizeReceipt(value, event, at, record, patch) {
   const receipt = {
     receipt_id: token(value.receipt_id, "receipt_id"),
     event,
@@ -591,7 +597,64 @@ function sanitizeReceipt(value, event, at) {
     user_activated: value.user_activated === true,
   };
   if (value.code) receipt.code = token(value.code, "receipt.code");
+  if (["user_started", "captured", "uploaded", "attached", "deleted"].includes(event)) {
+    receipt.authority_verifier_accepted = true;
+    receipt.turn_binding = {
+      ...assetClaim(record),
+      surface_id: record.turn.surface_id,
+    };
+  }
+  if (event === "captured") receipt.capture = clone(patch.capture);
+  if (event === "uploaded") receipt.evidence = clone(patch.evidence);
+  if (event === "attached") {
+    receipt.attachment_binding = attachmentBinding(record);
+    receipt.attached_at = patch.attached_at;
+  }
+  if (event === "processed") {
+    receipt.authority_verifier_accepted = true;
+    receipt.provider_binding = providerReceiptBinding(value.provider_receipt);
+    receipt.processing = clone(patch.processing);
+  }
+  if (event === "deleted") {
+    receipt.blob_authority_verifier_accepted = true;
+    receipt.blob_delete_binding = blobDeleteReceiptBinding(value.blob_delete_receipt);
+    receipt.deleted_evidence = clone(patch.evidence);
+    receipt.deletion = clone(patch.deletion);
+  }
+  if (event === "failed") receipt.failure = clone(patch.failure);
   return receipt;
+}
+
+function providerReceiptBinding(value) {
+  return {
+    assertion_kind: value.assertion_kind,
+    receipt_ref: value.receipt_ref,
+    request_id: value.request_id,
+    turn_id: value.turn_id,
+    session_id: value.session_id,
+    evidence_id: value.evidence_id,
+    blob_ref: value.blob_ref,
+    sha256: value.sha256,
+    provider: value.provider,
+    model: value.model,
+    direct_video_input: value.direct_video_input,
+    direct_video_received: value.direct_video_received,
+    capability_snapshot_id: value.capability_snapshot_id,
+    capability_snapshot_digest: value.capability_snapshot_digest,
+    provider_posture_digest: value.provider_posture_digest,
+  };
+}
+
+function blobDeleteReceiptBinding(value) {
+  return {
+    assertion_kind: value.assertion_kind,
+    receipt_ref: value.receipt_ref,
+    request_id: value.request_id,
+    evidence_id: value.evidence_id,
+    blob_ref: value.blob_ref,
+    sha256: value.sha256,
+    deleted: value.deleted,
+  };
 }
 
 function previousState(target) {
