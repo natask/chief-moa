@@ -1044,8 +1044,8 @@
       openHistory: () => safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false })),
       // Text mode types into the you-line. Submitting it is an ordinary turn.
       onSubmitText: (text) => submitInstruction(text),
-      // An unsent line blocks a dev reload; the gate reads this timestamp.
-      onComposeStateChange: AgeeComposeHeartbeat.create({ write: (patch) => safeStorageLocalSet(patch) }),
+      // Optional by contract (see compose-heartbeat.js): a hard reference here takes every gesture down with it.
+      onComposeStateChange: globalThis.AgeeComposeHeartbeat?.create?.({ write: safeStorageLocalSet }),
       finalizeUserTranscriptForCopy: finalizeCaptureForCopy,
     });
   }
