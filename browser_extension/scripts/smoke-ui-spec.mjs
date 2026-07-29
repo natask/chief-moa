@@ -72,7 +72,7 @@ if (!/runUiAction\(control\.action/.test(contentSource) || !/submitInstruction\(
 
 const rendererBody = sourceBetween(
   contentSource,
-  /function sanitizeUiSpecPayload\(/,
+  /function applyUiSpec\(/,
   /function loadAvatarBehaviorRuntime\(/,
   "UI spec renderer",
 );
