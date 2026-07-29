@@ -316,7 +316,7 @@
     root.id = "agee-root";
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
-      <button id="agee-launcher" type="button" data-agee-tip="Click to type, drag to move, scroll to resize, hold to talk" aria-label="Ag">
+      <button id="agee-launcher" type="button" aria-label="Ag">
         <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
@@ -1012,11 +1012,7 @@
 
   function applyGestureModeHints() {
     if (root) root.classList.toggle("agee-voice-first", voiceFirstGestures === true);
-    if (launcher) {
-      launcher.dataset.ageeTip = voiceFirstGestures
-        ? "Click to start or stop; hold to talk; double-click for a new thread; triple-click for chat"
-        : "Click to type, drag to move, scroll to resize, hold to talk";
-    }
+    if (launcher) delete launcher.dataset.ageeTip;
     syncTalkModeUi();
   }
 
@@ -1711,7 +1707,7 @@
     launcher.style.removeProperty("--agee-pet-dark");
     launcher.style.removeProperty("--agee-pet-scale");
     launcher.setAttribute("aria-label", "Ag");
-    launcher.dataset.ageeTip = "Click to type, drag to move, scroll to resize, hold to talk";
+    delete launcher.dataset.ageeTip;
     launcher.removeAttribute("title");
     if (image) image.removeAttribute("src");
     if (!activeCompanionPet) return;
