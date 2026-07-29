@@ -120,6 +120,10 @@ final class MoaOverlayUnitController {
         return youPresence.expanded();
     }
 
+    int qaYouRailHitWidth() {
+        return youView == null ? 0 : youView.railHitWidthPxForQa();
+    }
+
     void qaExpandYou() {
         youPresence.setExpanded(true);
         youPresence.latch(SystemClock.uptimeMillis());

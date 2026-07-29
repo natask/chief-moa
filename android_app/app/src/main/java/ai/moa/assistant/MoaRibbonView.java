@@ -128,6 +128,10 @@ final class MoaRibbonView extends View {
         return ribbonHeightPx;
     }
 
+    int railHitWidthPxForQa() {
+        return railHitWidthPx;
+    }
+
     void setAccessibilityActions(Runnable tap, Runnable copy, Runnable history) {
         accessibilityTap = tap;
         accessibilityCopy = copy;

@@ -324,6 +324,7 @@ public final class OverlayService extends Service {
         getSharedPreferences("moa_qa", MODE_PRIVATE).edit()
                 .putInt("left", bounds.left).putInt("top", bounds.top)
                 .putInt("right", bounds.right).putInt("bottom", bounds.bottom)
+                .putInt("rail_width", overlayUnit.qaYouRailHitWidth())
                 .putBoolean("expanded", overlayUnit.qaYouExpanded())
                 .putLong("observed_at", System.currentTimeMillis()).apply();
     }

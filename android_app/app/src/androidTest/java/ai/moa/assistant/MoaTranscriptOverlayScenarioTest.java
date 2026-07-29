@@ -68,9 +68,10 @@ public final class MoaTranscriptOverlayScenarioTest {
         checkpoint("expanded");
 
         bounds = expandedBounds;
-        // The rail hit target is one collapsed ribbon high. Reading it from the
-        // rendered bounds avoids target/test resource-density disagreement.
-        int rail = collapsedBounds.height();
+        int rail = instrumentation.getTargetContext()
+                .getSharedPreferences("moa_qa", Context.MODE_PRIVATE)
+                .getInt("rail_width", 0);
+        assertTrue("rendered rail width missing", rail > 0);
         device.click(bounds.right - rail / 2, bounds.top + Math.min(rail / 2, bounds.height() / 2));
         assertEquals(FINAL, clipboardText());
         checkpoint("copy");
