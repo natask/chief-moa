@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
-// Real-entry-point smoke for local Android/browser media tools. A tiny local
-// OpenAI-compatible model deliberately calls the advertised tool, while a
-// simulated owning client claims and receipts the resulting device request.
+// Real-entry-point smoke for Android useful actions and browser-local media.
+// A tiny local OpenAI-compatible model deliberately calls the advertised tool,
+// while a simulated owning client claims and receipts the device request.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -13,6 +13,18 @@ const os = require("node:os");
 const path = require("node:path");
 
 const TOKEN = "surface-entrypoint-smoke-token";
+const ANDROID_TOOLS = Object.freeze([
+  "app.launch", "app.list", "url.open", "phone.dial", "contact.open",
+  "media.open", "media.control", "media.bookmark", "media.playlist",
+  "screen.summary", "screen.tap_text", "screen.set_text", "screen.scroll",
+  "system.back", "system.home",
+]);
+const ANDROID_CONTEXT = Object.freeze({
+  availability: "available",
+  fresh: true,
+  package_name: "com.example.notes",
+  window_id: 17,
+});
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -47,9 +59,9 @@ async function main() {
   gateway.startServer();
   try {
     await waitForHealth(baseUrl);
-    await heartbeat(baseUrl, "android_entry", "android", [
-      "app.launch", "app.list", "media.open", "media.control", "media.bookmark", "media.playlist",
-    ]);
+    await heartbeat(baseUrl, "android_entry", "android", ANDROID_TOOLS, {
+      context_descriptor: ANDROID_CONTEXT,
+    });
     await heartbeat(baseUrl, "browser_entry", "browser_extension", ["media.open", "media.bookmark"]);
 
     await driveHttpAndroidTurn(baseUrl, "/v1/chat", {
@@ -70,6 +82,156 @@ async function main() {
       transcript_source: "client_stt",
       transcript: "Show me which apps are installed",
     }, "app.list", { limit: 40 });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/chat", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_url",
+      context_action: "continue",
+      messages: [{ role: "user", content: "Open the example website link" }],
+    }, "url.open", { url: "https://example.test/pricing" });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/voice/turns", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_dial",
+      conversation_id: "entry_dial",
+      turn_id: "entry_dial_turn",
+      context_action: "continue",
+      transcript_source: "client_stt",
+      transcript: "Dial the phone number +1 415 555 0123",
+    }, "phone.dial", { number: "+14155550123" });
+
+    await driveFunctionAndroidTurn(baseUrl, () => gateway.runAndroidCascadedVoiceReasoning({
+      source: "voice-cascaded",
+      device_id: "android_entry",
+      session_id: "entry_contact",
+      conversation_id: "entry_contact",
+      branch_id: "default",
+      turn_id: "entry_contact_turn",
+      context_action: "continue",
+      transcript: "Open the contact card for Ada Lovelace",
+    }), "contact.open", { name: "Ada Lovelace" });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/internal/voice/reason", {
+      device_id: "android_entry",
+      session_id: "entry_media_open",
+      conversation_id: "entry_media_open",
+      branch_id: "default",
+      turn_id: "entry_media_open_turn",
+      context_action: "continue",
+      transcript: "Play the YouTube video at the saved timestamp",
+    }, "media.open", {
+      video_id: "dQw4w9WgXcQ",
+      position_ms: 42_000,
+      app_name: "YouTube",
+    });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/chat", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_media_control",
+      context_action: "continue",
+      messages: [{ role: "user", content: "Pause the current media" }],
+    }, "media.control", { action: "pause" });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/voice/turns", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_media_list",
+      conversation_id: "entry_media_list",
+      turn_id: "entry_media_list_turn",
+      context_action: "continue",
+      transcript_source: "client_stt",
+      transcript: "List my saved video spots",
+    }, "media.bookmark", { operation: "list" });
+
+    await driveFunctionAndroidTurn(baseUrl, () => gateway.runAndroidCascadedVoiceReasoning({
+      source: "voice-cascaded",
+      device_id: "android_entry",
+      session_id: "entry_playlist",
+      conversation_id: "entry_playlist",
+      branch_id: "default",
+      turn_id: "entry_playlist_turn",
+      context_action: "continue",
+      transcript: "Add this video to the Focus playlist",
+    }), "media.playlist", {
+      operation: "add",
+      playlist_name: "Focus",
+      video_id: "dQw4w9WgXcQ",
+    });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/chat", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_screen_summary",
+      context_action: "continue",
+      messages: [{ role: "user", content: "Summarize the phone screen" }],
+    }, "screen.summary", {});
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/voice/turns", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_tap",
+      conversation_id: "entry_tap",
+      turn_id: "entry_tap_turn",
+      context_action: "continue",
+      transcript_source: "client_stt",
+      transcript: "Tap Continue on the phone screen",
+    }, "screen.tap_text", {
+      text: "Continue",
+      expected_package: ANDROID_CONTEXT.package_name,
+    });
+
+    await driveFunctionAndroidTurn(baseUrl, () => gateway.runAndroidCascadedVoiceReasoning({
+      source: "voice-cascaded",
+      device_id: "android_entry",
+      session_id: "entry_set_text",
+      conversation_id: "entry_set_text",
+      branch_id: "default",
+      turn_id: "entry_set_text_turn",
+      context_action: "continue",
+      transcript: "Enter Hello from AG in the Message field",
+    }), "screen.set_text", {
+      label: "Message",
+      text: "Hello from AG",
+      expected_package: ANDROID_CONTEXT.package_name,
+      expected_window_id: ANDROID_CONTEXT.window_id,
+    });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/internal/voice/reason", {
+      device_id: "android_entry",
+      session_id: "entry_scroll",
+      conversation_id: "entry_scroll",
+      branch_id: "default",
+      turn_id: "entry_scroll_turn",
+      context_action: "continue",
+      transcript: "Scroll the Feed forward on the phone",
+    }, "screen.scroll", {
+      label: "Feed",
+      direction: "forward",
+      expected_package: ANDROID_CONTEXT.package_name,
+      expected_window_id: ANDROID_CONTEXT.window_id,
+    });
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/chat", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_back",
+      context_action: "continue",
+      messages: [{ role: "user", content: "Press Android Back" }],
+    }, "system.back", {});
+
+    await driveHttpAndroidTurn(baseUrl, "/v1/voice/turns", {
+      source: "android-overlay",
+      device_id: "android_entry",
+      session_id: "entry_home",
+      conversation_id: "entry_home",
+      turn_id: "entry_home_turn",
+      context_action: "continue",
+      transcript_source: "client_stt",
+      transcript: "Go to the Android home screen",
+    }, "system.home", {});
 
     await driveFunctionAndroidTurn(baseUrl, () => gateway.runAndroidCascadedVoiceReasoning({
       source: "voice-cascaded",
@@ -101,13 +263,22 @@ async function main() {
       args: { tool: "media.bookmark", input: { operation: "recall" } },
     }), "media.bookmark", { operation: "recall", label: "liked spot" });
 
-    await heartbeat(baseUrl, "android_decoy", "android", [
-      "app.launch", "app.list", "media.open", "media.control", "media.bookmark", "media.playlist",
-    ]);
+    await assertMissingScreenContextFailsClosed(baseUrl);
+    await heartbeat(baseUrl, "android_entry", "android", ANDROID_TOOLS, {
+      context_descriptor: ANDROID_CONTEXT,
+    });
+
+    await heartbeat(baseUrl, "android_decoy", "android", ANDROID_TOOLS, {
+      context_descriptor: {
+        ...ANDROID_CONTEXT,
+        package_name: "com.example.decoy",
+        window_id: 19,
+      },
+    });
     await assertCallerFieldsCannotForgeAffinity(baseUrl, gateway);
 
     await assertBrowserTurnIsInert(baseUrl);
-    assertLegacyLiveSchemas(createVoiceProvider);
+    assertCrossSurfaceLiveSchemas(createVoiceProvider);
     await assertNoPendingAndroidMedia(baseUrl);
 
     console.log(JSON.stringify({
@@ -115,11 +286,15 @@ async function main() {
       checks: [
         "POST /v1/chat offers and receipts Android app.launch with a Unicode visible label",
         "POST /v1/voice/turns offers and receipts bounded Android app.list",
+        "typed and voice model turns receipt URL, dialer, and contact-card proposals",
+        "typed, cascaded, and LiveKit reasoning receipt Android media actions",
+        "typed, cascaded, and voice turns bind and receipt fixed Android accessibility primitives",
         "cascaded voice reasoning remembers natural 'I like this spot' as a named local proposal",
         "POST /v1/internal/voice/reason reaches the sole compatible Android device without trusting caller affinity",
         "legacy Live tool dispatch recalls natural 'the part I liked' through the Android receipt loop",
+        "screen actions fail closed before queueing when fresh Android observation binding is absent",
         "caller-controlled Android source/device fields cannot choose between two phones",
-        "Gemini and Vertex Live setup expose phone_action only on Android turns",
+        "Gemini and Vertex Live expose explicit cross-device phone_action from Android and browser turns",
         "POST /v1/browser/turns returns one inert browser-local media action and queues no Android work",
       ],
     }, null, 2));
@@ -147,7 +322,7 @@ async function driveFunctionAndroidTurn(baseUrl, invoke, tool, expectedInput) {
 
 async function claimAndReceipt(baseUrl, tool, expectedInput) {
   const request = await waitForPending(baseUrl, tool);
-  assert.equal(request.target_device_id, "android_entry", "same-source Android request must stay pinned");
+  assert.equal(request.target_device_id, "android_entry", "the sole compatible Android device must be selected");
   assert.equal(request.target_surface_type, "android");
   const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "android_entry" });
   assert.equal(claim.status, 200, JSON.stringify(claim.json));
@@ -234,7 +409,7 @@ async function assertBrowserTurnIsInert(baseUrl) {
   assert.equal((requests.json.requests || []).some((item) => item.target_surface_type === "android"), false);
 }
 
-function assertLegacyLiveSchemas(createVoiceProvider) {
+function assertCrossSurfaceLiveSchemas(createVoiceProvider) {
   for (const env of [
     { VOICE_PROVIDER: "gemini-live", GEMINI_API_KEY: "local-smoke" },
     { VOICE_PROVIDER: "vertex-live", VERTEX_PROJECT: "local-smoke", VERTEX_API_KEY: "local-smoke" },
@@ -245,8 +420,25 @@ function assertLegacyLiveSchemas(createVoiceProvider) {
     const browserNames = provider.setupMessage({ source: "agee-extension" })
       .tools[0].functionDeclarations.map((tool) => tool.name);
     assert.ok(androidNames.includes("phone_action"));
-    assert.equal(browserNames.includes("phone_action"), false);
+    assert.ok(browserNames.includes("phone_action"),
+      "explicit cross-device phone requests must remain available from browser voice");
   }
+}
+
+async function assertMissingScreenContextFailsClosed(baseUrl) {
+  await heartbeat(baseUrl, "android_entry", "android", ANDROID_TOOLS);
+  const before = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
+  const response = await postJson(`${baseUrl}/v1/chat`, {
+    source: "android-overlay",
+    device_id: "android_entry",
+    session_id: "entry_missing_screen_context",
+    context_action: "continue",
+    messages: [{ role: "user", content: "Tap Continue on the phone screen" }],
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.json));
+  const after = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
+  assert.equal((after.json.requests || []).length, (before.json.requests || []).length,
+    "screen.tap_text must not queue without a fresh Android package binding");
 }
 
 async function assertNoPendingAndroidMedia(baseUrl) {
@@ -256,11 +448,12 @@ async function assertNoPendingAndroidMedia(baseUrl) {
   )), false);
 }
 
-async function heartbeat(baseUrl, deviceId, surface, tools) {
+async function heartbeat(baseUrl, deviceId, surface, tools, metadata = {}) {
   const response = await postJson(`${baseUrl}/v1/device-clients/heartbeat`, {
     device_id: deviceId,
     surface_type: surface,
     local_tool_manifest: tools.map((tool) => ({ tool, risk: "smoke", approval: "local" })),
+    metadata,
   });
   assert.equal(response.status, 200, JSON.stringify(response.json));
 }
@@ -297,6 +490,27 @@ async function startMockModel(port) {
       let args;
       if (userText.includes("which apps are installed")) args = { tool: "app.list", input: {} };
       else if (userText.includes("i like this spot")) args = { tool: "media.bookmark", input: { operation: "remember" } };
+      else if (userText.includes("example website link")) args = { tool: "url.open", input: { url: "https://example.test/pricing" } };
+      else if (userText.includes("dial the phone number")) args = { tool: "phone.dial", input: { number: "+14155550123" } };
+      else if (userText.includes("contact card for ada lovelace")) args = { tool: "contact.open", input: { name: "Ada Lovelace" } };
+      else if (userText.includes("youtube video at the saved timestamp")) args = { tool: "media.open", input: {
+        video_id: "dQw4w9WgXcQ", position_ms: 42_000, app_name: "YouTube",
+      } };
+      else if (userText.includes("pause the current media")) args = { tool: "media.control", input: { action: "pause" } };
+      else if (userText.includes("list my saved video spots")) args = { tool: "media.bookmark", input: { operation: "list" } };
+      else if (userText.includes("add this video to the focus playlist")) args = { tool: "media.playlist", input: {
+        operation: "add", playlist_name: "Focus", video_id: "dQw4w9WgXcQ",
+      } };
+      else if (userText.includes("summarize the phone screen")) args = { tool: "screen.summary", input: {} };
+      else if (userText.includes("tap continue on the phone screen")) args = { tool: "screen.tap_text", input: { text: "Continue" } };
+      else if (userText.includes("enter hello from ag in the message field")) args = { tool: "screen.set_text", input: {
+        label: "Message", text: "Hello from AG",
+      } };
+      else if (userText.includes("scroll the feed forward")) args = { tool: "screen.scroll", input: {
+        label: "Feed", direction: "forward",
+      } };
+      else if (userText.includes("press android back")) args = { tool: "system.back", input: {} };
+      else if (userText.includes("android home screen")) args = { tool: "system.home", input: {} };
       else if (userText.includes("open calculator")) args = { tool: "app.launch", input: { app_name: "Calculator" } };
       else args = { tool: "app.launch", input: { app_name: "ዩቲዩብ" } };
       message = toolCall(++sequence, "phone_action", args);

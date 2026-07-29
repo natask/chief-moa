@@ -1,3 +1,4 @@
+- Verified the existing Android app, URL, dialer, contact, media, accessibility, and receipt executors against model-driven typed and voice proposals; physical-phone QA remains open — agent: Codex/GPT-5 — this commit
 - Fixed the live-conversation collapsed reply to paint only playback-crossed text (paint-time override; Copy/expanded keep the full reply) and cleared stale live-turn state on surface removal, turn-ready, and not-spoken markers, with added pure event-order tests — agent: Claude Code/Fable 5 — this commit
 - Coalesced Android ribbon and panel-drag window updates so streaming paint stays out of WindowManager and move bursts submit once per frame — agent: Codex/GPT-5 — a7a11d45
 - Refined the Android overlay into a compact streaming bubble with bounded expansion, copy and labeled History handoff, plus deterministic production-View screenshots and two Opus QA rounds — agent: Codex/GPT-5 — feat/android-visual-qa-20260727

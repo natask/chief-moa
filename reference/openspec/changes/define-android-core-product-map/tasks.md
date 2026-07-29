@@ -256,3 +256,29 @@ the installed CLI cannot import its `commander` dependency.
 - [x] 17.3 Verify the focused naming assertions plus Android unit tests, lint,
       and debug assembly, then build a local candidate without publishing or
       installing it.
+
+## 18. Model-Driven Android Useful Actions
+
+- [x] 18.1 Prove model-driven Android proposals and durable receipts across
+      typed chat, HTTP voice, cascaded voice, LiveKit reasoning, and legacy
+      native Live for app launch/list, URL opening, dialing, contacts, media,
+      and the fixed accessibility primitives.
+- [x] 18.2 Keep `phone_action` available to both Android and browser native
+      Live turns for explicit cross-device requests; keep multiple-phone
+      selection ambiguous and screen actions without a fresh bound observation
+      fail-closed before queueing.
+- [x] 18.3 Route explicit spoken playlist mutations through the conversational
+      phone-tool loop instead of diverting them to a workstation agent run,
+      while preserving agent routing for playlist implementation work.
+- [ ] 18.4 Complete physical-phone QA for resolved Android handlers, contacts
+      permission, notification-listener access, accessibility approval and
+      package/window binding, and gateway receipt synchronization.
+
+Verification evidence: the deterministic voice-intent classifier smoke and
+`smoke:surface-entrypoints`, `smoke:surface-skills`, and the full gateway check
+pass. The entrypoint smoke claims every queued proposal as the compatible
+Android device, submits the device receipt, and verifies gateway
+acknowledgement. Focused Android action/accessibility/media/receipt unit tests
+and `assembleDebug` also pass. Physical-phone QA remains open and is not
+implied by this deterministic proof. Strict OpenSpec validation remains locally
+blocked because the installed CLI cannot import its `commander` dependency.

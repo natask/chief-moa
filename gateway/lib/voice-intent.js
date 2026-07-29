@@ -79,11 +79,27 @@ function hasOperationalWorkContext(text) {
   return OPERATIONAL_WORK_CONTEXT_PATTERNS.some((pattern) => pattern.test(lower));
 }
 
+// Playlist mutations are phone actions when they name the user's media, not
+// implementation work. Without this exception, the generic "add/create"
+// prefixes below divert natural commands such as "add this video to Focus"
+// into a workstation agent run before the model can propose `phone_action`.
+function isDirectPhonePlaylistAction(text) {
+  const lower = normalizeSpeech(text);
+  if (!/^(?:add|create|delete|remove|rename)\b/.test(lower) || !/\bplaylist\b/.test(lower)) {
+    return false;
+  }
+  if (hasOperationalWorkContext(lower)) {
+    return false;
+  }
+  return !/\b(?:api|code|feature|handler|implementation|interface|support|test|tool|ui)\b/.test(lower);
+}
+
 // Heuristic: does this sound like an action to run, not a question to answer?
 function shouldRunAgentFromVoice(text) {
   const lower = normalizeSpeech(text);
   if (!lower) return false;
   if (isOperationalStatusQuestion(text)) return false;
+  if (isDirectPhonePlaylistAction(text)) return false;
   const actionStarts = [
     "make ",
     "build ",
