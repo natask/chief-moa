@@ -1033,7 +1033,6 @@
   // geometry in ribbon-layout.js; content.js only supplies the host document,
   // the companion anchor, and the clipboard/history capabilities.
   let ribbons = null;
-
   function setupRibbons() {
     ribbons = AgeeRibbons.create({
       root,
@@ -1045,6 +1044,8 @@
       openHistory: () => safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false })),
       // Text mode types into the you-line. Submitting it is an ordinary turn.
       onSubmitText: (text) => submitInstruction(text),
+      // An unsent line blocks a dev reload; the gate reads this timestamp.
+      onComposeStateChange: AgeeComposeHeartbeat.create({ write: (patch) => safeStorageLocalSet(patch) }),
       finalizeUserTranscriptForCopy: finalizeCaptureForCopy,
     });
   }
@@ -4089,14 +4090,17 @@
         return;
       }
       if (nextVersion === previousVersion) return;
-      devReloadVersion = nextVersion;
-      await safeRuntimeSendMessage({
+      const ack = await safeRuntimeSendMessage({
         cmd: "devReloadExtension",
         source: "content-script",
         server,
         previousVersion,
         info,
       });
+      // A deferred reload has not happened yet, so this tab must keep seeing
+      // the new version as new — otherwise the deploy is dropped the moment the
+      // turn it was waiting for ends.
+      if (!ack?.deferred) devReloadVersion = nextVersion;
     } catch {
       // The dev server is optional and usually offline during normal browsing.
     } finally {

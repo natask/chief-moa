@@ -10,6 +10,10 @@ const host = process.env.AGEE_DEV_RELOAD_HOST || "localhost";
 const port = Number(process.env.AGEE_DEV_RELOAD_PORT || 7777);
 // 30s alarm cadence for a sleeping service worker + margin.
 const holdMs = Number(process.env.AGEE_DEV_RELOAD_HOLD_MS || 40000);
+// A reload never interrupts a live turn: the extension reports the deferral and
+// applies the update when the turn ends. The server keeps serving until then,
+// up to this ceiling, so a deploy that waited still lands.
+const deferHoldMs = Number(process.env.AGEE_DEV_RELOAD_DEFER_HOLD_MS || 600000);
 const version = Date.now();
 const changedAt = new Date().toISOString();
 const endpoint = `http://${host}:${port}/__agee-dev/version`;
@@ -59,6 +63,10 @@ async function bumpExistingServer() {
 // running in the loaded build (or Chrome is closed) — report that plainly
 // instead of pretending the poke worked.
 let observedPolls = 0;
+let deferrals = 0;
+let deferReason = "";
+let deferredAt = 0;
+let reloadApplied = false;
 
 const server = createServer((req, res) => {
   const url = new URL(req.url || "/", `http://${host}:${port}`);
@@ -68,6 +76,27 @@ const server = createServer((req, res) => {
       console.log("[agee-deploy] a loaded extension polled the reload endpoint.");
     }
     sendJson(res, 200, { version, changedAt, source: "chief-moa-deploy" });
+    return;
+  }
+  // The extension reports why it is holding the reload back. Keep serving: the
+  // update applies itself the moment the user's turn is over.
+  if (url.pathname === "/__agee-dev/deferred") {
+    deferrals += 1;
+    const reason = String(url.searchParams.get("reason") || "work in flight");
+    deferredAt = Date.now();
+    if (reason !== deferReason) {
+      deferReason = reason;
+      console.log(`[agee-deploy] reload DEFERRED: ${reason}. Holding; it applies when the turn ends.`);
+    }
+    sendJson(res, 200, { deferred: true, version });
+    return;
+  }
+  // Sent immediately before chrome.runtime.reload(), so a deploy that waited
+  // for a turn can report that the update actually landed.
+  if (url.pathname === "/__agee-dev/reloading") {
+    reloadApplied = true;
+    console.log("[agee-deploy] extension is reloading now.");
+    sendJson(res, 200, { ok: true, version });
     return;
   }
   sendJson(res, 404, { error: "not found" });
@@ -87,7 +116,13 @@ server.listen(port, host, () => {
   const startedAt = Date.now();
   const finish = () => {
     server.close(() => {
-      if (observedPolls >= 2) {
+      if (reloadApplied) {
+        const waited = deferrals > 0 ? ` after waiting out ${deferReason}` : "";
+        console.log(`[agee-deploy] reload CONFIRMED: the extension reloaded${waited}.`);
+      } else if (deferrals > 0) {
+        console.log(`[agee-deploy] reload NOT APPLIED: held back by ${deferReason} for the whole window.`);
+        console.log("[agee-deploy] Nothing was interrupted. Re-run the deploy once the turn is over.");
+      } else if (observedPolls >= 2) {
         console.log(`[agee-deploy] reload CONFIRMED: extension polled ${observedPolls} times (bump observed and re-polled after reload/record).`);
       } else if (observedPolls === 1) {
         console.log("[agee-deploy] reload LIKELY: one poll observed. First-ever poll only records a baseline; the next deploy reloads automatically.");
@@ -100,7 +135,10 @@ server.listen(port, host, () => {
   const ticker = setInterval(() => {
     // End early once the post-reload (or post-record) second poll arrives, but
     // give a sleeping service worker its 30s alarm plus margin otherwise.
-    if (observedPolls >= 2 || Date.now() - startedAt >= holdMs) {
+    // Waiting on a live turn extends the window instead of ending it: the
+    // point of deferring is that the deploy still lands, just later.
+    const waiting = !reloadApplied && deferrals > 0 && Date.now() - deferredAt < deferHoldMs;
+    if (reloadApplied || (!waiting && (observedPolls >= 2 || Date.now() - startedAt >= holdMs))) {
       clearInterval(ticker);
       finish();
     }

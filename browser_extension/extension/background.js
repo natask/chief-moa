@@ -13,6 +13,7 @@ import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { pcm16VoiceActivity } from "./browser-voice-activity.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
+import { devReloadDecision } from "./dev-reload-gate.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
 import { browserLocalToolManifest as browserAutomationLocalToolManifest } from "./browser-automation-contract.js";
 import { createBrowserAutomationRuntime } from "./browser-automation-runtime.js";
@@ -1596,14 +1597,55 @@ async function pollDevReloadVersion(source) {
   }
 }
 
+// What the reload gate needs to know about work in flight. Read fresh on every
+// version change: a snapshot taken when the poll started could already be a
+// turn out of date.
+async function devReloadWorkSnapshot() {
+  const composingAt = (await chrome.storage.local.get({ ageeComposingAt: 0 }))?.ageeComposingAt || 0;
+  return {
+    now: Date.now(),
+    voiceCaptureActive:
+      voiceStartPending > 0
+      || [...voiceSessions.values()].some((session) => !session.closed && !session.committed && session.capture !== "none"),
+    recordSessionActive: !!activeRecordSession(),
+    videoNoteActive: !!videoNoteSession,
+    turnStatus: activeBrowserAgentPresentation?.status || "",
+    agentTaskCount: tasks.size,
+    agentLoopActive: agentLoopTaskActive,
+    composingAt,
+  };
+}
+
 async function maybeReloadForDevVersion(info, { server, previousVersion, source }) {
   const nextVersion = Number(info?.version || 0);
-  if (!nextVersion) return;
-  if (!previousVersion) {
+  const decision = devReloadDecision({
+    nextVersion,
+    previousVersion,
+    state: nextVersion && previousVersion && nextVersion !== previousVersion
+      ? await devReloadWorkSnapshot()
+      : null,
+  });
+  if (decision.action === "none") return decision;
+  if (decision.action === "record") {
     await chrome.storage.local.set({ ageeDevReloadVersion: nextVersion });
-    return;
+    return decision;
   }
-  if (nextVersion === previousVersion) return;
+  // Deferred: the stored version stays put, so the next poll after the turn
+  // ends still sees this change and applies it. Tell the dev server, so a
+  // deploy reports "waiting for the turn to finish" instead of claiming it
+  // reloaded — and so it knows to keep holding.
+  if (decision.action === "defer") {
+    await chrome.storage.local.set({
+      ageeDevReloadDeferred: { nextVersion, reason: decision.reason, source, at: new Date().toISOString() },
+    });
+    try {
+      await fetch(`${server}/__agee-dev/deferred?reason=${encodeURIComponent(decision.reason)}&ts=${Date.now()}`, {
+        cache: "no-store",
+      });
+    } catch {}
+    return decision;
+  }
+  await chrome.storage.local.remove("ageeDevReloadDeferred").catch(() => {});
   await chrome.storage.local.set({
     ageeDevReloadVersion: nextVersion,
     ageeDevReloadPendingLocalhostRefresh: true,
@@ -1615,7 +1657,13 @@ async function maybeReloadForDevVersion(info, { server, previousVersion, source 
       at: new Date().toISOString(),
     },
   });
+  // Announce the reload before taking the worker down, so a deploy that waited
+  // for a turn to end can report that the update actually landed.
+  try {
+    await fetch(`${server}/__agee-dev/reloading?ts=${Date.now()}`, { cache: "no-store" });
+  } catch {}
   chrome.runtime.reload();
+  return decision;
 }
 
 async function reloadDevTabsAfterExtensionRestart() {
@@ -4633,7 +4681,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         previousVersion: Number(msg.previousVersion || cfg.version || 0) || null,
         source: String(msg.source || "message"),
       }))
-      .then(() => sendResponse({ ok: true }))
+      .then((decision) => sendResponse({
+        ok: true,
+        deferred: decision?.action === "defer",
+        reason: decision?.reason || "",
+      }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }

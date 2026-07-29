@@ -531,6 +531,14 @@ async function main() {
               sendDisplay: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-send")).display,
               composeCopyDisplay: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-copy")).display,
               composeEmpty: ribbonYou.classList.contains("agee-ribbon-empty"),
+              // A browser paints no caret in a box of zero height, so an empty
+              // typing line with no box has no visible cursor.
+              composeCaretBoxHeight: Math.round(youTextEl.getBoundingClientRect().height),
+              composeCaretColor: getComputedStyle(youTextEl).caretColor,
+              // Proof the caret rules survived the stylesheet: a stray brace
+              // once made the CSS parser swallow this whole block, which is how
+              // both lines lost their caret without anything failing.
+              caretGlyphDisplay: getComputedStyle(ribbonYou.querySelector(".agee-ribbon-caret")).display,
               // The send rides the rail at the trailing edge, after the text
               // viewport, on the same 28px line. (The box itself is clamped to
               // the space between the seam and the viewport edge, so its right
@@ -583,6 +591,13 @@ async function main() {
     }
     if (overlayMetrics.composeEmpty !== true) {
       throw new Error(`an empty typing box did not mark itself empty: ${JSON.stringify(overlayMetrics)}`);
+    }
+    // The cursor has to be visible in an empty box, which needs both a box with
+    // height and a caret colour that is not the page's.
+    if (!(overlayMetrics.composeCaretBoxHeight >= 14)
+      || overlayMetrics.composeCaretColor === "auto"
+      || overlayMetrics.caretGlyphDisplay !== "inline-block") {
+      throw new Error(`the typing cursor has nowhere to blink: ${JSON.stringify(overlayMetrics)}`);
     }
     if (overlayMetrics.editable !== "plaintext-only") {
       throw new Error(`the you-line is not an editable buffer: ${JSON.stringify(overlayMetrics)}`);

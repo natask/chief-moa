@@ -81,6 +81,9 @@
       // Text mode submits through the host: the runtime owns presentation, not
       // conversation. Copy on a live capture asks the host to finalize it.
       onSubmitText = () => {},
+      // Told whenever the typing box gains or loses an unsent line, so the host
+      // can keep a dev reload from landing on top of it.
+      onComposeStateChange = () => {},
       finalizeUserTranscriptForCopy = () => false,
       doc = global.document,
       win = global,
@@ -455,7 +458,9 @@
     // for and dims the send. The prompt is painted by the viewport, never by
     // the editable node — text inside it would sit before the caret.
     function markComposeEmpty() {
-      you.el.classList.toggle("agee-ribbon-empty", !composedText());
+      const hasText = !!composedText();
+      you.el.classList.toggle("agee-ribbon-empty", !hasText);
+      try { onComposeStateChange({ composing, hasText }); } catch {}
     }
 
     // Prefill, used by the agent-authored quick actions that used to drop a
@@ -490,6 +495,7 @@
       you.textEl.removeAttribute("role");
       you.textEl.removeAttribute("aria-label");
       try { you.textEl.blur(); } catch {}
+      try { onComposeStateChange({ composing: false, hasText: false }); } catch {}
       if (clearText) retire(you);
       else render(you);
     }
