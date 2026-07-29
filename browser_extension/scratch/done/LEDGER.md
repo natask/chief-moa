@@ -1,3 +1,4 @@
+- Made the companion answer "am I hearing you": a six-state rim on the launcher's unused ring, listening no longer flag-gated, plus a real microphone level from the capture worklet at 24Hz driving --agee-level — agent: claude/opus-5 — worktree-agent-a25870d001b72c20f 59abc9e9
 - Anchored the ribbon words to the companion (they were rendering at the far end of a 340px box), slowed the reveal to a grapheme-paced 26/s so Amharic is readable, and removed the pet name/motion labels — agent: claude/opus-5 — lane/seam-hug-20260729
 - Made the panel's text field the you-line buffer, deleted the second text surface, and lowered content.js's size ceiling with it — agent: claude/opus-5 — lane/sliding-window-20260729
 - Hung the two boxes off the companion's centre line, revealed replies at reading pace, and made a click on the companion put the caret straight into the you-line buffer — agent: claude/opus-5 — lane/sliding-window-20260729
