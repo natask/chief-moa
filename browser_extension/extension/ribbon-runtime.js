@@ -665,6 +665,12 @@
       pushReply: (delta) => push(reply, delta),
       setReplyStreaming: (on) => setStreaming(reply, on),
 
+      copyLatest() {
+        if (you.buffer) return copy(you);
+        if (reply.buffer) return copy(reply);
+        return Promise.resolve(false);
+      },
+
       // Freeze both ribbons and start their linger timers. A reply the device
       // never spoke has to be read, so it stays up materially longer.
       endTurn({ spoken = true, error = false } = {}) {
