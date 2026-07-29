@@ -979,6 +979,17 @@ unheard suffix to the next durable context. This is presentation evidence, not
 proof that a human heard the audio. Older clients safely ignore the additive
 segment event.
 
+Android admits streamed PCM into a bounded, generation-scoped FIFO before any
+blocking `AudioTrack.write`. The WebSocket callback therefore stays available
+for `assistant_audio_done`, `turn_done`, and retry events while one worker
+preserves device-write order. Segment text and playback-progress ranges enter
+the local ledger only after that FIFO accepts the matching frame; disabled,
+overflowed, closed, and stale-generation frames cannot advance the collapsed
+spoken reply. Provider completion closes FIFO input, then the existing device
+gate waits for all accepted writes and the `AudioTrack` playback head. A
+zero-frame response drains immediately, while overflow and timeout remain
+visible incomplete-playback outcomes.
+
 The chunker (`gateway/lib/voice-chunker.js`) is pure and timer-free: sentence
 enders (`. ! ? …` and Ethiopic `። ፧ ፨`) are the primary boundary, clause
 enders (`, ; :` and Ethiopic `፣ ፤ ፥`) apply once the pending text is already

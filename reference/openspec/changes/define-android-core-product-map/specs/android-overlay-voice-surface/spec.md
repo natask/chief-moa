@@ -271,10 +271,21 @@ of resizing the card for each partial or completed turn.
 #### Scenario: Spoken response follows device playback
 - **WHEN** hosted assistant audio is enabled for a response
 - **THEN** an empty assistant bubble with a blinking caret appears after user commit
+- **AND** Android admits each received PCM frame to a bounded FIFO without blocking the voice socket on device playback
+- **AND** only FIFO-accepted PCM and its matching segment text enter playback-progress mapping
 - **AND** its collapsed text advances from the PCM/text segment ledger according to the AudioTrack playback head, coalesced to display frames
 - **AND** network receipt and provider `audio_done` do not claim that text was heard
+- **AND** disabled, overflowed, closed, or stale-generation PCM cannot advance the collapsed text
 - **AND** expanded view retains the complete display response independently of the shorter spoken response
 - **AND** cancellation, replacement, barge-in, or a stale turn cannot advance the current bubble
+
+#### Scenario: Provider completion drains accepted playback
+- **WHEN** `assistant_audio_done` arrives after zero or more streamed PCM frames
+- **THEN** Android closes FIFO input without blocking the socket callback
+- **AND** preserves FIFO write order before waiting for the AudioTrack playback head
+- **AND** reports device audio done only after every accepted frame drains
+- **AND** treats zero accepted frames as an immediate valid drain
+- **AND** exposes queue overflow or drain timeout as incomplete playback rather than advancing text or starting suffix retry early
 
 #### Scenario: Empty or failed turn removes placeholders
 - **WHEN** a turn ends with no speech, fails, or is intentionally cancelled before text exists
