@@ -20,12 +20,14 @@
 
 const crypto = require("node:crypto");
 const { createInteractionFeedbackContract } = require("./interaction-feedback");
+const { createWorkHistoryCompletionBridge, runBlockingReason } = require("./work-history-completion");
 
 const TASK_STATUSES = Object.freeze(["proposed", "queued", "active", "blocked", "completed", "canceled", "failed"]);
 
 const RUN_EVENT_TYPES = Object.freeze([
   "run.proposed",
   "run.queued",
+  "run.execution_linked",
   "run.claimed",
   "run.started",
   "run.context_pack_created",
@@ -263,23 +265,24 @@ function createWorkHistoryStore({ events }) {
     });
     if (run.record.task_id) {
       if (type === "run.completed") {
-        await setTaskStatus(run.record.task_id, "completed", `run ${runId} completed`);
+        await setTaskStatus(run.record.task_id, "completed", `run ${runId} completed`, taskStatusIdempotency(input, type));
       } else if (type === "run.failed") {
-        await setTaskStatus(run.record.task_id, "blocked", `run ${runId} failed`);
+        await setTaskStatus(run.record.task_id, "blocked", `run ${runId} failed`, taskStatusIdempotency(input, type));
       } else if (type === "run.canceled") {
-        await setTaskStatus(run.record.task_id, "canceled", `run ${runId} canceled`);
+        await setTaskStatus(run.record.task_id, "canceled", `run ${runId} canceled`, taskStatusIdempotency(input, type));
       }
     }
     return event;
   }
 
-  async function setTaskStatus(taskId, status, reason) {
+  async function setTaskStatus(taskId, status, reason, idempotencyKey = "") {
     const safeStatus = TASK_STATUSES.includes(status) ? status : "active";
     return append({
       event_type: "work.task.status_changed",
       stream_id: taskStream(taskId),
       actor: { kind: "gateway", id: "work-history" },
       correlation_id: text(taskId, 160),
+      idempotency_key: idem(idempotencyKey, "", ""),
       payload: { task_id: text(taskId, 160), status: safeStatus, reason: text(reason, 400) },
     });
   }
@@ -1189,6 +1192,11 @@ function createWorkHistoryStore({ events }) {
         if (type === "run.claimed") {
           run.claim = payload;
           run.status = "claimed";
+        } else if (type === "run.execution_linked") {
+          run.record = {
+            ...run.record,
+            execution_run_id: payload.agent_run_id || run.record.execution_run_id || "",
+          };
         } else if (type === "run.started") {
           run.status = "running";
         } else if (type === "run.completed") {
@@ -1305,32 +1313,12 @@ function createWorkHistoryStore({ events }) {
       || String(a.event_id || "").localeCompare(String(b.event_id || "")));
   }
 
-  function runBlockingReason(run) {
-    const pendingControl = [...run.controls.values()].find((control) => control.status === "queued" || control.status === "claimed");
-    if (pendingControl) {
-      return `control request ${pendingControl.control_id} (${pendingControl.action}) awaiting worker receipt`;
-    }
-    if (run.status === "queued") {
-      return "waiting for a worker to claim this run";
-    }
-    if (run.status === "failed") {
-      const failedVerification = run.verifications.filter((v) => v.status === "failed").slice(-1)[0];
-      return failedVerification
-        ? `verification failed: ${failedVerification.command || failedVerification.summary || failedVerification.verification_id}`
-        : "run failed";
-    }
-    const lastEvent = run.events.slice(-1)[0];
-    if (lastEvent?.event_type === "run.output_proposed") {
-      return "output proposed; waiting on user review";
-    }
-    return "";
-  }
-
   async function statusSummary() {
     const state = await collectState();
     const runs = [...state.runs.values()].map((run) => ({
       run_id: run.record.run_id,
       task_id: run.record.task_id || "", intent_id: run.record.intent_id || "", intent_revision: run.record.intent_revision || 0, acceptance_contract_ref: run.record.acceptance_contract_ref || "",
+      execution_run_id: run.record.execution_run_id || "",
       status: run.status,
       objective: text(run.record.objective, 200),
       worker_id: run.claim?.worker_id || "",
@@ -1550,12 +1538,16 @@ function createWorkHistoryStore({ events }) {
     return { route_kind: "run", route_ref: runId, safe_url: `/ui#work-run=${runId}` };
   }
 
+  const completionBridge = createWorkHistoryCompletionBridge({
+    collectState, append, appendRunEvent, setTaskStatus, actor, text, refs, runStream, requireText, idem,
+  });
   return {
     createTask,
     queueRun,
     claimRun,
     appendRunEvent,
     setTaskStatus,
+    ...completionBridge,
     recordSnapshot,
     recordDiff,
     recordVerification,
@@ -1669,6 +1661,11 @@ function idem(explicit, scope, operation) {
   const safeScope = text(scope, 160);
   if (!safeScope || !operation) return "";
   return `wh:${safeScope}:${operation}`;
+}
+
+function taskStatusIdempotency(input, type) {
+  const base = text(input?.idempotency_key, 200);
+  return base ? `${base}:task-status:${text(type, 40)}` : "";
 }
 
 function deploymentIdem(domain, ...parts) {

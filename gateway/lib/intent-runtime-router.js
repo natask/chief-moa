@@ -28,6 +28,7 @@ const MAX_ITEMS = Object.freeze({
   sourceReceipts: 20,
   relations: 24,
   diagnostics: 16,
+  notifications: 24,
 });
 
 const INTENT_EVENT_TYPES = Object.freeze([
@@ -35,6 +36,7 @@ const INTENT_EVENT_TYPES = Object.freeze([
   "intent.source_recorded",
   "intent.run_claimed",
   "intent.progress_recorded",
+  "intent.notification_created",
   "intent.disambiguated",
   "intent.connected",
   "intent.enriched",

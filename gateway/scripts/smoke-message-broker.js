@@ -81,6 +81,7 @@ async function main() {
         "principal context packs carry role-specific execution and handoff policy",
         "explicit principal activation launches exactly one non-blocking run",
         "explicit broker launch creates a linked wait=false agent run",
+        "stable explicit launch retries reuse one full chain and produce one review notification",
         "active run messages append broker_evidence_attached without cancellation",
         "broadcast dismisses irrelevant forks with broker_fork_dismissed (no-op, no cancel)",
         "a second user turn while an agent run is active leaves the run active",
@@ -305,18 +306,29 @@ async function assertPrincipalLaunch(baseUrl, dataDir) {
 }
 
 async function assertExplicitBrokerLaunch(baseUrl, dataDir) {
-  const response = await postJson(`${baseUrl}/v1/broker/messages`, {
+  const payload = {
     source: "message-broker-smoke",
+    turn_id: "stable-explicit-broker-launch",
     launch_agent: true,
     harness: "gemini",
     text: "start another broker launcher wiring task with the proper context",
-  });
+  };
+  const response = await postJson(`${baseUrl}/v1/broker/messages`, payload);
   assert.equal(response.status, 202, JSON.stringify(response.json));
   assert.equal(response.json.launches.length, 1, JSON.stringify(response.json.launches));
   const launch = response.json.launches[0];
   assert.equal(launch.status, "launched", JSON.stringify(launch));
   assert.ok(launch.agent_run_id, "launch result must include agent_run_id");
   assert.equal(launch.wait, false);
+
+  const retry = await postJson(`${baseUrl}/v1/broker/messages`, payload);
+  assert.equal(retry.status, 202, JSON.stringify(retry.json));
+  assert.equal(retry.json.event.id, response.json.event.id);
+  assert.equal(retry.json.launches.length, 1);
+  assert.equal(retry.json.launches[0].agent_run_id, launch.agent_run_id);
+  assert.equal(retry.json.event.completion_spine.intent_id, response.json.event.completion_spine.intent_id);
+  assert.equal(retry.json.event.completion_spine.task_id, response.json.event.completion_spine.task_id);
+  assert.equal(retry.json.event.completion_spine.work_history_run_id, response.json.event.completion_spine.work_history_run_id);
 
   const route = response.json.decisions.find((decision) =>
     decision.id === launch.route_decision_id &&
@@ -347,6 +359,13 @@ async function assertExplicitBrokerLaunch(baseUrl, dataDir) {
   const detail = await getJson(`${baseUrl}/v1/agent/runs/${launch.agent_run_id}`);
   assert.equal(detail.run.source, "broker-workflow-router");
   assert.equal(detail.run.harness, "gemini");
+  assert.equal(detail.run.branch_id, response.json.event.completion_spine.branch_id);
+  assert.equal(detail.run.intent_id, response.json.event.completion_spine.intent_id);
+  assert.equal(detail.run.turn_id, "stable-explicit-broker-launch");
+  assert.equal(detail.run.broker_event_id, response.json.event.id);
+  assert.equal(detail.run.route_decision_id, route.id);
+  assert.equal(detail.run.context_pack_ref, `broker-context-packs/${route.context_pack_id}.json`);
+  assert.equal(detail.run.work_history_run_id, response.json.event.completion_spine.work_history_run_id);
   assert.match(detail.run.prompt, /Broker-selected Moa workflow context pack/);
   const activated = detail.events.find((event) =>
     event.type === "broker_activated" &&
@@ -356,6 +375,23 @@ async function assertExplicitBrokerLaunch(baseUrl, dataDir) {
 
   const terminal = await waitForRunTerminal(baseUrl, launch.agent_run_id);
   assert.equal(terminal.run.status, "completed");
+  const delivery = await getJson(
+    `${baseUrl}/v1/intent-runtime/intents/${encodeURIComponent(response.json.event.completion_spine.intent_id)}/delivery`,
+  );
+  assert.equal(delivery.delivery.lifecycle_state, "active");
+  assert.equal(delivery.delivery.pending_notification_count, 1);
+  assert.equal(delivery.delivery.promotion_recorded, false);
+  assert.equal(delivery.delivery.run_refs.length, 1);
+  assert.equal(delivery.delivery.run_refs[0].execution_run_id, launch.agent_run_id);
+  assert.equal(delivery.delivery.run_refs[0].status, "running");
+
+  const activationEvents = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+  assert.equal(activationEvents.launch_refs.length, 1);
+  assert.equal(
+    fs.readdirSync(path.join(dataDir, "agent-runs"))
+      .filter((name) => name === `${launch.agent_run_id}.json`).length,
+    1,
+  );
 }
 
 async function assertActiveRunAttachment(baseUrl, dataDir, activeRunId) {

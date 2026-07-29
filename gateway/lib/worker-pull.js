@@ -368,6 +368,11 @@ function claimPayload(run) {
     work: {
       work_node_id: optionalId(run.work_node_id || ""),
       context_pack_ref: ref(run.context_pack_ref || ""),
+      intent_id: optionalId(run.intent_id || ""),
+      intent_agent_id: optionalId(run.intent_agent_id || ""),
+      work_history_run_id: optionalId(run.work_history_run_id || ""),
+      work_history_task_id: optionalId(run.work_history_task_id || ""),
+      acceptance_contract_ref: ref(run.acceptance_contract_ref || ""),
       parent_run_id: optionalId(run.parent_run_id || ""),
       project_id: projectId,
       profile_version: optionalId(run.profile_version || ""),

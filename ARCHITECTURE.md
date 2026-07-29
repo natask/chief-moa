@@ -1435,6 +1435,16 @@ run id on the route decision and broker event, and appends a `broker_activated`
 event to the run. When a message targets an active run, the gateway appends a
 `broker_evidence_attached` event to that run without canceling it.
 
+An explicit launch with a stable source turn/message id has one idempotent
+completion spine: broker event, route/context pack, canonical delivery intent,
+work task, work-history run, and executable `agent_run`. The executable run
+carries the branch, turn, broker, route, context-pack, intent, task, and
+work-history-run references. Local and worker-pull terminal results update only
+that linked work-history run and intent. Successful execution records
+`run.output_proposed` plus one pending intent notification; it deliberately does
+not record `run.completed`, `intent.completed`, acceptance, deployment, or
+promotion. User review and later release evidence retain those authorities.
+
 Three checked-in principal profiles specialize that same one-run broker path.
 An explicit security-audit intent selects `security`, which is audit-only and
 can emit bounded repair contracts only; accepted repairs and re-verification
@@ -2066,6 +2076,9 @@ queues.
   launcher-profile selection, explicit run activation, and context-pack
   persistence. Model output remains proposal-only unless the broker request
   explicitly asks to launch a run.
+- `gateway/lib/broker-completion-spine.js`: idempotent broker-to-intent/task/run
+  linkage and scoped terminal-result progress/notification bridge. It never
+  marks delivery complete.
 - `gateway/public/gateway-ui.html`: gateway-served browser control
   surface for health, runtime profile, prompt history, sessions, and runs.
 - `gateway/public/credential-panel.html`: gateway-served credential-autopilot
@@ -2113,6 +2126,8 @@ queues.
 - `gateway/lib/work-history.js`: event-sourced work-history control-plane
   store: tasks, queued runs, claims, snapshots, diffs, verifications, feedback,
   control requests, deployment records, and rebuildable projections.
+- `gateway/lib/work-history-completion.js`: the narrow executable-run linkage
+  and terminal-result projection used by the broker completion spine.
 - `gateway/lib/intent-workflow.js`: idempotent linkage from one broker-first
   current work turn to the canonical intent runtime, a work-history task, and an
   inert queued run proposal. It exposes `moa.delivery-intent.v1`; it never

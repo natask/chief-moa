@@ -6,7 +6,7 @@ const { createAgentWorkerHandlers } = require("../lib/agent-worker-handlers");
 const { WorkerPullError } = require("../lib/worker-pull");
 
 function makeHarness(overrides = {}) {
-  const calls = { auth: [], events: [], remembered: [], synced: [] };
+  const calls = { auth: [], events: [], remembered: [], synced: [], canonical: [] };
   const workerPull = {
     authenticate: (_request, scope) => { calls.auth.push(scope); return { scope }; },
     createRegistration: (body, request) => ({ kind: "registration", body, actor: request.actor }),
@@ -30,6 +30,7 @@ function makeHarness(overrides = {}) {
     readAgentRun: (id) => ({ id, status: "completed" }),
     rememberRunOutcome: (run) => calls.remembered.push(run.id),
     syncWorkGraphFromRun: (run) => { calls.synced.push(run.id); return Promise.resolve(); },
+    recordCanonicalCompletion: async (run) => { calls.canonical.push(run.id); },
     appendAgentEvent: (id, type, payload) => calls.events.push({ id, type, payload }),
     ...overrides,
     workerPull,
@@ -72,7 +73,7 @@ test("heartbeat and event routes extract run ids and use distinct scopes", async
   assert.equal((await route(handlers, "GET", "/v1/agent/workers/claim")).handled, false);
 });
 
-test("result completion responds before best-effort outcome hooks", async () => {
+test("result completion durably bridges canonical completion before acknowledging", async () => {
   const { handlers, calls } = makeHarness();
   const result = await route(handlers, "POST", "/v1/agent/runs/run_3/result", { status: "completed" });
   assert.equal(result.response.status, 200);
@@ -80,17 +81,23 @@ test("result completion responds before best-effort outcome hooks", async () => 
   assert.deepEqual(calls.auth, ["agent_runs:complete"]);
   assert.deepEqual(calls.remembered, ["run_3"]);
   assert.deepEqual(calls.synced, ["run_3"]);
+  assert.deepEqual(calls.canonical, ["run_3"]);
 });
 
 test("completion hooks record synchronous and asynchronous failures", async () => {
   const syncFailure = makeHarness({ readAgentRun: () => { throw new Error("read failed"); } });
-  assert.equal((await route(syncFailure.handlers, "POST", "/v1/agent/runs/run_4/result")).response.status, 200);
+  assert.equal((await route(syncFailure.handlers, "POST", "/v1/agent/runs/run_4/result")).response.status, 400);
   assert.equal(syncFailure.calls.events[0].type, "completion_hooks_failed");
 
   const asyncFailure = makeHarness({ syncWorkGraphFromRun: () => Promise.reject(new Error("sync failed")) });
   await route(asyncFailure.handlers, "POST", "/v1/agent/runs/run_5/result");
   await Promise.resolve();
   assert.equal(asyncFailure.calls.events[0].type, "work_node_sync_failed");
+
+  const canonicalFailure = makeHarness({ recordCanonicalCompletion: async () => { throw new Error("canonical failed"); } });
+  const failed = await route(canonicalFailure.handlers, "POST", "/v1/agent/runs/run_6/result");
+  assert.equal(failed.response.status, 400);
+  assert.equal(canonicalFailure.calls.events[0].type, "completion_hooks_failed");
 });
 
 test("worker errors retain protocol details and normalize other failures", async () => {
