@@ -22,6 +22,13 @@ cleared whenever the transcript surface is removed, a turn reaches ready, or a
 "(not spoken)"/"(not saved)" marker is written, so a stale live turn cannot
 shadow later voiceLog writes.
 
+The user ribbon's Copy action is also a capture disposition. During live
+capture it requests commit, keeps the copy pending while provider hypotheses
+settle, and writes only the authoritative final transcript to the clipboard.
+After finalization, Copy remains an immediate local clipboard action. This
+keeps the overlay useful for dictation into other apps without making partial
+streaming text look canonical.
+
 Acceptance is covered by `MoaLiveConversationStateTest` plus the existing audio
 progress, playback-drain, transcript-log, overlay-layout, and streaming voice
 controller suites. Physical-phone QA must still prove word timing against the
