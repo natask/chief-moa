@@ -86,6 +86,8 @@ public final class MainActivity extends Activity {
     private Button rollbackButton;
     private EditText gatewayUrlInput;
     private EditText gatewayTokenInput;
+    private EditText enrollmentCapabilityInput;
+    private TextView enrollmentStatus;
     private EditText preferredYoutubeInput;
     private CheckBox spokenRepliesInput;
     private JSONObject pendingUpdate;
@@ -291,7 +293,7 @@ public final class MainActivity extends Activity {
         addCardTitle(card, "Set up Ag together");
         addHint(card, "Start with one real conversation. Ag only asks for access when you choose a step.");
 
-        boolean connected = !MoaPrefs.gatewayUrl(this).trim().isEmpty();
+        boolean connected = verifiedEnrollment() != null;
         boolean microphone = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
         boolean firstConversation = MoaPrefs.firstConversationCompleted(this);
         boolean notifications = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
@@ -301,7 +303,7 @@ public final class MainActivity extends Activity {
                 new AgOnboardingState.LiveState(connected, microphone, firstConversation, notifications));
 
         onboardingRow(card, "1. Connect", connected,
-                connected ? "Gateway configured" : "Add your account connection below");
+                connected ? "Authenticated continuity verified" : "Use a short-lived enrollment code below");
         onboardingRow(card, "2. Microphone", microphone,
                 microphone ? "Android permission verified" : "Requested only when you tap Enable microphone");
         onboardingRow(card, "3. First conversation", firstConversation,
@@ -392,9 +394,27 @@ public final class MainActivity extends Activity {
 
     private View gatewayCard() {
         LinearLayout card = card();
-        addCardTitle(card, "Voice agent setup");
+        addCardTitle(card, "Connect Ag");
 
-        TextView caption = label("Keys stay on your server.", MoaColors.MUTED, 12, false);
+        TextView enrollmentCaption = label(
+                "Create a five-minute enrollment code on an owner-authenticated device. Ag exchanges it once and never receives your gateway bearer token.",
+                MoaColors.MUTED, 12, false);
+        enrollmentCaption.setPadding(0, 0, 0, dp(10));
+        card.addView(enrollmentCaption);
+
+        enrollmentCapabilityInput = textInput("Ag enrollment code", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        card.addView(enrollmentCapabilityInput);
+
+        enrollmentStatus = label(enrollmentSummary(), MoaColors.MUTED, 12, false);
+        enrollmentStatus.setPadding(0, dp(4), 0, dp(6));
+        card.addView(enrollmentStatus);
+
+        Button enrollButton = primaryButton("Connect this device");
+        enrollButton.setOnClickListener(v -> enrollDevice(enrollButton));
+        card.addView(enrollButton);
+
+        TextView caption = label("Advanced legacy gateway settings. These are not used by enrollment.", MoaColors.MUTED, 12, false);
         caption.setPadding(0, 0, 0, dp(10));
         card.addView(caption);
 
@@ -444,6 +464,54 @@ public final class MainActivity extends Activity {
         });
         card.addView(rollbackButton);
         return card;
+    }
+
+    private MoaDeviceCredentialStore.EnrollmentCredential verifiedEnrollment() {
+        MoaDeviceCredentialStore.EnrollmentCredential credential = new MoaDeviceCredentialStore(this)
+                .loadEnrollmentCredential(MoaPrefs.gatewayUrl(this), androidDeviceId());
+        return credential != null && credential.verified ? credential : null;
+    }
+
+    private String enrollmentSummary() {
+        MoaDeviceCredentialStore.EnrollmentCredential credential = verifiedEnrollment();
+        return credential == null ? "Not connected" : "Connected to account " + credential.accountId;
+    }
+
+    private void enrollDevice(Button button) {
+        String origin = gatewayUrlInput == null ? MoaPrefs.gatewayUrl(this)
+                : gatewayUrlInput.getText().toString().trim();
+        String capability = enrollmentCapabilityInput == null ? ""
+                : enrollmentCapabilityInput.getText().toString().trim();
+        button.setEnabled(false);
+        if (enrollmentStatus != null) enrollmentStatus.setText("Verifying with the gateway...");
+        new Thread(() -> {
+            try {
+                MoaPrefs.saveGatewayConfig(this, origin, "");
+                AgEnrollmentClient.Result result = new AgEnrollmentClient(origin).exchangeAndDiscover(
+                        capability, new MoaDeviceCredentialStore(this), androidDeviceId());
+                mainHandler.post(() -> {
+                    if (enrollmentCapabilityInput != null) enrollmentCapabilityInput.setText("");
+                    if (enrollmentStatus != null) enrollmentStatus.setText(
+                            "Authenticated continuity verified for account " + result.accountId
+                                    + ". No app-local state was transferred.");
+                    button.setEnabled(true);
+                    setContentView(createContent());
+                    updatePermissionState();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    if (enrollmentStatus != null) enrollmentStatus.setText(
+                            "Connection not verified: " + safeEnrollmentError(error));
+                    button.setEnabled(true);
+                });
+            }
+        }, "ag-device-enrollment").start();
+    }
+
+    private static String safeEnrollmentError(Exception error) {
+        String message = error == null ? "unknown error" : String.valueOf(error.getMessage()).trim();
+        if (message.isEmpty()) return "unknown error";
+        return message.length() <= 160 ? message : message.substring(0, 160);
     }
 
     private View actionCard() {

@@ -12,12 +12,47 @@ final class MoaDeviceCredentialStore implements MoaReleaseControlClient.DeviceCr
     private static final String KEY_TOKEN = "credential_token";
     private static final String KEY_IDEMPOTENCY = "idempotency_key";
     private static final String KEY_REGISTERED = "registered";
+    private static final String KEY_ENROLLMENT_ORIGIN = "ag_enrollment_origin";
+    private static final String KEY_ENROLLMENT_DEVICE = "ag_enrollment_device";
+    private static final String KEY_ENROLLMENT_TOKEN = "ag_enrollment_credential";
+    private static final String KEY_ENROLLMENT_VERIFIED = "ag_enrollment_verified";
+    private static final String KEY_ENROLLMENT_ACCOUNT = "ag_enrollment_account";
     private final SharedPreferences preferences;
 
     MoaDeviceCredentialStore(Context context) {
         Context app = context == null ? null : context.getApplicationContext();
         if (app == null) throw new IllegalArgumentException("context is required");
         preferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    synchronized EnrollmentCredential loadEnrollmentCredential(String origin, String deviceId) {
+        if (!safe(origin).equals(preferences.getString(KEY_ENROLLMENT_ORIGIN, ""))
+                || !safe(deviceId).equals(preferences.getString(KEY_ENROLLMENT_DEVICE, ""))) return null;
+        String token = preferences.getString(KEY_ENROLLMENT_TOKEN, "");
+        if (safe(token).isEmpty()) return null;
+        return new EnrollmentCredential(token,
+                preferences.getBoolean(KEY_ENROLLMENT_VERIFIED, false),
+                preferences.getString(KEY_ENROLLMENT_ACCOUNT, ""));
+    }
+
+    synchronized void saveEnrollmentCredential(String origin, String deviceId, String token,
+            boolean verified, String accountId) {
+        boolean saved = preferences.edit()
+                .putString(KEY_ENROLLMENT_ORIGIN, safe(origin))
+                .putString(KEY_ENROLLMENT_DEVICE, safe(deviceId))
+                .putString(KEY_ENROLLMENT_TOKEN, safe(token))
+                .putBoolean(KEY_ENROLLMENT_VERIFIED, verified)
+                .putString(KEY_ENROLLMENT_ACCOUNT, safe(accountId)).commit();
+        if (!saved) throw new IllegalStateException("Ag device credential could not be persisted");
+    }
+
+    static final class EnrollmentCredential {
+        final String token;
+        final boolean verified;
+        final String accountId;
+        EnrollmentCredential(String token, boolean verified, String accountId) {
+            this.token = safe(token); this.verified = verified; this.accountId = safe(accountId);
+        }
     }
 
     @Override
