@@ -26,17 +26,24 @@
   --agee-ribbon-gap: 8px;
   --agee-ribbon-edge: 16px;
 
-  /* colour — dark (default) */
+  /* colour — dark (default).
+     Every painted token here has a counterpart in the light block below, and
+     the two must differ. That invariant is enforced by
+     scripts/test-ribbon-palette.mjs; the values match Android's
+     MoaRibbonTokens so the two surfaces read as one product. */
   --agee-ribbon-ink: #f4f4f6;
   --agee-ribbon-ink-ambient: rgba(244, 244, 246, 0.88);
   --agee-ribbon-muted: #9b9ba4;
   --agee-ribbon-accent: #ffd76a;
-  --agee-ribbon-you: #7c5cff;
+  /* The ink that sits ON the accent fill (the send button). It was a literal
+     #17130a, which is a dark-mode value painted on a light page too. */
+  --agee-ribbon-on-accent: #17130a;
+  --agee-ribbon-you: #7c8cff;
   --agee-ribbon-agent: #f5a623;
   --agee-ribbon-ok: #35c759;
   --agee-ribbon-warn: #ff8a3d;
-  --agee-ribbon-plate: rgba(14, 15, 18, 0.72);
-  --agee-ribbon-plate-drag: rgba(14, 15, 18, 0.5);
+  --agee-ribbon-plate: rgba(18, 19, 23, 0.91);
+  --agee-ribbon-plate-drag: rgba(18, 19, 23, 0.69);
   --agee-ribbon-hairline: rgba(255, 255, 255, 0.14);
   --agee-ribbon-scrim: rgba(18, 19, 23, 0.92);
   --agee-ribbon-scrim-ink: #f7f7f8;
@@ -65,12 +72,13 @@
   --agee-ribbon-ink-ambient: rgba(20, 21, 25, 0.9);
   --agee-ribbon-muted: #6b6c76;
   --agee-ribbon-accent: #b87400;
-  --agee-ribbon-you: #5b3fe0;
+  --agee-ribbon-on-accent: #fff8ec;
+  --agee-ribbon-you: #6474e8;
   --agee-ribbon-agent: #c06b00;
   --agee-ribbon-ok: #1f8f3d;
   --agee-ribbon-warn: #c24a00;
-  --agee-ribbon-plate: rgba(252, 252, 253, 0.76);
-  --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.54);
+  --agee-ribbon-plate: rgba(252, 252, 253, 0.91);
+  --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.72);
   --agee-ribbon-hairline: rgba(0, 0, 0, 0.1);
   --agee-ribbon-scrim: rgba(252, 252, 253, 0.92);
   --agee-ribbon-scrim-ink: #141519;
@@ -210,7 +218,7 @@
   padding: 0;
   border-radius: 999px;
   background: var(--agee-ribbon-accent);
-  color: #17130a;
+  color: var(--agee-ribbon-on-accent);
   cursor: pointer;
   pointer-events: auto;
   transition:

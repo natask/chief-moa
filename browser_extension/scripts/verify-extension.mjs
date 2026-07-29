@@ -75,6 +75,7 @@ const requiredFiles = [
   "scripts/test-browser-agent-loop-policy.mjs",
   "scripts/test-browser-turn-protocol.mjs",
   "scripts/test-extension-production-sources.mjs",
+  "scripts/test-ribbon-palette.mjs",
   "scripts/test-runtime-intent-modules.mjs",
   "scripts/test-voice-preroll-buffer.mjs",
   "scripts/extension-production-sources.mjs",
@@ -1544,6 +1545,22 @@ if (
   !/class="agee-ribbon-line"/.test(ribbonRuntimeSource)
 ) {
   throw new Error("the overlay must build an upper transcription ribbon and a lower response ribbon");
+}
+
+// One palette per frame (overlay-2026-07-28 section 6). The luminance sampler
+// flips data-agee-ribbon-theme; every painted token has to flip with it, or the
+// unit paints a near-black plate under white ink on a white page. The exhaustive
+// check lives in scripts/test-ribbon-palette.mjs — this only makes sure it is
+// still there and still reachable, because a check nobody runs is not a check.
+if (
+  !/#agee-root\[data-agee-ribbon-theme="light"\]\s*\{/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-plate:\s*rgba\(18, 19, 23, 0\.91\)/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-plate:\s*rgba\(252, 252, 253, 0\.91\)/.test(ribbonsCssSource) ||
+  !/THEME_INVARIANT/.test(readFileSync("scripts/test-ribbon-palette.mjs", "utf8")) ||
+  !/function themeForLuminance\(/.test(ribbonLayoutSource) ||
+  !/root\.dataset\.ageeRibbonTheme = Layout\.themeForLuminance/.test(ribbonRuntimeSource)
+) {
+  throw new Error("the ribbon palette must flip whole with the sampled page theme, and the palette check must stay in test:unit");
 }
 
 // The sliding window is the hard cap: a bounded tail of the buffer is rendered
