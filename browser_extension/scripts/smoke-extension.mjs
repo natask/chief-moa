@@ -935,6 +935,29 @@ async function main() {
         });
         await chrome.tabs.sendMessage(tabId, { cmd: "toggleVoice" });
         await sleep(200);
+        // Before a single word exists. Opening capture must put the you-bubble
+        // on screen with a blinking caret in it, because the caret is the
+        // second "it is hearing me" signal and it has to beat the transcriber:
+        // the gateway's first partial is hundreds of milliseconds away and an
+        // empty screen for that long reads as nothing happening. Spec 5.1.
+        const [opened] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const you = document.querySelector("#agee-ribbon-you");
+            const caret = you?.querySelector(".agee-ribbon-caret");
+            const caretStyle = caret ? getComputedStyle(caret) : null;
+            return {
+              live: !!you?.classList.contains("agee-ribbon-live"),
+              pending: !!you?.classList.contains("agee-ribbon-pending"),
+              chars: (you?.querySelector(".agee-ribbon-text")?.textContent || "").length,
+              plate: you ? getComputedStyle(you).backgroundColor : "",
+              caretOpacity: caretStyle?.opacity || "0",
+              caretBlink: caretStyle?.animationName || "",
+              caretWidth: Math.round(caret?.getBoundingClientRect().width || 0),
+              caretHeight: Math.round(caret?.getBoundingClientRect().height || 0),
+            };
+          },
+        });
         const send = async (type, text) => {
           await chrome.tabs.sendMessage(tabId, {
             cmd: "voiceSessionEvent",
@@ -949,6 +972,24 @@ async function main() {
         const [partial] = await chrome.scripting.executeScript({
           target: { tabId },
           func: () => document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.textContent || "",
+        });
+        // The words land in the SAME bubble the caret opened, and the caret is
+        // still blinking at their tail while the transcript is interim.
+        const [streaming] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const you = document.querySelector("#agee-ribbon-you");
+            const caret = you?.querySelector(".agee-ribbon-caret");
+            const text = you?.querySelector(".agee-ribbon-text");
+            return {
+              live: !!you?.classList.contains("agee-ribbon-live"),
+              streaming: !!you?.classList.contains("agee-ribbon-streaming"),
+              // The caret sits after the words, inside the same line box.
+              caretAfterText: text?.compareDocumentPosition(caret) === Node.DOCUMENT_POSITION_FOLLOWING,
+              caretInBubble: caret?.closest("#agee-ribbon-you") === you,
+              caretBlink: caret ? getComputedStyle(caret).animationName : "",
+            };
+          },
         });
         await send("transcript_final", "What's the weather like today?");
         const [final] = await chrome.scripting.executeScript({
@@ -968,7 +1009,12 @@ async function main() {
             delete window.__ageePartialSmoke;
           },
         });
-        return { partial: partial?.result || "", final: final?.result || "" };
+        return {
+          opened: opened?.result || {},
+          streaming: streaming?.result || {},
+          partial: partial?.result || "",
+          final: final?.result || "",
+        };
       })()
     `);
     if (
@@ -976,6 +1022,33 @@ async function main() {
       livePartials?.final !== "What's the weather like today?"
     ) {
       throw new Error(`live transcript repeated revised speech instead of showing the latest: ${JSON.stringify(livePartials)}`);
+    }
+    // The bubble is up, empty, plated and blinking before the first word.
+    const opened = livePartials?.opened || {};
+    if (
+      !opened.live ||
+      !opened.pending ||
+      opened.chars !== 0 ||
+      opened.plate === "rgba(0, 0, 0, 0)" ||
+      // Sampled mid-blink, so any visible opacity counts; caretBlink is what
+      // proves it is animating rather than merely on.
+      Number(opened.caretOpacity) <= 0.1 ||
+      opened.caretBlink !== "agee-ribbon-caret" ||
+      opened.caretWidth < 1 ||
+      opened.caretHeight < 8
+    ) {
+      throw new Error(`capture must open the you bubble with a blinking caret before any transcript: ${JSON.stringify(opened)}`);
+    }
+    // And the transcript lands inside that same bubble, behind that same caret.
+    const streamingCaret = livePartials?.streaming || {};
+    if (
+      !streamingCaret.live ||
+      !streamingCaret.streaming ||
+      !streamingCaret.caretAfterText ||
+      !streamingCaret.caretInBubble ||
+      streamingCaret.caretBlink !== "agee-ribbon-caret"
+    ) {
+      throw new Error(`the transcript must stream into the bubble the caret opened: ${JSON.stringify(streamingCaret)}`);
     }
 
     // Overlay bubbles: the companion between two chat bubbles.

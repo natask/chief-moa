@@ -142,6 +142,9 @@
     let presentationCue = "";
     let themeTimer = null;
     let voiceRepliesOn = true;
+    // True between capture opening and capture closing. Only the opening edge
+    // clears the you-bubble; see setUserPending.
+    let userCaptureOpen = false;
     let geometryBreaches = [];
     let geometryAuditPending = false;
 
@@ -1216,7 +1219,23 @@
       // Open the you-ribbon before any transcript exists. Called when capture
       // opens so the unit reacts to the microphone, not to the transcriber.
       setUserPending(on) {
-        if (on) endCompose();
+        if (on) {
+          endCompose();
+          // A new capture opens an EMPTY line. The previous turn's words sit in
+          // this bubble on their linger timer by design, and putting the caret
+          // behind them would read as the new sentence appending to the old
+          // one — the staggered repeat the transcript path was just fixed to
+          // stop, reintroduced visually. Guarded by an explicit capture flag,
+          // not by the pending class: the first partial clears pending, so a
+          // repeated "listening" mid-capture would otherwise wipe words that
+          // have already been transcribed.
+          if (!userCaptureOpen) {
+            userCaptureOpen = true;
+            clear(you);
+          }
+        } else {
+          userCaptureOpen = false;
+        }
         setPending(you, on);
       },
 
