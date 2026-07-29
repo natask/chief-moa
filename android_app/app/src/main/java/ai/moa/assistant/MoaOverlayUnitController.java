@@ -109,9 +109,11 @@ final class MoaOverlayUnitController {
     }
 
     Rect qaYouBounds() {
-        return youParams == null ? new Rect() : new Rect(
-                youParams.x, youParams.y,
-                youParams.x + youParams.width, youParams.y + youParams.height);
+        if (youView == null || !youView.isAttachedToWindow()) return new Rect();
+        int[] location = new int[2];
+        youView.getLocationOnScreen(location);
+        return new Rect(location[0], location[1],
+                location[0] + youView.getWidth(), location[1] + youView.getHeight());
     }
 
     boolean qaYouExpanded() {
