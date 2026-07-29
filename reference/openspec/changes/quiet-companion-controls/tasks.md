@@ -10,7 +10,8 @@
   - Acceptance: turning voice off stops scheduled Web Audio sources and drops later audio frames while text continues.
 - [x] 1.4 Persist voice reply choice in extension-local storage.
   - Acceptance: reinjection restores the choice without a gateway call.
-- [ ] 1.5 Run browser verification, smoke, package, and loaded-extension reload confirmation.
+- [x] 1.5 Run browser verification, smoke, package, and loaded-extension reload confirmation.
+  - Evidence: version `0.1.103` passed 171 unit tests, extension verification, and real-extension smoke. The deploy path packaged `browser_extension/dist/Ag-0.1.103.zip` and confirmed the loaded unpacked extension re-polled after reload.
 
 ## 2. Android parity
 
