@@ -1,0 +1,1893 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-07-25T22:48:22.196Z",
+  "corpus_id": "chirp-language-regressions-v1",
+  "privacy": {
+    "transcript_text_persisted": false,
+    "audio_replicated": false,
+    "identifiers": "pseudonymous fixture ids only"
+  },
+  "provider_contract": {
+    "provider": "google-cloud-speech-v2",
+    "model": "chirp_3",
+    "location": "us",
+    "method": "Recognize",
+    "decoding": "explicit LINEAR16 16000Hz mono",
+    "prompt_field": "RecognitionConfig.features.customPromptConfig.customPrompt",
+    "language_semantics": {
+      "auto": "language-agnostic dominant-language transcription",
+      "explicit_list": "condition recognition on listed BCP-47 locales; result reports most likely detected language when supplied"
+    },
+    "requested_max_alternatives": 3,
+    "confidence_contract": "record only if provider actually returns it"
+  },
+  "user_policy": {
+    "allowed_language_codes": [
+      "am-ET",
+      "en-US"
+    ],
+    "allowed_scripts": [
+      "Ethiopic",
+      "Latin"
+    ],
+    "no_translation": true
+  },
+  "trials_per_audio_variant": 5,
+  "request_count": 50,
+  "billed_audio_seconds_estimate": 400,
+  "estimated_cost_usd_at_0_016_per_minute": 0.10666666666666667,
+  "technical_english_preservation": "unmeasured: no consented user-verified technical-English reference in this corpus",
+  "fixtures": [
+    {
+      "fixture_id": "geez-hindi-001",
+      "audio_bytes": 45140,
+      "audio_sha256": "59d330669c03078444c20e48a23dc2bfbda57285bb8b2303218b63b8d9bc79c7",
+      "duration_ms": 1410.625,
+      "reference_kind": "prior_prompted_provider_observation_not_user_ground_truth",
+      "variants": [
+        {
+          "id": "auto_no_prompt",
+          "language_codes": [
+            "auto"
+          ],
+          "custom_prompt_sha256": null,
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 0,
+            "wrong_script_rate": 1,
+            "mean_latency_ms": 944,
+            "p95_latency_ms": 1880,
+            "mean_wer_to_provider_observation": 1.3333333333333333,
+            "mean_cer_to_provider_observation": 1,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "hi"
+            ],
+            "stop_on_valid_request_count": 5,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "01b579dadb5c9bfe99f5a24c5b81dde4541359d839749b6546a9a6d0738cc0b5"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "01b579dadb5c9bfe99f5a24c5b81dde4541359d839749b6546a9a6d0738cc0b5",
+              "transcript_chars": 15,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 8,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 8
+                },
+                "foreign_code_points": [
+                  "U+915",
+                  "U+917",
+                  "U+91C",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [
+                "hi"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 755,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "01b579dadb5c9bfe99f5a24c5b81dde4541359d839749b6546a9a6d0738cc0b5",
+              "transcript_chars": 15,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 8,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 8
+                },
+                "foreign_code_points": [
+                  "U+915",
+                  "U+917",
+                  "U+91C",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [
+                "hi"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1880,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "01b579dadb5c9bfe99f5a24c5b81dde4541359d839749b6546a9a6d0738cc0b5",
+              "transcript_chars": 15,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 8,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 8
+                },
+                "foreign_code_points": [
+                  "U+915",
+                  "U+917",
+                  "U+91C",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [
+                "hi"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 668,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "01b579dadb5c9bfe99f5a24c5b81dde4541359d839749b6546a9a6d0738cc0b5",
+              "transcript_chars": 15,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 8,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 8
+                },
+                "foreign_code_points": [
+                  "U+915",
+                  "U+917",
+                  "U+91C",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [
+                "hi"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 717,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "01b579dadb5c9bfe99f5a24c5b81dde4541359d839749b6546a9a6d0738cc0b5",
+              "transcript_chars": 15,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 8,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 8
+                },
+                "foreign_code_points": [
+                  "U+915",
+                  "U+917",
+                  "U+91C",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [
+                "hi"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 700,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "auto_bilingual_prompt",
+          "language_codes": [
+            "auto"
+          ],
+          "custom_prompt_sha256": "f25cb9bf05293eaa399307b4a75ad8b6f31c624b173601c79eddcbe07b4eff81",
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 678.2,
+            "p95_latency_ms": 763,
+            "mean_wer_to_provider_observation": 0,
+            "mean_cer_to_provider_observation": 0,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "am"
+            ],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 601,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 725,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 641,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 661,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 763,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "am_ET_bilingual_prompt",
+          "language_codes": [
+            "am-ET"
+          ],
+          "custom_prompt_sha256": "f25cb9bf05293eaa399307b4a75ad8b6f31c624b173601c79eddcbe07b4eff81",
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 655.6,
+            "p95_latency_ms": 752,
+            "mean_wer_to_provider_observation": 0,
+            "mean_cer_to_provider_observation": 0,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "am-ET"
+            ],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 621,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 623,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 752,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 631,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 651,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "en_US_am_ET_no_prompt",
+          "language_codes": [
+            "en-US",
+            "am-ET"
+          ],
+          "custom_prompt_sha256": null,
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 0,
+            "wrong_script_rate": 1,
+            "mean_latency_ms": 617.4,
+            "p95_latency_ms": 666,
+            "mean_wer_to_provider_observation": 1.3333333333333333,
+            "mean_cer_to_provider_observation": 0.9166666666666666,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [],
+            "stop_on_valid_request_count": 5,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "5ce29115f0b3d4aa7d37502bf5ad7519f69beb8e6af65c853208c00d60f783e8"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "5ce29115f0b3d4aa7d37502bf5ad7519f69beb8e6af65c853208c00d60f783e8",
+              "transcript_chars": 13,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 6,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 6
+                },
+                "foreign_code_points": [
+                  "U+917",
+                  "U+91C",
+                  "U+926",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 637,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 0.9166666666666666,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5ce29115f0b3d4aa7d37502bf5ad7519f69beb8e6af65c853208c00d60f783e8",
+              "transcript_chars": 13,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 6,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 6
+                },
+                "foreign_code_points": [
+                  "U+917",
+                  "U+91C",
+                  "U+926",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 666,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 0.9166666666666666,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5ce29115f0b3d4aa7d37502bf5ad7519f69beb8e6af65c853208c00d60f783e8",
+              "transcript_chars": 13,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 6,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 6
+                },
+                "foreign_code_points": [
+                  "U+917",
+                  "U+91C",
+                  "U+926",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 567,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 0.9166666666666666,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5ce29115f0b3d4aa7d37502bf5ad7519f69beb8e6af65c853208c00d60f783e8",
+              "transcript_chars": 13,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 6,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 6
+                },
+                "foreign_code_points": [
+                  "U+917",
+                  "U+91C",
+                  "U+926",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 596,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 0.9166666666666666,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5ce29115f0b3d4aa7d37502bf5ad7519f69beb8e6af65c853208c00d60f783e8",
+              "transcript_chars": 13,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 6,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 6
+                },
+                "foreign_code_points": [
+                  "U+917",
+                  "U+91C",
+                  "U+926",
+                  "U+92E",
+                  "U+92F",
+                  "U+939"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 621,
+              "wer_to_provider_observation": 1.3333333333333333,
+              "cer_to_provider_observation": 0.9166666666666666,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "en_US_am_ET_bilingual_prompt",
+          "language_codes": [
+            "en-US",
+            "am-ET"
+          ],
+          "custom_prompt_sha256": "f25cb9bf05293eaa399307b4a75ad8b6f31c624b173601c79eddcbe07b4eff81",
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 766.8,
+            "p95_latency_ms": 1224,
+            "mean_wer_to_provider_observation": 0,
+            "mean_cer_to_provider_observation": 0,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "am-ET"
+            ],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 666,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1224,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 638,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 664,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "c0f268ada79bf5bd1147056b0a1a98d086c91c8ce9080e60986a71029054436c",
+              "transcript_chars": 12,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 9,
+                  "Latin": 0,
+                  "Ethiopic": 9,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 642,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "fixture_id": "geez-hindi-002",
+      "audio_bytes": 439680,
+      "audio_sha256": "7aa4137d4a535b110a48ffc6657d6b55b0e7ea93f6a53c33d985a3e69ce56d92",
+      "duration_ms": 13740,
+      "reference_kind": "prior_prompted_provider_observation_not_user_ground_truth",
+      "variants": [
+        {
+          "id": "auto_no_prompt",
+          "language_codes": [
+            "auto"
+          ],
+          "custom_prompt_sha256": null,
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 721,
+            "p95_latency_ms": 752,
+            "mean_wer_to_provider_observation": 1,
+            "mean_cer_to_provider_observation": 1,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "und"
+            ],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "transcript_chars": 0,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 0,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "und"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 663,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "transcript_chars": 0,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 0,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "und"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 723,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "transcript_chars": 0,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 0,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "und"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 718,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "transcript_chars": 0,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 0,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "und"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 749,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "transcript_chars": 0,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 0,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "und"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 752,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "auto_bilingual_prompt",
+          "language_codes": [
+            "auto"
+          ],
+          "custom_prompt_sha256": "f25cb9bf05293eaa399307b4a75ad8b6f31c624b173601c79eddcbe07b4eff81",
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 1281.6,
+            "p95_latency_ms": 2360,
+            "mean_wer_to_provider_observation": 0.125,
+            "mean_cer_to_provider_observation": 0.02857142857142857,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "am"
+            ],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "5558e856161f00c809131156dbd9cfd79cb15de19939836f755bd0cc368bf224"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "5558e856161f00c809131156dbd9cfd79cb15de19939836f755bd0cc368bf224",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 916,
+              "wer_to_provider_observation": 0.125,
+              "cer_to_provider_observation": 0.02857142857142857,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5558e856161f00c809131156dbd9cfd79cb15de19939836f755bd0cc368bf224",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 910,
+              "wer_to_provider_observation": 0.125,
+              "cer_to_provider_observation": 0.02857142857142857,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5558e856161f00c809131156dbd9cfd79cb15de19939836f755bd0cc368bf224",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1269,
+              "wer_to_provider_observation": 0.125,
+              "cer_to_provider_observation": 0.02857142857142857,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5558e856161f00c809131156dbd9cfd79cb15de19939836f755bd0cc368bf224",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 953,
+              "wer_to_provider_observation": 0.125,
+              "cer_to_provider_observation": 0.02857142857142857,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "5558e856161f00c809131156dbd9cfd79cb15de19939836f755bd0cc368bf224",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 2360,
+              "wer_to_provider_observation": 0.125,
+              "cer_to_provider_observation": 0.02857142857142857,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "am_ET_bilingual_prompt",
+          "language_codes": [
+            "am-ET"
+          ],
+          "custom_prompt_sha256": "f25cb9bf05293eaa399307b4a75ad8b6f31c624b173601c79eddcbe07b4eff81",
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 2770,
+            "p95_latency_ms": 4843,
+            "mean_wer_to_provider_observation": 0,
+            "mean_cer_to_provider_observation": 0,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [
+              "am-ET"
+            ],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "bb4e273c14a66c0812053edba438c81315a4b392428463356dba3ef6e70156b6"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "bb4e273c14a66c0812053edba438c81315a4b392428463356dba3ef6e70156b6",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 2667,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bb4e273c14a66c0812053edba438c81315a4b392428463356dba3ef6e70156b6",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 3232,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bb4e273c14a66c0812053edba438c81315a4b392428463356dba3ef6e70156b6",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1523,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bb4e273c14a66c0812053edba438c81315a4b392428463356dba3ef6e70156b6",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 4843,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bb4e273c14a66c0812053edba438c81315a4b392428463356dba3ef6e70156b6",
+              "transcript_chars": 35,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 28,
+                  "Latin": 0,
+                  "Ethiopic": 28,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [
+                "am-ET"
+              ],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1585,
+              "wer_to_provider_observation": 0,
+              "cer_to_provider_observation": 0,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "en_US_am_ET_no_prompt",
+          "language_codes": [
+            "en-US",
+            "am-ET"
+          ],
+          "custom_prompt_sha256": null,
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 0,
+            "wrong_script_rate": 1,
+            "mean_latency_ms": 1754.2,
+            "p95_latency_ms": 2450,
+            "mean_wer_to_provider_observation": 1,
+            "mean_cer_to_provider_observation": 1.1142857142857143,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [],
+            "stop_on_valid_request_count": 5,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "bcba5ba8a95369c3e33d070a72cf3bb4862329153c66d7af56fb9aa64815d19f"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "bcba5ba8a95369c3e33d070a72cf3bb4862329153c66d7af56fb9aa64815d19f",
+              "transcript_chars": 44,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 20,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 20
+                },
+                "foreign_code_points": [
+                  "U+905",
+                  "U+906",
+                  "U+907",
+                  "U+915",
+                  "U+91F",
+                  "U+924",
+                  "U+928",
+                  "U+92C",
+                  "U+92F",
+                  "U+930",
+                  "U+935",
+                  "U+938"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 2316,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1142857142857143,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bcba5ba8a95369c3e33d070a72cf3bb4862329153c66d7af56fb9aa64815d19f",
+              "transcript_chars": 44,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 20,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 20
+                },
+                "foreign_code_points": [
+                  "U+905",
+                  "U+906",
+                  "U+907",
+                  "U+915",
+                  "U+91F",
+                  "U+924",
+                  "U+928",
+                  "U+92C",
+                  "U+92F",
+                  "U+930",
+                  "U+935",
+                  "U+938"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 2450,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1142857142857143,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bcba5ba8a95369c3e33d070a72cf3bb4862329153c66d7af56fb9aa64815d19f",
+              "transcript_chars": 44,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 20,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 20
+                },
+                "foreign_code_points": [
+                  "U+905",
+                  "U+906",
+                  "U+907",
+                  "U+915",
+                  "U+91F",
+                  "U+924",
+                  "U+928",
+                  "U+92C",
+                  "U+92F",
+                  "U+930",
+                  "U+935",
+                  "U+938"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1429,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1142857142857143,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bcba5ba8a95369c3e33d070a72cf3bb4862329153c66d7af56fb9aa64815d19f",
+              "transcript_chars": 44,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 20,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 20
+                },
+                "foreign_code_points": [
+                  "U+905",
+                  "U+906",
+                  "U+907",
+                  "U+915",
+                  "U+91F",
+                  "U+924",
+                  "U+928",
+                  "U+92C",
+                  "U+92F",
+                  "U+930",
+                  "U+935",
+                  "U+938"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1370,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1142857142857143,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "bcba5ba8a95369c3e33d070a72cf3bb4862329153c66d7af56fb9aa64815d19f",
+              "transcript_chars": 44,
+              "script": {
+                "valid": false,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 20,
+                  "Latin": 0,
+                  "Ethiopic": 0,
+                  "foreign": 20
+                },
+                "foreign_code_points": [
+                  "U+905",
+                  "U+906",
+                  "U+907",
+                  "U+915",
+                  "U+91F",
+                  "U+924",
+                  "U+928",
+                  "U+92C",
+                  "U+92F",
+                  "U+930",
+                  "U+935",
+                  "U+938"
+                ]
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1206,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1142857142857143,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        },
+        {
+          "id": "en_US_am_ET_bilingual_prompt",
+          "language_codes": [
+            "en-US",
+            "am-ET"
+          ],
+          "custom_prompt_sha256": "f25cb9bf05293eaa399307b4a75ad8b6f31c624b173601c79eddcbe07b4eff81",
+          "summary": {
+            "trial_count": 5,
+            "distinct_candidate_count": 1,
+            "exact_candidate_agreement": 1,
+            "all_trials_identical": true,
+            "script_valid_trials": 5,
+            "wrong_script_rate": 0,
+            "mean_latency_ms": 1356,
+            "p95_latency_ms": 1540,
+            "mean_wer_to_provider_observation": 1,
+            "mean_cer_to_provider_observation": 1.1428571428571428,
+            "provider_confidence_available": false,
+            "provider_language_code_values": [],
+            "stop_on_valid_request_count": 1,
+            "fixed_n_request_count": 5,
+            "medoid_transcript_sha256": "086e63fd575d73f3ae96a633a82c43cd13b2fe0ff2bbf93657f724dfba6da2e1"
+          },
+          "trials": [
+            {
+              "transcript_sha256": "086e63fd575d73f3ae96a633a82c43cd13b2fe0ff2bbf93657f724dfba6da2e1",
+              "transcript_chars": 45,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 33,
+                  "Latin": 33,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1333,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1428571428571428,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "086e63fd575d73f3ae96a633a82c43cd13b2fe0ff2bbf93657f724dfba6da2e1",
+              "transcript_chars": 45,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 33,
+                  "Latin": 33,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1374,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1428571428571428,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "086e63fd575d73f3ae96a633a82c43cd13b2fe0ff2bbf93657f724dfba6da2e1",
+              "transcript_chars": 45,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 33,
+                  "Latin": 33,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1198,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1428571428571428,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "086e63fd575d73f3ae96a633a82c43cd13b2fe0ff2bbf93657f724dfba6da2e1",
+              "transcript_chars": 45,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 33,
+                  "Latin": 33,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1335,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1428571428571428,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            },
+            {
+              "transcript_sha256": "086e63fd575d73f3ae96a633a82c43cd13b2fe0ff2bbf93657f724dfba6da2e1",
+              "transcript_chars": 45,
+              "script": {
+                "valid": true,
+                "allowed_scripts": [
+                  "Ethiopic",
+                  "Latin"
+                ],
+                "letter_counts": {
+                  "letters": 33,
+                  "Latin": 33,
+                  "Ethiopic": 0,
+                  "foreign": 0
+                },
+                "foreign_code_points": []
+              },
+              "provider_language_codes": [],
+              "provider_confidence_available": false,
+              "provider_confidence": null,
+              "alternatives_returned": 1,
+              "latency_ms": 1540,
+              "wer_to_provider_observation": 1,
+              "cer_to_provider_observation": 1.1428571428571428,
+              "embedded_technical_english_terms": null,
+              "embedded_technical_english_note": "unmeasured: consented corpus has no user-verified technical-English reference"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
