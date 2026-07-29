@@ -10,6 +10,8 @@
       fail closed.
 - [x] 1.5 Add a static Apple-source gate that rejects credential persistence
       APIs, service labels, and generic-password commands.
+- [x] 1.6 Replace the pasted gateway token with browser-backed Ag device sign-in
+      and one narrowly scoped macOS Keychain session item.
 
 ## 2. QA artifact
 

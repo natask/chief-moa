@@ -135,22 +135,14 @@ public struct CommandPaletteView: View {
 
     private var connectionEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Your Ag gateway").font(.subheadline.weight(.semibold))
-            TextField("Canonical HTTPS gateway origin", text: $model.origin)
-                .textFieldStyle(.roundedBorder)
-            SecureField("Gateway session token (memory only)", text: $model.token)
-                .textFieldStyle(.roundedBorder)
+            Text("Your Ag account").font(.subheadline.weight(.semibold))
+            Text(model.isConfigured ? "Signed in on this Mac" : "Sign in once. Ag keeps this Mac connected securely.")
+                .font(.caption).foregroundStyle(.secondary)
             HStack {
-                Text("Token stays in memory and is cleared on disconnect or app exit.")
-                    .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Button("Disconnect") {
+                if model.isConfigured { Button("Sign out") {
                     Task { await model.disconnect() }
-                }
-                Button("Use for this session") {
-                    if model.useConnectionForSession() { editingConnection = false }
-                    promptFocused = true
-                }
+                } } else { Button("Sign in") { Task { await model.signIn() } } }
             }
         }
         .padding(12)

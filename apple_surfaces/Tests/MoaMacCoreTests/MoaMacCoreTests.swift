@@ -415,7 +415,7 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     #expect(replacement.token.isEmpty)
 }
 
-@Test func runnableAppleSourcesForbidCredentialPersistenceAPIs() throws {
+@Test func runnableAppleSourcesPermitOnlyTheDedicatedAgAccountKeychainStore() throws {
     let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     let package = tests.deletingLastPathComponent().deletingLastPathComponent()
     let roots = ["Sources", "Resources", "scripts"].map { package.appendingPathComponent($0) }
@@ -430,9 +430,16 @@ private actor FakeBrowserSender: BrowserDelegationSending {
         for case let file as URL in enumerator where file.hasDirectoryPath == false {
             let text = try String(contentsOf: file, encoding: .utf8)
             for pattern in forbidden {
+                if file.lastPathComponent == "GatewayDeviceAuth.swift" && pattern == "SecItem" { continue }
                 #expect(!text.contains(pattern), "Forbidden credential persistence API in \(file.path)")
             }
         }
+    }
+    let authStore = package.appendingPathComponent("Sources/MoaMacShell/GatewayDeviceAuth.swift")
+    let authText = try String(contentsOf: authStore, encoding: .utf8)
+    #expect(authText.contains("app.agee.ag.account-session"))
+    for providerSecret in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "MOA_GATEWAY_TOKEN"] {
+        #expect(!authText.contains(providerSecret))
     }
 }
 #endif
