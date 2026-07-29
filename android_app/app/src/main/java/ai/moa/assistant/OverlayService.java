@@ -49,6 +49,9 @@ public final class OverlayService extends Service {
     static final String ACTION_COLLAPSE_SURFACES = "ai.moa.assistant.action.COLLAPSE_SURFACES";
     static final String ACTION_HIDE_OVERLAY = "ai.moa.assistant.action.HIDE_OVERLAY";
     static final String ACTION_REFRESH_ORB_SCALE = "ai.moa.assistant.REFRESH_ORB_SCALE";
+    static final String ACTION_QA_STATE = "ai.moa.assistant.debug.QA_STATE_INTERNAL";
+    static final String EXTRA_QA_STATE = "qa_state";
+    static final String EXTRA_QA_TEXT = "qa_text";
     static final String EXTRA_START_VOICE = "ai.moa.assistant.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
@@ -277,6 +280,10 @@ public final class OverlayService extends Service {
         if (orbView == null) {
             showOrb();
         }
+        if (BuildConfig.DEBUG && ACTION_QA_STATE.equals(intent != null ? intent.getAction() : null)) {
+            applyQaState(intent);
+            return START_STICKY;
+        }
         if (ACTION_REFRESH_ORB_SCALE.equals(intent != null ? intent.getAction() : null)) {
             applyOrbScale();
             return START_STICKY;
@@ -289,6 +296,23 @@ public final class OverlayService extends Service {
             mainHandler.post(this::handleVoiceInvocation);
         }
         return START_STICKY;
+    }
+
+    /** Only reachable through the receiver compiled into debug APKs. */
+    private void applyQaState(Intent intent) {
+        String state = safe(intent.getStringExtra(EXTRA_QA_STATE));
+        String text = safe(intent.getStringExtra(EXTRA_QA_TEXT));
+        if ("reset".equals(state)) {
+            resetVoiceTurnTranscript();
+            removeTranscriptOverlay();
+        } else if ("partial".equals(state)) {
+            showTranscriptOverlay(text);
+            updateVoiceUserTranscript(text, false);
+        } else if ("final".equals(state)) {
+            showTranscriptOverlay(text);
+            updateVoiceUserTranscript(text, true);
+        }
+        Log.i(TAG, "qa_state_applied state=" + state + " chars=" + text.length());
     }
 
     @Override
