@@ -1,3 +1,4 @@
+- Moved streamed Android assistant audio onto a bounded generation-bound FIFO so socket events stay responsive through playback drain and interruption — agent: Codex/GPT-5 — (this commit)
 - Added a visible one-tap Copy action to finalized Android voice transcript rows with exact-text clipboard behavior and an inline copied receipt — agent: Codex/GPT-5 — 0166b808
 - Added a fail-closed release-evidence planner shared by Android, browser, web/gateway, macOS, and Windows; strengthened Android OTA CI to full check/coverage/lint/package verification and isolated its guarded pre-14 tile fallback — agent: Codex/GPT-5 — 686e6dc7
 - Adapted the low-opacity touch animation to the frame-coalesced orb listener now on master and reverified the isolated release build — agent: Codex/GPT-5 — efb4e980

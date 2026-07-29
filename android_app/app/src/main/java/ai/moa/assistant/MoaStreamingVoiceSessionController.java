@@ -1050,11 +1050,14 @@ final class MoaStreamingVoiceSessionController {
                     }
                 }
             }
-            if (playbackEnabled && playback != null && !playback.write(pcm)) {
-                reportError("Could not write assistant audio frame to playback.", null);
+            // Receipt is the liveness boundary. Enqueueing returns promptly and
+            // the AudioTrack FIFO drains on its own worker, so the watchdog is
+            // re-armed before any blocking device playback work begins. An
+            // overflow reports its own visible error and is not marked live.
+            boolean accepted = !playbackEnabled || playback == null || playback.enqueue(pcm);
+            if (accepted) {
+                post(() -> callback.onAssistantAudioChunk(currentTurnId));
             }
-            // Prove liveness on every frame so a mid-stream stall is caught.
-            post(() -> callback.onAssistantAudioChunk(currentTurnId));
         }
 
         @Override
