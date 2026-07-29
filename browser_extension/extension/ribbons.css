@@ -234,7 +234,7 @@
 /* Pending: the ribbon is live and waiting, with nothing to say yet. Three dots
    on the same scrim the text will use, so when the first word lands the plate
    is already there and only its contents change — no pop, no reflow. */
-.agee-ribbon-pending .agee-ribbon-line::before {
+#agee-ribbon-reply.agee-ribbon-pending .agee-ribbon-line::before {
   content: "";
   display: inline-block;
   width: 34px;
@@ -249,7 +249,7 @@
 /* An empty glyph run has no box, so the pending ribbon supplies its own scrim.
    Same colour and radius as .agee-ribbon-text: the plate does not change when
    the dots become words. */
-.agee-ribbon-pending .agee-ribbon-text {
+#agee-ribbon-reply.agee-ribbon-pending .agee-ribbon-text {
   background: var(--agee-ribbon-scrim);
   box-shadow: var(--agee-ribbon-scrim-shadow);
   padding: 2px 7px;
@@ -261,25 +261,10 @@
   50% { opacity: 0.85; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .agee-ribbon-pending .agee-ribbon-line::before { animation: none; opacity: 0.6; }
+  #agee-ribbon-reply.agee-ribbon-pending .agee-ribbon-line::before { animation: none; opacity: 0.6; }
 }
 
-.agee-ribbon-caret {
-  display: inline-block;
-  width: 1.5px;
-  height: 14px;
-  margin-left: 2px;
-  vertical-align: -2px;
-  background: var(--agee-ribbon-accent);
-  opacity: 0;
-}
-.agee-ribbon-streaming .agee-ribbon-caret {
-  opacity: 1;
-  animation: agee-ribbon-caret 1060ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-@keyframes agee-ribbon-caret {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.15; }
+.agee-ribbon-streaming   50% { opacity: 0.15; }
 }
 
 /* Copy rail: always present. Copy and history are things you reach for while
