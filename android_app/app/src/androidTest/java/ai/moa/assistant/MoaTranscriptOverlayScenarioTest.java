@@ -52,16 +52,18 @@ public final class MoaTranscriptOverlayScenarioTest {
     @Test
     public void partialFinalExpandedHistoryAndCopy() throws Exception {
         inject("partial", PARTIAL);
-        Rect collapsedBounds = waitForBounds(false);
+        UiObject2 partial = waitForRibbon(PARTIAL);
+        Rect collapsedBounds = partial.getVisibleBounds();
         checkpoint("partial");
 
         inject("final", FINAL);
-        Rect bounds = waitForBounds(false);
+        UiObject2 finished = waitForRibbon("until I choose to expand it");
         checkpoint("final");
 
-        device.click(bounds.centerX(), bounds.centerY());
+        finished.click();
         inject("snapshot", "");
-        Rect expandedBounds = waitForBounds(true);
+        waitForBounds(true);
+        Rect expandedBounds = waitForRibbon("until I choose to expand it").getVisibleBounds();
         assertTrue("expanded ribbon must grow", expandedBounds.height() > collapsedBounds.height());
         checkpoint("expanded");
 
@@ -84,6 +86,12 @@ public final class MoaTranscriptOverlayScenarioTest {
                 .putExtra("state", state).putExtra("text", text);
         new MoaQaStateReceiver().onReceive(target, input);
         device.waitForIdle();
+    }
+
+    private UiObject2 waitForRibbon(String text) {
+        UiObject2 node = device.wait(Until.findObject(By.descContains(text)), 5000);
+        assertNotNull("missing real overlay ribbon containing: " + text, node);
+        return node;
     }
 
     private Rect waitForBounds(boolean expanded) throws Exception {
