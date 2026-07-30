@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/aggie-protocol-adapter.js",
   "extension/background.js",
+  "extension/browser-action-checkpoint-policy.js",
   "extension/browser-agent-loop-policy.js",
   "extension/browser-agent-role-runtime.js",
   "extension/browser-automation-contract.js",
@@ -11,8 +12,10 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-command-runtime.js",
   "extension/browser-command-transcript-runtime.js",
   "extension/browser-diagnostics-contract.js",
+  "extension/browser-effect-receipt-runtime.js",
   "extension/browser-file-access-runtime.js",
   "extension/browser-media-runtime.js",
+  "extension/browser-observation-anchor-runtime.js",
   "extension/browser-surface-state-runtime.js",
   "extension/browser-tab-runtime.js",
   "extension/browser-cdp-policy.js",
