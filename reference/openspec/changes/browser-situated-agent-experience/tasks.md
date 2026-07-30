@@ -325,11 +325,11 @@ and approved-action paths; no parallel perception or execution API is added.
 
 ## 10. Release Evidence
 
-- [ ] 10.1 Run extension verify/smoke plus the new dynamic-grounding smoke in an
+- [x] 10.1 Run extension verify/smoke plus the new dynamic-grounding smoke in an
       isolated profile, bump the manifest patch version, and package the unit.
 - [ ] 10.2 Reload the user's unpacked extension only when the active-promotion
       gate proves no interruption, and verify the loaded version changed.
-- [ ] 10.3 Record any preview/reload blocker with the artifact path.
+- [x] 10.3 Record any preview/reload blocker with the artifact path.
 
 Acceptance: verification, commit, package, reload status, and post-reload smoke
 are recorded as distinct evidence; no step is claimed from an earlier one.
