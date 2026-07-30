@@ -7,6 +7,7 @@
 
 import { getEffectiveGatewayConfig } from "./config.js";
 import { createDeviceCredentialRuntime } from "./device-credential-runtime.js";
+import { createBrowserToolCatalogView } from "./browser-tool-catalog-view.js";
 import {
   buildAssignmentRequest,
   buildFallbackRequest,
@@ -987,6 +988,12 @@ ensurePort();
 historyRetryBtn.addEventListener("click", () => refreshHistory({ reason: "manual retry" }));
 refreshHistory({ reason: "initial" });
 refreshReleaseCockpit();
+createBrowserToolCatalogView({
+  request,
+  list: document.getElementById("browserToolList"),
+  status: document.getElementById("browserToolStatus"),
+  refreshButton: document.getElementById("browserToolRefresh"),
+}).refresh();
 
 // Keep the small diagnostic surface used by the browser smoke harness. These
 // functions were document globals before sidepanel.js became an ES module.

@@ -838,6 +838,22 @@ The extension revalidates all bindings immediately before execution or
 registration, owns stop/review/removal, and writes the canonical local receipt.
 Generated source never runs in privileged extension code.
 
+User-installed browser tools are the reusable function layer over that runtime.
+The user reviews a `moa.browser-injected-tool.v1` record in extension Settings:
+an exact JavaScript arrow-function source, closed primitive input schema, exact
+URL match set, description, and declared read effect. The first registry slice
+rejects page-change tools until a per-call checkpoint runtime exists. Only enabled
+records are added to the browser device's local tool manifest. Code-mode agents
+receive those live names and descriptions through one gateway broker
+capability; they do not receive extension authority or the ability to invent a
+new installed record. The extension resolves the advertised name from local
+storage, validates arguments and the current page against the stored record,
+executes in top-frame `USER_SCRIPT`, bounds the returned value, and receipts the
+source digest, input digest, tab/document/page binding, effect, and world.
+Page content may not register a tool, and a model-proposed source string is not
+an installed tool. Tool removal and the browser's tool catalog stay in packaged
+extension UI outside page-generated code.
+
 Two authority profiles prevent contradictory universal rules. The safe default,
 `reviewed_standalone_v1`, is default-off, requires direct approval for every
 changed revision, runs top-frame `USER_SCRIPT` under exact host access, verifies
@@ -1813,6 +1829,12 @@ target client
   -> validates and executes the local action inside that client boundary
   -> posts a receipt back to the gateway
 ```
+
+The browser manifest may include locally installed `browser.injected.*` tools
+only while the delegated user-script capability is actually available. The
+gateway pins an invocation to the same device that advertised the name. This
+is a registry and routing fact, not a grant: the extension still resolves the
+stored source, schema, and current URL scope immediately before execution.
 
 The gateway is only the registry and queue. It does not press phone buttons,
 open browser tabs, or speak through device speakers by itself. A browser turn

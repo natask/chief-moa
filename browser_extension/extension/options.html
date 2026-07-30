@@ -112,7 +112,7 @@
     </div>
 
     <h2>User scripts</h2>
-    <p class="sub">Off by default. These switches only make Chrome's isolated user-script runtime available for a future reviewed program flow. They do not let the model run code, and this build has no automatic execution path.</p>
+    <p class="sub">Off by default. These switches control Chrome's isolated user-script runtime. Installed tools can run only after you review their exact source, input schema, and URL scope; generated programs still require their own scoped authority.</p>
     <div>
       <label><input id="reviewedUserScripts" type="checkbox" /> Reviewed standalone scripts</label>
       <span id="reviewedUserScriptsStatus"></span>
@@ -122,7 +122,19 @@
       <label><input id="delegatedUserScripts" type="checkbox" /> Delegated script runtime</label>
       <span id="delegatedUserScriptsStatus"></span>
     </div>
-    <div class="hint">Separate opt-in for a future confirmed Delegate envelope. MAIN remains a separate visible grant. If Chrome reports “Allow User Scripts” is off, enable it on this extension's details page.</div>
+    <div class="hint">Separate opt-in for installed browser tools and confirmed Delegate programs. MAIN remains a separate visible grant. If Chrome reports “Allow User Scripts” is off, enable it on this extension's details page.</div>
+
+    <h3>Installed browser tools</h3>
+    <p class="sub">Review and save exact read tools that agents may call on matching pages. The extension validates arguments, runs the code in Chrome's USER_SCRIPT world, and records source and input digests. Page content cannot add tools. Turn on Background automation so the gateway can discover and invoke them.</p>
+    <label for="injectedToolList">Installed tool</label>
+    <select id="injectedToolList"></select>
+    <label for="injectedToolDefinition">Tool definition</label>
+    <textarea id="injectedToolDefinition" rows="15" spellcheck="false"></textarea>
+    <div>
+      <button id="saveInjectedTool" type="button">Review and save tool</button>
+      <button id="removeInjectedTool" type="button" style="background:#777" disabled>Remove selected</button>
+      <span id="injectedToolStatus"></span>
+    </div>
 
     <hr />
 
@@ -220,5 +232,6 @@
     </div>
 
     <script type="module" src="options.js"></script>
+    <script type="module" src="injected-tool-settings.js"></script>
   </body>
 </html>

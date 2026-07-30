@@ -244,6 +244,21 @@
         margin-bottom: 14px;
         padding: 12px;
       }
+      .browser-tools {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin-bottom: 14px;
+        padding: 12px;
+      }
+      .browser-tools header { border: 0; padding: 0; }
+      .browser-tools h2 { font-size: 13px; margin: 0; }
+      .browser-tools button { background: #1b1d22; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer; padding: 5px 8px; }
+      .browser-tools p { color: var(--muted); font-size: 11px; line-height: 1.45; }
+      .browser-tools ul { display: grid; gap: 7px; list-style: none; margin: 0; padding: 0; }
+      .browser-tools li { display: grid; gap: 2px; }
+      .browser-tools code { color: var(--accent); font-size: 11px; overflow-wrap: anywhere; }
+      .browser-tools li span { color: #777a82; font-size: 10px; }
       .release-cockpit h2 {
         font-size: 13px;
         margin: 0;
@@ -461,6 +476,15 @@
             <button id="releaseFeedbackSubmit" type="submit">Send release-bound feedback</button>
           </form>
         </div>
+      </section>
+      <section class="browser-tools" aria-labelledby="browserToolsTitle">
+        <header>
+          <h2 id="browserToolsTitle">Browser tools</h2>
+          <div class="spacer"></div>
+          <button id="browserToolRefresh" type="button">Refresh</button>
+        </header>
+        <p id="browserToolStatus">Reading browser capabilities…</p>
+        <ul id="browserToolList"></ul>
       </section>
       <div id="historyError" role="status" hidden>
         <span id="historyErrorText"></span>

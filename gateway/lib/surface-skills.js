@@ -805,6 +805,7 @@ async function brokerToolRequest(call, deps, spec, input, options = {}) {
     request = await deps.createToolRequest({
       tool: spec.tool,
       target_surface_type: spec.surface,
+      ...(options.targetDeviceId ? { target_device_id: options.targetDeviceId } : {}),
       ...((call && call.device_id && trustedSourceSurface === resolveTargetSurface(spec.surface))
         ? { target_device_id: call.device_id }
         : {}),
@@ -909,7 +910,40 @@ function surfaceExecuteCapabilities(call, deps) {
     description: "Start a background browser agent only when the trusted turn carries a confirmed delegation envelope. Args: { instruction: string, url?: string }. Returns { task_id, agent_run_id }.",
     run: (args) => launchBrowserAgentTask(call, deps, args || {}),
   };
+  const injectedTools = installedBrowserTools(call, deps);
+  if (injectedTools.length) {
+    capabilities.browser_injected_tool = {
+      description: `Run one user-installed, source-reviewed browser JavaScript tool on its exact page scope. Args: { tool: string, arguments?: object, tab_id?: integer }. Available tools: ${injectedTools.map((item) => `${item.tool} — ${item.description || "installed browser tool"}`).join("; ")}. The browser validates the name, schema, page scope, and local runtime before execution and returns a digest-bound receipt.`,
+      run: (args) => runInstalledBrowserTool(call, deps, injectedTools, args || {}),
+    };
+  }
   return capabilities;
+}
+
+function installedBrowserTools(call, deps) {
+  const deviceId = String(call?.device_id || "");
+  if (!deviceId || typeof deps.listDeviceClients !== "function") return [];
+  const device = deps.listDeviceClients().find((candidate) => String(candidate.device_id || candidate.id) === deviceId);
+  return (Array.isArray(device?.local_tool_manifest) ? device.local_tool_manifest : [])
+    .filter((item) => String(item?.tool || "").startsWith("browser.injected."));
+}
+
+function runInstalledBrowserTool(call, deps, installed, args) {
+  const tool = String(args?.tool || "").trim().toLowerCase();
+  if (!installed.some((item) => item.tool === tool)) {
+    return Promise.resolve({ ok: false, error: "tool is not installed and advertised by this browser" });
+  }
+  const input = args?.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments) ? args.arguments : {};
+  const tabId = Number(args?.tab_id ?? args?.tabId);
+  return brokerToolRequest(call, deps, {
+    tool,
+    surface: "browser_extension",
+    label: `run installed browser tool ${tool}`,
+    prepare: () => ({ input: { arguments: input, ...(Number.isInteger(tabId) ? { tab_id: tabId } : {}) } }),
+  }, {
+    arguments: input,
+    ...(Number.isInteger(tabId) ? { tab_id: tabId } : {}),
+  }, { targetDeviceId: String(call.device_id) });
 }
 
 // Classic (non-code-mode) tool defs so the surface skills work even when the

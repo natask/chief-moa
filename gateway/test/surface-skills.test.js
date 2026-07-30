@@ -15,7 +15,7 @@ const {
   runBrowserAction,
 } = require("../lib/surface-skills");
 
-function harness(call = {}) {
+function harness(call = {}, deviceClients = []) {
   const created = [];
   const deps = {
     createToolRequest: async (request) => {
@@ -29,9 +29,38 @@ function harness(call = {}) {
     }),
     delay: async () => {},
     launchBrowserAgentTask: async () => ({ task_id: "task", agent_run_id: "run" }),
+    listDeviceClients: () => deviceClients,
   };
   return { deps, created };
 }
+
+test("code-mode agents can call only browser-installed tools advertised by their device", async () => {
+  const call = { source: "agee-extension", device_id: "browser_owner", transcript: "Compare the visible prices" };
+  const state = harness(call, [{
+    device_id: "browser_owner",
+    local_tool_manifest: [{
+      tool: "browser.injected.extract_prices",
+      risk: "reviewed_page_code_read",
+      approval: "installed_source_and_scope",
+      description: "Extract visible prices.",
+    }],
+  }]);
+  const capabilities = surfaceExecuteCapabilities(call, state.deps);
+  assert.match(capabilities.browser_injected_tool.description, /browser\.injected\.extract_prices/);
+  const result = await capabilities.browser_injected_tool.run({
+    tool: "browser.injected.extract_prices",
+    arguments: { currency: "USD" },
+    tab_id: 17,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(state.created[0].tool, "browser.injected.extract_prices");
+  assert.equal(state.created[0].target_device_id, "browser_owner");
+  assert.deepEqual(state.created[0].input, { arguments: { currency: "USD" }, tab_id: 17 });
+
+  const denied = await capabilities.browser_injected_tool.run({ tool: "browser.injected.unreviewed", arguments: {} });
+  assert.equal(denied.ok, false);
+  assert.equal(state.created.length, 1);
+});
 
 function delegationEnvelope(userIntent) {
   return {

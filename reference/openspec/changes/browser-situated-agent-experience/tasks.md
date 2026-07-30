@@ -174,6 +174,18 @@ unreceipted success.
 Acceptance: stop prevents any new local action; navigation to an unlisted origin
 pauses the run; continuation requires a newly confirmed envelope.
 
+- [x] 3.4 Add user-installed JavaScript tools as an auditable browser-agent
+      capability, following the clean-room decision in
+      `agentboard-inspired-injected-tools-decision.md`.
+
+Acceptance: Settings saves only exact-source, closed-schema, exact-host tool
+read-tool records and rejects page-change tools until checkpoints exist; the
+live browser manifest advertises them only while the default-off
+user-script capability is available; code-mode agents can call only a tool
+advertised by their current browser device; the extension revalidates the live
+page and executes in `USER_SCRIPT`; the side panel lists actual packaged and
+injected tools; receipts bind source and input digests without raw source.
+
 ## 4. Grounded On-Page Explanation
 
 - [ ] 4.1 Render one packaged-code annotation bound to a valid anchor and

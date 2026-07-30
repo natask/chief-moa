@@ -153,7 +153,7 @@ const USER_SCRIPT_CONTROLS = Object.freeze([
 function userScriptStateLabel(state) {
   return ({
     [CAPABILITY_STATES.DISABLED]: "Off",
-    [CAPABILITY_STATES.AVAILABLE]: "Available (not connected to the agent)",
+    [CAPABILITY_STATES.AVAILABLE]: "Available to installed tools and authorized programs",
     [CAPABILITY_STATES.CHROME_TOGGLE_REQUIRED]: "Chrome's Allow User Scripts toggle is off",
     [CAPABILITY_STATES.PERMISSION_REVOKED]: "Permission or exact site access was revoked",
     [CAPABILITY_STATES.UNSUPPORTED]: "Unsupported by this Chrome version",

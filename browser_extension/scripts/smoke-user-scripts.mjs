@@ -107,7 +107,7 @@ async function waitForAgeeWorker(port, timeoutMs = 15000) {
         const manifest = await evaluate(candidate, `(() => {
           try {
             const value = globalThis.chrome?.runtime?.getManifest?.();
-            return value?.name === "AG" && value.permissions?.includes("userScripts") ? value : null;
+            return value?.name === "Ag" && value.permissions?.includes("userScripts") ? value : null;
           } catch {
             return null;
           }
@@ -216,8 +216,10 @@ async function main() {
     if (!Number.isInteger(tabId)) throw new Error("fixture tab id unavailable");
     const result = await evaluate(runtimePage, `(async () => {
       const runtimeModule = await import(chrome.runtime.getURL("user-scripts-runtime.js"));
-      await chrome.storage.local.set({ ageeReviewedUserScriptsEnabled: true });
+      const injectedModule = await import(chrome.runtime.getURL("browser-injected-tool-runtime.js"));
+      await chrome.storage.local.set({ ageeReviewedUserScriptsEnabled: true, ageeDelegatedUserScriptsEnabled: true });
       const runtime = runtimeModule.createUserScriptsRuntime({ chromeApi: chrome, chromeMajor: 143 });
+      const injectedRuntime = injectedModule.createBrowserInjectedToolRuntime({ chromeApi: chrome });
       const documentProbe = await chrome.scripting.executeScript({ target: { tabId: ${tabId} }, func: () => null });
       const documentId = documentProbe[0]?.documentId;
       if (!documentId) throw new Error("fixture document id unavailable");
@@ -275,7 +277,17 @@ async function main() {
       );
       const executed = await runtime.execute(immediate, approval(immediate));
       const registered = await runtime.register(persistent, approval(persistent));
-      globalThis.__moaUserScriptsSmoke = { runtime, persistent };
+      const installedTool = await injectedRuntime.save({
+        schema: "moa.browser-injected-tool.v1",
+        name: "real_smoke_tool",
+        description: "Return a bounded marker from the fixture page.",
+        effect: "read",
+        matches: [${JSON.stringify(`http://127.0.0.1:${server.address().port}/*`)}],
+        input_schema: { type: "object", properties: { marker: { type: "string", maxLength: 16 } }, required: ["marker"], additionalProperties: false },
+        source: "async (input) => ({ marker: input.marker, title: document.title })",
+      });
+      const injected = await injectedRuntime.execute(installedTool.tool, { tab_id: ${tabId}, arguments: { marker: "installed" } });
+      globalThis.__moaUserScriptsSmoke = { runtime, persistent, injectedRuntime, installedTool };
       const stored = await chrome.storage.local.get(["ageeUserScriptExecutionHistory", "ageeUserScriptPrograms"]);
       return {
         executeStatus: executed.status,
@@ -283,12 +295,15 @@ async function main() {
         registrationId: registered.registration?.id,
         immediateHasActiveRegistration: stored.ageeUserScriptExecutionHistory?.[0]?.active_registration !== undefined,
         persistentActiveRevision: stored.ageeUserScriptPrograms?.moa_real_smoke_persistent?.active_registration?.revision,
+        injectedTool: injected.result,
+        injectedSourceBound: injected.local_receipt?.source_sha256 === installedTool.source_sha256,
       };
     })()`);
     if (
       result.executeStatus !== "succeeded" || result.registerStatus !== "succeeded" ||
       result.registrationId !== "moa_real_smoke_persistent" || result.immediateHasActiveRegistration ||
-      result.persistentActiveRevision !== 1
+      result.persistentActiveRevision !== 1 || result.injectedTool?.marker !== "installed" ||
+      result.injectedTool?.title !== "userScripts smoke" || result.injectedSourceBound !== true
     ) throw new Error(`packaged runtime result mismatch: ${JSON.stringify(result)}`);
     await waitForValue(page, "document.documentElement.dataset.moaUserScriptsImmediate === 'yes'");
     await page.send("Page.reload");
@@ -297,17 +312,20 @@ async function main() {
     const removed = await evaluate(runtimePage, `(async () => {
       const state = globalThis.__moaUserScriptsSmoke;
       const removal = await state.runtime.unregister(state.persistent.artifact_id);
+      await state.injectedRuntime.remove(state.installedTool.name);
       const disabled = await state.runtime.setProfileEnabled("reviewed_standalone_v1", false);
+      const delegatedDisabled = await state.runtime.setProfileEnabled("delegated_runtime_v1", false);
       return {
         removalOk: removal.ok,
         disabledState: disabled.state,
+        delegatedDisabledState: delegatedDisabled.state,
         remaining: (await chrome.userScripts.getScripts({ ids: ["moa_real_smoke_persistent"] })).length,
       };
     })()`);
-    if (!removed.removalOk || removed.disabledState !== "disabled" || removed.remaining !== 0) throw new Error("runtime removal/disable was not verified");
+    if (!removed.removalOk || removed.disabledState !== "disabled" || removed.delegatedDisabledState !== "disabled" || removed.remaining !== 0) throw new Error("runtime removal/disable was not verified");
     const workerMarker = await evaluate(worker, "globalThis.document?.documentElement?.dataset?.moaUserScriptsImmediate || null");
     if (workerMarker != null) throw new Error("generated source appeared in the service worker");
-    console.log(`userScripts real Chrome smoke passed through packaged runtime: state=${state.state}, execute/history/read-back/reload/removal/disable verified, extension=${extensionId}`);
+    console.log(`userScripts real Chrome smoke passed through packaged runtime: state=${state.state}, execute/history/read-back/reload/removal/disable and installed tool execution verified, extension=${extensionId}`);
   } finally {
     details?.close();
     runtimePage?.close();

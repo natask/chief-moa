@@ -9245,6 +9245,7 @@ function voiceExecuteToolEnabled() {
 function surfaceSkillDeps() {
   return {
     createToolRequest,
+    listDeviceClients,
     readToolRequest: (id) => (fs.existsSync(toolRequestPath(id)) ? readToolRequest(id) : null),
     launchBrowserAgentTask: ({ instruction, url, call, delegation_envelope }) => {
       const created = launchBrowserAgentTaskInternal({

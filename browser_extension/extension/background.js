@@ -35,6 +35,7 @@ import {
 } from "./browser-media-runtime.js";
 import { createMediaConfirmationRuntime } from "./media-confirmation-runtime.js";
 import { createToolReceiptRuntime } from "./tool-receipt-runtime.js";
+import { TOOL_PREFIX, createBrowserInjectedToolRuntime } from "./browser-injected-tool-runtime.js";
 import {
   AGENT_LOOP_MAX_SUMMARY,
   MAX_SCREENSHOT_BASE64_CHARS,
@@ -66,13 +67,14 @@ import {
   transitionVoiceOwner,
 } from "./browser-surface-state-runtime.js";
 
-function browserLocalToolManifest() {
-  return [...browserAutomationLocalToolManifest(), ...browserMediaLocalToolManifest()]
+async function browserLocalToolManifest() {
+  return [...browserAutomationLocalToolManifest(), ...browserMediaLocalToolManifest(), ...(await injectedBrowserTools.manifest())]
     .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.tool === entry.tool) === index);
 }
 
 const mediaConfirmation = createMediaConfirmationRuntime({ chromeApi: chrome }), browserMedia = createBrowserMediaRuntime({ ask, callGateway, confirmMedia: mediaConfirmation.confirm, getConfig, storage: chrome.storage.local, tabs: chrome.tabs });
 const browserTabs = createBrowserTabRuntime({ chromeApi: chrome, storage: chrome.storage.session });
+const injectedBrowserTools = createBrowserInjectedToolRuntime({ chromeApi: chrome });
 const toolReceipts = createToolReceiptRuntime({ callGateway, execute: executeBrowserToolRequest, storage: chrome.storage.local });
 chrome.runtime.onInstalled.addListener(async () => {
   await initializePrivacyState();
@@ -707,13 +709,14 @@ async function pollBrowserToolRequests() {
   if (!(await isBackgroundAutomationEnabled())) return;
   const cfg = await getConfig();
   if (!cfg.gatewayUrl) return;
-  await toolReceipts.poll({ cfg, deviceId: await getStableDeviceId(), localToolManifest: browserLocalToolManifest() });
+  await toolReceipts.poll({ cfg, deviceId: await getStableDeviceId(), localToolManifest: await browserLocalToolManifest() });
 }
 
 async function executeBrowserToolRequest(request) {
   const tool = String(request?.tool || "");
   const input = request?.input && typeof request.input === "object" ? request.input : {};
   try {
+    if (tool.startsWith(TOOL_PREFIX)) return injectedBrowserTools.execute(tool, input);
     if (tool === "media.open" || tool === "media.bookmark") return browserMedia.execute({ tool, input });
     const automationReceipt = await browserAutomationRuntime.execute(request);
     if (automationReceipt) return automationReceipt;
@@ -1266,7 +1269,7 @@ async function heartbeatDeviceClient() {
         device_id: deviceId,
         surface_type: "browser_extension",
         status: "online",
-        local_tool_manifest: browserLocalToolManifest(),
+        local_tool_manifest: await browserLocalToolManifest(),
         metadata: {
           source: "agee-extension",
           extension_version: chrome.runtime.getManifest().version,
@@ -5190,6 +5193,15 @@ function closePanelSessions(reason) {
 }
 
 async function handlePanelRequest(msg) {
+  if (msg.cmd === "browserTools") {
+    const capability = await injectedBrowserTools.capability();
+    const manifest = await browserLocalToolManifest();
+    return {
+      ok: true,
+      capability: capability.state,
+      tools: manifest.map((tool) => ({ ...tool, kind: tool.tool.startsWith(TOOL_PREFIX) ? "injected" : "packaged" })),
+    };
+  }
   if (msg.cmd === "openOptions") {
     await openOptionsForTarget(msg.target);
     return { ok: true };
