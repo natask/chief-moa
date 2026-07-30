@@ -481,6 +481,15 @@ async function main() {
     if (firstTurn.input?.text !== "explain summarize this page" || firstTurn.role !== "explain" || firstTurn.intent_hint !== "browser_page_question") {
       throw new Error(`browser turn payload did not carry input/intent hint: ${JSON.stringify(firstTurn)}`);
     }
+    if (
+      firstTurn.invocation_context?.schema !== "moa.browser-invocation-context.v1" ||
+      firstTurn.invocation_context?.input !== "text" ||
+      firstTurn.invocation_context?.tab_id !== tabId ||
+      firstTurn.invocation_context?.snapshot?.snapshot_id !== firstEvidence.snapshot.snapshot_id ||
+      firstEvidence.invocation_context?.snapshot?.snapshot_id !== firstEvidence.snapshot.snapshot_id
+    ) {
+      throw new Error(`browser turn did not preserve one immutable send-time context: ${JSON.stringify({ firstTurn, firstEvidence })}`);
+    }
     if (firstEvidence.turn_id !== "turn-1" || firstEvidence.evidence_request_id !== "evreq-1") {
       throw new Error(`browser evidence payload was not linked to the turn/request: ${JSON.stringify(firstEvidence)}`);
     }

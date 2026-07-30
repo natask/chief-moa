@@ -28,7 +28,6 @@
     stopButton,
     log,
     uiSpecSurfaceEl,
-    companionRim = null,
     errorHoldTimer = null,
     pendingConfirm = null,
     open = false,
@@ -105,7 +104,7 @@
   const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
   const PROFILE_CACHE_KEY = "ageeProfileCache";
   const ACTIVE_BROWSER_AGENT_OWNER_KEY = "ageeActiveBrowserAgentOwner";
-  // How long the error rim holds before the companion returns to idle.
+  // How long the visible error reaction holds before the companion returns to idle.
   const ERROR_HOLD_MS = 3000;
   // Language chip: what AG currently hears (STT) and speaks (reply), read
   // from the cached gateway profile and kept live across a running turn.
@@ -315,7 +314,6 @@
     root.dataset.ageeOwner = browserAgentOwnerState;
     root.innerHTML = `
       <button id="agee-launcher" type="button" aria-label="Ag">
-        <span class="agee-ring" aria-hidden="true"></span>
         <span class="agee-shadow" aria-hidden="true"></span>
         <img class="agee-bird" src="${chrome.runtime.getURL("moa-mark.png")}" alt="" draggable="false" />
         <span class="agee-pet-mark" aria-hidden="true">
@@ -354,7 +352,6 @@
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-controls");
     tipEl = root.querySelector("#agee-tip");
-    companionRim = AgeeCompanionRim.createCompanionRim(root);
     setupRibbons();
     setupOverlayTooltips();
     setupCueLogInteractions();
@@ -1123,7 +1120,7 @@
   function askInlineConfirm(text) {
     if (!log) return Promise.resolve(false);
     if (pendingConfirm) pendingConfirm(false);
-    reactLauncher("attention"); // a question needs the user: ring for attention
+    reactLauncher("attention"); // a question needs the user's attention
     openTextSurface({ fresh: false });
     root?.classList.add("agee-confirming");
     syncAvatarBehaviorTrigger();
@@ -2274,19 +2271,12 @@
   }
 
   // Make the launcher visibly react: a one-shot body animation plus an expanding
-  // ring, plus the chime. Called when a cue finishes, errors, or needs the user.
+  // motion, plus the chime. Called when a cue finishes, errors, or needs the user.
   function reactLauncher(kind = "done") {
     if (!launcher) return;
-    const ring = launcher.querySelector(".agee-ring");
     launcher.classList.remove("agee-hop", "agee-shake", "agee-attention");
     void launcher.offsetWidth; // restart the animation even on back-to-back events
     launcher.classList.add(kind === "error" ? "agee-shake" : kind === "attention" ? "agee-attention" : "agee-hop");
-    if (ring) {
-      ring.dataset.kind = kind;
-      ring.classList.remove("agee-ring-go");
-      void ring.offsetWidth;
-      ring.classList.add("agee-ring-go");
-    }
     chime(kind);
     syncAvatarBehaviorTrigger();
   }
@@ -2380,18 +2370,15 @@
     }
     const voicing = next !== "idle";
     root.classList.toggle("agee-voicing", voicing);
-    // The rim is the state display (spec 2026-07-28 section 3). It owns the
-    // --agee-level var, so it has to hear about every transition, including the
-    // error state, which holds for three seconds and then falls back to idle.
-    companionRim?.setState(next);
     if (errorHoldTimer) clearTimeout(errorHoldTimer);
     errorHoldTimer = next === "error" ? setTimeout(() => setAgentState("idle"), ERROR_HOLD_MS) : null;
     // Reacts to the microphone, not the transcriber.
     ribbons?.setUserPending(next === "listening");
+    focusTranscriptionComposer(next === "listening");
     ribbons?.setReplyPending(next === "thinking");
     if (next === "idle") setTranscript("");
-    // Every stop/error/teardown path lands here, so the talk-mode ring can
-    // never outlive conversation mode.
+    // Every stop/error/teardown path lands here, so conversation state cannot
+    // outlive its capture.
     syncTalkModeUi();
     syncAvatarBehaviorTrigger();
   }
@@ -2402,6 +2389,17 @@
   // what you said after the turn ends.
   function setTranscript(text, interim = false) {
     ribbons?.setUser(String(text || ""), { interim });
+  }
+
+  function focusTranscriptionComposer(active) {
+    const target = root?.querySelector("#agee-ribbon-you .agee-ribbon-text");
+    if (!target) return;
+    const attributes = [["tabindex", "-1"], ["role", "textbox"], ["aria-label", "Live voice transcription"], ["aria-readonly", "true"]];
+    if (active) { for (const [name, value] of attributes) target.setAttribute(name, value); try { target.focus({ preventScroll: true }); } catch {} }
+    else if (!target.getAttribute("contenteditable")) {
+      if (document.activeElement === target) try { target.blur(); } catch {}
+      for (const [name] of attributes) target.removeAttribute(name);
+    }
   }
 
   // The lower ribbon is the assistant response stream.
@@ -2693,9 +2691,8 @@
       return;
     }
     if (msg.type === "mic_level") {
-      // ~24 per second while the mic is open, zero when it is not. It arrives on
-      // the same channel as the transcript so it dies with the turn.
-      if (isCurrentTurn) companionRim?.pushMicLevel(msg.rms);
+      // Retained as a tolerated additive gateway event. The bare companion has
+      // no amplitude ring or animation loop to drive.
       return;
     }
     if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
@@ -4292,13 +4289,13 @@
         // "Changes on this page" review affordance (list + undo).
         if (msg.pageTweak) attachTweakReview(msg.cueId);
         setSurfacePhase("editing");
-        reactLauncher("done"); // hop + ring + happy chime
+        reactLauncher("done"); // hop + happy chime
         // Replies live in the cue/result surface. The composer stays free for
         // the next command instead of becoming a chat transcript.
         if (agentState === "thinking") setAgentState("idle");
         return false;
       case "error":
-        showCueError(msg.cueId, msg.text); // shake + ring + falling chime when visible
+        showCueError(msg.cueId, msg.text); // shake + falling chime when visible
         setSurfacePhase("editing");
         if (agentState === "thinking" || agentState === "speaking") setAgentState("idle");
         return false;

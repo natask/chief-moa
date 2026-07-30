@@ -41,9 +41,26 @@ function withStore(planNext, fn) {
 
 test("agent-loop creation requires and persists the confirmed envelope", () => withStore(null, (store) => {
   assert.throws(() => store.create({ instruction: "work", url: "https://example.test/work" }), /confirmed delegation_envelope is required/);
-  const task = store.create({ instruction: "work", url: "https://example.test/work", delegation_envelope: envelope("work") });
+  const task = store.create({
+    instruction: "work",
+    url: "https://example.test/work",
+    delegation_envelope: envelope("work"),
+    invocation_context: {
+      schema: "moa.browser-invocation-context.v1",
+      input: "text",
+      tab_id: 7,
+      captured_at: "2026-07-29T20:00:00.000Z",
+      page: { url: "https://example.test/work", title: "Work", snapshot_id: "snap-work" },
+      snapshot: { snapshot_id: "snap-work", url: "https://example.test/work", title: "Work", page_text: "Task list" },
+    },
+    invocation_evidence_refs: ["evidence-1", "!!!", "evidence-2"],
+  });
   assert.equal(task.max_steps, 3);
   assert.equal(store.get(task.id).delegation_envelope.version, "moa.browser-delegation.v1");
+  assert.equal(task.invocation_context.schema, "moa.browser-invocation-context.v1");
+  assert.equal(task.invocation_context.executable, false);
+  assert.deepEqual(task.invocation_evidence_refs, ["evidence-1", "evidence-2"]);
+  assert.deepEqual(store.summarize({ id: "legacy", max_steps: 1 }).invocation_evidence_refs, []);
 }));
 
 test("agent-loop blocks disallowed actions and out-of-scope observations", () => withStore(

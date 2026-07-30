@@ -42,6 +42,24 @@ canvas, diagram, cross-origin-frame, or appearance questions, but it is a
 separate evidence class and must never be an ambient prerequisite for page
 understanding.
 
+### Turn-scoped invocation context
+
+Page evidence belongs to the submitted turn, not to the continuously changing
+workspace view. Typed send and final voice submission each form one atomic
+boundary: at that boundary the extension resolves the active tab and captures
+fresh bounded semantic, visual, page-identity, epoch, and provenance evidence,
+then binds those exact evidence references to the outgoing message and any run
+created from it. Evidence captured when the composer first opened, recording
+started, or an agent was selected is not sufficient for submission.
+
+Navigation after submission changes the live browser state but never rewrites
+the submitted turn's invocation context. Responses and durable history can
+therefore say which page the turn began from even when the workspace is now
+showing another page. Live anchored output and local effects still revalidate
+against the current page and fail stale. A later message submitted after the
+navigation gets a new current-page snapshot; continuity of agent identity or
+session does not reuse the earlier page evidence.
+
 ## Considered Shapes
 
 ### A. Tutorial-first state machine
@@ -218,8 +236,10 @@ This distinguishes three facts that the current snapshot collapses:
 
 ```text
 user explicitly selects or addresses an agent
-  -> extension captures bounded snapshot + anchors + provenance
-  -> gateway routes the typed turn under that agent's authority contract
+  -> composer remains live while the user may continue navigating
+  -> send/finalized voice submission resolves the then-active page
+  -> extension captures and binds bounded snapshot + anchors + provenance
+  -> gateway routes the submitted turn under that agent's authority contract
   -> Explain/Help return response blocks and optional non-executable proposals
   -> Collaborate may return one action proposal for confirmation
   -> Delegate creates a bounded run only after envelope confirmation
@@ -255,6 +275,12 @@ The companion never owns conversation memory, artifacts, or authority. A user
 can hide it without stopping the workspace, and stop/delegate controls remain
 available in both the companion and workspace.
 
+Starting click-to-speak focuses the visible user composer immediately. The
+composer shows its normal blinking caret before transcript text arrives, then
+reconciles interim transcript in that same field until final submission. The
+companion does not gain a blue listening ring; listening and transcription are
+communicated through the focused composer and existing bounded state cues.
+
 ## Failure Behavior
 
 - Gateway unavailable: stop any active delegated run before new actions,
@@ -266,6 +292,8 @@ available in both the companion and workspace.
 - Delegation scope changes: pause the run, show the mismatch, and require a new
   or narrowed envelope before continuing.
 - Page navigation: increment page epoch and retire all prior page anchors.
+  Preserve already-submitted turn evidence as invocation history, and bind the
+  next submitted turn to a newly captured snapshot of the new page.
 - Scroll: reproject and remeasure anchors without a model call.
 - DOM/layout change: mark affected anchors dirty, then revalidate or re-ground.
 - Restricted page/cross-origin frame/canvas: report the evidence limit; use an

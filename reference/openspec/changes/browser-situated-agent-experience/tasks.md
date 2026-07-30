@@ -132,6 +132,16 @@ cd browser_extension && npm run smoke
 Acceptance: scroll keeps the anchor valid; navigation and lookalike replacement
 make it stale; reflow either remeasures the same node or makes the anchor stale.
 
+- [x] 2.3 Bind each typed send and finalized voice submission atomically to a
+      fresh snapshot of the then-active page, and preserve those immutable
+      evidence references on the submitted turn and any launched run.
+
+Acceptance: an isolated two-page test opens the composer or starts recording on
+page A, navigates to page B before submission, and proves the submitted turn is
+bound to page B. Navigation to page C after submission does not rewrite that
+turn; a later submitted turn binds a new page C snapshot. No result is claimed
+from a snapshot captured only when capture began or an agent was selected.
+
 ## 3. Bounded Delegated Browser Run
 
 - [x] 3.0 Treat submission of an imperative Delegate request as authorization
@@ -294,6 +304,15 @@ Acceptance: real-extension smoke reinjects the content script after adding a
 stale duplicate and still finds one `#agee-root`; desktop and 375px-wide
 fixtures measure the compact defaults; the existing pointer gesture checks
 continue to prove drag, hold-to-talk, toggle capture, and send-on-release.
+
+- [x] 8.4 Make click-to-speak focus the visible user composer with its normal
+      blinking caret, reconcile interim transcript in that field, and remove
+      the blue listening ring from the companion.
+
+Acceptance: in a real-extension fixture, click-to-speak visibly focuses the
+composer before the first transcript event, interim replacements appear in the
+same field without creating a second input, and listening/processing states
+never render a blue companion ring.
 
 ## 9. Tutorial Workflow
 

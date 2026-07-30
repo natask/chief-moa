@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   browserEvidencePage,
+  browserInvocationContext,
   browserTurnActions,
   browserTurnClient,
   browserTurnEvidenceRequestId,
@@ -99,6 +100,49 @@ test("client and page evidence preserve the bounded transport shape", () => {
     captured_at: "now",
     viewport: { width: 1 },
   });
+});
+
+test("invocation context is a fresh immutable send-time page binding", () => {
+  const raw = {
+    url: "https://example.test/tasks/one",
+    title: "Task one",
+    pageText: "First task",
+    snapshotId: "snap-one",
+    capturedAt: "2026-07-29T20:00:00.000Z",
+    viewport: { width: 1280, height: 720 },
+    documentContext: { scope: "whole_rendered_document", complete: true },
+    elements: [{ i: 0, tag: "button", label: "Launch agent" }],
+  };
+  const context = browserInvocationContext(raw, {
+    tabId: 42,
+    input: "voice",
+    visualEvidence: { encoding: "base64_jpeg", data: "jpeg-data" },
+  });
+
+  assert.equal(context.schema, "moa.browser-invocation-context.v1");
+  assert.equal(context.input, "voice");
+  assert.equal(context.tab_id, 42);
+  assert.equal(context.page.url, "https://example.test/tasks/one");
+  assert.equal(context.snapshot.page_text, "First task");
+  assert.deepEqual(context.visual_evidence, { encoding: "base64_jpeg", data: "jpeg-data" });
+  assert.equal(Object.isFrozen(context), true);
+  assert.equal(Object.isFrozen(context.snapshot), true);
+  assert.equal(Object.isFrozen(context.snapshot.elements[0]), true);
+
+  raw.url = "https://example.test/tasks/two";
+  raw.pageText = "Second task";
+  raw.elements[0].label = "Different button";
+  assert.equal(context.page.url, "https://example.test/tasks/one");
+  assert.equal(context.snapshot.page_text, "First task");
+  assert.equal(context.snapshot.elements[0].label, "Launch agent");
+
+  const next = browserInvocationContext({
+    ...raw,
+    snapshotId: "snap-two",
+    capturedAt: "2026-07-29T20:01:00.000Z",
+  }, { tabId: 42, input: "text" });
+  assert.notEqual(next.snapshot.snapshot_id, context.snapshot.snapshot_id);
+  assert.equal(next.page.url, "https://example.test/tasks/two");
 });
 
 test("turn identity and status paths accept protocol aliases without leaking origins", () => {

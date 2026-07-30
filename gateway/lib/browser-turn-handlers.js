@@ -8,6 +8,7 @@ function createBrowserTurnHandlers(deps) {
     sanitizeLooseId, sanitizeBrowserClientMetadata, mergeBrowserPageRefs,
     browserPageRefFromBody, sanitizeBrowserVisualEvidence, browserTurnLifecycle,
     mergeBrowserEvidenceSummaries, attachBrowserRoleExecution,
+    sanitizeBrowserInvocationContext,
   } = deps;
   const now = typeof deps.now === "function" ? deps.now : () => new Date().toISOString();
 
@@ -65,6 +66,11 @@ function createBrowserTurnHandlers(deps) {
     if (!summary.visible_text && !summary.source_ref && !summary.context_scope && screenshot?.omitted !== false) {
       sendJson(response, 400, { error: "evidence or screen visible text is required" }); return;
     }
+    const submittedInvocation = sanitizeBrowserInvocationContext(body.invocation_context || body.invocationContext);
+    if (turn.invocation_context && submittedInvocation && turn.invocation_context.digest !== submittedInvocation.digest) {
+      sendJson(response, 409, { error: "invocation_context does not match the submitted browser turn" }); return;
+    }
+    const invocationContext = turn.invocation_context || submittedInvocation;
     const timestamp = now();
     const evidence = {
       id: sanitizeOptionalId(body.evidence_id || body.id, randomId("evidence")),
@@ -82,6 +88,7 @@ function createBrowserTurnHandlers(deps) {
     const evidenceRefs = Array.from(new Set([].concat(turn.evidence_refs || [], evidence.id).filter(Boolean)));
     let completed = await browserTurnLifecycle.completeBrowserTurnRecord({
       ...turn,
+      invocation_context: invocationContext,
       page_ref: mergeBrowserPageRefs(turn.page_ref, evidence.page_ref),
       evidence_refs: evidenceRefs,
       evidence_summary: mergeBrowserEvidenceSummaries(turn.evidence_summary, summary),

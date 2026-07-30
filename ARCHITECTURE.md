@@ -1236,6 +1236,15 @@ recent voice turns, chat turns, provider events, active/completed runs, profile
 status, and browser task receipts so a later voice session can recover what the
 browser surface did without relying on provider memory.
 
+Every explicitly submitted typed browser turn and finalized browser voice turn
+binds one immutable `moa.browser-invocation-context.v1` captured from the active
+page at submission time. Opening the composer, starting capture, or selecting an
+agent does not freeze context early. Later tab or page navigation cannot rewrite
+the filed turn or any run launched from it; a later submission captures its own
+new context. This binding is evidence only. Anchored output and page-local
+effects still require the extension to revalidate the current tab, document,
+anchor, permission, and policy immediately before rendering or execution.
+
 The authenticated browser-turn contract exposes the separately addressable
 `delegate`, `help`, `collaborate`, and `explain` roles through
 `GET /v1/browser/roles` and accepts an explicit `role` on

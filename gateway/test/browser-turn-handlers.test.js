@@ -44,6 +44,7 @@ function harness(overrides = {}) {
     browserTurnLifecycle: { completeBrowserTurnRecord: async (record) => ({ ...record, status: "completed" }) },
     mergeBrowserEvidenceSummaries: (left, right) => ({ ...(left || {}), ...(right || {}) }),
     attachBrowserRoleExecution: (record) => ({ ...record, role_attached: true }),
+    sanitizeBrowserInvocationContext: (value) => value || null,
     now: () => "2026-07-15T00:00:00.000Z",
     ...overrides,
   };
@@ -167,4 +168,21 @@ test("primitive aliases cover browserTurnId and evidence_request_id precedence",
   response = {};
   await state.handlers.handleBrowserEvidence(request("POST", { evidence_request_id: "evidence-request-1", visible_text: "x" }), response);
   assert.equal(response.status, 200);
+});
+
+test("evidence cannot rewrite a turn's send-time invocation context", async () => {
+  const state = harness();
+  state.turn.invocation_context = { digest: "sha256:page-b" };
+  const response = {};
+  await state.handlers.handleBrowserEvidence(request("POST", {
+    turn_id: "turn-1",
+    visible_text: "page C",
+    invocation_context: { digest: "sha256:page-c" },
+  }), response);
+  assert.deepEqual(response, {
+    status: 409,
+    payload: { error: "invocation_context does not match the submitted browser turn" },
+  });
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.evidenceWrites.length, 0);
 });

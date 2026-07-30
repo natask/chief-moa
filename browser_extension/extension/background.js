@@ -12,6 +12,7 @@ import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { pcm16VoiceActivity } from "./browser-voice-activity.js";
+import { captureBoundTabJpeg } from "./browser-visual-capture-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { devReloadDecision } from "./dev-reload-gate.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
@@ -44,6 +45,7 @@ import {
 } from "./browser-agent-loop-policy.js";
 import {
   browserEvidencePage,
+  browserInvocationContext,
   browserTurnActions,
   browserTurnClient,
   browserTurnEvidenceRequestId,
@@ -2205,13 +2207,12 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   send(tabId, { cmd: "progress", cueId, text: "thinking…" });
   throwIfAborted(signal);
 
-  let screen;
-  try {
-    const snap = await ask(tabId, { cmd: "snapshot" });
-    screen = snapToScreen(snap);
-  } catch {
-    screen = undefined; // restricted page; send without screen context
-  }
+  const invocationContext = await resolveBrowserInvocationContext(
+    contextControls.invocationContext,
+    tabId,
+    "text",
+  );
+  const screen = snapToScreen(invocationContext.snapshot);
 
   throwIfAborted(signal);
   // Share one stable session+conversation id across turns so the gateway
@@ -2242,6 +2243,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
         device_id: deviceId,
         input: "text",
       },
+      invocation_context: invocationContext,
       screen,
     },
   });
@@ -3251,8 +3253,17 @@ async function sendVoiceSessionControl(id, message) {
     await stopOffscreenVoiceCapture(id);
   }
   if (message?.type === "commit_turn") {
-    if (!sendOrQueueVoiceSessionCommit(session, message || {})) return { ok: false, error: "voice session is not open" };
-    return { ok: true, queued: session.pendingCommitMessage === message };
+    let invocationContext = null;
+    if (!session.transcriptionOnly) {
+      const invocationTabId = await voiceInvocationTabId(session);
+      invocationContext = await collectBrowserInvocationContext(invocationTabId, "voice", { withVisual: true });
+    }
+    const outbound = invocationContext
+      ? { ...(message || {}), invocation_context: invocationContext }
+      : (message || {});
+    session.invocationContext = invocationContext;
+    if (!sendOrQueueVoiceSessionCommit(session, outbound)) return { ok: false, error: "voice session is not open" };
+    return { ok: true, queued: Boolean(session.pendingCommitMessage), invocation_context: invocationContext };
   }
   if (message?.type === "cancel_turn") {
     clearQueuedVoiceSessionMedia(session);
@@ -3722,36 +3733,15 @@ async function saveTaskState(id, patch) {
 }
 
 async function captureScreenshot(tabId) {
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 45 });
-    const base64 = dataUrl.split(",")[1]; // strip data: prefix
-    if (base64) return base64;
-  } catch {
-    // Headless Chrome and some tab states reject captureVisibleTab. Fall back to
-    // a short-lived CDP attach so page-agent evidence can still include pixels.
-  }
   return captureScreenshotViaDebugger(tabId);
 }
 
 async function captureScreenshotViaDebugger(tabId) {
-  const target = { tabId };
-  let attached = false;
-  try {
-    await debuggerAttach(target);
-    attached = true;
-    await debuggerSend(target, "Page.enable");
-    const shot = await debuggerSend(target, "Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 45,
-      fromSurface: true,
-    });
-    return shot?.data || null;
-  } catch {
-    return null;
-  } finally {
-    if (attached) await debuggerDetach(target);
-  }
+  return captureBoundTabJpeg(tabId, {
+    attach: debuggerAttach,
+    send: debuggerSend,
+    detach: debuggerDetach,
+  });
 }
 
 function elementsText(snap) {
@@ -3895,6 +3885,30 @@ async function collectBrowserSnapshot(tabId) {
   }
 }
 
+async function collectBrowserInvocationContext(tabId, input, { withVisual = false } = {}) {
+  const snapshot = Number.isInteger(tabId) && tabId >= 0
+    ? await collectBrowserSnapshot(tabId)
+    : normalizeBrowserSnapshot(null);
+  const visualEvidence = withVisual && Number.isInteger(tabId) && tabId >= 0
+    ? agentLoopScreenshotObservation(await captureScreenshot(tabId))
+    : null;
+  return browserInvocationContext(snapshot, { tabId, input, visualEvidence });
+}
+
+async function resolveBrowserInvocationContext(candidate, tabId, input) {
+  try {
+    const resolved = await Promise.resolve(candidate);
+    if (resolved?.schema === "moa.browser-invocation-context.v1") return resolved;
+  } catch {}
+  return collectBrowserInvocationContext(tabId, input);
+}
+
+async function voiceInvocationTabId(session) {
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (Number.isInteger(active?.id)) return active.id;
+  return Number.isInteger(session?.tabId) && session.tabId >= 0 ? session.tabId : null;
+}
+
 async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, options = {}) {
   const text = String(instruction || "").trim() || "Describe this page";
   const inputKind = options.input || "text";
@@ -3906,7 +3920,12 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
 
   await noteBrowserAgentProgress(tabId, cueId, text, 0, "collecting_page_context");
   throwIfAborted(signal);
-  const snapshot = await collectBrowserSnapshot(tabId);
+  const invocationContext = await resolveBrowserInvocationContext(
+    options.invocationContext,
+    tabId,
+    inputKind,
+  );
+  const snapshot = normalizeBrowserSnapshot(invocationContext.snapshot);
   await noteBrowserAgentProgress(tabId, cueId, text, 1, "capturing_visual_context", "capturing visual context");
   throwIfAborted(signal);
   const screenshot = agentLoopScreenshotObservation(await captureScreenshot(tabId));
@@ -3937,6 +3956,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
       transcript: text,
       modality: inputKind,
       input: { type: inputKind, text },
+      invocation_context: invocationContext,
       page: browserEvidencePage(snapshot),
       intent_hint: "browser_page_question",
       ...(role ? { role } : {}),
@@ -3956,6 +3976,7 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
         turn_id: browserTurnId(started),
         evidence_request_id: evidenceRequestId,
         instruction: text,
+        invocation_context: invocationContext,
         page: browserEvidencePage(snapshot),
         snapshot: {
           snapshot_id: snapshot.snapshotId,
@@ -4017,7 +4038,7 @@ async function waitForBrowserTurnAnswer(cfg, initial, signal) {
   throw new Error(`browser turn ${browserTurnId(initial) || ""} did not finish in time`.trim());
 }
 
-async function describePage(tabId, controller, cueId) {
+async function describePage(tabId, controller, cueId, invocationContext) {
   const signal = controller.signal;
 
   try {
@@ -4035,7 +4056,7 @@ async function describePage(tabId, controller, cueId) {
       cfg,
       signal,
       cueId,
-      { input: "text" },
+      { input: "text", invocationContext },
     );
   } catch (err) {
     const message = signal.aborted ? "Task cancelled." : String(err.message || err);
@@ -4781,10 +4802,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
+    const invocationContext = collectBrowserInvocationContext(tabId, "text");
     runAgent(tabId, msg.instruction, controller, cueId, {
       agentRole: msg.agentRole,
       contextAction: msg.contextAction,
       threadLabel: msg.threadLabel,
+      invocationContext,
     });
   }
   if (msg.cmd === "branch" && sender.tab) {
@@ -4826,7 +4849,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId });
-    describePage(tabId, controller, cueId);
+    const invocationContext = collectBrowserInvocationContext(tabId, "text");
+    describePage(tabId, controller, cueId, invocationContext);
   }
   if (msg.cmd === "cancel" && sender.tab) {
     const tabId = sender.tab.id;
@@ -5182,6 +5206,7 @@ async function handlePanelRequest(msg) {
       return { ok: false, error: "No gateway URL set. Open Ag Options and configure the companion gateway URL." };
     }
     await ensureContent(tab.id);
+    const invocationContext = await collectBrowserInvocationContext(tab.id, "text");
     const cueId = nextCueId(msg.cueId || `panel_${Date.now().toString(36)}`);
     const controller = new AbortController();
     tasks.set(cueId, { controller, tabId: tab.id });
@@ -5190,6 +5215,7 @@ async function handlePanelRequest(msg) {
         input: "text",
         role,
         delivery: "return",
+        invocationContext,
       });
       return {
         ok: true,

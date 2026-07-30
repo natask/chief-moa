@@ -24,17 +24,6 @@
   --agee-green: #35c759;
   --agee-red: #ff453a;
   --agee-blue: #4a9bff;
-  /* The user's own colour lives in ribbons.css as --agee-ribbon-you, which is
-     the token the you-bubble already paints from and which flips with
-     data-agee-ribbon-theme. There is deliberately no second name for it here:
-     this file briefly carried a second name for it, holding a dark-mode violet
-     in both palettes, and a rim that stayed dark on a light page beside a
-     bubble that had correctly flipped was the result. Do not reintroduce it. */
-  /* Mic/playback amplitude, 0..1, rewritten once per frame by content.js while
-     a turn is live and reset to 0 the moment it is not. Everything that reacts
-     to loudness reads this one var. */
-  --agee-level: 0;
-
   --agee-radius-sm: 8px;
   --agee-radius-md: 10px;
   --agee-radius-lg: 14px;
@@ -112,10 +101,8 @@
   filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5));
   animation: agee-mascot-idle 6s ease-in-out infinite;
 }
-/* Spec section 3: the idle mark rests at 0.34 and every live state takes it to
-   full. The step from faint to solid is half the "it is hearing me" answer; the
-   rim is the other half. Hover and keyboard focus restore it so the drag target
-   never looks dead. */
+/* The idle mark rests faint. Live state, hover, and keyboard focus restore it
+   so the drag target never looks dead. */
 #agee-root:not(.agee-voicing):not(.agee-recording) #agee-launcher .agee-bird {
   opacity: 0.34;
 }
@@ -359,80 +346,11 @@
 #agee-launcher .agee-shadow {
   display: none;
 }
-/* ---- The rim: the companion's state display ------------------------------
-   Contract: reference/design/overlay-2026-07-28/spec.md section 3.
-   One element, six states, no text: idle / listening / thinking / speaking /
-   recording / error. The rim is drawn OUTSIDE the mark's box (inset -0.18em) so
-   it never shrinks the mascot and never changes layout, and it is sized in em
-   so scroll-to-resize (--agee-mascot-font) keeps working untouched.
-   Border-width and opacity are the only animated properties. No box-shadow, no
-   halo, no scale pulse -- those read as a notification badge, not a creature.
-   Idle paints nothing, which is why the base rule is transparent. */
-#agee-launcher .agee-ring {
-  display: block;
-  position: absolute;
-  inset: -0.18em;
-  border-radius: 50%;
-  border: 0 solid transparent;
-  pointer-events: none;
-  box-sizing: border-box;
-}
-/* Listening is NOT flag-gated. It used to live under .agee-voice-first, an
-   experiment that is off by default, so in the default mode "the mic is open"
-   looked exactly like idle. Width tracks --agee-level at 24Hz. */
-#agee-root.agee-state-listening #agee-launcher .agee-ring {
-  border-color: var(--agee-ribbon-you, #7c8cff);
-  border-width: calc(0.06em + 0.05em * var(--agee-level, 0));
-}
 #agee-root.agee-state-listening #agee-launcher .agee-bird {
   filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) brightness(1.12) saturate(1.2);
 }
-/* Thinking has no level to track, so it breathes on opacity instead. */
-#agee-root.agee-state-thinking #agee-launcher .agee-ring {
-  border-color: var(--agee-amber);
-  border-width: 0.06em;
-  animation: agee-rim-think 1.4s ease-in-out infinite;
-}
-@keyframes agee-rim-think {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-#agee-root.agee-state-speaking #agee-launcher .agee-ring {
-  border-color: var(--agee-gold);
-  border-width: calc(0.06em + 0.04em * var(--agee-level, 0));
-}
-/* A note capture must not look like a voice turn: steady, no motion at all. */
-#agee-root.agee-recording #agee-launcher .agee-ring {
-  border-color: var(--agee-red);
-  border-width: 0.07em;
-  animation: none;
-}
-#agee-root.agee-state-error #agee-launcher .agee-ring {
-  border-color: var(--agee-ember);
-  border-width: 0.07em;
-  animation: none;
-}
 #agee-root.agee-state-error #agee-launcher .agee-bird {
   opacity: 1;
-}
-/* Reduced motion: drop level tracking and hold each state's mid-width rim.
-   Colour still tells all six states apart. */
-@media (prefers-reduced-motion: reduce) {
-  #agee-root.agee-state-listening #agee-launcher .agee-ring {
-    border-width: 0.085em;
-  }
-  #agee-root.agee-state-speaking #agee-launcher .agee-ring {
-    border-width: 0.08em;
-  }
-  #agee-root.agee-state-thinking #agee-launcher .agee-ring {
-    animation: none;
-    opacity: 0.75;
-  }
 }
 #agee-launcher.agee-hop {
   animation: agee-hop 0.5s ease;
@@ -719,25 +637,10 @@
 #agee-root.agee-state-speaking #agee-launcher .agee-bird {
   filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5)) saturate(1.5) brightness(1.12);
 }
-/* Voice-first gesture experiment (agee-voice-first root class, flag-gated).
-   Talk mode borrows the rim as a slow amber halo so toggled-on reads at a
-   glance. It only paints while nothing else is happening: the state rim above
-   is the contract, and talk mode must never sit on top of "I am hearing you".
-   The listening style that used to live here is gone -- it is default now. */
-#agee-root.agee-voice-first.agee-talk:not(.agee-voicing):not(.agee-recording) #agee-launcher .agee-ring {
-  border: 0.08em solid rgba(245, 166, 35, 0.55);
-  animation: agee-talk-ring 2.2s ease-in-out infinite;
-}
-@keyframes agee-talk-ring {
-  0%,
-  100% {
-    opacity: 0.5;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.95;
-    transform: scale(1.05);
-  }
+/* The focused live-transcription target uses the ribbon's synthetic caret.
+   Suppress host-page or UA focus paint so no replacement circle appears. */
+#agee-ribbon-you.agee-ribbon-pending .agee-ribbon-text:focus {
+  outline: none;
 }
 #agee-stop {
   display: none;

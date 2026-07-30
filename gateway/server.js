@@ -64,6 +64,10 @@ const {
   sanitizeBrowserVisualEvidence,
 } = require("./lib/browser-evidence");
 const { sanitizeLooseId, screenNodeLabel } = require("./lib/input-utils");
+const {
+  browserInvocationContextPrompt,
+  sanitizeBrowserInvocationContext,
+} = require("./lib/browser-invocation-context");
 const browserTurns = require("./lib/browser-turns");
 const { browserAgentRoleCatalog, browserAgentRoleFromBody } = require("./lib/browser-agent-roles");
 const { validateBrowserDelegationEnvelope } = require("./lib/browser-delegation-envelope");
@@ -392,6 +396,7 @@ const { routeBrowserTurns, handleBrowserTurnBody } = createBrowserTurnHandlers({
   sanitizeLooseId, sanitizeBrowserClientMetadata, mergeBrowserPageRefs,
   browserPageRefFromBody, sanitizeBrowserVisualEvidence, browserTurnLifecycle,
   mergeBrowserEvidenceSummaries, attachBrowserRoleExecution,
+  sanitizeBrowserInvocationContext,
 });
 const projectStore = createProjectStore({
   filePath: PROJECTS_FILE,
@@ -1940,7 +1945,9 @@ function browserTurnHasContextSignal(body) {
     return false;
   }
   return Boolean(
-    body.page_ref
+    body.invocation_context
+      || body.invocationContext
+      || body.page_ref
       || body.page
       || body.page_context
       || body.evidence
@@ -1999,7 +2006,8 @@ async function buildBrowserTurnRecord(body, options = {}) {
   const hasEvidence = evidenceRefs.length > 0 || Boolean(evidenceSummary.visible_text || evidenceSummary.source_ref);
   const evidenceRequestIds = sanitizeBrowserIdList(body.evidence_request_ids || body.evidence_request_id || body.request_id);
   const agentRole = browserAgentRoleFromBody(body);
-  const pageRef = mergeBrowserPageRefs(browserPageRefFromBody(body), evidenceSummary.page_ref);
+  const invocationContext = sanitizeBrowserInvocationContext(body.invocation_context || body.invocationContext);
+  const pageRef = mergeBrowserPageRefs(invocationContext?.page, browserPageRefFromBody(body), evidenceSummary.page_ref);
   const delegationValidation = agentRole.id === "delegate" && agentRole.explicit
     ? validateBrowserDelegationEnvelope(body.delegation_envelope, { turnText: text, pageUrl: pageRef.url })
     : { ok: false, errors: [], envelope: null };
@@ -2015,6 +2023,7 @@ async function buildBrowserTurnRecord(body, options = {}) {
     modality,
     transcript: modality === "voice" ? text : "",
     text,
+    invocation_context: invocationContext,
     page_ref: pageRef,
     evidence_refs: evidenceRefs,
     evidence_summary: evidenceSummary.visible_text || evidenceSummary.source_ref ? evidenceSummary : null,
@@ -2083,6 +2092,8 @@ function attachBrowserRoleExecution(record) {
       role: "delegate",
       turn_id: record.turn_id || record.id,
       delegation_envelope: record.delegation_envelope,
+      invocation_context: record.invocation_context,
+      invocation_evidence_refs: record.evidence_refs,
     });
     const taskId = launched.task.id;
     const runId = launched.run.id;
@@ -2135,6 +2146,7 @@ async function browserEvidenceAnswer(record) {
     "For every other action request, describe the proposal and say it still needs browser-local approval or execution.",
     "",
     `User request: ${record.text || record.transcript || ""}`,
+    record.invocation_context ? `Invocation binding: ${record.invocation_context.digest}` : "",
     "",
     "<page_evidence>",
     `title: ${page.title || summary.page_ref?.title || ""}`,
@@ -3770,6 +3782,7 @@ async function handleVoiceTurn(request, response) {
   }
 
   const source = String(body.source || body.client?.source || "android-overlay").slice(0, 80);
+  const invocationContext = sanitizeBrowserInvocationContext(body.invocation_context || body.invocationContext);
   const voiceDecision = resolveContextDecision({ text: transcript, contextAction: body.context_action, toolCall: null });
   let voiceEffectiveAction = voiceDecision.action;
   if (voiceEffectiveAction !== "incognito" && voiceDecision.prior_source !== "client") {
@@ -3823,6 +3836,7 @@ async function handleVoiceTurn(request, response) {
     device_id: deviceId,
     transcript: truncate(transcript, 16000),
     transcript_source: videoNote ? "video_note" : normalizeTranscriptSource(body.transcript_source, transcript, "client_stt"),
+    invocation_context: invocationContext,
     classification,
     screen,
     created_at: startedAt,
@@ -3971,6 +3985,10 @@ async function handleVoiceTurn(request, response) {
       harness: dispatch.harness,
       prompt: dispatch.prompt,
       screen: body.screen || body.context?.screen,
+      invocation_context: invocationContext,
+      invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
+      branch_id: filingBranchId,
+      turn_id: turnId,
     }));
 
     const display = agentRunStartedDisplay(runs, transcript);
@@ -4019,6 +4037,7 @@ async function handleVoiceTurn(request, response) {
       !contextArtifact ? legacySessionContext : "",
       !contextArtifact ? legacyRecallContext : "",
       screenContext ? voiceSystemContext(screenContext) : "",
+      browserInvocationContextPrompt(invocationContext),
       videoNote ? videoNoteSystemContext(videoNote) : "",
     ].filter(Boolean);
     const modelMessages = buildAdmittedAnswerMessages({
@@ -4066,6 +4085,8 @@ async function handleVoiceTurn(request, response) {
         profile_version: profileVersion,
         source,
         transcript,
+        invocation_context: invocationContext,
+        invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
       };
       // source/device_id are caller JSON. They are context, never a private
       // device principal, so this path cannot pin a local action to that id.
@@ -6091,9 +6112,12 @@ function createAgentRun(body) {
   if (requestedProjectId && !project && !useWorkerPullForAgentRuns()) {
     throw new Error(`unknown project: ${body.project_id}`);
   }
-  const prompt = project && body.include_project_brief !== false
+  const projectPrompt = project && body.include_project_brief !== false
     ? promptWithProjectBrief(userPrompt, project)
     : userPrompt;
+  const invocationContext = sanitizeBrowserInvocationContext(body.invocation_context || body.invocationContext);
+  const invocationPrompt = browserInvocationContextPrompt(invocationContext);
+  const prompt = [projectPrompt, invocationPrompt].filter(Boolean).join("\n\n");
   if (Buffer.byteLength(prompt, "utf8") > MAX_AGENT_PROMPT_BYTES) {
     throw new Error(`prompt plus project brief is too large; max ${MAX_AGENT_PROMPT_BYTES} bytes`);
   }
@@ -6155,6 +6179,8 @@ function createAgentRun(body) {
     ...(body.browser_authority ? { browser_authority: String(body.browser_authority) } : {}),
     ...(body.browser_execution_policy ? { browser_execution_policy: String(body.browser_execution_policy) } : {}),
     ...(body.delegation_envelope ? { delegation_envelope: body.delegation_envelope } : {}),
+    ...(invocationContext ? { invocation_context: invocationContext } : {}),
+    invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
     parent_run_id: body.parent_run_id ? sanitizeId(body.parent_run_id) : "",
     project_id: project ? project.id : requestedProjectId,
     project_brief_updated_at: project?.updated_at || "",
@@ -6205,6 +6231,8 @@ function createAgentRun(body) {
     browser_authority: run.browser_authority,
     browser_execution_policy: run.browser_execution_policy,
     delegation_envelope: run.delegation_envelope,
+    invocation_context: run.invocation_context,
+    invocation_evidence_refs: run.invocation_evidence_refs,
     work_node_id: run.work_node_id,
     context_pack_ref: run.context_pack_ref,
     input_artifact_refs: run.input_artifact_refs,
@@ -7199,6 +7227,8 @@ function liveToolLaunchAgentRun(call, args) {
   const sessionId = call.conversation_id || call.session_id || "";
   const run = startAgentRun({
     conversation_id: sessionId,
+    branch_id: call.branch_id || "default",
+    turn_id: call.turn_id || "",
     profile_version: call.profile_version || agentProfile.currentVersion(),
     source: "gemini-live-tool",
     harness: args.harness || DEFAULT_HARNESS,
@@ -7207,6 +7237,8 @@ function liveToolLaunchAgentRun(call, args) {
       branchId: call.branch_id || "default",
       allBranches: call.all_branches_context === true || call.allBranchesContext === true,
     }),
+    invocation_context: call.invocation_context,
+    invocation_evidence_refs: call.invocation_evidence_refs,
   });
   return {
     ok: true,
@@ -7376,6 +7408,8 @@ function liveToolLaunchBrowserAgent(call, args) {
   const sessionId = call.conversation_id || call.session_id || "";
   const run = startAgentRun({
     conversation_id: sessionId,
+    branch_id: call.branch_id || "default",
+    turn_id: call.turn_id || "",
     profile_version: call.profile_version || agentProfile.currentVersion(),
     source: "gemini-live-browser-tool",
     harness: DEFAULT_HARNESS,
@@ -7384,6 +7418,8 @@ function liveToolLaunchBrowserAgent(call, args) {
       branchId: call.branch_id || "default",
       allBranches: call.all_branches_context === true || call.allBranchesContext === true,
     }),
+    invocation_context: call.invocation_context,
+    invocation_evidence_refs: call.invocation_evidence_refs,
   });
   const task = createBrowserTask({
     instruction,
@@ -7394,6 +7430,8 @@ function liveToolLaunchBrowserAgent(call, args) {
     branch_id: call.branch_id || "default",
     profile_version: call.profile_version || agentProfile.currentVersion(),
     agent_run_id: run.id,
+    invocation_context: call.invocation_context,
+    invocation_evidence_refs: call.invocation_evidence_refs,
   });
   appendAgentEvent(run.id, "browser_task_queued", {
     browser_task_id: task.id,
@@ -7761,6 +7799,7 @@ function launchBrowserAgentTaskInternal(body = {}) {
   }
   const sessionId = body.conversation_id ? sanitizeId(body.conversation_id) : (body.session_id ? sanitizeId(body.session_id) : "");
   const branchId = body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default";
+  const invocationContext = sanitizeBrowserInvocationContext(body.invocation_context || body.invocationContext);
   const prompt = [
     "Background browser-agent task.",
     "",
@@ -7781,6 +7820,8 @@ function launchBrowserAgentTaskInternal(body = {}) {
     browser_authority: "bounded_browser_actions",
     browser_execution_policy: "multi_step_claim_receipt",
     delegation_envelope: delegation.envelope,
+    invocation_context: invocationContext,
+    invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
     turn_id: body.turn_id || "",
     harness: "echo",
     prompt: agentPromptWithSessionContext(prompt, { sessionId, branchId }),
@@ -7796,6 +7837,8 @@ function launchBrowserAgentTaskInternal(body = {}) {
     role: "delegate",
     max_steps: delegation.envelope.max_steps,
     delegation_envelope: delegation.envelope,
+    invocation_context: invocationContext,
+    invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
   });
   appendAgentEvent(run.id, "browser_agent_task_queued", {
     browser_agent_task_id: task.id,
@@ -7803,6 +7846,8 @@ function launchBrowserAgentTaskInternal(body = {}) {
     url,
     max_steps: task.max_steps,
     delegation_envelope: task.delegation_envelope,
+    invocation_context_digest: invocationContext?.digest || "",
+    invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
   });
   return { task, run };
 }
@@ -8935,6 +8980,7 @@ async function runCascadedVoiceReasoningInner(input) {
   const modalityHint = voiceModalityHintBlock(profile, input);
   const expressiveDirective = voiceExpressiveDirective(input);
   const personaBlock = sessionPersonaBlock(input?.persona);
+  const invocationContextDirective = browserInvocationContextPrompt(input?.invocation_context || input?.invocationContext);
   const messages = [{ role: "user", content: transcript }];
   const systemBlocks = [
     contextArtifact?.text || "",
@@ -8944,6 +8990,7 @@ async function runCascadedVoiceReasoningInner(input) {
     modalityHint,
     expressiveDirective,
     personaBlock,
+    invocationContextDirective,
     languageControl,
     deliveryDirective,
     toolAckDirective,
@@ -8967,6 +9014,8 @@ async function runCascadedVoiceReasoningInner(input) {
     profile_version: agentProfile.currentVersion(profileOptions),
     source: input?.source || "voice-cascaded",
     transcript,
+    invocation_context: sanitizeBrowserInvocationContext(input?.invocation_context || input?.invocationContext),
+    invocation_evidence_refs: sanitizeBrowserIdList(input?.invocation_evidence_refs),
   };
   const toolDefs = cascadedVoiceProfileTools(toolCallInput)
     .concat(cascadedAgentRunTools(toolCallInput))
@@ -9205,6 +9254,8 @@ function surfaceSkillDeps() {
         conversation_id: (call && (call.conversation_id || call.session_id)) || "",
         branch_id: (call && call.branch_id) || "default",
         profile_version: call && call.profile_version,
+        invocation_context: call && call.invocation_context,
+        invocation_evidence_refs: call && call.invocation_evidence_refs,
         ...(delegation_envelope ? { delegation_envelope } : {}),
       });
       return { task_id: created.task.id, agent_run_id: created.run.id, task: created.task };
@@ -9629,6 +9680,7 @@ async function recordStreamingVoiceTurn(turn) {
     ? classifyVoiceTurnWithPersona(turn.persona, { source: turn.source || "voice-live" }, transcript)
     : "";
   const classification = incomplete ? "interrupted" : (liveClassification || "chat");
+  const invocationContext = sanitizeBrowserInvocationContext(turn.invocation_context || turn.invocationContext);
   const baseRecord = {
     id: turnId,
     session_id: sessionId,
@@ -9639,6 +9691,7 @@ async function recordStreamingVoiceTurn(turn) {
     source: String(turn.source || "android-overlay").slice(0, 80),
     transcript,
     transcript_source: transcriptSource,
+    invocation_context: invocationContext,
     ...(transcriptionOnly ? {
       transcript_completeness: {
         state: rawTranscriptBytes <= CAPTURE_BLOCK_MAX_LITERAL_BYTES ? "complete" : "truncated",
@@ -9714,6 +9767,7 @@ async function recordStreamingVoiceTurn(turn) {
         ? { spoken_progress: turn.spoken_progress }
         : {}),
       error: String(turn.error || ""),
+      invocation_context: invocationContext,
     },
   };
   // Incognito is a no-durable-effects boundary, not merely a storage filter.
@@ -9816,6 +9870,10 @@ async function recordStreamingVoiceTurn(turn) {
           source: "voice-live-router",
           harness: dispatch.harness,
           prompt,
+          branch_id: branchId,
+          turn_id: turnId,
+          invocation_context: invocationContext,
+          invocation_evidence_refs: sanitizeBrowserIdList(turn.invocation_evidence_refs),
         });
         return summarizeAgentRun(run);
       });
@@ -11655,6 +11713,7 @@ function createBrowserTask(body) {
     throw new Error("instruction is required");
   }
   const now = new Date().toISOString();
+  const invocationContext = sanitizeBrowserInvocationContext(body.invocation_context || body.invocationContext);
   const task = {
     id: randomId("btask"),
     status: "pending",
@@ -11666,6 +11725,8 @@ function createBrowserTask(body) {
     branch_id: body.branch_id ? sanitizeOptionalId(body.branch_id, "default") : "default",
     profile_version: body.profile_version ? sanitizeOptionalId(body.profile_version, "") : agentProfile.currentVersion(),
     agent_run_id: body.agent_run_id ? sanitizeId(body.agent_run_id) : "",
+    ...(invocationContext ? { invocation_context: invocationContext } : {}),
+    invocation_evidence_refs: sanitizeBrowserIdList(body.invocation_evidence_refs),
     claimed_by: "",
     claimed_at: "",
     lease_expires_at: "",
@@ -11738,6 +11799,8 @@ function summarizeBrowserTask(task, options = {}) {
     branch_id: task.branch_id || "default",
     profile_version: task.profile_version || "",
     agent_run_id: task.agent_run_id || "",
+    invocation_context: task.invocation_context || null,
+    invocation_evidence_refs: sanitizeBrowserIdList(task.invocation_evidence_refs),
     claimed_by: task.claimed_by || "",
     claimed_at: task.claimed_at || "",
     lease_expires_at: task.lease_expires_at || "",
@@ -12644,6 +12707,8 @@ function summarizeAgentRun(run) {
     project_brief_updated_at: run.project_brief_updated_at || "",
     work_node_id: run.work_node_id || "",
     context_pack_ref: run.context_pack_ref || "",
+    invocation_context: run.invocation_context || null,
+    invocation_evidence_refs: sanitizeBrowserIdList(run.invocation_evidence_refs),
     working_dir: run.working_dir,
     claimed_by_worker_id: run.claimed_by_worker_id || "",
     claim_id: run.claim_id || "",

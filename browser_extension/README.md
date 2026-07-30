@@ -41,6 +41,12 @@ narrow that bundle, optionally extract, summarize, redact, and preserve a local
 version, and inspect the exact outbound payload. Privacy means informed control
 over collection, local transformation, retention, and release.
 
+The extension captures that page evidence when the user actually sends typed
+input or finalizes a voice turn. The resulting invocation context stays bound to
+that turn even if the user later changes pages or tabs; the next submission
+captures the newly active page. Page actions still revalidate live browser state
+before they run.
+
 ## Develop it (quiet by default)
 
 Development is **headless and off-screen**. It drives **Chrome for Testing**
@@ -91,8 +97,8 @@ is separate from the quiet flow on purpose:
 5. Open any low-risk page (or run `npm run dev -- --no-browser` and open `http://localhost:7777/fixtures/demo.html`).
 6. Press **Cmd+,** (Mac) / **Ctrl+,**, type `test`, hit Enter. A healthy gateway-backed install should render a short reply such as `Hello, Captain.` or `Hi Captain.`. If you see an error mentioning an Anthropic key, Chrome is running an old extension/service worker; reload the AG card or remove the old copy and load [extension/](extension/) again.
 
-The Moa mark floats on the page when idle, glows while it works, and rings
-(a short chime plus a ring pulse) when a turn finishes, errors, or needs you.
+The Moa mark floats on the page when idle and uses motion, tint, and a short
+chime for turn state without drawing a circle around the companion.
 Typed replies render above the command input; responses, errors, and voice turns
 never clear or replace the draft in the command input. Voice keeps the same input surface available: partial and
 final transcript feedback appears above the input while you speak, and assistant

@@ -416,7 +416,7 @@ if (
 if (
   !/voiceSessions\.set\(id, session\);[\s\S]{0,1100}await startOffscreenVoiceCapture\(id, warmCaptureId \|\| null\)[\s\S]{0,260}captureStarted = true/.test(backgroundSource) ||
   !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource) ||
-  !/message\?\.type === "commit_turn"[\s\S]{0,220}sendOrQueueVoiceSessionCommit/.test(backgroundSource)
+  !/message\?\.type === "commit_turn"[\s\S]{0,1200}sendOrQueueVoiceSessionCommit/.test(backgroundSource)
 ) {
   throw new Error("extension-owned voice capture must become ready before gateway setup, flush queued audio on session_ready, and send commit after the flush");
 }
@@ -837,6 +837,15 @@ if (
 }
 
 if (
+  /captureVisibleTab/.test(backgroundSource) ||
+  !/captureBoundTabJpeg\(tabId/.test(backgroundSource) ||
+  !/collectBrowserInvocationContext\(invocationTabId, "voice", \{ withVisual: true \}\)/.test(backgroundSource) ||
+  !/invocation_context: invocationContext/.test(backgroundSource)
+) {
+  throw new Error("browser screenshots must stay target-tab-bound, and finalized voice must carry that bounded visual evidence");
+}
+
+if (
   !/snapshotId/.test(contentSource) ||
   !/viewport:\s*\{/.test(contentSource) ||
   !/capturedAt:\s*new Date\(\)\.toISOString\(\)/.test(contentSource) ||
@@ -974,55 +983,22 @@ if (
   throw new Error("overlay.css must carry visible thinking (pulse) and speaking (steady tint) mark states for the already-toggled agee-state-* classes");
 }
 
-// The companion rim is the state display: one element, six states, painted by
-// default. Contract: reference/design/overlay-2026-07-28/spec.md section 3.
-// The listening rule used to be scoped to the .agee-voice-first experiment,
-// which is off by default, so "the mic is open" looked exactly like idle.
-if (/\.agee-voice-first\.agee-state-listening/.test(overlayCssSource)) {
-  throw new Error("the listening state must not be gated behind the agee-voice-first experiment");
-}
-for (const rimRule of [
-  /#agee-launcher \.agee-ring \{[\s\S]{0,220}inset: -0\.18em/,
-  // The listening rim paints the user's colour, and there is exactly ONE token
-  // for that colour: --agee-ribbon-you in ribbons.css, which flips with
-  // data-agee-ribbon-theme like the bubble it matches. overlay.css briefly
-  // carried a second name (--agee-you) for the same thing, which did not flip,
-  // so on a light page the rim stayed dark-mode violet beside a light bubble.
-  /#agee-root\.agee-state-listening #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-ribbon-you/,
-  /#agee-root\.agee-state-thinking #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-amber/,
-  /#agee-root\.agee-state-speaking #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-gold/,
-  /#agee-root\.agee-recording #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-red/,
-  /#agee-root\.agee-state-error #agee-launcher \.agee-ring \{[\s\S]{0,200}--agee-ember/,
-  /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,600}#agee-root\.agee-state-listening #agee-launcher \.agee-ring/,
-]) {
-  if (!rimRule.test(overlayCssSource)) {
-    throw new Error(`overlay.css is missing a companion rim state rule: ${rimRule}`);
-  }
-}
-// Width and opacity only. A glow or a scale pulse reads as a notification
-// badge, not a creature, and neither is compositor-cheap on a 44px mark.
-const rimRules = overlayCssSource.match(/#agee-[^{]*\.agee-ring[^{]*\{[^}]*\}/g) || [];
-for (const rule of rimRules) {
-  if (/box-shadow|filter:|transform:/.test(rule)) {
-    throw new Error(`the companion rim may only animate width and opacity: ${rule}`);
-  }
+// The companion is bare. Listening feedback belongs in the focused user
+// message bubble and its blinking caret; no state may paint a circle around the
+// mascot or leave the old ring node available for host-page CSS to revive.
+if (/agee-ring|agee-rim-think|agee-talk-ring/.test(overlayCssSource)
+  || /class="agee-ring"/.test(contentSource)) {
+  throw new Error("the companion must not render a state circle or ring");
 }
 if (!/for \(const s of \["idle", "listening", "thinking", "speaking", "error"\]\)/.test(contentSource)) {
   throw new Error("setAgentState must paint all six companion states, error included");
 }
-if (!/companionRim\?\.setState\(next\)/.test(contentSource) || !/AgeeCompanionRim\.createCompanionRim\(root\)/.test(contentSource)) {
-  throw new Error("content.js must drive the companion rim runtime from setAgentState");
+if (/AgeeCompanionRim|companionRim\?\./.test(contentSource)) {
+  throw new Error("the removed companion ring must not keep an invisible animation loop alive");
 }
 if (/--agee-you\s*:/.test(overlayCssSource) || /var\(--agee-you[,)]/.test(overlayCssSource)) {
   throw new Error("overlay.css must not redeclare the user's colour: --agee-ribbon-you in ribbons.css is the one token");
 }
-// The rim is drawn OUTSIDE the launcher's box, where getBoundingClientRect()
-// cannot see it, so the bubble gap has to be widened by the outset or the rim
-// paints under the bubble at a large mascot scale.
-if (!/gap: Layout\.GAP \+ rimOutset\(\)/.test(ribbonRuntimeSource)) {
-  throw new Error("ribbon placement must add the companion rim's outset to the bubble gap");
-}
-
 // The floating #agee-quiet-controls pill is deleted, not repainted. It was
 // position:fixed beside the mascot with a plate hard-coded in overlay.css, so
 // it stayed dark on a light page while the bubbles correctly flipped. Its two
@@ -1073,8 +1049,8 @@ if (
 ) {
   throw new Error("background.js must relay mic_level on the voice event channel and never queue it for an unattached tab");
 }
-if (!/msg\.type === "mic_level"[\s\S]{0,300}companionRim\?\.pushMicLevel\(msg\.rms\)/.test(contentSource)) {
-  throw new Error("content.js must route mic_level into the companion rim");
+if (!/msg\.type === "mic_level"[\s\S]{0,180}no amplitude ring or animation loop/.test(contentSource)) {
+  throw new Error("content.js must tolerate mic_level without driving an invisible ring runtime");
 }
 if (
   !/const DB_FLOOR = -55/.test(companionLevelSource) ||
@@ -1255,6 +1231,16 @@ if (
 // microphone actually coming up.
 if (!/ribbons\?\.setUserPending\(true\)/.test(branchStartBody)) {
   throw new Error("starting a capture must open the caret on the press");
+}
+const agentStateBody = sourceBetween(
+  contentSource,
+  /function setAgentState\(/,
+  /function setTranscript\(/,
+  "agent state"
+);
+if (!/setUserPending\(next === "listening"\)[\s\S]{0,120}focusTranscriptionComposer\(next === "listening"\)/.test(agentStateBody)
+  || !/target\.focus\(\{ preventScroll: true \}\)/.test(contentSource)) {
+  throw new Error("voice capture must focus the user-message box before interim transcription arrives");
 }
 
 // A click on a listening companion always sends. Provenance-matching made the

@@ -36,6 +36,10 @@ thing the agent actually observed.
 
 - Add a browser-local observation-anchor primitive that preserves what and
   where the extension observed and can distinguish scroll from stale identity.
+- Bind each submitted browser turn to a fresh current-page evidence snapshot
+  captured atomically with typed send or finalized voice submission. Later tab
+  navigation does not rewrite that turn's invocation context; a later turn
+  captures the page that is current when that later turn is submitted.
 - Coordinate a small on-page companion/annotation layer, the existing side
   panel as a persistent workspace, and a larger artifact/page-projection area.
 - Make Explain, Help, Collaborate, and Delegate distinct user-addressable agents
@@ -87,6 +91,9 @@ stale.
 - A stale anchor must re-ground or disappear; it must never drift to a merely
   nearby target.
 - Companion appearance or personality never grants execution authority.
+- A submitted turn keeps the exact page evidence captured at its invocation;
+  later navigation may stale actions and anchors but must not relabel the turn
+  as though it began on the new page.
 - The explicitly selected agent is authoritative. Inference may suggest an
   agent but may never silently route into greater authority.
 - Delegate authority comes only from a user-confirmed task envelope. It is not
@@ -147,5 +154,8 @@ stale.
   reversible.
 - The companion exposes visible stop, mode, and customization controls without
   becoming the canonical state owner.
+- Click-to-speak focuses the visible user composer with a blinking caret and
+  streams interim transcript into that composer. Listening state does not add
+  a blue ring around the companion.
 - A tutorial uses the same anchors, artifacts, proposals, and receipts rather
   than a parallel runtime.

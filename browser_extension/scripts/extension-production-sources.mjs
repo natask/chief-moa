@@ -23,6 +23,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-task-intent.js",
   "extension/browser-turn-protocol.js",
   "extension/browser-voice-activity.js",
+  "extension/browser-visual-capture-runtime.js",
   "extension/companion-level.js",
   "extension/companion-rim.js",
   "extension/compose-heartbeat.js",

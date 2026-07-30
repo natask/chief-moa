@@ -1,10 +1,25 @@
 const MAX_ELEMENTS = 100;
 
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function jsonClone(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizeBrowserSnapshot(snapshot, options = {}) {
   const raw = snapshot && typeof snapshot === "object" ? snapshot : {};
   const elements = Array.isArray(raw.elements) ? raw.elements : [];
-  const elementSummaries = Array.isArray(raw.elementSummaries) && raw.elementSummaries.length
-    ? raw.elementSummaries.map((item) => String(item || ""))
+  const suppliedSummaries = Array.isArray(raw.elementSummaries) ? raw.elementSummaries : raw.element_summaries;
+  const elementSummaries = Array.isArray(suppliedSummaries) && suppliedSummaries.length
+    ? suppliedSummaries.map((item) => String(item || ""))
     : elements.slice(0, MAX_ELEMENTS).map((element) => {
       const type = element.type ? ` ${element.type}` : "";
       const label = element.label ? ` ${element.label}` : "";
@@ -26,6 +41,40 @@ function normalizeBrowserSnapshot(snapshot, options = {}) {
       : raw.document_context && typeof raw.document_context === "object" ? raw.document_context : null,
     elementSummaries,
   };
+}
+
+function browserInvocationContext(snapshot, options = {}) {
+  const normalized = normalizeBrowserSnapshot(snapshot, options);
+  const tabId = Number.isInteger(options.tabId) && options.tabId >= 0 ? options.tabId : null;
+  const input = String(options.input || "text").trim() || "text";
+  const boundedElements = jsonClone(normalized.elements.slice(0, MAX_ELEMENTS), []);
+  const boundedViewport = jsonClone(normalized.viewport, null);
+  const boundedDocumentContext = jsonClone(normalized.documentContext, null);
+  const visualEvidence = options.visualEvidence && typeof options.visualEvidence === "object"
+    ? jsonClone(options.visualEvidence, null)
+    : null;
+  return deepFreeze({
+    schema: "moa.browser-invocation-context.v1",
+    input,
+    tab_id: tabId,
+    captured_at: normalized.capturedAt,
+    ...(visualEvidence ? { visual_evidence: visualEvidence } : {}),
+    page: {
+      ...browserEvidencePage(normalized),
+      viewport: boundedViewport,
+    },
+    snapshot: {
+      snapshot_id: normalized.snapshotId,
+      url: normalized.url,
+      title: normalized.title,
+      page_text: normalized.pageText,
+      document_context: boundedDocumentContext,
+      elements: boundedElements,
+      element_summaries: normalized.elementSummaries.slice(0, MAX_ELEMENTS),
+      viewport: boundedViewport,
+      captured_at: normalized.capturedAt,
+    },
+  });
 }
 
 function browserTurnClient(deviceId, input) {
@@ -148,6 +197,7 @@ function browserTurnFailed(data) {
 
 export {
   browserEvidencePage,
+  browserInvocationContext,
   browserTurnActions,
   browserTurnClient,
   browserTurnEvidenceRequestId,

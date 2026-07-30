@@ -955,6 +955,8 @@ async function main() {
               caretBlink: caretStyle?.animationName || "",
               caretWidth: Math.round(caret?.getBoundingClientRect().width || 0),
               caretHeight: Math.round(caret?.getBoundingClientRect().height || 0),
+              composerFocused: document.activeElement === you?.querySelector(".agee-ribbon-text"),
+              companionRingPresent: !!document.querySelector("#agee-launcher .agee-ring"),
             };
           },
         });
@@ -1035,9 +1037,11 @@ async function main() {
       Number(opened.caretOpacity) <= 0.1 ||
       opened.caretBlink !== "agee-ribbon-caret" ||
       opened.caretWidth < 1 ||
-      opened.caretHeight < 8
+      opened.caretHeight < 8 ||
+      !opened.composerFocused ||
+      opened.companionRingPresent
     ) {
-      throw new Error(`capture must open the you bubble with a blinking caret before any transcript: ${JSON.stringify(opened)}`);
+      throw new Error(`capture must focus the you bubble with a blinking caret and no companion ring before any transcript: ${JSON.stringify(opened)}`);
     }
     // And the transcript lands inside that same bubble, behind that same caret.
     const streamingCaret = livePartials?.streaming || {};
@@ -1656,24 +1660,35 @@ async function main() {
                 voiceSessionId: start.voiceSessionId,
                 audio: bytesToBase64([1, 0, 2, 0]),
               });
-              const commit = await chrome.runtime.sendMessage({
-                cmd: "voiceSessionControl",
-                voiceSessionId: start.voiceSessionId,
-                message: { type: "commit_turn", turn_id: "queue-turn" },
-              });
-              return { start, audio, commit };
+              return { start, audio };
             },
           });
+          const start = result?.result?.start || {};
+          const audio = result?.result?.audio || {};
+          const contextTab = await chrome.tabs.create({
+            url: "https://example.com/?agee-voice-invocation-context=1",
+            active: true,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          const [commitResult] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: async (voiceSessionId) => chrome.runtime.sendMessage({
+              cmd: "voiceSessionControl",
+              voiceSessionId,
+              message: { type: "commit_turn", turn_id: "queue-turn" },
+            }),
+            args: [start.voiceSessionId],
+          });
+          const commit = commitResult?.result || {};
+          await chrome.tabs.remove(contextTab.id);
           const beforeReady = state.sent.slice();
           state.ready = true;
           state.ws?.onmessage?.({ data: JSON.stringify({ type: "session_ready" }) });
           await new Promise((resolve) => setTimeout(resolve, 80));
           const afterReady = state.sent.slice();
-          const start = result?.result?.start || {};
-          const audio = result?.result?.audio || {};
-          const commit = result?.result?.commit || {};
           const audioRecords = afterReady.filter((entry) => entry.kind === "audio");
           const commitRecords = afterReady.filter((entry) => entry.kind === "json" && entry.type === "commit_turn");
+          const invocationContext = commitRecords[0]?.message?.invocation_context || null;
           return {
             ok:
               start.ok === true &&
@@ -1687,10 +1702,21 @@ async function main() {
               audioRecords[0].bytes.join(",") === "1,0,2,0" &&
               commitRecords.length === 1 &&
               commitRecords[0].ready === true &&
+              invocationContext?.schema === "moa.browser-invocation-context.v1" &&
+              invocationContext?.input === "voice" &&
+              invocationContext?.tab_id === contextTab.id &&
+              invocationContext?.snapshot?.snapshot_id &&
+              (
+                (invocationContext?.visual_evidence?.encoding === "base64_jpeg" && invocationContext.visual_evidence.data) ||
+                (invocationContext?.visual_evidence?.encoding === "omitted" && invocationContext.visual_evidence.reason)
+              ) &&
+              commit.invocation_context?.snapshot?.snapshot_id === invocationContext.snapshot.snapshot_id &&
               afterReady.findIndex((entry) => entry.kind === "audio") < afterReady.findIndex((entry) => entry.type === "commit_turn"),
             start,
             audio,
             commit,
+            invocationContext,
+            contextTabId: contextTab.id,
             beforeReady,
             afterReady,
           };
@@ -1730,7 +1756,10 @@ async function main() {
             return {
               inputValue: buffer ? buffer.textContent : null,
               logText: log ? log.textContent : "",
-              replyText: ribbon?.querySelector(".agee-ribbon-text")?.textContent || window.__ageeLastReply?.text || "",
+              // The target updates immediately; the rendered node may still
+              // show the prior copy receipt during the intentional paced reveal.
+              replyText: window.__ageeLastReply?.text || "",
+              renderedReplyText: ribbon?.querySelector(".agee-ribbon-text")?.textContent || "",
               replyLive: !!ribbon?.classList.contains("agee-ribbon-live"),
             };
           },

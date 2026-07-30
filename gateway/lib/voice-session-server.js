@@ -24,6 +24,7 @@ const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
+const { bindBrowserVoiceInvocationContext } = require("./browser-invocation-context");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -510,6 +511,8 @@ class VoiceSessionConnection {
       return;
     }
 
+    if (bindBrowserVoiceInvocationContext(turn, event)) turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
+
     this.responding = true;
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     turn.providerEvents = providerEvents;
@@ -863,6 +866,7 @@ class VoiceSessionConnection {
         profile_version: turn.profileVersion || "",
         device_id: turn.deviceId || "",
         source: turn.source,
+        invocation_context: turn.invocationContext || null,
       });
       await this.recordProviderEvent(turn, providerEvents, "tool_result", {
         tool_name: name,
@@ -1251,6 +1255,7 @@ class VoiceSessionConnection {
         input_languages: turnInputLanguages(turn),
         provider_events: Array.isArray(providerEvents.events) ? providerEvents.events : [],
         ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
+        ...(turn.invocationContext ? { invocation_context: turn.invocationContext } : {}),
       });
     } catch (error) {
       writeTurnMetadata(turn, {
@@ -1328,6 +1333,7 @@ class VoiceSessionConnection {
         input_languages: turnInputLanguages(turn),
         provider_events: Array.isArray(turn.providerEvents?.events) ? turn.providerEvents.events : [],
         ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
+        ...(turn.invocationContext ? { invocation_context: turn.invocationContext } : {}),
       });
     } catch (error) {
       writeTurnMetadata(turn, {
@@ -1692,6 +1698,7 @@ function contextSummaryForTurn(turn, contextProvider) {
     build_failed: turn?.contextBuildFailed === true,
     chars: String(turn?.contextPrompt || "").length,
     all_branches_context: turn?.allBranchesContext === true,
+    invocation_context_digest: turn?.invocationContext?.digest || "",
   };
 }
 
@@ -1884,6 +1891,7 @@ function writeTurnMetadata(turn, patch) {
     input_format: turn.format,
     playback_policy: turn.playbackPolicy || previous.playback_policy || {},
     context: turn.contextSummary || previous.context || {},
+    invocation_context: turn.invocationContext || previous.invocation_context || null,
     capture: turn.captureSummary || previous.capture || captureSummaryForTurn(turn),
     transport: turn.transportSummary || previous.transport || {},
     status: patch.status || previous.status || turn.status,

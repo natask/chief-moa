@@ -51,6 +51,34 @@ local execution authority.
 - **AND** the absence of DOM text does not cause the gateway to discard the
   visual evidence
 
+### Requirement: Browser invocation context is bound at submission
+
+Each typed browser message and finalized browser-voice message SHALL atomically
+bind a fresh snapshot of the then-active page as its invocation evidence. The
+binding SHALL include bounded page identity and semantic/visual evidence
+references with capture and freshness metadata. Starting capture, opening the
+composer, or selecting an agent SHALL NOT freeze the later message to an older
+page. Navigation after submission SHALL NOT rewrite the submitted turn's
+invocation context, even though current-page actions and anchors still require
+fresh local revalidation.
+
+#### Scenario: User navigates before sending
+
+- **GIVEN** the user opens the composer or starts voice capture on page A
+- **WHEN** the user navigates to page B and then sends or finalizes the message
+- **THEN** the turn binds a fresh page B evidence snapshot
+- **AND** does not reuse page A merely because capture began there
+
+#### Scenario: User navigates after sending
+
+- **GIVEN** a submitted turn is bound to page B
+- **WHEN** the user navigates to page C while its agent or response remains
+  active
+- **THEN** the submitted turn and any run launched from it retain page B as
+  their invocation context
+- **AND** a later message submitted on page C binds a new page C snapshot
+- **AND** no page-B action executes on page C without fresh revalidation
+
 ### Requirement: Freshness-bound on-page output
 
 Every anchored explanation, instruction, or action proposal SHALL bind to the
@@ -281,3 +309,22 @@ SHALL NOT grant page, browser, gateway, or execution-machine authority.
   workspace surfaces
 - **AND** stopping follows the existing browser-local cancellation and receipt
   boundary
+
+### Requirement: Click-to-speak uses the visible composer
+
+Click-to-speak SHALL focus the visible user message composer immediately and
+show its normal blinking caret while waiting for transcription. Interim speech
+hypotheses SHALL reconcile in that same composer until final submission. Voice
+state SHALL NOT add a blue ring around the companion.
+
+#### Scenario: Transcription has not arrived yet
+
+- **WHEN** the user activates click-to-speak
+- **THEN** the user composer becomes visible and focused with a blinking caret
+- **AND** no second transcript field or blue companion ring appears
+
+#### Scenario: Interim transcript changes
+
+- **WHEN** successive interim hypotheses arrive during capture
+- **THEN** the same focused composer displays the reconciled provisional text
+- **AND** final submission uses that composer content as the visible user turn

@@ -905,7 +905,7 @@ class CascadedVoiceProvider {
         turn_id: turn.turnId || turn.turn_id || "",
         device_id: turn.deviceId || turn.device_id || "",
         all_branches_context: turn.allBranchesContext === true || turn.all_branches_context === true,
-        source: turn.source || "voice-cascaded",
+        source: turn.source || "voice-cascaded", ...(turn.invocationContext ? { invocation_context: turn.invocationContext } : {}),
         // Delivery context so the reasoner can answer "why did you reply in text?"
         // honestly and can reason about the language/modality switch itself.
         response_modality: modality,
