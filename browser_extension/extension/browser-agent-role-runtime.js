@@ -1,4 +1,5 @@
 const BROWSER_AGENT_ROLES = new Set(["delegate", "help", "collaborate", "explain"]);
+const EFFECTFUL_ACTION_CLASSES = new Set(["click", "type", "clear", "select", "navigate", "key"]);
 
 export function normalizeBrowserAgentRole(value) {
   const role = String(value || "").trim().toLowerCase();
@@ -16,29 +17,50 @@ const ACTION_CLASS_RULES = Object.freeze([
   ["screenshot", /\b(screenshot|screen ?shot|capture (?:the )?(?:page|screen)|visual evidence)\b/i],
 ]);
 
+const EFFECT_CLASS_RULES = Object.freeze([
+  ["purchase", /\b(?:buy|purchase)\b|\bplace\s+(?:the\s+)?order\b/i],
+  ["payment", /\b(?:pay|payment)\b/i],
+  ["checkout", /\bcheckout\b/i],
+  ["external_submit", /\bsubmit\b|\bsend\s+(?:(?:the|this|that|my|your)\s+)?(?:it|form|application|message|request|email)\b/i],
+  ["credential", /\b(?:credential|credentials|password|passcode)\b/i],
+  ["destructive", /\b(?:delete|destroy|erase)\b|\bremove\s+(?:(?:the|this|that|my|your)\s+)?(?:it|account|record|file|data|content)\b/i],
+]);
+
 export function browserIntentActionClasses(text) {
   const intent = String(text || "").trim();
   const inferred = ACTION_CLASS_RULES.filter(([, pattern]) => pattern.test(intent)).map(([actionClass]) => actionClass);
   return inferred.length ? inferred : ["click", "scroll", "wait"];
 }
 
+export function browserIntentEffectClasses(text) {
+  const intent = String(text || "").trim();
+  return EFFECT_CLASS_RULES.filter(([, pattern]) => pattern.test(intent)).map(([effectClass]) => effectClass);
+}
+
 export function browserDelegationEnvelope(text, pageUrl) {
   const intent = String(text || "").trim().replace(/\s+/g, " ");
   const url = new URL(String(pageUrl || ""));
   if (!["http:", "https:"].includes(url.protocol)) throw new TypeError("delegation requires an http(s) page");
+  const actionClasses = browserIntentActionClasses(intent);
+  const effectClasses = browserIntentEffectClasses(intent);
+  const preauthorized = actionClasses.filter((actionClass) =>
+    actionClass !== "navigate" && !(effectClasses.length > 0 && EFFECTFUL_ACTION_CLASSES.has(actionClass)));
+  const alwaysAsk = actionClasses.filter((actionClass) => !preauthorized.includes(actionClass));
   return {
     version: "moa.browser-delegation.v1",
     confirmation: { confirmed: true, source: "user_submission", user_intent: intent },
     goal: intent,
     scope: { page_url: url.href, allowed_origins: [url.origin] },
-    allowed_action_classes: browserIntentActionClasses(intent),
+    allowed_action_classes: actionClasses,
+    allowed_effect_classes: effectClasses,
     approval_policy: {
-      preauthorized: browserIntentActionClasses(intent).filter((actionClass) => actionClass !== "navigate"),
-      always_ask: ["navigate", "sensitive", "destructive"],
+      preauthorized,
+      always_ask: alwaysAsk,
+      always_ask_effects: effectClasses,
     },
     checkpoints: [
       "before navigation",
-      "before a sensitive or destructive action",
+      ...effectClasses.map((effectClass) => `before_effect:${effectClass}`),
       "when page identity or origin changes",
       "when completion cannot be verified",
     ],
