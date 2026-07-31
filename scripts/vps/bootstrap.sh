@@ -104,8 +104,6 @@ Gateway is up.
   Voice WS:     wss://$domain/v1/voice/sessions
   Token:        MOA_GATEWAY_TOKEN in $ENV_FILE
   Update:       $APP_DIR/scripts/vps/update.sh
-  Backup:       $APP_DIR/scripts/vps/backup.sh
-  Backup timers: $APP_DIR/scripts/vps/install-backup-timers.sh --install
 
 Point clients (Android app, browser extension) at https://$domain with the
 token above. TLS certificates are issued automatically; the first HTTPS

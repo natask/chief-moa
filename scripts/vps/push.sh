@@ -11,9 +11,8 @@
 # live-app freeze: run it only when the user explicitly asks to deploy or
 # promote in the current turn. It is intentionally not wired into
 # `scripts/deploy.sh auto` (the hook target), so no background or cron run
-# can promote the VPS by accident. The data gate stays on the VPS side:
-# update.sh runs backup.sh and restore-check.sh first and aborts before
-# touching the active service if either fails.
+# can promote the VPS by accident. Preview, drain, compatibility, rollback,
+# and post-apply health gates stay on the VPS side.
 #
 # The host is never guessed. It must come from --host or MOA_VPS_SSH.
 
@@ -98,7 +97,7 @@ else
   }
 fi
 
-echo "Promoting origin/$REF on $HOST (backup + restore check run first)..."
+echo "Promoting origin/$REF on $HOST (preview + drain + rollback gates run first)..."
 # BatchMode fails fast instead of hanging on a password prompt.
 remote_update_cmd="$(printf 'APP_DIR=%q %q --ref %q' \
   "$REMOTE_APP_DIR" "$REMOTE_APP_DIR/scripts/vps/update.sh" "$REF")"

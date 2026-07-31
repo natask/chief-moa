@@ -119,31 +119,24 @@ independently of artifact retention.
 - WHEN artifacts are pruned
 - THEN the promotion evidence for those versions remains queryable.
 
-### Requirement: Backups are retained by age and are never evicted by promotion churn
+### Requirement: Promotion does not copy persistent state
 
-The system SHALL retain backups by age rather than by count: all backups for 7
-days, one per day for 30 days, and one per month off-host. Backups taken for a
-promotion SHALL be tagged and SHALL NOT evict scheduled backups. Backup
-retention SHALL be governed separately from deployment-artifact retention.
+The system SHALL preserve Postgres and named data volumes in place during a
+gateway promotion and SHALL NOT create a deployment-time full-state copy.
+Eligible state changes SHALL be additive and readable by the predecessor used
+for code rollback.
 
 #### Scenario: promotion retries in a loop
 
-- GIVEN many failed promotion attempts in one day, each taking a backup
+- GIVEN many failed promotion attempts in one day
 - WHEN retention is applied
-- THEN scheduled backups from previous days remain
-- AND only the promotion-tagged backups are pruned.
+- THEN no persistent-state archive is created.
 
 #### Scenario: an artifact retention change is applied
 
 - WHEN deployment artifacts are pruned to the running version and one
   predecessor
-- THEN no backup is deleted by that action.
-
-#### Scenario: pruning before the off-host mirror has run
-
-- GIVEN a backup that has not been mirrored off-host
-- WHEN on-host pruning runs
-- THEN that backup is not pruned.
+- THEN no persistent gateway data is deleted by that action.
 
 ### Requirement: A surface never fails on a directory another surface owns
 
@@ -197,44 +190,32 @@ by a later trigger of the same schedule.
 - THEN the mismatch is reported as a configuration fault
 - AND it is not reported as a promotion timeout.
 
-### Requirement: A failed promotion consumes no backup retention
+### Requirement: A failed promotion leaves persistent state in place
 
-The system SHALL prove a candidate can build and boot before taking the backup
-for its apply, and SHALL take at most one backup per promotion attempt. A
-promotion that fails before the apply SHALL leave the scheduled backup history
-unchanged.
+The system SHALL prove a candidate can build and boot before apply. A failed
+promotion SHALL roll code back without copying, replacing, or deleting the
+mounted persistent volumes.
 
 #### Scenario: a candidate fails to build
 
 - WHEN a promotion dies during or before the image build
-- THEN no backup was written for that attempt
-- AND no existing backup was pruned.
+- THEN no persistent-state copy was written for that attempt.
 
 #### Scenario: a promotion reaches the apply
 
 - WHEN a promotion proceeds to the apply
-- THEN exactly one backup was written for that attempt
-- AND its restore was verified against that same candidate.
-
-#### Scenario: a reused backup cannot be verified
-
-- GIVEN a backup offered for reuse whose restore receipt is missing, names
-  another commit, or is stale
-- WHEN the apply begins
-- THEN a fresh backup is taken and restore-checked instead
-- AND the apply does not proceed on the unverified one.
+- THEN the existing Postgres and named data volumes remain mounted.
 
 ### Requirement: The plane records outcomes without relaxing the promotion gate
 
 The system SHALL record deployment state in addition to, and never in place of,
-the existing gate: backup and restore-check before the active service is
-touched, the deployment evidence chain before apply, and the drain check
-immediately before mutation.
+the existing gate: isolated preview, compatibility, rollback, the deployment
+evidence chain before apply, and the drain check immediately before mutation.
 
 #### Scenario: a promotion runs under the plane
 
 - WHEN a version is promoted
-- THEN the backup, restore-check, evidence, and drain checks all run as before
+- THEN the preview, compatibility, rollback, evidence, and drain checks all run
 - AND the plane records the resulting state transition afterwards.
 
 #### Scenario: the plane is unavailable

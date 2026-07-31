@@ -1779,7 +1779,7 @@ records `run.claimed`. A spoken correction attaches as `user_feedback` without
 canceling; explicit pause/cancel creates a `run_control_request` that only the
 owning worker can claim and receipt. Deployment-link questions read
 `deployment_record` projections; an applied record is rejected unless it carries
-an explicit promotion marker plus backup and restore-check refs. "Open the run
+an explicit promotion marker plus state-preservation and rollback refs. "Open the run
 on my phone" queues a `ui.open` tool request through the cross-device tool hub;
 the gateway never opens UI itself. All records are product events, so every
 projection (status, run detail, deployment links) rebuilds from the event log.
@@ -2444,10 +2444,10 @@ The VPS stack (`docker-compose.yml` + `docker-compose.vps.yml`) runs gateway,
 Postgres, and Caddy TLS on one droplet. Named volumes hold the shared event
 store and `DATA_DIR` blobs; they survive image rebuilds and git updates. A
 preview stack runs under a different compose project name with its own volumes;
-that is a preview, not a rollback of the active store. Promotion (update,
-active URL change, active-service restart) requires a Postgres dump, a
-`DATA_DIR` snapshot, and a passing scratch restore check first
-(`scripts/vps/backup.sh`, `scripts/vps/restore-check.sh`).
+that is a preview, not a rollback of the active store. Promotion preserves
+Postgres and named data volumes in place. It does not copy them. The prior code
+revision is the rollback target, so promoted state changes must remain additive
+and backward-compatible with that predecessor.
 
 Preview application runtimes never receive a direct connection to the active
 production database, queue, blob store, or worker pool. When a preview must show
@@ -2462,9 +2462,8 @@ production storage.
 Gateway-touching master pushes are verified in a read-only CI job. A separate,
 write-scoped job may atomically advance only `vps-deploy` to that exact verified
 master SHA. The droplet then owns runtime authority: its pull timer requires
-four distinct credentials, waits for a drain-safe gateway, backs up active
-state, runs the candidate from an isolated checkout/project/ports/volumes,
-proves the candidate can restore and read the prior state, records the M4
+four distinct credentials, waits for a drain-safe gateway, runs the candidate
+from an isolated checkout/project/ports/volumes, records the M4
 review/preview/verification/apply claim, and only then calls the guarded updater.
 The updater rechecks drain safety immediately before checkout mutation and
 records the observed effect and receipt after edge-visible health passes.

@@ -69,7 +69,7 @@ async function createPromotionEvidence(input, env = process.env) {
   const evidence = {
     schema_version: 1, candidate_commit: commit, target: "gateway", review_decision: "approved",
     preview_verification_status: "passed", drain_status: "drained", resume_status: "verified",
-    compatibility_status: "compatible", backup_restore_status: "passed", rollback_status: "verified",
+    compatibility_status: "compatible", backup_restore_status: "not_required", rollback_status: "verified",
     post_apply_smoke_plan_status: "ready", request_id: requestId, preview_claim_id: previewClaimId,
     preview_deployment_id: previewDeploymentId, preview_verification_id: previewVerificationId,
     apply_claim_id: applyClaimId, apply_worker_id: env.MOA_PRODUCTION_PROMOTER_ID || "production-promoter",

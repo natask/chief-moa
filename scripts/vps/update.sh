@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Update the running VPS gateway to a new git ref while preserving the event
-# store. Backup + restore check run first (versioned-state rule), then only
-# the gateway service is rebuilt and recreated: Postgres and Caddy keep
+# store. Only the gateway service is rebuilt and recreated: Postgres and Caddy keep
 # running, and the named data volumes are untouched. Schema changes apply on
 # gateway boot (schema.sql is idempotent).
 #
 #   scripts/vps/update.sh                # update to origin/master
 #   scripts/vps/update.sh --ref my-branch
-# Promotion always requires a fresh backup and successful scratch restore.
+# Promotion does not copy persistent state. Rollback restores the prior code
+# while leaving the same volumes mounted, so active changes must remain additive
+# and backward-compatible.
 
 set -euo pipefail
 
@@ -18,21 +19,12 @@ source "$SCRIPT_DIR/lib.sh"
 REF="${MOA_REF:-master}"
 EVIDENCE_FILE="${MOA_PROMOTION_EVIDENCE_FILE:-}"
 EXPECTED_COMMIT="${MOA_EXPECTED_COMMIT:-}"
-REUSE_BACKUP="${MOA_PROMOTION_BACKUP_DIR:-}"
-# A reused backup must be recent enough that it still describes the state this
-# apply is about to mutate. Older than this and update.sh takes its own.
-BACKUP_MAX_AGE="${MOA_PROMOTION_BACKUP_MAX_AGE_SECONDS:-3600}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) REF="$2"; shift 2 ;;
     --commit) EXPECTED_COMMIT="$2"; shift 2 ;;
     --evidence) EVIDENCE_FILE="$2"; shift 2 ;;
-    --backup) REUSE_BACKUP="$2"; shift 2 ;;
-    --skip-backup)
-      echo "--skip-backup was removed: active promotion requires backup and scratch-restore evidence" >&2
-      exit 64
-      ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -137,52 +129,7 @@ node_runtime "$SCRIPT_DIR/validate-promotion-evidence.js" \
   --file "$EVIDENCE_FILE" --commit "$candidate_sha" --target gateway \
   --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
 
-# 1. Backup and prove the restore path before mutating the active service.
-#
-# The caller may hand over a backup it already took and restore-verified against
-# this exact candidate (promote-candidate.sh does, immediately before calling
-# here). Reusing it is not a weaker gate: the same backup and the same restore
-# proof are required, and the receipt is checked rather than trusted. It only
-# stops one promotion from writing 1.3 GB twice minutes apart. Anything that
-# does not verify falls through to taking a fresh backup.
-reusable_backup() {
-  local dir="${1%/}" receipt="" verified="" checked_at="" checked_epoch=0 age=0
-  [ -n "$dir" ] && [ -d "$dir" ] || return 1
-  [ -f "$dir/postgres-dump.sql" ] && [ -f "$dir/data-dir.tar.gz" ] || {
-    echo "Not reusing $dir: incomplete backup." >&2; return 1; }
-  receipt="$dir/restore-check.json"
-  [ -f "$receipt" ] || { echo "Not reusing $dir: no restore-check receipt." >&2; return 1; }
-  verified="$(sed -n 's/.*"verified_commit": *"\([^"]*\)".*/\1/p' "$receipt" | head -n 1)"
-  [ "$verified" = "$candidate_sha" ] || {
-    echo "Not reusing $dir: restore was verified against $verified, not the candidate." >&2; return 1; }
-  checked_at="$(sed -n 's/.*"checked_at": *"\([^"]*\)".*/\1/p' "$receipt" | head -n 1)"
-  # GNU date on the droplet, BSD date when this runs on a developer Mac. An
-  # unparseable timestamp must refuse the reuse, never wave it through.
-  checked_epoch="$(date -u -d "$checked_at" +%s 2>/dev/null \
-    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$checked_at" +%s 2>/dev/null \
-    || echo 0)"
-  [ "$checked_epoch" -gt 0 ] || { echo "Not reusing $dir: unreadable receipt timestamp." >&2; return 1; }
-  age=$(( $(date -u +%s) - checked_epoch ))
-  [ "$age" -ge 0 ] && [ "$age" -le "$BACKUP_MAX_AGE" ] || {
-    echo "Not reusing $dir: restore proof is ${age}s old (limit ${BACKUP_MAX_AGE}s)." >&2; return 1; }
-  return 0
-}
-
-if [ -n "$REUSE_BACKUP" ] && reusable_backup "$REUSE_BACKUP"; then
-  latest_backup="${REUSE_BACKUP%/}"
-  echo "Reusing this promotion's verified backup: $latest_backup"
-else
-  MOA_BACKUP_REASON=promotion "$SCRIPT_DIR/backup.sh"
-  latest_backup="$(ls -1d "$BACKUP_DIR"/*/ 2>/dev/null | sort | tail -n 1)"
-  if [ -z "$latest_backup" ]; then
-    echo "Backup did not create a backup directory under $BACKUP_DIR." >&2
-    exit 1
-  fi
-  latest_backup="${latest_backup%/}"
-  "$SCRIPT_DIR/restore-check.sh" "$latest_backup"
-fi
-
-# A user turn may start while backup/restore runs. Recheck at the last point
+# A user turn may start while preview/evidence work runs. Recheck at the last point
 # before checkout mutation; M4 evidence is necessary but cannot replace live
 # no-interruption evidence.
 port="$(env_value GATEWAY_PORT)"
@@ -217,7 +164,7 @@ new_sha="$(git -C "$APP_DIR" rev-parse --short HEAD)"
 # 3. Rebuild and recreate only the gateway. Volumes and other services stay.
 # The guarded updater normally uses --no-deps for the active gateway, so run
 # the candidate's one-shot additive release-control migration explicitly first.
-# This occurs after backup/restore proof and before the active gateway effect.
+# This occurs after preview/evidence proof and before the active gateway effect.
 compose run --rm --no-deps release-control-db-init
 MOA_BUILD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)" \
 MOA_BUILD_REF="$REF" \

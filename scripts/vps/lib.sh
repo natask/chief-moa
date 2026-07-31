@@ -7,7 +7,6 @@
 MOA_ROOT="${MOA_ROOT:-/opt/chief-moa}"
 APP_DIR="${APP_DIR:-$MOA_ROOT/app}"
 ENV_FILE="${ENV_FILE:-$MOA_ROOT/gateway.env}"
-BACKUP_DIR="${BACKUP_DIR:-$MOA_ROOT/backups}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-chief-moa}"
 
 # MOA_NO_TLS=1 runs the base stack without the Caddy TLS overlay (private

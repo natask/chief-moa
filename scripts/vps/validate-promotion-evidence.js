@@ -31,7 +31,7 @@ exact("preview_verification_status", "passed");
 exact("drain_status", "drained");
 exact("resume_status", "verified");
 exact("compatibility_status", "compatible");
-exact("backup_restore_status", "passed");
+exact("backup_restore_status", "not_required");
 exact("rollback_status", "verified");
 exact("post_apply_smoke_plan_status", "ready");
 for (const name of [

@@ -38,8 +38,8 @@ leave artifacts that another agent can resume.
      the plan.
    - For implementation changes, create or update the preview deployment or
      release artifact after verification. Promote the active target
-     automatically when preview smoke, rollback, no-interruption,
-     state-compatibility, and backup/restore gates pass. Use
+     automatically when preview smoke, rollback, no-interruption, and
+     state-compatibility gates pass. Use
      `bash scripts/deploy.sh auto` from the repo root, or the explicit
      `gateway`, `android`, or `extension` target, after those gates pass.
    - Extension releases must bump `browser_extension/extension/manifest.json`;

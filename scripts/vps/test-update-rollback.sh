@@ -8,7 +8,7 @@ trap 'rm -rf "$ROOT"' EXIT
 run_case() {
   local failure="$1" expected="$2"
   local case_dir="$ROOT/$failure"
-  mkdir -p "$case_dir/scripts" "$case_dir/app" "$case_dir/backups" "$case_dir/bin"
+  mkdir -p "$case_dir/scripts" "$case_dir/app" "$case_dir/bin"
   cp "$SCRIPT_DIR/update.sh" "$case_dir/scripts/update.sh"
   cp "$SCRIPT_DIR/recover-promotion.sh" "$case_dir/scripts/recover-promotion.sh"
   : >"$case_dir/env"
@@ -18,7 +18,7 @@ run_case() {
   if [ "$failure" = effect-rejected ]; then printf 'previous\n' >"$case_dir/receipt.json"; fi
 
   cat >"$case_dir/scripts/lib.sh" <<'EOF'
-APP_DIR="${APP_DIR:?}"; ENV_FILE="${ENV_FILE:?}"; BACKUP_DIR="${BACKUP_DIR:?}"
+APP_DIR="${APP_DIR:?}"; ENV_FILE="${ENV_FILE:?}"
 require_env_file() { test -f "$ENV_FILE"; }
 env_value() { sed -n "s/^${1}=//p" "$ENV_FILE" | tail -n 1; }
 compose() {
@@ -35,14 +35,6 @@ wait_for_gateway_health() {
   if [ "$TEST_FAILURE" = health ] && grep -q '^c' "$TEST_STATE/current"; then return 45; fi
 }
 node_runtime() { node "$@"; }
-EOF
-  cat >"$case_dir/scripts/backup.sh" <<'EOF'
-#!/usr/bin/env bash
-mkdir -p "$BACKUP_DIR/backup-1"
-EOF
-  cat >"$case_dir/scripts/restore-check.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
 EOF
   chmod +x "$case_dir/scripts/"*.sh
 
@@ -124,7 +116,7 @@ EOF
 
   set +e
   PATH="$case_dir/bin:$PATH" TEST_STATE="$case_dir" TEST_FAILURE="$failure" \
-    APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" BACKUP_DIR="$case_dir/backups" \
+    APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" \
     MOA_PROMOTION_RECEIPT_FILE="$case_dir/receipt.json" MOA_PROMOTION_JOURNAL_FILE="$case_dir/journal.json" \
     bash "$case_dir/scripts/update.sh" --ref master --commit cccccccccccccccccccccccccccccccccccccccc \
       --evidence "$case_dir/evidence.json" \
@@ -163,7 +155,7 @@ EOF
       grep -q 'PROMOTION RECOVERY REQUIRED' "$case_dir/stderr"
       before="$(wc -l <"$case_dir/log")"
       PATH="$case_dir/bin:$PATH" TEST_STATE="$case_dir" TEST_FAILURE=recovery \
-        APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" BACKUP_DIR="$case_dir/backups" \
+        APP_DIR="$case_dir/app" ENV_FILE="$case_dir/env" \
         bash "$case_dir/scripts/recover-promotion.sh" --journal "$case_dir/journal.json"
       [ "$(wc -l <"$case_dir/log")" -eq "$before" ]
       grep -qx receipted "$case_dir/m4"

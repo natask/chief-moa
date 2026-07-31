@@ -36,7 +36,6 @@ What stays off the VPS:
 ```text
 /opt/chief-moa/app          git checkout (compose files, scripts)
 /opt/chief-moa/gateway.env  compose env file (token, passwords, domain)
-/opt/chief-moa/backups/     pg dumps + DATA_DIR snapshots
 volumes: chief-moa_moa-gateway-data     DATA_DIR blobs (OTA APKs, voice audio)
          chief-moa_moa-postgres-data    Postgres data
          chief-moa_moa-caddy-data       TLS certificates
@@ -194,50 +193,11 @@ that branch or is behind it, then SSHes to the VPS and runs
 checkout path, set `MOA_VPS_APP_DIR=/path/to/app`.
 
 This is a promotion of the active gateway. Run it only when an operator has
-explicitly approved deploy/promote for the current turn. The backup and restore
-gate remains on the VPS inside `update.sh`, so the active service is not rebuilt
-or restarted until the fresh backup and scratch restore check pass.
-
-## Backup And Restore Check
-
-```sh
-/opt/chief-moa/app/scripts/vps/backup.sh
-/opt/chief-moa/app/scripts/vps/restore-check.sh /opt/chief-moa/backups/<timestamp>
-```
-
-Run both before any promotion: an update, an active URL change, or an
-active-service restart. The restore check rebuilds a scratch gateway from the
-backup under its own compose project and port, verifies `/health` and a
-Postgres-backed read, then removes itself. Copy backups off the droplet on a
-schedule; they are plain files.
-
-Install unattended backup timers on the VPS:
-
-```sh
-sudo /opt/chief-moa/app/scripts/vps/install-backup-timers.sh --install
-systemctl list-timers 'chief-moa-*'
-```
-
-Defaults:
-
-- daily backup at 03:15 UTC plus up to 30 minutes randomized delay;
-- weekly scratch restore check of the latest complete backup on Sunday at
-  04:15 UTC plus up to 1 hour randomized delay;
-- no active gateway update, restart, DNS change, or promotion.
-
-From the operator Mac, mirror completed backup directories off the droplet with
-the LaunchAgent installer:
-
-```sh
-scripts/vps/install-backup-pull-launchagent.sh \
-  --install \
-  --host root@api.example.com \
-  --dest "$HOME/Backups/chief-moa-vps"
-```
-
-The pull agent runs `scripts/vps/pull-backups.sh --execute`, excludes `.tmp`
-backup directories, and does not delete local backups when remote retention
-changes.
+explicitly approved deploy/promote for the current turn. Promotion builds and
+smokes an isolated preview, waits for a drained active gateway, preserves the
+mounted Postgres and data volumes, and rolls code back if active health fails.
+It does not create a full-state backup. Destructive state migrations require a
+separate explicit plan and are not eligible for this path.
 
 ## Modes And Required Env
 

@@ -10,7 +10,7 @@ const receiptWriter = path.join(__dirname, "record-promotion-receipt.js");
 const base = {
   schema_version: 1, candidate_commit: "a".repeat(40), target: "gateway", review_decision: "approved",
   preview_verification_status: "passed", drain_status: "drained", resume_status: "verified",
-  compatibility_status: "compatible", backup_restore_status: "passed", rollback_status: "verified",
+  compatibility_status: "compatible", backup_restore_status: "not_required", rollback_status: "verified",
   post_apply_smoke_plan_status: "ready", active_url: "https://api.example.test",
   request_id: "request-1", review_id: "review-1", preview_claim_id: "preview-claim-1",
   preview_deployment_id: "preview-deployment-1", preview_verification_id: "preview-verification-1",
@@ -19,7 +19,7 @@ const base = {
   isolated_database_ref: "database://preview-1", isolated_queue_ref: "queue://preview-1",
   isolated_storage_ref: "storage://preview-1", isolated_worker_pool_ref: "workers://preview-1",
   drain_resume_ref: "evidence://drain-resume", compatibility_ref: "evidence://compatibility",
-  backup_restore_ref: "evidence://backup-restore", rollback_ref: "evidence://rollback",
+  backup_restore_ref: "state://persistent-volumes-preserved", rollback_ref: "evidence://rollback",
   post_apply_smoke_ref: "evidence://post-smoke",
 };
 function run(value) {

@@ -99,8 +99,8 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
 - `moa-gateway-refresh` - audit-first gateway health, drift, and change review.
   Audit mode is read-only and never restarts the live service. Promotion
   (`scripts/deploy.sh gateway`) requires the active-promotion gate to pass:
-  preview smoke, rollback path, no interrupted work, state compatibility, and
-  backup/restore evidence for persisted state. Background/cron invocations may
+  preview smoke, rollback path, no interrupted work, and state compatibility.
+  Background/cron invocations may
   promote when they can prove the same gate; otherwise they stop at audit.
 
 The main machine (10.147.17.10) has been decommissioned. The production
@@ -157,10 +157,10 @@ Remove old fields, files, or behavior only after active code no longer needs
 them. Do not couple an irreversible migration to the same active promotion that
 requires new code.
 
-If recordings, transcripts, archives, databases, queues, or generated user data
-are involved, promotion must include backup and restore evidence. If preview,
-rollback, compatibility, drain or resume, backup, restore, or smoke evidence is
-missing, stop at the preview or artifact and record what is missing.
+Gateway promotion preserves the existing Postgres and named data volumes rather
+than copying them. Require additive, predecessor-readable state changes. If
+preview, rollback, compatibility, drain or resume, or smoke evidence is missing,
+stop at the preview or artifact and record what is missing.
 
 ## Finish Order
 

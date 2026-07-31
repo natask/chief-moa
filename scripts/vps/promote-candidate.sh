@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Turn one CI-published vps-deploy commit into isolated preview, restored-state
-# compatibility, M4 evidence, guarded apply, receipt, and cleanup.
+# Turn one published vps-deploy commit into an isolated preview, M4 evidence,
+# guarded apply, receipt, and cleanup. Active persistent volumes are preserved
+# in place; promotion does not copy them.
 
 set -euo pipefail
 umask 077
@@ -40,9 +41,7 @@ require_drain
 
 suffix="${target:0:12}"
 project="moa-preview-$suffix"
-restore_project="moa-restore-$suffix"
 preview_port="${MOA_PREVIEW_PORT:-18787}"
-restore_port="${MOA_RESTORE_PORT:-18788}"
 preview_tls_port="${MOA_PREVIEW_TLS_PORT:-18789}"
 preview_root="$MOA_ROOT/previews/$suffix"
 source_dir="$preview_root/source"
@@ -92,15 +91,7 @@ VOICE_TTS_PROVIDER=loopback
 ENV
 chmod 600 "$preview_env"
 
-# Prove the candidate builds and boots BEFORE spending a backup on it.
-#
-# The build is the expensive, failure-prone step (~13 minutes on this droplet)
-# and most failed promotions die in or before it. Taking the backup first meant
-# every doomed attempt wrote 1.3 GB and pruned the retention window for a
-# candidate that never reached the active service. Ordering is the fix: a
-# backup exists to protect an apply that is about to happen, so it belongs
-# immediately before the apply, not twenty minutes ahead of one that may never
-# come.
+# Prove the candidate builds and boots before any active mutation.
 MOA_BUILD_SHA="$target" MOA_BUILD_REF="$REF" MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   preview_compose up -d --build --wait
 preview_upstream_url="http://127.0.0.1:$preview_port"
@@ -121,17 +112,6 @@ unauthorized="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 "$preview_
 [ "$unauthorized" = "401" ] || { echo "promotion blocked: preview auth gate returned $unauthorized" >&2; exit 1; }
 curl -kfsS --max-time 5 -H "Authorization: Bearer $preview_token" "$preview_url/v1/supervisor/status" >/dev/null
 
-# The candidate is proven. Now take the one backup this promotion uses and
-# prove it restores into the CANDIDATE's schema -- that restore is both the
-# rollback evidence and the state-compatibility evidence. The active stack is
-# read-only throughout: the restore runs from the candidate's own checkout,
-# project, port, database volume, and DATA_DIR volume.
-MOA_BACKUP_REASON=promotion "$SCRIPT_DIR/backup.sh"
-latest_backup="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '*.tmp' | sort | tail -n 1)"
-[ -n "$latest_backup" ] || { echo "promotion blocked: backup directory missing" >&2; exit 1; }
-APP_DIR="$source_dir" ENV_FILE="$preview_env" SCRATCH_PROJECT="$restore_project" SCRATCH_PORT="$restore_port" \
-  "$source_dir/scripts/vps/restore-check.sh" "$latest_backup"
-
 # Recheck immediately before minting apply authority. update.sh checks again
 # immediately before checkout mutation.
 require_drain
@@ -140,8 +120,8 @@ queue_ref="verification://queue/${project}-disabled-isolated"
 storage_ref="verification://storage/${project}-gateway-volume"
 worker_ref="verification://worker-pool/${project}-disabled-isolated"
 drain_ref="verification://drain/active-drain-safe"
-compatibility_ref="restore://candidate/${latest_backup##*/}/$suffix"
-backup_ref="backup://snapshot/${latest_backup##*/}"
+compatibility_ref="compatibility://additive-state-contract/$suffix"
+state_preservation_ref="state://persistent-volumes-preserved/$suffix"
 rollback_ref="rollback://git/$current"
 post_smoke_ref="smoke://active/health"
 node_runtime "$source_dir/scripts/vps/create-promotion-evidence.js" \
@@ -150,16 +130,11 @@ node_runtime "$source_dir/scripts/vps/create-promotion-evidence.js" \
   --database-ref "$database_ref" --queue-ref "$queue_ref" --storage-ref "$storage_ref" \
   --worker-pool-ref "$worker_ref" --drain-resume-ref "$drain_ref" \
   --compatibility-ref "$compatibility_ref" \
-  --backup-restore-ref "$backup_ref" --rollback-ref "$rollback_ref" \
+  --backup-restore-ref "$state_preservation_ref" --rollback-ref "$rollback_ref" \
   --post-apply-smoke-ref "$post_smoke_ref"
 
-# update.sh reuses this run's backup rather than taking a second one. It
-# re-validates the receipt itself (complete, promotion-tagged, restore-verified
-# against this exact candidate, and recent), so the guarantee is unchanged and
-# the promotion writes 1.3 GB once instead of twice.
 MOA_PROMOTION_EVIDENCE_FILE="$evidence_file" "$SCRIPT_DIR/update.sh" \
-  --ref "$REF" --commit "$target" --evidence "$evidence_file" \
-  --backup "$latest_backup"
+  --ref "$REF" --commit "$target" --evidence "$evidence_file"
 trap - EXIT
 cleanup
 echo "promotion complete: $current -> $target"

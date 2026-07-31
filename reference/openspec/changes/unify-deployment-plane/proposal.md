@@ -58,11 +58,10 @@ they use it and do not complain. This change specifies all of it.
   records the turn id. A complaint opens a rollback conversation; it does not
   roll back on its own.
 
-- **Split artifact retention from backup retention.** Deployment artifacts keep
-  the running version and exactly one predecessor and are rebuilt beyond that.
-  Backups keep everything for 7 days, one per day for 30, one per month
-  off-host, pruned by age and never by count, with promotion backups tagged so
-  they cannot evict scheduled ones.
+- **Remove deployment-time full-state copies.** Deployment artifacts keep the
+  running version and exactly one predecessor. Postgres and named data volumes
+  remain mounted in place during code rollout; eligible state changes are
+  additive and predecessor-readable.
 
 - **Stop the surfaces sharing a filesystem.** Move the Android OTA store out of
   the gateway's data volume, or make the publisher write as the gateway's uid.
@@ -82,10 +81,9 @@ they use it and do not complain. This change specifies all of it.
 
 ## Non-Goals
 
-- **Weakening the promotion gate.** Backup and restore-check still run before
-  the active service is touched, and the M4 request/review/preview/verification/
-  claim/effect/receipt chain still gates apply. This change adds a state
-  machine and a retention policy. It removes no check.
+- **Weakening runtime safety.** The M4 request/review/preview/verification/
+  claim/effect/receipt chain, drain gate, preserved volumes, code rollback, and
+  post-apply smoke still gate apply. Destructive state migrations are excluded.
 - **Automatic rollback on complaint.** One frustrated sentence is not a
   deployment decision.
 - **Replacing the M4 control plane.** The plane reads it; it does not supersede
@@ -97,7 +95,6 @@ they use it and do not complain. This change specifies all of it.
 
 Rolling back one step stays cheap: the predecessor image is on disk, under a
 minute. Rolling back two or more steps means a rebuild — about 13 minutes for
-the gateway image on this droplet, plus roughly 8 for backup and restore-check,
-so 20-25 minutes to reach an arbitrary older version. For a single-user product
+the gateway image on this droplet. For a single-user product
 that is the right trade against permanently parking gigabytes of images, and it
 is stated here so the choice is deliberate.

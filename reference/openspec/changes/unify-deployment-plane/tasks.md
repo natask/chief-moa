@@ -80,24 +80,25 @@
 
 ## 3. Retention
 
-- [x] 3.2 Tag backups with a reason (`promotion` or `scheduled`) and prune
-      promotion backups aggressively without letting them evict scheduled ones.
-      Order the promotion so the backup follows the preview build and precedes
-      the apply, and let `update.sh` reuse it against a checked restore receipt
-      instead of taking a second one.
-      Acceptance: a simulated day of failed promotions prunes no scheduled
-      backup; a promotion writes one backup, not two; an unverifiable receipt
-      falls back to a fresh backup. Covered in
-      `scripts/vps/test-backup-retention.sh`.
-- [ ] 3.1 Move scheduled backups from count-based to age-based retention: all
+- [x] 3.0 Remove deployment-time and scheduled full-state copies. Promotion
+      preserves the existing Postgres and named data volumes and rolls code
+      back to the predecessor on failure. The VPS backup timers and local pull
+      agent are disabled; no promotion writes a `/data` archive.
+      Acceptance: promotion scripts contain no backup or restore-check call,
+      and the live timer units are disabled.
+
+- [x] 3.2 Superseded by 3.0. The earlier tagged-backup retention implementation
+      was removed with the full-state backup path.
+- [x] 3.1 Superseded by 3.0; scheduled full-state backup automation is removed.
+      Previous plan: move scheduled backups from count-based to age-based: all
       for 7 days, daily for 30, monthly off-host. Tagging (3.2) already stops
       promotion churn from evicting history; this bounds the window by time
       rather than by count.
       Acceptance: a quiet week and a busy week retain the same span of history.
-- [ ] 3.3 Refuse to prune a backup that the off-host mirror has not taken.
+- [x] 3.3 Superseded by 3.0. Refuse to prune a backup that the off-host mirror has not taken.
       Acceptance: pruning with no mirror record leaves the backup in place and
       logs why.
-- [ ] 3.4 Delete the unrestorable `20260706T084805Z` backup (0-byte dump) and
+- [x] 3.4 Superseded by 3.0; all same-droplet snapshots were removed. Delete the unrestorable `20260706T084805Z` backup (0-byte dump) and
       make the prune report incomplete backups instead of skipping them
       silently.
       Acceptance: incomplete backups are named in the prune output.

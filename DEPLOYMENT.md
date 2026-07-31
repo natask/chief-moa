@@ -302,22 +302,19 @@ git show HEAD:.github/workflows/<workflow>.yml
 ## Gateway and extension
 
 Move `master` only through `scripts/release/push-master.sh`. Gateway CI moves the
-verified commit to `vps-deploy`. The VPS timer then runs preview, backup, restore,
-drain, compatibility, and smoke checks before it changes the active gateway.
+verified commit to `vps-deploy`. The VPS timer then runs preview, drain,
+compatibility, rollback, and smoke checks before it changes the active gateway.
 
-The candidate is built and smoked **before** the backup is taken. A promotion
-that dies in the build writes no backup at all, and the backup it does take sits
-immediately before the apply it protects. `update.sh` reuses that backup rather
-than taking a second one, but only after checking its restore receipt: complete,
-verified against this exact candidate, and recent. Anything that does not verify
-falls through to a fresh backup.
+Gateway promotion does not create a Postgres dump or copy `/data`. The previous
+code revision remains the rollback target while Postgres and the named data
+volumes stay mounted in place. Therefore active state changes must be additive
+and readable by both the candidate and its predecessor. A destructive schema or
+storage migration is not eligible for this promotion path and needs a separate,
+explicit migration plan.
 
-Backups record why they were taken and prune only their own kind. Scheduled
-backups are the user's history and keep `MOA_BACKUP_RETENTION` (14); promotion
-backups keep `MOA_PROMOTION_BACKUP_RETENTION` (2). Promotion retries cannot evict
-history — before this, 66 prune events in five days had collapsed a fourteen-day
-window into about five hours. Backups are user data, not deployment artifacts;
-the retention rules above for OTA releases do not apply to them.
+The former same-droplet backup timers and local pull LaunchAgent are retired.
+They copied the entire voice spool on every run, consumed gigabytes, and added
+latency without providing off-host disaster recovery.
 
 The poll interval must stay longer than the worst-case promotion. A promotion
 takes roughly 20 minutes on this droplet; a 120-second timer re-triggered the
