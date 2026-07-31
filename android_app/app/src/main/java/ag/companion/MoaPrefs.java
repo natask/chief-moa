@@ -13,6 +13,7 @@ final class MoaPrefs {
     static final String HOSTED_GATEWAY_URL = BuildConfig.DEFAULT_GATEWAY_URL;
     static final String ONBOARDING_GATEWAY_URL = HOSTED_GATEWAY_URL;
     static final String DEFAULT_GATEWAY_URL = ONBOARDING_GATEWAY_URL;
+    static final String BUNDLED_GATEWAY_TOKEN = BuildConfig.BUNDLED_GATEWAY_TOKEN;
     static final String LOCAL_DEV_GATEWAY_URL = "http://10.147.17.6:8787";
     static final String LEGACY_MAIN_GATEWAY_URL = "http://10.147.17.10:8787";
 
@@ -142,7 +143,14 @@ final class MoaPrefs {
     }
 
     static String gatewayToken(Context context) {
-        return prefs(context).getString(KEY_GATEWAY_TOKEN, "");
+        return gatewayTokenAfterBundledFallback(
+                prefs(context).getString(KEY_GATEWAY_TOKEN, ""),
+                BUNDLED_GATEWAY_TOKEN);
+    }
+
+    static String gatewayTokenAfterBundledFallback(String storedToken, String bundledToken) {
+        String stored = safe(storedToken);
+        return stored.isEmpty() ? safe(bundledToken) : stored;
     }
 
     static void saveGatewayConfig(Context context, String gatewayUrl, String gatewayToken) {

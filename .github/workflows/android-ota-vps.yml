@@ -282,6 +282,7 @@ jobs:
       - name: Build and verify stable-signed OTA artifact
         shell: bash
         env:
+          MOA_ANDROID_BUNDLED_GATEWAY_TOKEN: ${{ secrets.MOA_GATEWAY_TOKEN }}
           MOA_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/android-release.keystore
           MOA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
           MOA_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}

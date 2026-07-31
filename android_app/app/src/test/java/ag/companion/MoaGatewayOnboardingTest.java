@@ -35,6 +35,17 @@ public final class MoaGatewayOnboardingTest {
     }
 
     @Test
+    public void bundledGatewayTokenFillsOnlyAnEmptySavedToken() {
+        assertEquals(
+                "bundled-token",
+                MoaPrefs.gatewayTokenAfterBundledFallback("", " bundled-token "));
+        assertEquals(
+                "saved-token",
+                MoaPrefs.gatewayTokenAfterBundledFallback(" saved-token ", "bundled-token"));
+        assertEquals("", MoaPrefs.gatewayTokenAfterBundledFallback("", ""));
+    }
+
+    @Test
     public void tokenlessStaleDefaultMigratesToHostedOrigin() {
         assertEquals(
                 MoaPrefs.DEFAULT_GATEWAY_URL,
