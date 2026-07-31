@@ -28,7 +28,12 @@ import android.view.accessibility.AccessibilityNodeInfo;
  *
  * Actions are explicit, not gestures: the you-bubble shows exactly one Copy
  * button and one History button whenever it holds text. The reply bubble keeps
- * its copy rail behind engagement as before.
+ * its copy rail behind engagement, and its History rail behind expansion, as
+ * before. The you-bubble's plate is deliberately near-black in BOTH system
+ * themes ({@link MoaRibbonTokens#plateColor}), so its Copy/History glyphs and
+ * text always use the paired light ink ({@link MoaRibbonTokens#inkColor}) —
+ * never the theme's plain {@code palette.ink}, which is dark in light theme
+ * and would vanish against that near-black plate.
  *
  * Painting by state (see {@link MoaRibbonPresence}):
  * <ul>
@@ -278,7 +283,8 @@ final class MoaRibbonView extends View {
         }
         if (textLayout == null || textLayout.getWidth() != width) {
             TextPaint paint = new TextPaint(textPaint);
-            paint.setColor(toneColor != 0 ? toneColor : palette.ink);
+            paint.setColor(toneColor != 0
+                    ? toneColor : MoaRibbonTokens.inkColor(palette, reply));
             CharSequence display = shown;
             if (highlightStart >= 0 && highlightStart < shown.length()) {
                 SpannableString highlighted = new SpannableString(shown);
@@ -496,6 +502,15 @@ final class MoaRibbonView extends View {
         return Math.max(viewportLeft(), width - padXPx - rail);
     }
 
+    /**
+     * The width in px that the wrapped turn text is laid out into: the fixed
+     * window minus the gutter, padding, and whichever rails are currently
+     * visible. This is the geometry the browser overlay mirrors.
+     */
+    int textViewportWidthPx() {
+        return Math.round(viewportRight() - viewportLeft());
+    }
+
     private void animateTo(float targetPlate, float targetAlpha, long durationMs) {
         if (plateAnimator != null) {
             plateAnimator.cancel();
@@ -601,7 +616,8 @@ final class MoaRibbonView extends View {
         scratch.set(0, 0, getWidth(), getHeight());
         fillPaint.setShader(null);
         fillPaint.setColor(withAlpha(
-                state == MoaRibbonPresence.State.DRAGGING ? palette.plateDrag : palette.plate,
+                MoaRibbonTokens.plateColor(
+                        palette, reply, state == MoaRibbonPresence.State.DRAGGING),
                 plateFraction));
         canvas.drawRoundRect(scratch, radiusPx, radiusPx, fillPaint);
         // The border is drawn INSIDE the box so solidifying never costs layout.
@@ -610,28 +626,39 @@ final class MoaRibbonView extends View {
         canvas.drawRoundRect(scratch, radiusPx, radiusPx, strokePaint);
     }
 
-    /** The copy glyph: two offset rounded outlines. One button, nothing else. */
+    /**
+     * The copy glyph: two offset rounded outlines. One button, nothing else.
+     * Uses the same role-aware ink as the text ({@link MoaRibbonTokens#inkColor})
+     * rather than the raw theme {@code palette.ink}/{@code palette.muted}: the
+     * you-bubble's plate is near-black in both themes, and the plain light-theme
+     * ink is itself dark, so it would be nearly invisible on that plate.
+     */
     private void drawRail(Canvas canvas) {
         float size = dp(9);
         float cx = getWidth() - padXPx - size;
         float cy = ribbonHeightPx / 2f;
-        strokePaint.setColor(palette.muted);
+        int ink = MoaRibbonTokens.inkColor(palette, reply);
+        strokePaint.setColor(withAlpha(ink, 0.62f));
         scratch.set(cx - size / 2f - dp(1.5f), cy - size / 2f - dp(1.5f),
                 cx + size / 2f - dp(1.5f), cy + size / 2f - dp(1.5f));
         canvas.drawRoundRect(scratch, dp(2), dp(2), strokePaint);
-        strokePaint.setColor(palette.ink);
+        strokePaint.setColor(ink);
         scratch.set(cx - size / 2f + dp(1.5f), cy - size / 2f + dp(1.5f),
                 cx + size / 2f + dp(1.5f), cy + size / 2f + dp(1.5f));
         canvas.drawRoundRect(scratch, dp(2), dp(2), strokePaint);
         strokePaint.setColor(palette.hairline);
     }
 
-    /** The history glyph: a clock face. Explicit full-app handoff, never inline chat. */
+    /**
+     * The history glyph: a clock face. Explicit full-app handoff, never inline
+     * chat. Uses the same role-aware ink as {@link #drawRail} so it stays
+     * readable on the you-bubble's near-black plate in either theme.
+     */
     private void drawHistory(Canvas canvas) {
         float cx = getWidth() - railHitWidthPx - railHitWidthPx / 2f;
         float cy = ribbonHeightPx / 2f;
         float radius = dp(4.5f);
-        strokePaint.setColor(palette.ink);
+        strokePaint.setColor(MoaRibbonTokens.inkColor(palette, reply));
         canvas.drawCircle(cx, cy, radius, strokePaint);
         canvas.drawLine(cx, cy, cx, cy - dp(3), strokePaint);
         canvas.drawLine(cx, cy, cx + dp(2.5f), cy + dp(1.5f), strokePaint);

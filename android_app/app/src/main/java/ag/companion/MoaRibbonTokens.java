@@ -99,6 +99,14 @@ final class MoaRibbonTokens {
         final int warn;
         final int plate;
         final int plateDrag;
+        // The user's own message plate is deliberately near-black in BOTH system
+        // themes, with its own light ink, so "what I said" reads as one steady
+        // dark card and never inverts to a pale plate under a light theme. The
+        // assistant reply plate still follows the theme (light in light mode) so
+        // the two speakers stay visually distinct.
+        final int youPlate;
+        final int youPlateDrag;
+        final int youInk;
         final int hairline;
         final int scrim;
         final int halo;
@@ -106,7 +114,9 @@ final class MoaRibbonTokens {
         final int menuRowPressed;
 
         private Palette(int ink, int inkAmbient, int muted, int accent, int you, int agent,
-                        int ok, int warn, int plate, int plateDrag, int hairline, int scrim,
+                        int ok, int warn, int plate, int plateDrag,
+                        int youPlate, int youPlateDrag, int youInk,
+                        int hairline, int scrim,
                         int halo, int menuBg, int menuRowPressed) {
             this.ink = ink;
             this.inkAmbient = inkAmbient;
@@ -118,6 +128,9 @@ final class MoaRibbonTokens {
             this.warn = warn;
             this.plate = plate;
             this.plateDrag = plateDrag;
+            this.youPlate = youPlate;
+            this.youPlateDrag = youPlateDrag;
+            this.youInk = youInk;
             this.hairline = hairline;
             this.scrim = scrim;
             this.halo = halo;
@@ -128,16 +141,42 @@ final class MoaRibbonTokens {
 
     static final Palette DARK = new Palette(
             0xFFF4F4F6, 0xE0F4F4F6, 0xFF9B9BA4, 0xFFFFD76A, 0xFF7C8CFF, 0xFFF5A623,
-            0xFF35C759, 0xFFFF8A3D, 0xE8232733, 0xB0232733, 0x24FFFFFF, 0x6B090A0C,
+            0xFF35C759, 0xFFFF8A3D, 0xE8232733, 0xB0232733,
+            0xE8232733, 0xB0232733, 0xFFF4F4F6,
+            0x24FFFFFF, 0x6B090A0C,
             0xB8000000, 0xDB121317, 0x14FFFFFF);
 
     static final Palette LIGHT = new Palette(
             0xFF141519, 0xE6141519, 0xFF6B6C76, 0xFFB87400, 0xFF6474E8, 0xFFC06B00,
-            0xFF1F8F3D, 0xFFC24A00, 0xE8FCFCFD, 0xB8FCFCFD, 0x1A000000, 0x85FFFFFF,
+            0xFF1F8F3D, 0xFFC24A00, 0xE8FCFCFD, 0xB8FCFCFD,
+            0xF21C1F27, 0xC01C1F27, 0xFFF4F4F6,
+            0x1A000000, 0x85FFFFFF,
             0xE0FFFFFF, 0xE1FCFCFD, 0x0D000000);
 
     static Palette palette(boolean light) {
         return light ? LIGHT : DARK;
+    }
+
+    /**
+     * The plate fill for one turn. The user's plate is near-black in both themes
+     * ({@link Palette#youPlate}); the assistant reply plate follows the theme
+     * ({@link Palette#plate}). Pure so the light/dark colour policy is testable
+     * without instantiating a view.
+     */
+    static int plateColor(Palette p, boolean reply, boolean dragging) {
+        if (reply) {
+            return dragging ? p.plateDrag : p.plate;
+        }
+        return dragging ? p.youPlateDrag : p.youPlate;
+    }
+
+    /**
+     * Text ink for one turn. User text uses {@link Palette#youInk} because it
+     * sits on the near-black user plate in either theme; reply text uses the
+     * theme ink on the theme plate.
+     */
+    static int inkColor(Palette p, boolean reply) {
+        return reply ? p.ink : p.youInk;
     }
 
     /**
