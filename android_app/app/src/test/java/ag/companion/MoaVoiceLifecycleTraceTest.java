@@ -21,6 +21,8 @@ public final class MoaVoiceLifecycleTraceTest {
         trace.captureStarted();
         clock.now = 20;
         trace.sessionReady();
+        clock.now = 30;
+        trace.transcriptPartialReceived();
         clock.now = 45;
         trace.commitRequested(true);
         clock.now = 80;
@@ -35,14 +37,21 @@ public final class MoaVoiceLifecycleTraceTest {
         clock.now = 250;
         trace.completed("completed", true, true);
 
-        assertEquals(9, events.size());
-        JSONObject terminal = new JSONObject(events.get(8));
+        assertEquals(10, events.size());
+        JSONObject terminal = new JSONObject(events.get(9));
         assertEquals("android_voice_lifecycle_v1", terminal.getString("schema"));
         assertEquals("completed", terminal.getString("stage"));
         assertEquals(250L, terminal.getLong("elapsed_ms"));
         assertTrue(terminal.getBoolean("tts_expected"));
         assertTrue(terminal.getBoolean("audio_received"));
         assertTrue(terminal.getBoolean("audible_success"));
+        assertEquals(30L, terminal.getLong("capture_to_first_feedback_ms"));
+        assertEquals(30L, terminal.getLong("capture_to_first_partial_ms"));
+        assertEquals(80L, terminal.getLong("capture_to_final_transcript_ms"));
+        assertEquals(75L, terminal.getLong("commit_to_first_assistant_text_ms"));
+        assertEquals(105L, terminal.getLong("commit_to_first_audio_receipt_ms"));
+        assertEquals(105L, terminal.getLong("commit_to_first_playout_ms"));
+        assertEquals(0L, terminal.getLong("audio_receipt_to_playout_ms"));
         String joined = String.join("\n", events);
         assertFalse(joined.contains("transcript_text"));
         assertFalse(joined.contains("token"));
@@ -125,6 +134,42 @@ public final class MoaVoiceLifecycleTraceTest {
         assertFalse(terminal.getBoolean("audible_success"));
         assertFalse(String.join("\n", events).contains("playback_start"));
         assertFalse(String.join("\n", events).contains("playback_complete"));
+        assertEquals(-1L, terminal.getLong("capture_to_first_partial_ms"));
+        assertEquals(-1L, terminal.getLong("commit_to_first_playout_ms"));
+    }
+
+    @Test
+    public void firstLocalFeedbackUsesTheFirstPartialAndNeverMovesBackward() throws Exception {
+        FakeClock clock = new FakeClock();
+        List<String> events = new ArrayList<>();
+        MoaVoiceLifecycleTrace trace =
+                new MoaVoiceLifecycleTrace(clock, events::add, "local-trace");
+
+        clock.now = 100;
+        trace.captureStarted();
+        clock.now = 125;
+        trace.transcriptPartialReceived();
+        clock.now = 150;
+        trace.transcriptPartialReceived();
+        clock.now = 175;
+        trace.commitRequested(true);
+        clock.now = 210;
+        trace.resultReceived("assistant_text");
+        clock.now = 240;
+        trace.resultReceived("assistant_audio");
+        clock.now = 255;
+        trace.playbackStarted();
+        clock.now = 300;
+        trace.completed("completed", true, true);
+
+        JSONObject terminal = new JSONObject(events.get(events.size() - 1));
+        assertEquals(25L, terminal.getLong("capture_to_first_feedback_ms"));
+        assertEquals(25L, terminal.getLong("capture_to_first_partial_ms"));
+        assertEquals(-1L, terminal.getLong("capture_to_final_transcript_ms"));
+        assertEquals(35L, terminal.getLong("commit_to_first_assistant_text_ms"));
+        assertEquals(65L, terminal.getLong("commit_to_first_audio_receipt_ms"));
+        assertEquals(80L, terminal.getLong("commit_to_first_playout_ms"));
+        assertEquals(15L, terminal.getLong("audio_receipt_to_playout_ms"));
     }
 
     private static final class FakeClock implements MoaVoiceLifecycleTrace.Clock {

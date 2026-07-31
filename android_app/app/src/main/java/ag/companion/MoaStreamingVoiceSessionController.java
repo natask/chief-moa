@@ -1054,6 +1054,11 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onTranscriptPartial(String transcriptTurnId, String text) {
             Log.i(TAG, "transcriptPartial chars=" + safe(text).length());
+            synchronized (lock) {
+                if (lifecycleTrace != null) {
+                    lifecycleTrace.transcriptPartialReceived();
+                }
+            }
             post(() -> callback.onTranscriptPartial(transcriptTurnId, text));
         }
 

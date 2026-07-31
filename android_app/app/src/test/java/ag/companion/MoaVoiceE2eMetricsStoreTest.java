@@ -29,6 +29,8 @@ public final class MoaVoiceE2eMetricsStoreTest {
         assertTrue(summary.contains("audible 1"));
         assertTrue(summary.contains("p50 200 ms"));
         assertTrue(summary.contains("p95 400 ms"));
+        assertTrue(summary.contains("first feedback p50 20 ms"));
+        assertTrue(summary.contains("p95 40 ms"));
         assertFalse(summary.contains("transcript"));
     }
 
@@ -66,6 +68,7 @@ public final class MoaVoiceE2eMetricsStoreTest {
         return new JSONObject()
                 .put("stage", stage)
                 .put("audible_success", audible)
+                .put("capture_to_first_feedback_ms", latency / 10)
                 .put("commit_to_terminal_ms", latency);
     }
 }

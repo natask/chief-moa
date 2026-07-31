@@ -31,6 +31,11 @@ final class MoaVoiceLifecycleTrace {
     private long captureStartedElapsedMs = -1L;
     private long commitElapsedMs = -1L;
     private long firstResultElapsedMs = -1L;
+    private long firstPartialElapsedMs = -1L;
+    private long finalTranscriptElapsedMs = -1L;
+    private long firstAssistantTextElapsedMs = -1L;
+    private long firstAudioReceiptElapsedMs = -1L;
+    private long firstPlayoutElapsedMs = -1L;
 
     MoaVoiceLifecycleTrace(Clock clock, Sink sink, String traceId) {
         this.clock = clock;
@@ -55,16 +60,30 @@ final class MoaVoiceLifecycleTrace {
 
     void resultReceived(String resultKind) {
         String bounded = boundedResultKind(resultKind);
+        long elapsed = elapsedMs();
         if ("assistant_audio".equals(bounded)) {
             assistantAudioReceived = true;
+            firstAudioReceiptElapsedMs = first(firstAudioReceiptElapsedMs, elapsed);
+        } else if ("assistant_text".equals(bounded)) {
+            firstAssistantTextElapsedMs = first(firstAssistantTextElapsedMs, elapsed);
+        } else if ("transcript".equals(bounded)) {
+            finalTranscriptElapsedMs = first(finalTranscriptElapsedMs, elapsed);
         }
         if (firstResultElapsedMs < 0L) {
-            firstResultElapsedMs = elapsedMs();
+            firstResultElapsedMs = elapsed;
         }
         emit("result_received", bounded, false, false);
     }
 
+    void transcriptPartialReceived() {
+        long elapsed = elapsedMs();
+        firstPartialElapsedMs = first(firstPartialElapsedMs, elapsed);
+        firstResultElapsedMs = first(firstResultElapsedMs, elapsed);
+        emit("result_received", "transcript_partial", false, false);
+    }
+
     void playbackStarted() {
+        firstPlayoutElapsedMs = first(firstPlayoutElapsedMs, elapsedMs());
         emit("playback_start", "", false, false);
     }
 
@@ -123,6 +142,26 @@ final class MoaVoiceLifecycleTrace {
                 event.put("capture_to_terminal_ms", delta(captureStartedElapsedMs, elapsedMs()));
                 event.put("commit_to_result_ms", delta(commitElapsedMs, firstResultElapsedMs));
                 event.put("commit_to_terminal_ms", delta(commitElapsedMs, elapsedMs()));
+                event.put("capture_to_first_feedback_ms", delta(
+                        captureStartedElapsedMs,
+                        firstAvailable(
+                                firstPartialElapsedMs,
+                                finalTranscriptElapsedMs,
+                                firstAssistantTextElapsedMs,
+                                firstAudioReceiptElapsedMs,
+                                firstPlayoutElapsedMs)));
+                event.put("capture_to_first_partial_ms",
+                        delta(captureStartedElapsedMs, firstPartialElapsedMs));
+                event.put("capture_to_final_transcript_ms",
+                        delta(captureStartedElapsedMs, finalTranscriptElapsedMs));
+                event.put("commit_to_first_assistant_text_ms",
+                        delta(commitElapsedMs, firstAssistantTextElapsedMs));
+                event.put("commit_to_first_audio_receipt_ms",
+                        delta(commitElapsedMs, firstAudioReceiptElapsedMs));
+                event.put("commit_to_first_playout_ms",
+                        delta(commitElapsedMs, firstPlayoutElapsedMs));
+                event.put("audio_receipt_to_playout_ms",
+                        delta(firstAudioReceiptElapsedMs, firstPlayoutElapsedMs));
             }
             sink.write(event.toString());
         } catch (Exception ignored) {
@@ -158,9 +197,23 @@ final class MoaVoiceLifecycleTrace {
         return start < 0L || end < start ? -1L : end - start;
     }
 
+    private static long first(long current, long candidate) {
+        return current < 0L ? candidate : current;
+    }
+
+    private static long firstAvailable(long... values) {
+        long earliest = -1L;
+        for (long value : values) {
+            if (value >= 0L && (earliest < 0L || value < earliest)) {
+                earliest = value;
+            }
+        }
+        return earliest;
+    }
+
     private static String boundedResultKind(String value) {
         return switch (safe(value)) {
-            case "transcript", "assistant_text", "assistant_audio" -> safe(value);
+            case "transcript", "transcript_partial", "assistant_text", "assistant_audio" -> safe(value);
             default -> "other";
         };
     }

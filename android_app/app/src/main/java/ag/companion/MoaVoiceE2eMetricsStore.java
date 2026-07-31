@@ -28,6 +28,20 @@ final class MoaVoiceE2eMetricsStore {
                     .put("capture_to_terminal_ms", boundedDuration(event.optLong("capture_to_terminal_ms", -1L)))
                     .put("commit_to_result_ms", boundedDuration(event.optLong("commit_to_result_ms", -1L)))
                     .put("commit_to_terminal_ms", boundedDuration(event.optLong("commit_to_terminal_ms", -1L)))
+                    .put("capture_to_first_feedback_ms", boundedDuration(
+                            event.optLong("capture_to_first_feedback_ms", -1L)))
+                    .put("capture_to_first_partial_ms", boundedDuration(
+                            event.optLong("capture_to_first_partial_ms", -1L)))
+                    .put("capture_to_final_transcript_ms", boundedDuration(
+                            event.optLong("capture_to_final_transcript_ms", -1L)))
+                    .put("commit_to_first_assistant_text_ms", boundedDuration(
+                            event.optLong("commit_to_first_assistant_text_ms", -1L)))
+                    .put("commit_to_first_audio_receipt_ms", boundedDuration(
+                            event.optLong("commit_to_first_audio_receipt_ms", -1L)))
+                    .put("commit_to_first_playout_ms", boundedDuration(
+                            event.optLong("commit_to_first_playout_ms", -1L)))
+                    .put("audio_receipt_to_playout_ms", boundedDuration(
+                            event.optLong("audio_receipt_to_playout_ms", -1L)))
                     .put("audible_success", "completed".equals(stage)
                             && event.optBoolean("audible_success", false));
             SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -50,6 +64,7 @@ final class MoaVoiceE2eMetricsStore {
         int teardown = 0;
         int audible = 0;
         List<Long> latencies = new ArrayList<>();
+        List<Long> firstFeedbackLatencies = new ArrayList<>();
         for (int i = 0; i < samples.length(); i++) {
             JSONObject sample = samples.optJSONObject(i);
             if (sample == null) continue;
@@ -60,13 +75,17 @@ final class MoaVoiceE2eMetricsStore {
             if (sample.optBoolean("audible_success", false)) audible++;
             long latency = sample.optLong("commit_to_terminal_ms", -1L);
             if (latency >= 0L) latencies.add(latency);
+            long firstFeedback = sample.optLong("capture_to_first_feedback_ms", -1L);
+            if (firstFeedback >= 0L) firstFeedbackLatencies.add(firstFeedback);
         }
         int total = completed + failed + teardown;
         if (total == 0) return "No mobile voice samples yet";
         Collections.sort(latencies);
         return total + " turns · " + completed + " completed · " + failed + " failed · "
                 + teardown + " canceled · audible " + audible + " · p50 "
-                + percentile(latencies, 0.50) + " ms · p95 " + percentile(latencies, 0.95) + " ms";
+                + percentile(latencies, 0.50) + " ms · p95 " + percentile(latencies, 0.95) + " ms"
+                + " · first feedback p50 " + percentile(firstFeedbackLatencies, 0.50)
+                + " ms · p95 " + percentile(firstFeedbackLatencies, 0.95) + " ms";
     }
 
     private static JSONArray load(SharedPreferences prefs) {
