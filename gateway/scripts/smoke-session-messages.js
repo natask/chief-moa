@@ -50,12 +50,24 @@ async function main() {
     assert.deepEqual(payload.messages.map((message) => message.speaker), [
       "user", "assistant", "user", "assistant", "user", "assistant",
     ]);
+    assert.deepEqual(payload.messages.map((message) => message.turn_id), [
+      "browser-turn", "browser-turn", "android-chat", "android-chat", "android-voice", "android-voice",
+    ]);
     assert.equal(payload.messages.find((message) => message.turn_id === "android-chat" && message.speaker === "user").text, longText);
     assert.equal(payload.messages.filter((message) => message.turn_id === "android-voice").length, 2, "voice/chat mirror and broker evidence must deduplicate");
     assert.ok(payload.messages.some((message) => message.source_surface === "browser"));
     assert.ok(payload.messages.every((message) => message.message_id && message.session_id === sessionId));
     const voiceUser = payload.messages.find((message) => message.message_id === `turn:${sessionId}:default:android-voice:user`);
     assert.deepEqual(voiceUser.provenance.map((item) => item.store).sort(), ["broker", "chat", "voice"]);
+    assert.equal(voiceUser.voice_history.audio_accessible, true);
+    assert.equal(voiceUser.voice_history.retranscription_supported, false);
+    assert.equal(voiceUser.voice_history.retranscription_available, false);
+    assert.deepEqual(voiceUser.voice_history.transcript_revisions.map((item) => item.transcript), [
+      "original voice direction", "voice direction",
+    ]);
+    assert.equal(voiceUser.voice_history.current_revision, 1);
+    assert.ok(!JSON.stringify(voiceUser.voice_history).includes("voice-sessions/"));
+    assert.ok(!JSON.stringify(voiceUser.voice_history).includes("http"));
 
     const unknown = await requestJson(`${baseUrl}/v1/sessions/unknown/messages`);
     assert.equal(unknown.status, 200);
@@ -66,7 +78,7 @@ async function main() {
       session_id: sessionId,
       retained_long_text_chars: longText.length,
       message_count: payload.messages.length,
-      checks: ["authenticated", "ordered", "deduplicated", "mixed-source", "complete-long-text", "unknown-session-empty"],
+      checks: ["authenticated", "newest-first", "turn-grouped", "deduplicated", "mixed-source", "audio-probed", "revisions", "complete-long-text", "unknown-session-empty"],
     }, null, 2));
   } finally {
     if (server) {
@@ -86,8 +98,22 @@ function seedSources(dataDir, sessionId, longText) {
   write(`voice-turns/${sessionId}/android-voice.json`, {
     id: "android-voice", session_id: sessionId, branch_id: "default", source: "android-voice",
     transcript: "voice direction", response: { display: "voice answer" }, classification: "chat",
+    retranscribed: true,
+    transcript_revisions: [
+      {
+        revision: 0, transcript: "original voice direction", transcript_source: "stt",
+        source: "original", created_at: "2026-07-16T10:00:00.000Z",
+      },
+      {
+        revision: 1, transcript: "voice direction", transcript_source: "stt-retranscribe",
+        source: "retranscribe", created_at: "2026-07-16T10:00:01.000Z",
+      },
+    ],
     created_at: "2026-07-16T10:00:00.000Z",
   });
+  const pcmPath = path.join(dataDir, "voice-sessions", sessionId, "android-voice.pcm");
+  fs.mkdirSync(path.dirname(pcmPath), { recursive: true });
+  fs.writeFileSync(pcmPath, Buffer.from([1, 2, 3, 4]));
   write(`chat-turns/${sessionId}/voice-mirror.json`, {
     turn_id: "voice-mirror", voice_turn_id: "android-voice", session_id: sessionId, branch_id: "default",
     source: "android-live-transcript", user_text: "voice direction", response_text: "voice answer",

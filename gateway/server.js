@@ -121,7 +121,8 @@ const { runResearch } = require("./lib/research-workflow");
 const { createPresentationHandlers } = require("./lib/presentation-handlers");
 const { createSupervisorHandlers } = require("./lib/supervisor-handlers");
 const { createSessionReadHandlers } = require("./lib/session-read-handlers");
-const { projectSessionMessages, SESSION_MESSAGE_MAX_LIMIT } = require("./lib/session-messages");
+const { projectSessionMessages, SESSION_MESSAGE_MAX_LIMIT, voiceHistoryKey } = require("./lib/session-messages");
+const { projectVoiceHistory } = require("./lib/session-message-voice-history");
 const { createThreadSwitchHandlers } = require("./lib/thread-switch-handlers");
 const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers");
 const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
@@ -10338,9 +10339,27 @@ function listRawChatTurnRecordsForSession(sessionId, branchId = "", limit = 50, 
     .slice(-safeLimit);
 }
 
-function sessionMessagesPayload({ sessionId, branchId = "", limit } = {}) {
+async function sessionMessagesPayload({ sessionId, branchId = "", limit } = {}) {
   const safeSessionId = sanitizeOptionalId(sessionId, "default");
   const safeBranchId = branchId ? sanitizeOptionalId(branchId, "default") : "";
+  const voiceRecords = listRawVoiceTurnRecordsForSession(safeSessionId);
+  const retranscriptionSupported = activeProviderSupportsRetranscription();
+  const voiceHistoryByTurn = new Map(await Promise.all(voiceRecords.map(async (record) => {
+    const turnId = String(record.id || record.turn_id || "");
+    let audioAccessibility = "unavailable";
+    const key = voiceTurnAudioKey(safeSessionId, turnId, "user");
+    if (key) {
+      try {
+        audioAccessibility = await blobStore.probeReadable(key) ? "accessible" : "unavailable";
+      } catch {
+        audioAccessibility = "unknown";
+      }
+    }
+    return [voiceHistoryKey(record.branch_id || "default", turnId), projectVoiceHistory(record, {
+      audioAccessibility,
+      retranscriptionSupported,
+    })];
+  })));
   const browserRecords = browserTurnStore.listAllBrowserTurns()
     .filter((record) => String(record.session_id || record.conversation_id || "") === safeSessionId)
     .slice(0, SESSION_MESSAGE_MAX_LIMIT);
@@ -10352,11 +10371,20 @@ function sessionMessagesPayload({ sessionId, branchId = "", limit } = {}) {
     sessionId: safeSessionId,
     branchId: safeBranchId,
     limit,
-    voiceTurns: listRawVoiceTurnRecordsForSession(safeSessionId),
+    voiceTurns: voiceRecords,
     chatTurns: listRawChatTurnRecordsForSession(safeSessionId, "", SESSION_MESSAGE_MAX_LIMIT, true),
     browserTurns: browserRecords,
     brokerEvents: brokerRecords,
+    voiceHistoryByTurn,
   });
+}
+
+function activeProviderSupportsRetranscription() {
+  try {
+    return typeof internalTtsProvider().transcribePcmWindowed === "function";
+  } catch {
+    return false;
+  }
 }
 
 function readChatTurnLedger() {

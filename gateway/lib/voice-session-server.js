@@ -25,6 +25,8 @@ const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-termi
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
 const { bindBrowserVoiceInvocationContext } = require("./browser-invocation-context");
+const { completeNoSpeech, completeTranscriptFinalization, handleTranscriptFinalize }
+  = require("./voice-transcript-finalize");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
 const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
@@ -220,6 +222,12 @@ class VoiceSessionConnection {
     }
     if (type === "commit_turn") {
       await this.handleCommitTurn(event);
+      return;
+    }
+    if (type === "finalize_transcript") {
+      await handleTranscriptFinalize(this, event, {
+        captureSummaryForTurn, closeAudioStream, transportSummaryForTurn,
+      });
       return;
     }
     if (type === "text_turn") {
@@ -459,6 +467,9 @@ class VoiceSessionConnection {
       turn_id: turnId,
       playback_policy: playbackPolicy,
       phrase_assist: this.phraseAssist.capability(turn),
+      transcript_finalize: {
+        supported: !turn.liveSession && typeof this.voiceProvider?.transcribeTurn === "function",
+      },
       ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
@@ -968,34 +979,9 @@ class VoiceSessionConnection {
       || providerEvents.assistantAudioStarted
       || turn.assistantAudioBytes > 0;
     if (!transcript && !hasAssistantOutput) {
-      await this.recordProviderEvent(turn, providerEvents, "turn_no_speech", {
-        reason: transcriptQualityRejected ? "transcript_quality_rejected" : "stt_empty",
-        audio_bytes: turn.audioBytes,
-        transcript_language_rejected: providerResult?.transcript_language_rejected === true,
-        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
+      await completeNoSpeech(this, turn, providerEvents, providerResult, transcriptQualityRejected, {
+        nowIso, turnInputLanguages, turnReplyLanguage, writeTurnMetadata,
       });
-      writeTurnMetadata(turn, {
-        status: "no_speech",
-        completed_at: nowIso(),
-        transcript_language_rejected: providerResult?.transcript_language_rejected === true,
-        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
-      });
-      turn.status = "no_speech";
-      this.stopTurnProgress();
-      await this.sendTurnDone({
-        type: "turn_done",
-        session_id: turn.sessionId,
-        branch_id: turn.branchId,
-        turn_id: turn.turnId,
-        status: "no_speech",
-        reason: transcriptQualityRejected ? "transcript_quality_rejected" : "stt_empty",
-        reply_language: turnReplyLanguage(turn, providerResult, null),
-        input_languages: turnInputLanguages(turn),
-        ...(providerResult?.transcript_quality ? { transcript_quality: providerResult.transcript_quality } : {}),
-      });
-      if (this.turn === turn) {
-        this.turn = null;
-      }
       return;
     }
 
@@ -1030,6 +1016,13 @@ class VoiceSessionConnection {
       assistantText,
       assistantAudioFormat,
     });
+    if (turn.finalizeTranscriptOnly) {
+      await completeTranscriptFinalization(
+        this, turn, providerEvents, providerResult, canonicalRecord, transcript,
+        { elapsedMsSince, nowIso, sanitizeStageTimings, turnInputLanguages, turnReplyLanguage, writeTurnMetadata },
+      );
+      return;
+    }
     const profileControlText = profileControlAssistantText(canonicalRecord);
     // classified non-chat, so the provider returned no spoken reply; the gateway
     // produced the confirmation text while applying the change. Send it as text
@@ -1388,20 +1381,27 @@ class VoiceSessionConnection {
       duration_ms: completionMs,
       stage_timings: sanitizeStageTimings(events.stageTimings),
     });
-    await this.recordIncompleteTurn(turn, "error", message);
+    const incompleteRecord = await this.recordIncompleteTurn(turn, "error", message);
     writeTurnMetadata(turn, {
       status: "error",
       error: message,
       error_reason: turnErrorReason(error),
       completed_at: nowIso(),
     });
-    this.sendError(`failed to complete turn: ${message}`);
+    if (!turn.finalizeTranscriptOnly) {
+      this.sendError(`failed to complete turn: ${message}`);
+    }
     await this.sendTurnDone({
-      type: "turn_done",
+      type: turn.finalizeTranscriptOnly ? "transcript_finalized" : "turn_done",
       session_id: turn.sessionId,
       branch_id: turn.branchId,
       turn_id: turn.turnId,
       status: "error",
+      ...(turn.finalizeTranscriptOnly ? {
+        transcript: String(events.transcript || "").trim(),
+        transcription_only: true,
+        stored: Boolean(incompleteRecord),
+      } : {}),
       reason: turnErrorReason(error),
       error_summary: cleanErrorSummary(message),
       reply_language: turnReplyLanguage(turn, null, null),

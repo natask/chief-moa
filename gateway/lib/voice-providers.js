@@ -11,6 +11,7 @@ const { createSttStage, createReasonerStage, createTtsStage } = require("./voice
 const { createSpeechChunker } = require("./voice-chunker");
 const { createStreamingSttSession, DEFAULT_ROTATE_AFTER_MS } = require("./voice-stt-streaming");
 const { TranscriptSidecarVoiceProvider } = require("./voice-provider-composition");
+const { transcriptionOnlyResult } = require("./voice-transcript-finalize");
 const { finalizeStreamingOrBatchTranscript } = require("./transcript-quality");
 const { phoneActionGeminiDeclaration } = require("./surface-skills");
 const {
@@ -550,6 +551,11 @@ class LoopbackVoiceProvider {
       audio_format: CLIENT_AUDIO_FORMAT,
     };
   }
+  async transcribeTurn(turn, hooks) {
+    const transcript = String(turn.syntheticText || "").trim() || "Fake transcript for the streaming voice MVP.";
+    await hooks.onTranscriptFinal(transcript);
+    return transcriptionOnlyResult("loopback", "local-test-tone", transcript, CLIENT_AUDIO_FORMAT);
+  }
 }
 
 class UnsupportedVoiceProvider {
@@ -779,7 +785,7 @@ class CascadedVoiceProvider {
     return "gcloud_adc";
   }
 
-  async processTurn(turn, hooks) {
+  async transcribeTurn(turn, hooks) {
     if (!this.configured()) {
       throw new Error("chirp STT provider requires GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT plus GCP_SERVICE_ACCOUNT_KEY, GOOGLE_APPLICATION_CREDENTIALS, CHIRP_ACCESS_TOKEN, or gcloud ADC on the gateway machine");
     }
@@ -841,21 +847,15 @@ class CascadedVoiceProvider {
     if (transcript) {
       await hooks.onTranscriptFinal(transcript);
     }
-
+    return transcriptionOnlyResult("chirp", this.model, transcript, CLIENT_AUDIO_FORMAT, {
+      languageRejected: transcription.languageRejected === true, transcript_language_rejected: transcription.languageRejected === true,
+      transcript_quality: transcription.transcript_quality || null });
+  }
+  async processTurn(turn, hooks) {
+    const transcriptionResult = await this.transcribeTurn(turn, hooks), transcript = transcriptionResult.transcript;
     // STT-only and explicit dictation hand the transcript back without spending
     // a reasoning or TTS call. The gateway still records the literal turn.
-    if (turn.transcriptionOnly === true || !this.cascaded()) {
-      return {
-        provider: "chirp",
-        model: this.model,
-        transcript,
-        assistant_text: "",
-        audio_format: CLIENT_AUDIO_FORMAT,
-        transcription_only: true,
-        transcript_language_rejected: transcription.languageRejected === true,
-        transcript_quality: transcription.transcript_quality || null,
-      };
-    }
+    if (turn.transcriptionOnly === true || !this.cascaded()) return transcriptionResult;
 
     // Leg 2 — the gateway's durable, model-agnostic LLM turn. The reasoner reads
     // the effective agent profile (reply language/voice as OUTPUT policy) and
@@ -863,7 +863,7 @@ class CascadedVoiceProvider {
     // turn returns no speak text; we then skip TTS.
     let reasoning = { speak: "", display: transcript, language: this.replyLanguage(turn), model: this.model, classification: "chat" };
     if (!transcript) {
-      return this.cascadedResult(transcript, reasoning, false, transcription);
+      return this.cascadedResult(transcript, reasoning, false, transcriptionResult);
     }
     const modality = this.replyModality(turn);
     const pinnedLanguage = this.replyLanguage(turn);
@@ -952,7 +952,7 @@ class CascadedVoiceProvider {
         // the breaker and end the superseded turn silently instead of
         // rebranding it a reasoning failure.
         reportVoiceStreamingFault(`turn_superseded_reached_reasoner_catch: ${cleanError(error)}`);
-        return this.cascadedResult(transcript, reasoning, false, transcription, { modality });
+        return this.cascadedResult(transcript, reasoning, false, transcriptionResult, { modality });
       }
       await voiceStageError(hooks, "reasoning", reasoningStartedAtMs, error, {
         provider_id: this.reasoningProviderId,
@@ -1037,7 +1037,7 @@ class CascadedVoiceProvider {
       } else {
         this.lastTtsError = streamTtsError;
       }
-      return this.cascadedResult(transcript, reasoning, streamSpoke, transcription, extras);
+      return this.cascadedResult(transcript, reasoning, streamSpoke, transcriptionResult, extras);
     }
 
     // Leg 3 (non-streaming: VOICE_STREAMING=0, breaker tripped, text modality,
@@ -1144,7 +1144,7 @@ class CascadedVoiceProvider {
     }
     this.lastTtsError = ttsError;
 
-    return this.cascadedResult(transcript, reasoning, spoke, transcription, {
+    return this.cascadedResult(transcript, reasoning, spoke, transcriptionResult, {
       modality,
       ttsError,
       ttsDelivery: ttsError ? "failed" : (spoke ? "complete" : "not_requested"),

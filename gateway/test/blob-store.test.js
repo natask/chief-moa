@@ -123,6 +123,7 @@ test("local driver round-trips put/stat/read/delete with no bucket", async () =>
   );
 
   assert.strictEqual((await store.stat("audio-notes/a.pcm")).size, 8);
+  assert.strictEqual(await store.probeReadable("audio-notes/a.pcm"), true);
   const found = await store.getReadStream("audio-notes/a.pcm");
   assert.strictEqual(found.source, "local");
   assert.strictEqual(found.size, 8);
@@ -132,6 +133,7 @@ test("local driver round-trips put/stat/read/delete with no bucket", async () =>
 
   await store.delete("audio-notes/a.pcm");
   assert.strictEqual(await store.stat("audio-notes/a.pcm"), null);
+  assert.strictEqual(await store.probeReadable("audio-notes/a.pcm"), false);
   assert.strictEqual(await store.getReadStream("audio-notes/a.pcm"), null);
   assert.deepStrictEqual(store.status(), { mode: "local" });
 });
@@ -172,6 +174,7 @@ test("gcs put uploads write-behind and reads fall through after spool prune", as
 
   // Prune the spool: reads fall through to the bucket.
   fs.unlinkSync(path.join(dataDir, "voice-sessions/s1/t1.pcm"));
+  assert.strictEqual(await store.probeReadable("voice-sessions/s1/t1.pcm"), true);
   found = await store.getReadStream("voice-sessions/s1/t1.pcm");
   assert.strictEqual(found.source, "gcs");
   assert.strictEqual(found.size, 11);

@@ -53,7 +53,7 @@ function createSessionReadHandlers(deps) {
         sendJson(response, 400, { error: "invalid session message limit" });
         return true;
       }
-      sendJson(response, 200, sessionMessagesPayload({
+      sendJson(response, 200, await sessionMessagesPayload({
         sessionId: decodeSessionPath(path, "/messages"),
         branchId: url.searchParams.get("branch_id") || "",
         limit: parsedLimit.value,

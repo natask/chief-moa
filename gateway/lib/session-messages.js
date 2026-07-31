@@ -22,9 +22,10 @@ function projectSessionMessages(input = {}) {
   addRecords(input.brokerEvents, "broker", brokerCandidates);
 
   const all = [...byKey.values()]
-    .map(finalizeMessage)
     .sort(compareMessages);
-  const messages = all.slice(-limit);
+  const messages = all.slice(-limit)
+    .sort(compareMessagesNewestFirst)
+    .map(finalizeMessage);
   const included = countMessages(messages);
   return {
     version: "session_messages.v1",
@@ -60,7 +61,12 @@ function projectSessionMessages(input = {}) {
         inputExcluded("other_branch");
       } else {
         counts[store] += 1;
-        for (const candidate of projector(record, { sessionId, recordBranch, store })) mergeCandidate(candidate);
+        for (const candidate of projector(record, {
+          sessionId,
+          recordBranch,
+          store,
+          voiceHistoryByTurn: input.voiceHistoryByTurn,
+        })) mergeCandidate(candidate);
       }
     }
   }
@@ -88,7 +94,9 @@ function projectSessionMessages(input = {}) {
 
 function voiceCandidates(record, context) {
   const turnId = recordId(record, "voice");
-  const base = baseCandidate(record, context, turnId, "voice", 40);
+  const base = baseCandidate(record, context, turnId, "voice", 40, {
+    voiceHistory: context.voiceHistoryByTurn?.get(voiceHistoryKey(context.recordBranch, turnId)),
+  });
   const state = completionState(record, "completed");
   return speakerCandidates(base, record.transcript, assistantText(record), state);
 }
@@ -144,6 +152,9 @@ function speakerCandidate(base, speaker, value, state, createdAt) {
     text_truncated: bounded.truncated,
     stored_text_chars: bounded.originalLength,
     projected_text_chars: bounded.text.length,
+    ...(speaker === "user" && base.source_kind === "voice" && base.voice_history
+      ? { voice_history: base.voice_history }
+      : {}),
   };
 }
 
@@ -162,14 +173,19 @@ function baseCandidate(record, context, turnId, sourceKind, priority, options = 
     classification: clean(record.classification) || (context.store === "chat" ? "chat" : context.store === "broker" ? "intent" : ""),
     created_at: clean(record.created_at || record.ts || record.updated_at),
     assistant_at: clean(record.completed_at || record.updated_at || record.created_at || record.ts),
+    turn_at: clean(record.created_at || record.ts || record.updated_at),
     evidence: recordEvidence(record, context.store),
     provenance: [{ store: context.store, record_id: recordIdValue }],
+    voice_history: options.voiceHistory,
     priority,
   };
 }
 
 function finalizeMessage(candidate) {
-  const { key, key_prefix, priority, assistant_at, ...message } = candidate;
+  const { key, key_prefix, priority, assistant_at, turn_at, voice_history, ...message } = candidate;
+  if (candidate.speaker === "user" && candidate.source_kind === "voice" && voice_history) {
+    message.voice_history = voice_history;
+  }
   return message;
 }
 
@@ -276,6 +292,21 @@ function compareMessages(left, right) {
     || clean(left.message_id).localeCompare(clean(right.message_id));
 }
 
+function compareMessagesNewestFirst(left, right) {
+  return clean(right.turn_at).localeCompare(clean(left.turn_at))
+    || messageGroupKey(left).localeCompare(messageGroupKey(right))
+    || speakerOrder(left.speaker) - speakerOrder(right.speaker)
+    || clean(left.message_id).localeCompare(clean(right.message_id));
+}
+
+function messageGroupKey(message) {
+  return `${clean(message.session_id)}:${clean(message.branch_id)}:${clean(message.turn_id)}`;
+}
+
+function voiceHistoryKey(branchId, turnId) {
+  return `${clean(branchId) || "default"}:${clean(turnId)}`;
+}
+
 function speakerOrder(value) { return value === "user" ? 0 : 1; }
 
 function countMessages(messages) {
@@ -319,4 +350,5 @@ module.exports = {
   SESSION_MESSAGE_MAX_LIMIT,
   SESSION_MESSAGE_TEXT_MAX_CHARS,
   projectSessionMessages,
+  voiceHistoryKey,
 };

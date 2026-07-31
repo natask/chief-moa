@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {
   SESSION_MESSAGE_TEXT_MAX_CHARS,
   projectSessionMessages,
+  voiceHistoryKey,
 } = require("../lib/session-messages");
 
 test("projects ordered mixed-source messages without truncating long product direction", () => {
@@ -33,7 +34,10 @@ test("projects ordered mixed-source messages without truncating long product dir
   });
 
   assert.deepEqual(payload.messages.map((message) => message.speaker), [
-    "user", "assistant", "user", "assistant", "user", "assistant", "user",
+    "user", "user", "assistant", "user", "assistant", "user", "assistant",
+  ]);
+  assert.deepEqual(payload.messages.map((message) => message.turn_id), [
+    "broker-1", "browser-1", "browser-1", "chat-1", "chat-1", "voice-1", "voice-1",
   ]);
   assert.equal(payload.messages.find((message) => message.turn_id === "chat-1" && message.speaker === "user").text, longText);
   assert.equal(payload.messages.find((message) => message.turn_id === "voice-1" && message.speaker === "assistant").text, " voice reply preserved ");
@@ -43,6 +47,16 @@ test("projects ordered mixed-source messages without truncating long product dir
 });
 
 test("deduplicates only explicit voice and broker links while retaining provenance", () => {
+  const voiceHistory = {
+    audio_accessibility: "accessible",
+    audio_accessible: true,
+    retranscription_supported: true,
+    retranscription_available: true,
+    current_revision: 0,
+    revision_count: 1,
+    revisions_truncated: false,
+    transcript_revisions: [{ revision: 0, transcript: "same words" }],
+  };
   const payload = projectSessionMessages({
     sessionId: "shared",
     voiceTurns: [{
@@ -64,12 +78,18 @@ test("deduplicates only explicit voice and broker links while retaining provenan
       id: "broker-linked", session_id: "shared", text: "same words",
       evidence_refs: [{ turn_id: "voice-linked" }], created_at: "2026-07-16T10:00:02Z",
     }],
+    voiceHistoryByTurn: new Map([[voiceHistoryKey("default", "voice-linked"), voiceHistory]]),
   });
 
   assert.equal(payload.messages.length, 4);
   const voiceUser = payload.messages.find((message) => message.message_id === "turn:shared:default:voice-linked:user");
   assert.deepEqual(voiceUser.provenance.map((item) => item.store).sort(), ["broker", "chat", "voice"]);
   assert.deepEqual(voiceUser.evidence.broker_event_ids, ["broker-linked"]);
+  assert.deepEqual(voiceUser.voice_history, voiceHistory);
+  assert.equal(
+    payload.messages.find((message) => message.message_id === "turn:shared:default:voice-linked:assistant").voice_history,
+    undefined,
+  );
   assert.ok(payload.messages.some((message) => message.message_id === "turn:shared:default:independent:user"));
 });
 

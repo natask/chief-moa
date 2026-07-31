@@ -43,6 +43,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/supervisor-handlers.js",
   "lib/session-read-handlers.js",
   "lib/session-messages.js",
+  "lib/session-message-voice-history.js",
   "lib/thread-switch-handlers.js",
   "lib/broker-research-handlers.js",
   "lib/media-note-handlers.js",

@@ -112,6 +112,22 @@ async function main() {
     assert.doesNotMatch(fakeGoogle.lastCustomPrompt(), /English/);
     assert.equal(withCodes.body.revision, 2, "second retranscription is revision 2");
 
+    // The canonical History read uses the newest transcript by default while
+    // retaining completed revisions and live server-owned capability state.
+    const history = await getSessionMessages(baseUrl, sessionId);
+    assert.equal(history.status, 200);
+    const voiceMessage = history.body.messages.find((message) =>
+      message.turn_id === turnId && message.speaker === "user");
+    assert.equal(voiceMessage.text, "amharic retranscription");
+    assert.equal(voiceMessage.voice_history.audio_accessible, true);
+    assert.equal(voiceMessage.voice_history.retranscription_supported, true);
+    assert.equal(voiceMessage.voice_history.retranscription_available, true);
+    assert.equal(voiceMessage.voice_history.current_revision, 2);
+    assert.deepEqual(
+      voiceMessage.voice_history.transcript_revisions.map((item) => item.transcript),
+      ["the original noisy transcript", "the clean retranscribed transcript", "amharic retranscription"],
+    );
+
     // 3. Missing PCM -> 404.
     const missing = await postRetranscribe(baseUrl, sessionId, "no_such_turn", {});
     assert.equal(missing.status, 404, "missing PCM returns 404");
@@ -124,6 +140,14 @@ async function main() {
     await fakeGoogle.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+async function getSessionMessages(baseUrl, sessionId) {
+  const response = await fetch(
+    `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+    { headers: { Authorization: `Bearer ${TOKEN}` } },
+  );
+  return { status: response.status, body: await response.json() };
 }
 
 async function postRetranscribe(baseUrl, sessionId, turnId, body) {

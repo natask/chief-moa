@@ -110,6 +110,32 @@ function createBlobStore(options = {}) {
     return remote ? { size: remote.size, source: "gcs" } : null;
   }
 
+  // Prove that at least one byte of the exact object can be read. This is used
+  // for user-facing capability state, where a stored byte count is not evidence
+  // that retained media still exists or remains readable. GCS uses a one-byte
+  // range request and cancels after the first body chunk.
+  async function probeReadable(key) {
+    const safe = safeKey(key);
+    let fd = null;
+    try {
+      fd = fs.openSync(path.join(dataDir, safe), "r");
+      const stats = fs.fstatSync(fd);
+      if (stats.isFile() && stats.size > 0) {
+        const byte = Buffer.allocUnsafe(1);
+        return fs.readSync(fd, byte, 0, 1, 0) === 1;
+      }
+    } catch {
+      // A pruned or unreadable spool may still have a readable remote object.
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {}
+      }
+    }
+    return gcs ? gcs.probeReadable(safe) : false;
+  }
+
   async function getReadStream(key) {
     const safe = safeKey(key);
     // Open by fd so a concurrent janitor prune between stat and first read
@@ -393,6 +419,7 @@ function createBlobStore(options = {}) {
     put,
     finalizeSpool,
     stat,
+    probeReadable,
     getReadStream,
     readBytes,
     ensureLocal,
@@ -505,6 +532,28 @@ function createGcsClient(options = {}) {
     return response ? Buffer.from(await response.arrayBuffer()) : null;
   }
 
+  async function probeReadable(key) {
+    const response = await fetch(
+      `${endpoint}/storage/v1/b/${bucket}/o/${objectName(key)}?alt=media`,
+      { headers: await headers({ range: "bytes=0-0" }) },
+    );
+    if (response.status === 404) {
+      await drain(response);
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(`GCS readability probe failed (${response.status}): ${cleanError(await response.text())}`);
+    }
+    if (!response.body) return false;
+    const reader = response.body.getReader();
+    try {
+      const first = await reader.read();
+      return !first.done && Boolean(first.value?.byteLength);
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+  }
+
   async function deleteObject(key) {
     const response = await fetch(`${endpoint}/storage/v1/b/${bucket}/o/${objectName(key)}`, {
       method: "DELETE",
@@ -517,7 +566,7 @@ function createGcsClient(options = {}) {
     throw new Error(`GCS delete failed (${response.status}): ${cleanError(await response.text())}`);
   }
 
-  return { bucket, prefix, endpoint, upload, stat, readStream, readBytes, delete: deleteObject };
+  return { bucket, prefix, endpoint, upload, stat, probeReadable, readStream, readBytes, delete: deleteObject };
 }
 
 async function verifyReclaimableObject(gcs, key, filePath, expectedStats) {
