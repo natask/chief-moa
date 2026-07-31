@@ -3025,7 +3025,11 @@ public final class OverlayService extends Service {
                     return;
                 }
                 markStreamingTurnProgressing();
-                String transcript = streamingTranscriptAccumulator.update(text);
+                // Gateway transcript events are authoritative whole-turn
+                // snapshots, not deltas. Merging a revised snapshot repeats
+                // the entire utterance when the recognizer changes an early
+                // word while preserving the later text.
+                String transcript = streamingTranscriptAccumulator.replaceSnapshot(text);
                 currentStreamingTranscript = safe(transcript);
                 liveConversation.updateUserPartial(turnId, currentStreamingTranscript);
                 updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
@@ -3040,7 +3044,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 markStreamingTurnProgressing();
-                String transcript = safe(streamingTranscriptAccumulator.update(text));
+                String transcript = safe(streamingTranscriptAccumulator.replaceSnapshot(text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
                     liveConversation.finalizeUser(turnId, transcript);

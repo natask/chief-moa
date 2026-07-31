@@ -66,4 +66,16 @@ public final class MoaSpeechTranscriptAccumulatorTest {
                 accumulator.update("doesn't get automatically sent")
         );
     }
+
+    @Test
+    public void gatewaySnapshotRevisionReplacesInsteadOfRepeatingWholeTurn() {
+        MoaSpeechTranscriptAccumulator accumulator = new MoaSpeechTranscriptAccumulator();
+
+        accumulator.replaceSnapshot("Hello can you hear me this is what we have to solve");
+
+        assertEquals(
+                "Hello, can you hear me? No. This is what we have to solve today.",
+                accumulator.replaceSnapshot("Hello, can you hear me? No. This is what we have to solve today.")
+        );
+    }
 }

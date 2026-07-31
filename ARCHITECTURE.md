@@ -722,6 +722,15 @@ cascaded voice paths assemble that pack through a canonical context-artifact
 envelope with versioned cache identity, stable source ids, ranking rationale,
 and secret-like-text redaction before any provider call. History stays out of
 the transient cue stack and appears only when the user opens History.
+
+Streaming `transcript_partial` and `transcript_final` events carry the
+authoritative whole-turn transcript snapshot, never a text delta. Clients
+replace the current transcript with each event. They must not concatenate or
+overlap-merge successive gateway snapshots because recognition can revise an
+early word while retaining the rest of a long utterance; treating that revision
+as a new segment duplicates the whole recording. Local, device-owned speech
+recognizers may keep a separate fragment accumulator where their native API
+actually emits segments.
 The browser side panel and Android full app hydrate that History view from the
 canonical session-message projection. They request a bounded latest window,
 preserve long message text within the API limit, and expose stale/retry state;
