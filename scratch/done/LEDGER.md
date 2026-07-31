@@ -1,3 +1,4 @@
+- Bounded collapsed Android transcript rendering and moved compact Copy/History controls into retained History — agent: Codex/GPT-5 — d8803e29
 - Retained zero-audio failed speech turns for a bounded retry window — agent: Codex/GPT-5 — e803b553
 - Bound partial-speech retries to exact recorded suffixes and preserved ordered audio under concurrent failure — agent: Codex/GPT-5 — c0de8598
 - Made partial hosted speech explicit and retryable without rerunning reasoning — agent: Codex/GPT-5 — 0647bb2a
