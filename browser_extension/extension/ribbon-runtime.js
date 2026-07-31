@@ -724,10 +724,9 @@
     async function copy(ribbon, key) {
       if (!ribbon) return false;
       // Copy on a live capture is also a disposition: it finalizes what has
-      // been said so far and does NOT send it. The host stops the capture
-      // without producing a turn, then calls copyUserTranscript() with the
-      // settled text — so the clipboard never gets a half-formed hypothesis and
-      // the model never gets a turn the user only meant to paste somewhere.
+      // been said so far and does NOT send it to reasoning. The host completes
+      // copyUserTranscript() only after the transcription-only session returns
+      // its terminal text, so the clipboard never gets a half-formed hypothesis.
       if (ribbon === you && !key && finalizeUserTranscriptForCopy()) {
         pendingUserCopy = true;
         revealAll(you);
@@ -1263,6 +1262,9 @@
         if (!pendingUserCopy) return Promise.resolve(false);
         pendingUserCopy = false;
         return copy(you, TextModel.defaultVariant(you));
+      },
+      cancelPendingUserCopy() {
+        pendingUserCopy = false;
       },
       // Same for the reply side: the gap between committing a turn and the
       // first reply delta is where "is it thinking?" lives.

@@ -1041,13 +1041,11 @@
     });
   }
 
-  // Copy on a live capture finalizes the utterance WITHOUT sending it.
-  // Ordering and the never-commit rule live in capture-copy-disposition.js.
   const captureCopy = AgeeCaptureCopyDisposition.create({
-    isCapturing: () => Boolean(liveVoice) && listening,
-    cancelCapture: () => stopAllLiveVoiceTurns("cancel"),
-    onIdle: () => setAgentState("idle"),
-    copyTranscript: () => ribbons?.copyUserTranscript(),
+    isCapturing: () => Boolean(liveVoice) && listening, canFinalizeWithoutSend: () => liveVoice?.dictation === true || liveVoice?.transcriptFinalizeSupported === true,
+    finalizeCapture: () => commitLiveVoiceTurn(liveVoice, liveVoice?.dictation !== true),
+    onBlocked: () => { const message = "Can't finalize this Ask capture without sending it yet. Recording kept."; if (liveVoice) { updateCue(liveVoice.cueId, message, "error"); setReplyRibbon(message, { tone: "warn", streaming: false }); } queueMicrotask(() => ribbons?.cancelPendingUserCopy()); },
+    copyTranscript: () => ribbons?.copyUserTranscript(), cancelPendingCopy: () => ribbons?.cancelPendingUserCopy(),
   });
   const finalizeCaptureForCopy = () => captureCopy.requestFinalize();
 
@@ -2658,7 +2656,7 @@
     const isCurrentTurn = liveVoice === state;
 
     if (msg.type === "session_ready") {
-      state.sessionReady = true;
+      state.sessionReady = true; state.transcriptFinalizeSupported = msg.transcript_finalize?.supported === true;
       updateCue(state.cueId, "", "running");
       return;
     }
@@ -2708,6 +2706,7 @@
       if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
       ensureVoiceCueCard(state, text, "");
+      if (captureCopy.isPending()) return;
       // Fast local stop path: a whole-utterance "stop / shut up / be quiet"
       // halts playback and every live turn at once, silently. It never sends the
       // transcript on as a turn and never produces an assistant reply.
@@ -2816,6 +2815,11 @@
       finishLiveVoiceDone(state);
       return;
     }
+    if (msg.type === "transcript_finalized") {
+      Object.assign(state, { turnStatus: String(msg.status || "completed").toLowerCase(), transcript: String(msg.transcript || "").trim(), transcriptionOnly: msg.transcription_only === true, clipboardCopied: msg.clipboard_copied === true });
+      return state.turnStatus === "error"
+        ? finishLiveVoiceError(state, msg.error_summary || "Transcription failed.") : finishLiveVoiceDone(state);
+    }
     if (msg.type === "error") {
       if (msg.recoverable === false || msg.code === "microphone_capture_failed") {
         finishLiveVoiceError(state, msg.message || "Live voice microphone capture failed.", msg.recovery);
@@ -2886,10 +2890,10 @@
     return restarted;
   }
 
-  async function commitLiveVoiceTurn(state = liveVoice) {
+  async function commitLiveVoiceTurn(state = liveVoice, finalizeTranscriptOnly = state?.finalizeTranscriptOnly === true) {
     if (!AgeeSteeringUi.isCurrentLiveVoiceState(state, liveVoice, isLiveVoiceStateActive)) return;
     voiceFirstCaptureOrigin = null;
-    state.committed = true;
+    state.committed = true; state.finalizeTranscriptOnly = finalizeTranscriptOnly;
     stopLiveCapture(state);
     setVoiceState(false);
     setAgentState("thinking");
@@ -2903,7 +2907,7 @@
       safeRuntimeSendMessage({
         cmd: "voiceSessionControl",
         voiceSessionId: state.voiceSessionId,
-        message: { type: "commit_turn", turn_id: state.turnId },
+        message: { type: finalizeTranscriptOnly ? "finalize_transcript" : "commit_turn", turn_id: state.turnId },
       }).then((res) => {
         if (!res && extensionContextInvalidated) return;
         if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
@@ -3026,6 +3030,7 @@
 
   function stopLiveVoiceState(state, mode = "stop", replacement = null) {
     if (!isLiveVoiceStateActive(state)) return;
+    if (liveVoice === state) captureCopy.cancel();
     stopLiveCapture(state);
     // Capture fully-played segments before stopLivePlayback stop()s the sources.
     const playedSegments = state.framesPlayed || 0;
@@ -3223,14 +3228,12 @@
     // never holds capture open.
     stopLiveCapture(state);
 
-    if (state.dictation && state.transcriptionOnly) {
+    if ((state.dictation || captureCopy.isPending()) && state.transcriptionOnly) {
       conversationActive = false;
       const transcript = String(state.transcript || "").trim();
-      const copied = state.clipboardCopied === true
-        ? true
-        : transcript
-          ? await copyTextToClipboard(transcript)
-          : false;
+      const copied = captureCopy.isPending()
+        ? transcript ? await captureCopy.complete({ clipboardCopied: state.clipboardCopied === true }) : (captureCopy.cancel(), false)
+        : state.clipboardCopied === true || (transcript ? await copyTextToClipboard(transcript) : false);
       const summary = copied
         ? "Copied — clipboard replaced."
         : transcript

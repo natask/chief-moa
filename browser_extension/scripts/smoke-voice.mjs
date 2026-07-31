@@ -5,8 +5,8 @@
 // runtime agent profile against a LOCAL moa_gateway instance. Here the field is
 // `voice` (a Gemini Live core voice), and we prove the spoken gender aliases:
 //
-//   "switch to a female voice" -> profile_control voice=Aoede ; gateway GET reflects it.
-//   "use a male voice"         -> profile_control voice=Charon ; gateway GET reflects it.
+//   "switch to a female voice" -> profile_control, blocked without a model judge.
+//   "use a male voice"         -> profile_control, blocked without a model judge.
 //
 // Same quiet rules as smoke-settings.mjs: --headless=new, throwaway Chrome
 // profile under .gstack/background-qa/<run>/, no visible window, no focus stolen.
@@ -297,6 +297,7 @@ async function main() {
 
   let browserCdp;
   let workerCdp;
+  let optionsCdp;
   let pageCdp;
   let failures = 0;
   try {
@@ -320,13 +321,19 @@ async function main() {
     await workerCdp.send("Runtime.enable");
     await evaluate(workerCdp, INSTALL_FETCH_RECORDER);
 
-    const cfg = await evaluate(workerCdp, configureStorageExpr(GATEWAY_URL, GATEWAY_TOKEN));
+    const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
+    browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
+    const { targetId: optionsId } = await browserCdp.send("Target.createTarget", {
+      url: `chrome-extension://${extensionId}/options.html`,
+    });
+    const optionsTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === optionsId);
+    optionsCdp = new Cdp(optionsTarget.webSocketDebuggerUrl);
+    await optionsCdp.send("Runtime.enable");
+    await waitForEval(optionsCdp, `document.readyState === "complete" ? true : null`);
+    const cfg = await evaluate(optionsCdp, configureStorageExpr(GATEWAY_URL, GATEWAY_TOKEN));
     if (cfg.url !== GATEWAY_URL || !cfg.tokenSet) {
       throw new Error(`storage did not take the local gateway config: ${JSON.stringify(cfg)}`);
     }
-
-    const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
-    browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
 
     // Starting voice: env default Kore, no override.
     const start = await fetchGatewayVoice();
@@ -370,7 +377,7 @@ async function main() {
     if (!tabId) throw new Error("real content script did not answer ping via the service worker");
 
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
-    await waitForEval(pageCdp, `document.querySelector("#agee-log") ? true : null`);
+    await waitForEval(pageCdp, `document.querySelector("#agee-root") ? true : null`);
 
     let contentCtx = null;
     for (const candidate of isolatedContexts) {
@@ -390,7 +397,7 @@ async function main() {
 
     // ---- Leg 1 — "switch to a female voice" -> profile_control voice=Aoede ----
     console.log("");
-    console.log('Leg 1 — typed "switch to a female voice" routes to the gateway profile (/v1/voice/turns profile_control, voice=Aoede)');
+    console.log('Leg 1 — typed "switch to a female voice" routes to profile_control and fails closed without a model judge');
     {
       await evaluate(pageCdp, triggerRunExpr("switch to a female voice"), { contextId: contentCtx });
       const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
@@ -399,20 +406,20 @@ async function main() {
 
       const ok =
         reply.kind === "done" &&
-        /updated voice aoede/i.test(reply.text) &&
+        /couldn't confirm you asked/i.test(reply.text) &&
         voiceTurnCall && voiceTurnCall.ok && voiceTurnCall.status === 200 &&
-        after.profileVoice === "Aoede" &&
-        after.providerVoice === "Aoede" &&
-        after.isOverridden === true;
+        !after.profileVoice &&
+        after.providerVoice === "Kore" &&
+        after.isOverridden === false;
       if (ok) {
         pass(
-          'female-voice alias applied through the gateway',
-          `POST /v1/voice/turns -> profile_control; voice=Aoede; provider voice=Aoede; is_overridden=true`,
+          'female-voice alias reached the guarded gateway profile path',
+          `POST /v1/voice/turns -> profile_control; mutation blocked; provider remains Kore`,
         );
         console.log(`         overlay reply: "${reply.text.trim()}"`);
       } else {
         failures++;
-        console.log(`  [FAIL] "switch to a female voice" did not set voice=Aoede through the gateway.`);
+        console.log(`  [FAIL] "switch to a female voice" did not reach the guarded profile-control outcome.`);
         console.log(`         rendered: ${JSON.stringify(reply)}`);
         console.log(`         voice turn call: ${JSON.stringify(voiceTurnCall)}`);
         console.log(`         gateway after: ${JSON.stringify(after)}`);
@@ -421,7 +428,7 @@ async function main() {
 
     // ---- Leg 2 — "use a male voice" -> profile_control voice=Charon ----
     console.log("");
-    console.log('Leg 2 — typed "use a male voice" routes to the gateway profile (/v1/voice/turns profile_control, voice=Charon)');
+    console.log('Leg 2 — typed "use a male voice" routes to profile_control and fails closed without a model judge');
     {
       await evaluate(pageCdp, triggerRunExpr("use a male voice"), { contextId: contentCtx });
       const reply = await waitForEval(pageCdp, renderedReplyExpr(), 20000, { contextId: contentCtx });
@@ -430,20 +437,20 @@ async function main() {
 
       const ok =
         reply.kind === "done" &&
-        /updated voice charon/i.test(reply.text) &&
+        /couldn't confirm you asked/i.test(reply.text) &&
         voiceTurnCall && voiceTurnCall.ok && voiceTurnCall.status === 200 &&
-        after.profileVoice === "Charon" &&
-        after.providerVoice === "Charon" &&
-        after.isOverridden === true;
+        !after.profileVoice &&
+        after.providerVoice === "Kore" &&
+        after.isOverridden === false;
       if (ok) {
         pass(
-          'male-voice alias applied through the gateway',
-          `POST /v1/voice/turns -> profile_control; voice=Charon; provider voice=Charon; is_overridden=true`,
+          'male-voice alias reached the guarded gateway profile path',
+          `POST /v1/voice/turns -> profile_control; mutation blocked; provider remains Kore`,
         );
         console.log(`         overlay reply: "${reply.text.trim()}"`);
       } else {
         failures++;
-        console.log(`  [FAIL] "use a male voice" did not set voice=Charon through the gateway.`);
+        console.log(`  [FAIL] "use a male voice" did not reach the guarded profile-control outcome.`);
         console.log(`         rendered: ${JSON.stringify(reply)}`);
         console.log(`         voice turn call: ${JSON.stringify(voiceTurnCall)}`);
         console.log(`         gateway after: ${JSON.stringify(after)}`);
@@ -458,11 +465,12 @@ async function main() {
     }
     console.log(
       `voice-by-talking smoke passed (REAL extension + LOCAL gateway, headless): id=${extensionId}, ` +
-        `"switch to a female voice" -> profile_control voice=Aoede, "use a male voice" -> profile_control voice=Charon, ` +
-        `gateway profile + provider status reflect each change, no window shown, no real secret used.`,
+        `voice-change aliases reached guarded profile_control and failed closed without a configured judge, ` +
+        `no window shown, no real secret used.`,
     );
   } finally {
     pageCdp?.close();
+    optionsCdp?.close();
     workerCdp?.close();
     browserCdp?.close();
     chrome.kill("SIGTERM");

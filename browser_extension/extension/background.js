@@ -2182,6 +2182,21 @@ async function loadHistory(cfg) {
   };
 }
 
+async function retranscribeHistoryVoiceTurn(cfg, requestedSessionId, requestedTurnId) {
+  const sessionId = String(requestedSessionId || "").trim();
+  const turnId = String(requestedTurnId || "").trim();
+  const activeSessionId = await getStableSessionId();
+  if (!sessionId || sessionId !== activeSessionId) {
+    throw new Error("The retained voice turn does not belong to the active session.");
+  }
+  if (!turnId || turnId.length > 200) throw new Error("The retained voice turn has no valid turn id.");
+  return callGateway(
+    cfg,
+    `/v1/voice/turns/${encodeURIComponent(sessionId)}/${encodeURIComponent(turnId)}/retranscribe`,
+    { method: "POST", body: {}, maxResponseBytes: 256 * 1024 },
+  );
+}
+
 async function createVoiceSessionTicket(cfg, signal) {
   const sessionId = await getStableSessionId();
   const deviceId = await getStableDeviceId();
@@ -2478,7 +2493,7 @@ async function offscreenVoiceCaptureStatus() {
 }
 
 async function copyDictationTranscript(session) {
-  if (!session?.transcriptionOnly || session.clipboardAttempted) return session?.clipboardCopied === true;
+  if (!(session?.transcriptionOnly || session?.transcriptFinalizing) || session.clipboardAttempted) return session?.clipboardCopied === true;
   session.clipboardAttempted = true;
   const text = String(session.mediaIntentText || "").trim();
   if (!text) return false;
@@ -3129,6 +3144,7 @@ async function forwardVoiceSessionEvent(session, event) {
       sendVoiceSessionJson(session, { type: "text_turn", text: session.sampleText, turn_id: session.turnId });
     }
     flushQueuedVoiceSessionMedia(session);
+    session.transcriptFinalizeSupported = parsed.transcript_finalize?.supported === true;
     if (session.capture === "extension-offscreen" && !session.captureStarted && !session.captureStartRequested) {
       session.captureStartRequested = true;
       startOffscreenVoiceCapture(session.id)
@@ -3201,6 +3217,21 @@ async function forwardVoiceSessionEvent(session, event) {
       status: status === "completed" ? "done" : status === "error" ? "error" : status,
     }).catch(() => {});
   }
+  if (parsed?.type === "transcript_finalized") {
+    session.mediaIntentText = String(parsed.transcript || session.mediaIntentText || "");
+    parsed.clipboard_copied = await copyDictationTranscript(session);
+    const status = String(parsed.status || "completed").toLowerCase();
+    updateActiveBrowserAgentOwnerForVoiceSession(session.id, {
+      status: status === "completed" ? "completed" : status,
+      transition_sequence: nextVoiceOwnerTransition(session),
+      reason: "capture transcript finalized",
+    }).catch(() => {});
+    updateBrowserAgentPresentation({
+      cue_id: session.cueId,
+      user_text: session.mediaIntentText,
+      status: status === "completed" ? "done" : status,
+    }).catch(() => {});
+  }
   const voiceMediaAction = mediaActionsFromTurn(parsed)[0];
   if (voiceMediaAction) {
     const key = JSON.stringify(voiceMediaAction).slice(0, 2000);
@@ -3250,8 +3281,13 @@ async function sendVoiceSessionControl(id, message) {
   if (!session || session.closed || voiceSessions.get(session.id) !== session) {
     return { ok: false, error: "voice session is not open" };
   }
-  if (message?.type === "commit_turn" || message?.type === "cancel_turn") {
+  const finalizingTranscript = message?.type === "finalize_transcript";
+  if (finalizingTranscript && session.transcriptFinalizeSupported !== true) {
+    return { ok: false, error: "gateway does not support capture-only transcript finalization" };
+  }
+  if (message?.type === "commit_turn" || message?.type === "cancel_turn" || finalizingTranscript) {
     session.committed = true;
+    if (finalizingTranscript) session.transcriptFinalizing = true;
     clearVoiceAutoCommit(session);
     await stopOffscreenVoiceCapture(id);
   }
@@ -5291,6 +5327,11 @@ async function handlePanelRequest(msg) {
       source: history.source,
       metadata: history.metadata,
     };
+  }
+  if (msg.cmd === "historyRetranscribe") {
+    const cfg = await getConfig();
+    const result = await retranscribeHistoryVoiceTurn(cfg, msg.sessionId, msg.turnId);
+    return { ok: true, result };
   }
   return { ok: false, error: `unsupported panel command: ${String(msg.cmd || "")}` };
 }

@@ -1,9 +1,9 @@
-// Chat-history persistence smoke for the REAL agee extension.
+// Canonical History persistence smoke for the REAL agee extension.
 //
 // Proves the headline fix: a conversational turn typed into the overlay is
 // persisted server-side under a STABLE session id, and when the overlay is
-// re-opened on a fresh page load it RELOADS that prior turn from history instead
-// of starting empty.
+// left behind, the durable side-panel workspace RELOADS that prior turn from
+// canonical History instead of relying on transient overlay state.
 //
 // Flow:
 //   1. Boot a throwaway gateway with `node server.js` directly (own port/token/
@@ -13,11 +13,9 @@
 //   2. Load the REAL unpacked extension into headless Chrome for Testing, point
 //      it at the throwaway gateway via chrome.storage.local (URL + token only —
 //      never .env, never printed, no API key in the browser).
-//   3. Open the overlay, send ONE conversational turn, wait for the done row.
-//   4. RE-OPEN the overlay on a fresh page load (re-inits the content script, so
-//      historyLoaded resets exactly as a real reopen would), and assert the
-//      prior turn renders from history: a "you" row with the transcript AND an
-//      "agee" row with the reply, present BEFORE any live turn.
+//   3. Open the overlay, send ONE conversational turn, and wait for its reply.
+//   4. Close that page and open sidepanel.html. Assert one newest-first outer
+//      turn card nests the exact user transcript and assistant reply.
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -306,12 +304,28 @@ async function main() {
     pageCdp = new Cdp(pageTarget.webSocketDebuggerUrl);
     const contentCtx = await openPageAndResolveContext(pageCdp, demoUrl);
 
-    // Drive the REAL overlay submit path: open the overlay (background "open"
-    // message -> content toggle(true), which also loads the then-empty history),
-    // type a conversational instruction into the bar, and press Enter. This goes
-    // through submitInstruction -> createCue (a real cue card) -> background run.
-    await evaluate(pageCdp, `chrome.runtime.sendMessage({ cmd: "open" }).catch(() => {}); true;`, { contextId: contentCtx });
-    await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-ribbon-you .agee-ribbon-text"))`, 10000, { contextId: contentCtx });
+    // Drive the REAL overlay submit path: the worker sends `open` to the content
+    // script, which starts composition in the user ribbon. Type a conversational
+    // instruction and press Enter; submitInstruction then routes it through the
+    // background while the overlay remains current-turn-only.
+    await waitForEval(
+      workerCdp,
+      `(async () => {
+        const [tab] = await chrome.tabs.query({ url: "http://localhost/*" });
+        if (!tab) return null;
+        try {
+          const result = await chrome.tabs.sendMessage(tab.id, { cmd: "open" });
+          return result?.ok ? tab.id : null;
+        } catch { return null; }
+      })()`,
+      10000,
+    );
+    await waitForEval(
+      pageCdp,
+      `document.querySelector("#agee-ribbon-you .agee-ribbon-text")?.getAttribute("contenteditable") === "plaintext-only"`,
+      10000,
+      { contextId: contentCtx },
+    );
     await evaluate(
       pageCdp,
       `(() => {
@@ -339,97 +353,84 @@ async function main() {
       throw new Error("live conversational turn did not produce a reply in the overlay");
     }
 
-    // Confirm the turn actually persisted server-side under the stable session id.
+    // Confirm the turn actually persisted in canonical History under the stable
+    // session id. Typed overlay turns use the browser-turn path, so the legacy
+    // paired `/turns` endpoint is not their storage authority.
     const sessionId = await evaluate(
       workerCdp,
       `chrome.storage.local.get("ageeSessionId").then((g) => g.ageeSessionId || null)`,
     );
     if (!sessionId) throw new Error("extension did not persist a stable ageeSessionId");
-    const persisted = await fetch(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
+    const persisted = await fetch(`${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       headers: { authorization: `Bearer ${GATEWAY_TOKEN}` },
     }).then((r) => r.json());
-    if (!Array.isArray(persisted.turns) || persisted.turns.length !== 1) {
-      throw new Error(`gateway should have exactly 1 persisted turn, got ${JSON.stringify(persisted.turns)}`);
+    if (!Array.isArray(persisted.messages) || persisted.messages.length !== 2) {
+      throw new Error(`gateway should project exactly 2 messages for one turn, got ${JSON.stringify(persisted.messages)}`);
     }
-    const serverReply = String(persisted.turns[0].reply || "").trim();
-    if (persisted.turns[0].transcript !== TRANSCRIPT || !serverReply) {
-      throw new Error(`persisted turn missing transcript/reply: ${JSON.stringify(persisted.turns[0])}`);
+    const persistedUser = persisted.messages.find((message) => message.speaker === "user");
+    const persistedAssistant = persisted.messages.find((message) => message.speaker === "assistant");
+    const serverReply = String(persistedAssistant?.text || "").trim();
+    if (persistedUser?.text !== TRANSCRIPT || !serverReply
+        || persistedUser?.turn_id !== persistedAssistant?.turn_id) {
+      throw new Error(`canonical History missing one complete turn: ${JSON.stringify(persisted.messages)}`);
     }
 
-    // ---- RE-OPEN on a fresh page load: history must reload from the gateway ----
-    // Re-navigating gives a brand-new content script (historyLoaded resets),
-    // exactly like closing the tab/overlay and opening it again later.
+    // ---- LEAVE THE OVERLAY, OPEN HISTORY: reload from the gateway ------------
+    // The overlay is intentionally current-turn-only. Durable scrollback lives
+    // in the extension side panel and must reconstruct from gateway state.
     pageCdp.close();
-    // Close page #1's tab so only the reopened tab matches http://localhost/* when
-    // the service worker resolves which tab to open the overlay on.
     await browserCdp.send("Target.closeTarget", { targetId }).catch(() => {});
     await delay(300);
-    const { targetId: targetId2 } = await browserCdp.send("Target.createTarget", { url: "about:blank" });
-    const pageTarget2 = await waitForTarget(devToolsPort, (t) => t.type === "page" && t.id === targetId2);
-    pageCdp = new Cdp(pageTarget2.webSocketDebuggerUrl);
-    const contentCtx2 = await openPageAndResolveContext(pageCdp, demoUrl);
-
-    // Open the overlay the real way: the service worker sends {cmd:"open"} to the
-    // tab (chrome.tabs.sendMessage), which the content script handles -> toggle(true)
-    // -> loadHistoryOnce -> renders restored rows. (A content-world
-    // chrome.runtime.sendMessage would reach the background, not the overlay.)
-    await waitForEval(
-      workerCdp,
-      `(async () => {
-        const [tab] = await chrome.tabs.query({ url: "http://localhost/*" });
-        if (!tab) return null;
-        try {
-          const r = await chrome.tabs.sendMessage(tab.id, { cmd: "open" });
-          return r && r.ok ? tab.id : null;
-        } catch { return null; }
-      })()`,
-      10000,
+    const panelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
+    const { targetId: targetId2 } = await browserCdp.send("Target.createTarget", { url: panelUrl });
+    const pageTarget2 = await waitForTarget(
+      devToolsPort,
+      (t) => t.type === "page" && t.id === targetId2 && t.url === panelUrl,
     );
+    pageCdp = new Cdp(pageTarget2.webSocketDebuggerUrl);
+    await pageCdp.send("Runtime.enable");
+    await waitForEval(pageCdp, `document.readyState === "complete" && Boolean(document.getElementById("history"))`);
 
     const restored = await waitForEval(
       pageCdp,
       `(() => {
-        const log = document.querySelector("#agee-log");
-        if (!log) return null;
-        const youRows = [...log.querySelectorAll(".agee-row.agee-you")].map((r) => r.textContent || "");
-        const ageeRows = [...log.querySelectorAll(".agee-row.agee-agee, .agee-row.agee-done")].map((r) => r.textContent || "");
-        const hasTranscript = youRows.some((t) => t.includes(${JSON.stringify(TRANSCRIPT)}));
-        const hasReply = ageeRows.some((t) => t.trim().length > 0);
-        return hasTranscript && hasReply
-          ? { youRows: youRows.length, ageeRows: ageeRows.length, firstReply: ageeRows.find((t) => t.trim().length > 0) }
+        const cards = [...document.querySelectorAll("#history > .history-turn")];
+        if (cards.length !== 1) return null;
+        const rows = [...cards[0].querySelectorAll(":scope > .history-message")];
+        const user = rows.find((row) => row.dataset.speaker === "user");
+        const assistant = rows.find((row) => row.dataset.speaker === "assistant");
+        const userText = user?.querySelector(":scope > .body")?.textContent || "";
+        const assistantText = assistant?.querySelector(":scope > .body")?.textContent || "";
+        return userText === ${JSON.stringify(TRANSCRIPT)} && assistantText
+          ? {
+              cards: cards.length,
+              speakers: rows.map((row) => row.dataset.speaker),
+              userText,
+              assistantText,
+              turnId: cards[0].dataset.turnId,
+            }
           : null;
       })()`,
       20000,
-      { contextId: contentCtx2 },
     );
     if (!restored) {
       const dump = await evaluate(
         pageCdp,
-        `(() => { const log = document.querySelector("#agee-log"); return log ? log.innerText : "(no log)"; })()`,
-        { contextId: contentCtx2 },
+        `(() => { const history = document.getElementById("history"); return history ? history.innerText : "(no History)"; })()`,
       ).catch(() => "(unavailable)");
-      throw new Error(`overlay did not reload chat history on reopen. Log dump:\n${dump}`);
+      throw new Error(`side panel did not reload canonical History. Dump:\n${dump}`);
     }
-
-    // History must precede any live cue: the restored "you" row should be the
-    // first child of the log (no live turns were sent on the reopened page).
-    const historyFirst = await evaluate(
-      pageCdp,
-      `(() => {
-        const log = document.querySelector("#agee-log");
-        const first = log && log.firstElementChild;
-        return Boolean(first && first.classList.contains("agee-you"));
-      })()`,
-      { contextId: contentCtx2 },
-    );
-    if (!historyFirst) throw new Error("restored history row is not first in the log (must precede live turns)");
+    if (JSON.stringify(restored.speakers) !== JSON.stringify(["user", "assistant"])
+        || restored.turnId !== persistedUser.turn_id) {
+      throw new Error(`restored outer turn grouping drifted: ${JSON.stringify(restored)}`);
+    }
 
     console.log(
       "History smoke passed (REAL extension + throwaway gateway, headless Chrome for Testing):\n" +
         `  service worker id=${extensionId}; gateway=${baseUrl}\n` +
-        `  stable session id persisted; one conversational turn stored server-side (transcript + reply);\n` +
-        `  overlay re-opened on a fresh page load and RELOADED ${restored.youRows} prior "you" row(s) + ${restored.ageeRows} "agee" row(s) from history;\n` +
-        `  restored history sits before any live turn; no API key in browser, token only from storage.`,
+        `  stable session id persisted; one conversational turn projected as user + assistant messages;\n` +
+        `  side panel RELOADED ${restored.cards} newest-first outer turn card with nested user + assistant content;\n` +
+        `  transient overlay state was not used as History authority; no API key in browser, token only from storage.`,
     );
   } finally {
     pageCdp?.close();

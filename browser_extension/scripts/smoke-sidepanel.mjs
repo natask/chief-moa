@@ -36,7 +36,23 @@ const SEEDED_MESSAGES = [
     source_kind: "voice",
     speaker: "user",
     text: LONG_ANDROID_TEXT,
+    created_at: "2026-07-30T08:00:00.000Z",
     completion_state: "completed",
+    voice_history: {
+      audio_accessible: true,
+      audio_accessibility: "available",
+      retranscription_supported: true,
+      retranscription_available: true,
+      current_revision: 0,
+      revision_count: 1,
+      revisions_truncated: false,
+      transcript_revisions: [{
+        revision: 0,
+        transcript: LONG_ANDROID_TEXT,
+        source: "original",
+        created_at: "2026-07-30T08:00:00.000Z",
+      }],
+    },
   },
   {
     message_id: "msg_android_assistant",
@@ -46,6 +62,7 @@ const SEEDED_MESSAGES = [
     source_kind: "voice",
     speaker: "assistant",
     text: "I preserved that Android direction in the shared session.",
+    created_at: "2026-07-30T08:00:01.000Z",
     completion_state: "completed",
   },
   {
@@ -56,6 +73,7 @@ const SEEDED_MESSAGES = [
     source_kind: "text",
     speaker: "user",
     text: "Show this browser turn after restart.",
+    created_at: "2026-07-30T09:00:00.000Z",
     completion_state: "completed",
   },
   {
@@ -66,6 +84,7 @@ const SEEDED_MESSAGES = [
     source_kind: "text",
     speaker: "assistant",
     text: "This response is durable.",
+    created_at: "2026-07-30T09:00:01.000Z",
     completion_state: "completed",
   },
   // Exact canonical duplicate: the panel must render the identity only once.
@@ -77,6 +96,7 @@ const SEEDED_MESSAGES = [
     source_kind: "text",
     speaker: "assistant",
     text: "This response is durable.",
+    created_at: "2026-07-30T09:00:01.000Z",
     completion_state: "completed",
   },
 ];
@@ -84,6 +104,8 @@ const SEEDED_MESSAGES = [
 function startGateway() {
   let messageReads = 0;
   let legacyReads = 0;
+  let retranscribeCalls = 0;
+  let retranscribeFailure = false;
   let canonicalAvailable = true;
   let historyFailure = false;
   const server = createServer((req, res) => {
@@ -111,7 +133,10 @@ function startGateway() {
         return;
       }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ messages: SEEDED_MESSAGES, has_more: false }));
+      // Canonical History is newest-turn-first while preserving user then
+      // assistant inside each turn.
+      const newestFirst = [...SEEDED_MESSAGES.slice(2), ...SEEDED_MESSAGES.slice(0, 2)];
+      res.end(JSON.stringify({ messages: newestFirst, has_more: false }));
       return;
     }
     if (url.pathname === `/v1/sessions/${SESSION_ID}/turns`) {
@@ -137,6 +162,54 @@ function startGateway() {
       ] }));
       return;
     }
+    if (req.method === "POST"
+        && url.pathname.startsWith(`/v1/voice/turns/${SESSION_ID}/`)
+        && url.pathname.endsWith("/retranscribe")) {
+      retranscribeCalls += 1;
+      const turnId = decodeURIComponent(
+        url.pathname.slice(`/v1/voice/turns/${SESSION_ID}/`.length, -"/retranscribe".length),
+      );
+      if (retranscribeFailure) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "provider retry failed" }));
+        return;
+      }
+      if (turnId === "turn_android") {
+        const userMessage = SEEDED_MESSAGES.find((message) => message.message_id === "msg_android_user");
+        const revision = userMessage.voice_history.current_revision + 1;
+        userMessage.text = `A cleaner transcript revision ${revision}.`;
+        userMessage.voice_history.current_revision = revision;
+        userMessage.voice_history.transcript_revisions.push({
+          revision,
+          transcript: userMessage.text,
+          source: "retranscribe",
+          created_at: `2026-07-30T10:0${revision}:00.000Z`,
+        });
+        userMessage.voice_history.revision_count =
+          userMessage.voice_history.transcript_revisions.length;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        session_id: SESSION_ID,
+        turn_id: turnId,
+        transcript: turnId === "turn_android"
+          ? SEEDED_MESSAGES.find((message) => message.message_id === "msg_android_user").text
+          : "A cleaner transcript.",
+        retranscribed: true,
+        revision: 1,
+      }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/v1/voice/turns/sidepanel-final-transcript") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "sidepanel-final-transcript",
+        transcript: "Canonical final transcript from retained audio.",
+        assistant_text: "The final transcript is ready.",
+        status: "completed",
+      }));
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
   });
@@ -146,8 +219,10 @@ function startGateway() {
       baseUrl: `http://127.0.0.1:${server.address().port}`,
       messageReads: () => messageReads,
       legacyReads: () => legacyReads,
+      retranscribeCalls: () => retranscribeCalls,
       setCanonicalAvailable: (available) => { canonicalAvailable = available === true; },
       setHistoryFailure: (failed) => { historyFailure = failed === true; },
+      setRetranscribeFailure: (failed) => { retranscribeFailure = failed === true; },
     }));
   });
 }
@@ -250,24 +325,53 @@ async function openPanel(browserCdp, devToolsPort, panelUrl) {
   return { targetId, pageCdp };
 }
 
-async function assertHydratedHistory(pageCdp, label) {
+async function assertHydratedHistory(pageCdp, label, { retranscriptionAdvertised = true } = {}) {
   const history = await waitForEval(pageCdp, `(() => {
+    const cards = [...document.querySelectorAll("#history > .history-turn")];
     const rows = [...document.querySelectorAll("#history .history-message")];
-    if (rows.length !== 4) return null;
+    if (cards.length !== 2 || rows.length !== 4) return null;
     return {
+      outerTurns: cards.map((card) => card.dataset.turnId),
+      nestedSpeakers: cards.map((card) =>
+        [...card.querySelectorAll(":scope > .history-message")].map((row) => row.dataset.speaker)),
       ids: rows.map((row) => row.dataset.messageId),
       speakers: rows.map((row) => row.dataset.speaker),
       text: rows.map((row) => row.querySelector(".body")?.textContent || ""),
+      copyLabels: rows.map((row) => row.querySelector(".history-copy")?.getAttribute("aria-label") || ""),
+      latestVoiceTurns: rows
+        .filter((row) => row.dataset.latestVoiceTranscript === "true"
+          && row.classList.contains("latest-voice-transcript"))
+        .map((row) => row.dataset.turnId),
+      retranscribeTurns: rows
+        .filter((row) => row.querySelector(".history-retranscribe"))
+        .map((row) => row.dataset.turnId),
       stale: document.getElementById("history")?.dataset.stale,
       errorHidden: document.getElementById("historyError")?.hidden,
     };
   })()`);
+  if (JSON.stringify(history.outerTurns) !== JSON.stringify(["turn_browser", "turn_android"])
+      || JSON.stringify(history.nestedSpeakers) !== JSON.stringify([["user", "assistant"], ["user", "assistant"]])) {
+    throw new Error(`${label}: outer turn cards were not newest-first with nested speaker order: ${JSON.stringify(history)}`);
+  }
   if (new Set(history.ids).size !== 4) throw new Error(`${label}: canonical ids were duplicated: ${JSON.stringify(history)}`);
   if (JSON.stringify(history.speakers) !== JSON.stringify(["user", "assistant", "user", "assistant"])) {
     throw new Error(`${label}: message ordering/speakers drifted: ${JSON.stringify(history)}`);
   }
-  if (history.text[0] !== LONG_ANDROID_TEXT || history.text[3] !== "This response is durable.") {
+  if (history.text[0] !== "Show this browser turn after restart."
+      || history.text[1] !== "This response is durable."
+      || history.text[2] !== LONG_ANDROID_TEXT
+      || history.text[3] !== "I preserved that Android direction in the shared session.") {
     throw new Error(`${label}: seeded history text was truncated or reordered: ${JSON.stringify(history)}`);
+  }
+  if (JSON.stringify(history.copyLabels) !== JSON.stringify(["Copy transcript", "", "Copy transcript", ""])) {
+    throw new Error(`${label}: retained messages did not expose accessible copy actions: ${JSON.stringify(history)}`);
+  }
+  if (JSON.stringify(history.latestVoiceTurns) !== JSON.stringify(["turn_android"])) {
+    throw new Error(`${label}: latest completed user voice transcript hook drifted: ${JSON.stringify(history)}`);
+  }
+  const expectedRetranscribeTurns = retranscriptionAdvertised ? ["turn_android"] : [];
+  if (JSON.stringify(history.retranscribeTurns) !== JSON.stringify(expectedRetranscribeTurns)) {
+    throw new Error(`${label}: re-transcribe availability did not follow advertised voice metadata: ${JSON.stringify(history)}`);
   }
   if (history.stale !== "false" || history.errorHidden !== true) {
     throw new Error(`${label}: reconciled history stayed stale/error: ${JSON.stringify(history)}`);
@@ -324,6 +428,61 @@ async function main() {
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "initial open");
 
+    const copied = await evaluate(pageCdp, `(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (value) => { globalThis.__sidepanelCopied = value; } },
+      });
+      document.querySelector("#history .history-copy")?.click();
+      return new Promise((resolveCopy) => setTimeout(() => resolveCopy({
+        value: globalThis.__sidepanelCopied,
+        feedback: document.querySelector("#history .history-copy")?.textContent,
+        label: document.querySelector("#history .history-copy")?.getAttribute("aria-label"),
+      }), 20));
+    })()`);
+    if (copied?.value !== "Show this browser turn after restart."
+        || copied?.feedback !== "Copied"
+        || !/copied$/i.test(copied?.label || "")) {
+      throw new Error(`one-click history copy did not preserve exact text or expose feedback: ${JSON.stringify(copied)}`);
+    }
+
+    const finalTranscript = await evaluate(pageCdp, `(() => {
+      if (!startVoiceLifecycleDiagnostic("sidepanel-final-transcript")) return null;
+      handleVoiceEvent({ event: { type: "transcript_partial", text: "Provisional words" } });
+      handleVoiceEvent({ event: { type: "transcript_final", text: "Provider final words" } });
+      handleVoiceEvent({ event: { type: "transcript_partial", text: "Late stale hypothesis" } });
+      handleVoiceEvent({ event: { type: "assistant_text", text: "The final transcript is ready." } });
+      handleVoiceEvent({ event: {
+        type: "turn_done",
+        turn_id: "sidepanel-final-transcript",
+        status: "completed",
+      } });
+      return true;
+    })()`);
+    if (!finalTranscript) throw new Error("could not start the final-transcript lifecycle fixture");
+    const reconciledTranscript = await waitForEval(pageCdp, `(() => {
+      const card = [...document.querySelectorAll(".turn")].at(-1);
+      const heard = card?.querySelector(".you")?.textContent || "";
+      const reply = card?.querySelector(".ag")?.textContent || "";
+      return heard === "Canonical final transcript from retained audio."
+        ? { heard, reply, status: document.getElementById("status")?.textContent }
+        : null;
+    })()`);
+    if (reconciledTranscript.reply !== "The final transcript is ready."
+        || reconciledTranscript.status !== "Ready.") {
+      throw new Error(`terminal transcript did not reconcile cleanly: ${JSON.stringify(reconciledTranscript)}`);
+    }
+
+    const retranscribed = await evaluate(pageCdp, `request({
+      cmd: "historyRetranscribe",
+      sessionId: ${JSON.stringify(SESSION_ID)},
+      turnId: "sidepanel-final-transcript",
+    })`);
+    if (!retranscribed?.ok || retranscribed.result?.transcript !== "A cleaner transcript."
+        || gateway.retranscribeCalls() !== 1) {
+      throw new Error(`panel re-transcribe proxy did not round-trip once: ${JSON.stringify(retranscribed)}`);
+    }
+
     // A failed refresh must preserve the last-good messages, mark them stale,
     // and expose a user-triggered recovery instead of presenting an empty chat.
     gateway.setHistoryFailure(true);
@@ -335,7 +494,7 @@ async function main() {
         ? { count: history.children.length, error: error.textContent }
         : null;
     })()`);
-    if (stale.count !== 4 || !/not cleared|retry/i.test(stale.error)) {
+    if (stale.count !== 2 || !/not cleared|retry/i.test(stale.error)) {
       throw new Error(`history outage did not preserve a recoverable last-good view: ${JSON.stringify(stale)}`);
     }
     gateway.setHistoryFailure(false);
@@ -381,7 +540,7 @@ async function main() {
     pageCdp.close();
     await browserCdp.send("Target.closeTarget", { targetId: pageTargetId });
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
-    await assertHydratedHistory(pageCdp, "panel reopen");
+    await assertHydratedHistory(pageCdp, "panel reopen", { retranscriptionAdvertised: false });
     if (gateway.legacyReads() < 1) throw new Error("panel reopen did not exercise the legacy /turns fallback");
 
     // Stop the isolated service-worker target while leaving the panel document
@@ -402,9 +561,92 @@ async function main() {
       throw new Error(`expected canonical history to be re-read for each document/restart, got ${gateway.messageReads()}`);
     }
 
+    gateway.setRetranscribeFailure(true);
+    await evaluate(pageCdp, `document.querySelector(
+      '#history .history-message[data-turn-id="turn_android"] .history-retranscribe'
+    )?.click(); true`);
+    const failedRetranscription = await waitForEval(pageCdp, `(() => {
+      const row = document.querySelector('#history .history-message[data-turn-id="turn_android"]');
+      const button = row?.querySelector(".history-retranscribe");
+      const status = document.getElementById("status");
+      return button?.disabled === false && /failed/i.test(status?.textContent || "")
+        ? { text: row.querySelector(":scope > .body")?.textContent, button: button.textContent }
+        : null;
+    })()`);
+    if (failedRetranscription.text !== LONG_ANDROID_TEXT || failedRetranscription.button !== "Re-transcribe") {
+      throw new Error(`failed re-transcription hid or changed the original: ${JSON.stringify(failedRetranscription)}`);
+    }
+
+    gateway.setRetranscribeFailure(false);
+    await evaluate(pageCdp, `document.querySelector(
+      '#history .history-message[data-turn-id="turn_android"] .history-retranscribe'
+    )?.click(); true`);
+    await waitForEval(pageCdp, `(() => {
+      const row = document.querySelector('#history .history-message[data-turn-id="turn_android"]');
+      return row?.dataset.transcriptRevision === "1"
+        && row?.dataset.selectedTranscriptRevision === "1"
+        && row?.querySelector(".history-retranscribe")?.disabled === false;
+    })()`);
+    await evaluate(pageCdp, `document.querySelector(
+      '#history .history-message[data-turn-id="turn_android"] .history-retranscribe'
+    )?.click(); true`);
+    const revised = await waitForEval(pageCdp, `(() => {
+      const row = document.querySelector('#history .history-message[data-turn-id="turn_android"]');
+      const revision = row?.querySelector('.history-transcript-revision[data-revision="0"]');
+      return row?.dataset.transcriptRevision === "2"
+        && row?.dataset.selectedTranscriptRevision === "2"
+        && revision
+        ? {
+            current: row.querySelector(":scope > .body")?.textContent,
+            original: revision.querySelector(".body")?.textContent,
+            copyCount: row.querySelectorAll(".history-copy").length,
+            revisions: [...row.querySelectorAll(".history-transcript-revision")]
+              .map((entry) => entry.dataset.revision),
+            retranscribeReady: row.querySelector(".history-retranscribe")?.disabled === false,
+          }
+        : null;
+    })()`);
+    if (revised.current !== "A cleaner transcript revision 2."
+        || revised.original !== LONG_ANDROID_TEXT
+        || revised.copyCount !== 4
+        || JSON.stringify(revised.revisions) !== JSON.stringify(["0", "1", "2"])
+        || revised.retranscribeReady !== true
+        || gateway.retranscribeCalls() !== 4) {
+      throw new Error(`completed transcript revisions were not individually retained: ${JSON.stringify(revised)}`);
+    }
+    const selectedOriginal = await evaluate(pageCdp, `(() => {
+      const row = document.querySelector('#history .history-message[data-turn-id="turn_android"]');
+      row?.querySelector('.history-transcript-revision[data-revision="0"] .revision-label')?.click();
+      return {
+        selected: row?.dataset.selectedTranscriptRevision,
+        presented: row?.querySelector(":scope > .body")?.textContent,
+      };
+    })()`);
+    if (selectedOriginal.selected !== "0" || selectedOriginal.presented !== LONG_ANDROID_TEXT) {
+      throw new Error(`selecting the original did not present that exact revision: ${JSON.stringify(selectedOriginal)}`);
+    }
+    const copiedOriginal = await evaluate(pageCdp, `(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (value) => { globalThis.__sidepanelCopiedRevision = value; } },
+      });
+      document.querySelector(
+        '#history .history-message[data-turn-id="turn_android"] .history-transcript-revision .history-copy'
+      )?.click();
+      return new Promise((resolveCopy) => setTimeout(
+        () => resolveCopy(globalThis.__sidepanelCopiedRevision),
+        20,
+      ));
+    })()`);
+    if (copiedOriginal !== LONG_ANDROID_TEXT) {
+      throw new Error("original transcript revision was not independently copyable");
+    }
+
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
-        "canonical mixed-surface history hydrated and deduplicated on first open, panel reopen, and extension/background restart; " +
+        "canonical mixed-surface history hydrated as newest-first outer turn cards with nested user/assistant content on first open, panel reopen, and extension/background restart; " +
+        "newest turns rendered first with speaker order intact, exact copy feedback worked, final voice transcript reconciled from storage; " +
+        "the retained-audio proxy failed safely, then re-transcribed twice into chronological revisions 0/1/2 with latest selected and older versions copyable; " +
         "agee-panel port round-tripped, conversational roles had no selector, Delegate confirmation cancelled safely, " +
         "open-agee-panel and chrome.sidePanel.open remained available.",
     );

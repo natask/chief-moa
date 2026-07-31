@@ -406,11 +406,11 @@ function firstText(record, fields) {
   for (const field of fields) {
     const value = record?.[field];
     const text = typeof value === "string"
-      ? value.trim()
+      ? value
       : typeof value?.text === "string"
-        ? value.text.trim()
+        ? value.text
         : "";
-    if (text) return text;
+    if (text.trim()) return text;
   }
   return "";
 }
@@ -420,6 +420,43 @@ function stableRecordBase(record, index) {
     record?.message_id || record?.messageId || record?.id || record?.turn_id ||
     record?.turnId || record?.browser_turn_id || `legacy_${index}`
   );
+}
+
+function historyTimestamp(record) {
+  return String(
+    record?.created_at || record?.createdAt || record?.timestamp ||
+    record?.completed_at || record?.updated_at || ""
+  );
+}
+
+function normalizeVoiceHistory(record) {
+  const history = record?.voice_history;
+  if (!history || typeof history !== "object" || Array.isArray(history)) return null;
+  const revisions = Array.isArray(history.transcript_revisions)
+    ? history.transcript_revisions.flatMap((entry) => {
+      const revision = Number(entry?.revision);
+      const transcript = typeof entry?.transcript === "string" ? entry.transcript : "";
+      if (!Number.isSafeInteger(revision) || revision < 0 || !transcript.trim()) return [];
+      return [{
+        revision,
+        transcript,
+        source: String(entry.source || entry.transcript_source || "").trim(),
+        createdAt: String(entry.created_at || "").trim(),
+      }];
+    }).slice(0, 20)
+    : [];
+  const currentRevision = Number(history.current_revision);
+  const revisionCount = Number(history.revision_count);
+  return {
+    audioAccessible: history.audio_accessible === true,
+    audioAccessibility: String(history.audio_accessibility || "").trim(),
+    retranscriptionSupported: history.retranscription_supported === true,
+    retranscriptionAvailable: history.retranscription_available === true,
+    currentRevision: Number.isSafeInteger(currentRevision) && currentRevision >= 0 ? currentRevision : null,
+    revisionCount: Number.isSafeInteger(revisionCount) && revisionCount >= 0 ? revisionCount : revisions.length,
+    revisionsTruncated: history.revisions_truncated === true,
+    revisions,
+  };
 }
 
 function normalizeHistoryMessages(payload) {
@@ -439,11 +476,19 @@ function normalizeHistoryMessages(payload) {
     const kind = String(record.source_kind || record.kind || record.input_mode || "").trim();
     const completion = String(record.completion_state || record.status || "").trim();
     const meta = [source, kind, completion && completion !== "completed" ? completion : ""].filter(Boolean).join(" · ");
+    const createdAt = historyTimestamp(record);
+    const voiceHistory = speaker === "user" && kind.toLowerCase() === "voice"
+      ? normalizeVoiceHistory(record)
+      : null;
+    const sessionId = String(record.session_id || record.sessionId || "").trim();
     if (speaker) {
       const text = speaker === "user"
         ? firstText(record, ["text", "content", "user_text", "transcript", "instruction"])
         : firstText(record, ["text", "content", "assistant_text", "reply_text", "reply", "display"]);
-      if (text) messages.push({ id: baseId, turnId, speaker, text, meta });
+      if (text) messages.push({
+        id: baseId, turnId: turnId || baseId, speaker, text, meta, createdAt,
+        sourceIndex: index, kind, completion, sessionId, voiceHistory,
+      });
       return;
     }
 
@@ -452,40 +497,229 @@ function normalizeHistoryMessages(payload) {
     // identity heuristic.
     const userText = firstText(record, ["user_text", "transcript", "instruction"]);
     const assistantText = firstText(record, ["assistant_text", "reply_text", "reply", "display", "text"]);
-    if (userText) messages.push({ id: `${baseId}:user`, turnId: turnId || baseId, speaker: "user", text: userText, meta });
-    if (assistantText) messages.push({ id: `${baseId}:assistant`, turnId: turnId || baseId, speaker: "assistant", text: assistantText, meta });
+    if (userText) messages.push({
+      id: `${baseId}:user`, turnId: turnId || baseId, speaker: "user", text: userText,
+      meta, createdAt, sourceIndex: index, kind, completion,
+    });
+    if (assistantText) messages.push({
+      id: `${baseId}:assistant`, turnId: turnId || baseId, speaker: "assistant", text: assistantText,
+      meta, createdAt, sourceIndex: index, kind, completion,
+    });
   });
 
   const seen = new Set();
-  return messages.filter((message) => {
+  const unique = messages.filter((message) => {
     if (!message.id || seen.has(message.id)) return false;
     seen.add(message.id);
     return true;
   });
+  const turns = new Map();
+  for (const message of unique) {
+    const group = turns.get(message.turnId) || {
+      id: message.turnId,
+      messages: [],
+      sourceIndex: message.sourceIndex,
+      createdAt: message.createdAt,
+    };
+    group.messages.push(message);
+    group.sourceIndex = Math.max(group.sourceIndex, message.sourceIndex);
+    if (message.createdAt > group.createdAt) group.createdAt = message.createdAt;
+    turns.set(message.turnId, group);
+  }
+  const reverseUntimedTurns = payload?.source === "turns";
+  const ordered = [...turns.values()]
+    .sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt) ||
+      (reverseUntimedTurns
+        ? right.sourceIndex - left.sourceIndex
+        : left.sourceIndex - right.sourceIndex) ||
+      right.id.localeCompare(left.id))
+    .flatMap((group) => group.messages.sort((left, right) =>
+      (left.speaker === "user" ? 0 : 1) - (right.speaker === "user" ? 0 : 1) ||
+      left.sourceIndex - right.sourceIndex ||
+      left.id.localeCompare(right.id)));
+  const latestVoiceTranscript = ordered.find((message) =>
+    message.speaker === "user" &&
+    message.kind.toLowerCase() === "voice" &&
+    ["completed", "complete"].includes(message.completion.toLowerCase()));
+  if (latestVoiceTranscript) latestVoiceTranscript.latestVoiceTranscript = true;
+  return ordered;
+}
+
+async function copyHistoryText(text) {
+  const value = String(text ?? "");
+  if (!value) return false;
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {}
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.documentElement.appendChild(textarea);
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {}
+  textarea.remove();
+  return copied;
+}
+
+function historyCopyButton(message, textSource = () => message.text) {
+  const button = document.createElement("button");
+  const speaker = message.speaker === "assistant" ? "Ag response" : "transcript";
+  button.type = "button";
+  button.className = "history-copy";
+  button.textContent = "Copy";
+  button.setAttribute("aria-label", `Copy ${speaker}`);
+  button.setAttribute("aria-live", "polite");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    const copied = await copyHistoryText(textSource());
+    button.textContent = copied ? "Copied" : "Copy failed";
+    button.setAttribute("aria-label", copied ? `${speaker} copied` : `Could not copy ${speaker}`);
+    setTimeout(() => {
+      button.disabled = false;
+      button.textContent = "Copy";
+      button.setAttribute("aria-label", `Copy ${speaker}`);
+    }, 1600);
+  });
+  return button;
+}
+
+function renderTranscriptRevisions(item, message, selectRevision) {
+  const history = message.voiceHistory;
+  if (!history?.revisions.length) return;
+  const fragment = document.createDocumentFragment();
+  const rows = [];
+  for (const revision of [...history.revisions].sort((left, right) => left.revision - right.revision)) {
+    const row = document.createElement("div");
+    row.className = "history-transcript-revision";
+    row.dataset.revision = String(revision.revision);
+    row.dataset.selected = String(revision.revision === history.currentRevision);
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "revision-label";
+    label.textContent = revision.revision === 0 ? "Original transcript" : `Transcript revision ${revision.revision}`;
+    label.setAttribute("aria-pressed", String(revision.revision === history.currentRevision));
+    label.addEventListener("click", () => {
+      for (const candidate of rows) {
+        const selected = candidate === row;
+        candidate.dataset.selected = String(selected);
+        candidate.querySelector(".revision-label")?.setAttribute("aria-pressed", String(selected));
+      }
+      selectRevision(revision);
+    });
+    const body = document.createElement("div");
+    body.className = "body";
+    body.textContent = revision.transcript;
+    row.append(label, body, historyCopyButton(message, () => revision.transcript));
+    rows.push(row);
+    fragment.appendChild(row);
+  }
+  item.appendChild(fragment);
+}
+
+function historyRetranscribeButton(message) {
+  const available = message.speaker === "user" &&
+    message.kind.toLowerCase() === "voice" &&
+    message.voiceHistory?.retranscriptionAvailable === true &&
+    message.voiceHistory?.audioAccessible === true &&
+    message.voiceHistory?.retranscriptionSupported === true &&
+    Boolean(message.sessionId && message.turnId);
+  if (!available) return null;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "history-retranscribe";
+  button.textContent = "Re-transcribe";
+  button.setAttribute("aria-label", "Re-transcribe retained audio");
+  button.setAttribute("aria-live", "polite");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Re-transcribing…";
+    try {
+      const response = await request({
+        cmd: "historyRetranscribe",
+        sessionId: message.sessionId,
+        turnId: message.turnId,
+      }, TURN_WATCHDOG_MS);
+      if (!response?.ok) throw new Error(response?.error || "Re-transcription failed.");
+      button.textContent = "Re-transcribed";
+      setStatus("Transcript updated.");
+      await refreshHistory({ reason: "re-transcription completed" });
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Re-transcribe";
+      button.setAttribute("aria-label", `Re-transcription failed. ${String(error?.message || error)}`);
+      setStatus(`Re-transcription failed: ${String(error?.message || error)}`, "error");
+    }
+  });
+  return button;
+}
+
+function renderHistoryMessage(message) {
+  const item = document.createElement("section");
+  item.className = "history-message";
+  item.dataset.messageId = message.id;
+  item.dataset.turnId = message.turnId;
+  item.dataset.speaker = message.speaker;
+  if (message.voiceHistory?.currentRevision != null) {
+    item.dataset.transcriptRevision = String(message.voiceHistory.currentRevision);
+    item.dataset.selectedTranscriptRevision = String(message.voiceHistory.currentRevision);
+  }
+  if (message.latestVoiceTranscript) {
+    item.classList.add("latest-voice-transcript");
+    item.dataset.latestVoiceTranscript = "true";
+  }
+  const speaker = document.createElement("div");
+  speaker.className = "speaker";
+  speaker.textContent = message.speaker === "assistant" ? "Ag" : "you";
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent = message.text;
+  item.append(speaker, body);
+  let selectedTranscript = message.text;
+  if (message.speaker === "user") {
+    item.appendChild(historyCopyButton(message, () => selectedTranscript));
+  }
+  renderTranscriptRevisions(item, message, (revision) => {
+    selectedTranscript = revision.transcript;
+    body.textContent = revision.transcript;
+    item.dataset.selectedTranscriptRevision = String(revision.revision);
+  });
+  const retranscribe = historyRetranscribeButton(message);
+  if (retranscribe) item.appendChild(retranscribe);
+  if (message.meta) {
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = message.meta;
+    item.appendChild(meta);
+  }
+  return item;
 }
 
 function renderHistory(messages) {
-  const fragment = document.createDocumentFragment();
+  const turns = new Map();
   for (const message of messages) {
-    const item = document.createElement("article");
-    item.className = "history-message";
-    item.dataset.messageId = message.id;
-    item.dataset.turnId = message.turnId;
-    item.dataset.speaker = message.speaker;
-    const speaker = document.createElement("div");
-    speaker.className = "speaker";
-    speaker.textContent = message.speaker === "assistant" ? "Ag" : "you";
-    const body = document.createElement("div");
-    body.className = "body";
-    body.textContent = message.text;
-    item.append(speaker, body);
-    if (message.meta) {
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = message.meta;
-      item.appendChild(meta);
+    const group = turns.get(message.turnId) || [];
+    group.push(message);
+    turns.set(message.turnId, group);
+  }
+  const fragment = document.createDocumentFragment();
+  for (const [turnId, turnMessages] of turns) {
+    const card = document.createElement("article");
+    card.className = "history-turn";
+    card.dataset.turnId = turnId;
+    const latestVoice = turnMessages.some((message) => message.latestVoiceTranscript);
+    if (latestVoice) {
+      card.classList.add("latest-voice-turn");
+      card.dataset.latestVoiceTurn = "true";
     }
-    fragment.appendChild(item);
+    card.append(...turnMessages.map(renderHistoryMessage));
+    fragment.appendChild(card);
   }
   historyEl.replaceChildren(fragment);
 }
@@ -635,8 +869,10 @@ function newTurnState(kind, youText) {
     turnId: `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     voiceSessionId: null,
     transcript: "",
+    transcriptFinal: false,
     replyText: "",
     done: false,
+    terminalPending: false,
     watchdog: null,
     ui: addTurnCard(youText || ""),
   };
@@ -720,7 +956,11 @@ function recoverTurn(state, fallbackMessage) {
         const reply = String(res?.turn?.assistant_text || res?.turn?.reply_text || "").trim();
         const heard = String(res?.turn?.transcript || "").trim();
         if (reply) {
-          if (heard && !state.transcript) updateCard(state, { you: heard });
+          if (heard) {
+            state.transcript = heard;
+            state.transcriptFinal = true;
+            updateCard(state, { you: heard });
+          }
           updateCard(state, { reply });
           finishTurn(state);
         } else {
@@ -729,6 +969,69 @@ function recoverTurn(state, fallbackMessage) {
       })
       .catch(() => failTurn(state, fallbackMessage));
   }, 1500);
+}
+
+function finalTranscriptFromEvent(message) {
+  return firstText(message, ["transcript", "user_text", "final_transcript"]);
+}
+
+async function reconcileStoredVoiceTurn(state) {
+  const ids = [...new Set([state.canonicalTurnId, state.turnId].filter(Boolean))];
+  for (const turnId of ids) {
+    try {
+      const response = await request({ cmd: "voiceTurnFetch", turnId }, 3000);
+      const stored = response?.turn;
+      if (!stored) continue;
+      const heard = firstText(stored, ["transcript", "user_text", "final_transcript"]);
+      const reply = firstText(stored, ["assistant_text", "reply_text", "reply"]);
+      if (heard) {
+        state.transcript = heard;
+        state.transcriptFinal = true;
+        updateCard(state, { you: heard });
+      }
+      if (reply) {
+        state.replyText = reply;
+        updateCard(state, { reply });
+      }
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+async function completeVoiceTurn(state, message) {
+  if (state.done || state.terminalPending) return;
+  state.terminalPending = true;
+  const status = String(message.status || "completed").toLowerCase();
+  if (message.turn_id) state.canonicalTurnId = String(message.turn_id);
+  const eventTranscript = finalTranscriptFromEvent(message);
+  if (eventTranscript) {
+    state.transcript = eventTranscript;
+    state.transcriptFinal = true;
+    updateCard(state, { you: eventTranscript });
+  }
+  if (status === "error") {
+    state.terminalPending = false;
+    failTurn(state, String(message.message || message.error || "Voice turn failed."));
+    return;
+  }
+
+  // `turn_done` means the gateway has closed the canonical record. Re-read it
+  // before retiring the live card so a provisional hypothesis cannot remain
+  // visible when the stored final transcript differs.
+  await reconcileStoredVoiceTurn(state);
+  state.terminalPending = false;
+  if (state.done) return;
+  if (status === "no_speech" && !state.replyText) {
+    updateCard(state, { error: "Didn't catch that." });
+    finishTurn(state);
+    return;
+  }
+  if (!state.replyText) {
+    recoverTurn(state, "The turn completed but no reply arrived.");
+    return;
+  }
+  finishTurn(state);
 }
 
 function handleVoiceEvent(payload) {
@@ -751,7 +1054,9 @@ function handleVoiceEvent(payload) {
   if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
     const text = String(msg.text || "").trim();
     if (!text) return;
+    if (msg.type === "transcript_partial" && state.transcriptFinal) return;
     state.transcript = text;
+    state.transcriptFinal = msg.type === "transcript_final";
     updateCard(state, { you: text });
     return;
   }
@@ -771,19 +1076,7 @@ function handleVoiceEvent(payload) {
     return;
   }
   if (msg.type === "turn_done") {
-    const status = String(msg.status || "completed").toLowerCase();
-    if (msg.turn_id) state.canonicalTurnId = String(msg.turn_id);
-    if (status === "error") {
-      failTurn(state, String(msg.message || msg.error || "Voice turn failed."));
-      return;
-    }
-    if (status === "no_speech" && !state.replyText) {
-      updateCard(state, { error: "Didn't catch that." });
-    } else if (!state.replyText) {
-      recoverTurn(state, "The turn completed but no reply arrived.");
-      return;
-    }
-    finishTurn(state);
+    completeVoiceTurn(state, msg);
     return;
   }
   if (msg.type === "error") {
@@ -997,4 +1290,18 @@ createBrowserToolCatalogView({
 
 // Keep the small diagnostic surface used by the browser smoke harness. These
 // functions were document globals before sidepanel.js became an ES module.
-Object.assign(globalThis, { refreshHistory, request, roleForInstruction });
+function startVoiceLifecycleDiagnostic(turnId) {
+  if (turn && !turn.done) return false;
+  const state = newTurnState("voice", "");
+  state.turnId = String(turnId || state.turnId);
+  turn = state;
+  return true;
+}
+
+Object.assign(globalThis, {
+  handleVoiceEvent,
+  refreshHistory,
+  request,
+  roleForInstruction,
+  startVoiceLifecycleDiagnostic,
+});
