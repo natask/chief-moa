@@ -117,8 +117,14 @@ Moa Gateway
   cross-surface conversation history. It merges gateway-owned chat, voice,
   browser, and broker records into stable user/assistant messages, preserves
   source and completeness metadata, and removes duplicates only when records
-  carry an explicit shared identity. Android and browser clients may cache or
-  render this projection, but do not become conversation stores.
+  carry an explicit shared identity. The latest-N result orders turns newest
+  first while keeping the user message before the assistant message inside each
+  turn. A voice user message may include `voice_history`: current revision,
+  total revision count, truncation state, retained-audio accessibility, and a
+  bounded chronological revision list. The list preserves the original and the
+  newest completed revisions when the full chain exceeds its bound. Android and
+  browser clients may cache or render this projection, but do not become
+  conversation stores.
 
   Completed capture-only dictation is also projected into a durable
   `capture_block`. The block preserves the literal transcript, completeness,
@@ -127,7 +133,9 @@ Moa Gateway
   non-executable proposal (`file_only` / `unclassified` by default), not an
   action, task, model invocation, or agent dispatch. Projection and routing run
   after the latency-sensitive transcript/clipboard result and may reconcile
-  idempotently from completed turns after a restart.
+  idempotently from completed turns after a restart. Re-transcription revisions
+  are not yet projected into capture blocks; that reconciliation remains a
+  separate additive change.
 
   Streaming STT treats provider hypotheses as replacements, not append-only
   text. Final result identities are idempotent within a provider stream, while
@@ -879,6 +887,25 @@ transcript, which the gateway always requests from the Live provider
 (`inputAudioTranscription`), so the exact-transcript guarantee holds on every
 Live model.
 
+An STT-capable cascaded voice session advertises
+`session_ready.transcript_finalize.supported`. A capture-only client may send
+`finalize_transcript` instead of `commit_turn`. The gateway closes the retained
+PCM stream, runs only the provider transcription leg, stores the literal
+transcript and audio-backed turn, and returns terminal `transcript_finalized`.
+This path runs no reasoner, tool, action proposal, assistant text, TTS, or
+`turn_done` conversation completion. An unsupported provider fails visibly
+instead of routing the capture through the ordinary answer pipeline.
+
+`POST /v1/voice/turns/:sessionId/:turnId/retranscribe` may run STT again over
+accessible retained PCM. Each successful explicit request appends a
+chronological transcript revision, updates the turn's current transcript, and
+keeps the original and older revisions. Re-transcription is repeatable and does
+not rerun reasoning or TTS. The canonical session-message projection exposes at
+most eight completed revisions: the original plus the newest seven in
+chronological order, with the full count, current revision, and truncation
+state. Missing, deleted, expired, or inaccessible audio leaves stored text
+readable and copyable.
+
 Native-audio Live models are audio-only for output: they reject any text-output
 request and close the socket with 1007 "Text output is not supported for native
 audio output model." The gateway therefore omits `outputAudioTranscription` for
@@ -1208,6 +1235,13 @@ transcript, and terminal result. A late-opened tab hydrates from that state, and
 an invocation from any tab stops or commits the already active dictation rather
 than starting a second recorder. Terminal cleanup is generation-bound so a late
 event from an older turn cannot clear or overwrite a newer turn.
+
+Capture-only browser dictation waits for terminal `transcript_finalized` before
+copying the exact final transcript. It does not copy an interim hypothesis or
+open the ordinary reasoning and reply path. The browser History workspace groups
+each recording into one newest-first outer card, selects the latest completed
+transcript revision by default, and keeps the bounded chronological revisions
+selectable and copyable inside that card.
 
 Each spoken
 browser utterance gets its own turn id under the stable browser session id. When
@@ -1974,6 +2008,8 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   capture-only turn. It preserves the literal transcript and completeness,
   retained media reference, surface/session/turn identity, language, and
   provider provenance. It is evidence and grants no execution authority.
+  Transcript-revision projection is not implemented; capture blocks currently
+  retain their completed-turn transcript until an additive reconciliation lands.
 - `capture_route_proposal`: an append-only classification attached to a
   `capture_block`. The initial safe result is `file_only` / `unclassified` with
   `executable=false` and `model_used=false`; later reflection, topic, or intent
@@ -2192,6 +2228,11 @@ queues.
 - `gateway/lib/session-messages.js`: canonical bounded cross-surface session
   message projection with stable identities, provenance, and explicit-link
   deduplication.
+- `gateway/lib/session-message-voice-history.js`: bounded retained-audio state
+  and chronological transcript-revision projection for canonical voice user
+  messages.
+- `gateway/lib/voice-transcript-finalize.js`: STT-only
+  `finalize_transcript` completion and terminal `transcript_finalized` receipt.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
   validators, active pointers, and runtime projection for conversational
   customization.

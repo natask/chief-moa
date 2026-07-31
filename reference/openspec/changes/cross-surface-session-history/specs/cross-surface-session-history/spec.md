@@ -212,6 +212,48 @@ original and every older revision.
   and copyable
 - **AND** the affected turn shows a retryable error
 
+### Requirement: Capture Finalization Runs STT Only
+
+An STT-capable voice session SHALL advertise transcript finalization support.
+When the client sends `finalize_transcript`, the gateway SHALL retain the
+captured PCM, run only speech recognition, store the literal transcript, and
+emit terminal `transcript_finalized`. It SHALL NOT run reasoning, tools, action
+proposals, assistant text, or TTS.
+
+#### Scenario: Browser finalizes capture-only dictation
+
+- **WHEN** the browser sends `finalize_transcript` for a recording turn on a
+  session that advertised support
+- **THEN** the gateway runs STT once and stores the exact final transcript with
+  its retained audio
+- **AND** emits `transcript_finalized` with the session and turn identity
+- **AND** emits no assistant text, assistant audio, action, or ordinary
+  `turn_done`
+- **AND** the browser copies only the terminal transcript
+
+### Requirement: Canonical Transcript Revisions Are Bounded
+
+The canonical session-message projection SHALL return completed transcript
+revisions in chronological order. It SHALL expose no more than eight revisions
+per voice user message. When more exist, it SHALL preserve the original and the
+newest seven. It SHALL report the full revision count, current revision, and
+whether the projected list was truncated.
+
+#### Scenario: Stored turn has twelve completed revisions
+
+- **WHEN** History reads a voice turn with revisions zero through eleven
+- **THEN** the canonical message reports twelve total revisions and current
+  revision eleven
+- **AND** returns revisions zero and five through eleven in chronological order
+- **AND** marks the revision list truncated
+
+#### Scenario: Capture block exists for a later revised turn
+
+- **WHEN** re-transcription appends a later transcript revision
+- **THEN** canonical session History exposes the bounded revision chain
+- **AND** this change does not claim that the existing capture block reconciled
+  that later revision
+
 ### Requirement: Extension Toolbar Opens The Workspace
 
 The browser extension toolbar action SHALL open the side-panel workspace for

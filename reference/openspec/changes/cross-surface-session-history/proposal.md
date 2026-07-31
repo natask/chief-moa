@@ -9,7 +9,10 @@ still requires its own verification, commit, artifact, and promotion evidence.
 The shared projection is implemented. The browser transcript-history polish
 unit below is accepted follow-on product direction. It changes the canonical
 latest-N order to newest first and does not reopen the completed Android history
-slice beyond consuming that corrected order.
+slice beyond consuming that corrected order. The STT-only capture finalization,
+repeatable re-transcription, bounded revision projection, and browser History
+presentation in this unit are implemented and verified. Search and capture-block
+revision projection remain follow-ons.
 
 ## Source Intent
 
@@ -77,6 +80,13 @@ inventing its own partial conversation history.
   revision when the turn has accessible retained audio.
 - Open the side-panel workspace when the user clicks the browser extension
   toolbar action. Keep existing double-tap and session gestures unchanged.
+- Add an additive capture-only voice completion: the client sends
+  `finalize_transcript`, the gateway runs STT without reasoning or TTS, and the
+  gateway returns terminal `transcript_finalized` with the stored literal
+  transcript.
+- Bound canonical revision reads while keeping the full stored chain: expose the
+  original plus the newest completed revisions in chronological order, along
+  with current revision, total count, and truncation state.
 
 ## Non-Goals And Explicit Follow-Ons
 
@@ -91,6 +101,7 @@ after this recovery wave rather than silently dropped:
 - comparative STT and voice-provider evaluation;
 - cursor-complete or time-window history export and historical intent review;
 - transcript-history search;
+- capture-block reconciliation after a voice transcript gains later revisions;
 - Android overlay/native/remove ergonomics and remaining physical-phone gesture
   QA;
 - multimodal presentation input, including explicitly granted image, slide,

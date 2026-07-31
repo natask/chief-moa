@@ -85,26 +85,35 @@ this recovery wave.
 
 ## 6. Browser Transcript-History Polish
 
-- [ ] 6.1 Change the canonical gateway latest-N projection to return the newest
+- [x] 6.0 Add the negotiated STT-only capture path:
+      `finalize_transcript` closes and retains PCM, runs no reasoner/tool/TTS
+      work, stores the literal transcript, and returns `transcript_finalized`.
+- [x] 6.1 Change the canonical gateway latest-N projection to return the newest
       turn first. Keep the user message before the assistant message within each
       turn and retain deterministic identity tie-breaking.
-- [ ] 6.2 Render one outer History card or section per recording, ordered newest
+- [x] 6.2 Render one outer History card or section per recording, ordered newest
       to oldest. Show the latest completed transcript version by default. Render
       original and re-transcribed versions as an inward card stack with a
       chronological revision selector.
-- [ ] 6.3 Add exact Copy to every selectable transcript version. Copy only the
+- [x] 6.3 Add exact Copy to every selectable transcript version. Copy only the
       selected text, with no label, timestamp, assistant response, or metadata.
 - [ ] 6.4 Remove repeated page, provider, session, agent, developer, and
       duplicate current-turn status blocks from the default History list. Keep
       current load errors and actions visible. Move linked run and receipt
       evidence behind a secondary detail view.
-- [ ] 6.5 Add explicit audio-backed Re-transcribe for messages whose canonical
+- [x] 6.5 Add explicit audio-backed Re-transcribe for messages whose canonical
       record exposes accessible retained audio. Allow repeated explicit
       attempts. Append each success as a labeled revision, make the latest
       success the default, and preserve every older selectable version.
-- [ ] 6.6 Make the extension toolbar action open the side-panel workspace
+- [x] 6.6 Make the extension toolbar action open the side-panel workspace
       without creating a turn or changing the active session. Preserve existing
       double-tap and session gestures. Keep History search as a follow-on.
+- [x] 6.7 Bound the canonical voice-history projection to eight completed
+      revisions. Preserve the original plus the newest seven in chronological
+      order and report the full count, current revision, and truncation state.
+- [ ] 6.8 Add transcript-history search across recordings and revisions.
+- [ ] 6.9 Reconcile later transcript revisions into the durable capture-block
+      projection without losing its original completed-turn evidence.
 
 Acceptance: a gateway fixture seeds three turns and proves latest-N returns
 turns newest first while each user message precedes its assistant message. An
@@ -117,3 +126,8 @@ actions append two revisions without changing older versions. The extension
 toolbar action opens the side panel without changing session or gesture state.
 The default list contains no repeated page, provider, session, agent, or
 developer status blocks and no search field.
+
+Verified 2026-07-30 with focused gateway unit tests for finalization, ordering,
+audio capability, and bounded revisions; the browser capture disposition unit
+test; `npm run smoke:voice-retranscribe`; and `npm run smoke:sidepanel`. Task 6.4
+stays open because the linked run/receipt secondary detail view is not complete.

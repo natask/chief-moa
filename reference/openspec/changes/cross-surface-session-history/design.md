@@ -48,6 +48,14 @@ surface/kind, and excluded/unreadable counts. Cursor-complete export and
 time-window snapshots stay with the `historical-intent-to-implementation`
 follow-on rather than this UI recovery wave.
 
+Voice user messages carry additive `voice_history` data when the gateway can
+resolve the stored turn. The projection reports retained-audio accessibility
+from a storage probe, not from a stale byte count. It also reports
+`current_revision`, `revision_count`, `revisions_truncated`, and at most eight
+completed `transcript_revisions`. Revisions stay chronological. When the full
+chain exceeds eight entries, the projection keeps revision zero and the newest
+seven completed revisions. The stored turn keeps the full append-only chain.
+
 ### Deduplication
 
 One accepted user turn may be mirrored as a voice/chat turn, broker event, and
@@ -116,7 +124,8 @@ It does not repeat page identity, provider details, session selectors, agent
 selectors, developer diagnostics, or duplicate current-turn status between
 cards. A load error, missing-audio reason, or active re-transcription state may
 appear because it changes what the user can do now. Linked run and receipt
-details remain available through a secondary detail view when present.
+details do not appear in the default list. A secondary detail view for that
+evidence remains open work.
 
 Retained transcript display and re-transcription have separate contracts:
 
@@ -138,6 +147,33 @@ Retained transcript display and re-transcription have separate contracts:
 
 This unit does not change raw-audio retention defaults. It consumes only audio
 that the user already retained under the existing storage policy.
+
+### STT-only capture finalization
+
+```text
+browser capture reaches disposition
+  -> client sends finalize_transcript for the active voice turn
+  -> gateway closes and retains the PCM stream
+  -> provider runs STT only
+  -> gateway stores the literal transcript and capture-only turn
+  -> gateway emits transcript_finalized
+  -> browser copies the terminal transcript and refreshes History
+```
+
+The gateway advertises this additive capability in `session_ready`. The path
+does not call the reasoner, tool loop, action broker, assistant text hooks, or
+TTS. It does not emit ordinary `turn_done`. An unsupported provider or empty STT
+result fails visibly under the capture-only contract.
+
+The later re-transcription route reads retained PCM and runs STT only. Each
+successful explicit request appends a new revision and makes it current.
+Repeated requests remain valid. A failed request appends no revision and keeps
+all completed text readable.
+
+The canonical session history owns revision presentation in this unit.
+`capture_block` continues to preserve its completed-turn transcript and does not
+yet reconcile later revisions. Search across recordings and revisions also
+remains a follow-on.
 
 ### Browser workspace entry
 
