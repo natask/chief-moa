@@ -14,6 +14,44 @@ const { handleTtsRetry, MAX_RECEIPTS, MAX_RETRIES_PER_TURN } = require("../lib/v
 const FORMAT = { encoding: "pcm16", sample_rate: 16000, channels: 1 };
 const REPLY = "First sentence.\n\n   Second sentence.";
 
+test("a short unpunctuated first phrase reaches TTS before reasoning completes", async () => {
+  const provider = createVoiceProvider({
+    env: {
+      MOA_MODE: "local", VOICE_PROVIDER: "chirp",
+      VOICE_REASONING_PROVIDER: "gateway", VOICE_TTS_PROVIDER: "cloud-tts",
+      VOICE_STREAMING: "1", VOICE_CHUNK_FIRST_FLUSH_MS: "50",
+      CHIRP_MODEL: "chirp_3", GCP_PROJECT_ID: "test-project", CHIRP_ACCESS_TOKEN: "test-token",
+    },
+    reasoner: async () => ({}),
+  });
+  let resolveAudio;
+  const firstAudio = new Promise((resolve) => { resolveAudio = resolve; });
+  provider.synthesizeSpeech = async () => Buffer.alloc(320, 1);
+  const pipeline = provider.createStreamingReplyPipeline({
+    hooks: {
+      isTurnActive: () => true,
+      onAssistantAudioStart: async () => {},
+      onAssistantAudioSegment: async () => {},
+      sendAudio: async (_pcm, metadata) => resolveAudio(metadata.segmentText),
+      onAssistantAudioDone: async () => {},
+    },
+    language: "en-US",
+    turnStartedAtMs: Date.now(),
+    voice: "Kore",
+    speakingRate: 1,
+    tone: "",
+    playbackRate: 1,
+  });
+
+  pipeline.pushDelta("Short reply without punctuation");
+  const spoken = await Promise.race([
+    firstAudio,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("first phrase stayed buffered")), 300)),
+  ]);
+  assert.equal(spoken, "Short reply without");
+  await pipeline.finish();
+});
+
 test("a second-chunk TTS failure is explicit and the unheard suffix can be retried idempotently", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-partial-tts-"));
   let synthesisCall = 0;

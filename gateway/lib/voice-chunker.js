@@ -3,8 +3,8 @@
 // Sentence/clause chunker for the streaming cascaded voice pipeline, plus the
 // incremental speak-text sanitizer that feeds it. Pure functions and plain
 // state — no I/O, no timers. The force-break timer is owned by the CALLER
-// (the TTS pipeline): when `pendingLength() >= minChars` and no chunk has been
-// produced for `flushTimeoutMs` (see `nextDeadline()`), the caller invokes
+// (the TTS pipeline): when `pendingLength() >= minPendingForForceBreak()` and
+// no chunk has been produced before `nextDeadline()`, the caller invokes
 // `forceBreak()` explicitly. That keeps this module unit-testable with plain
 // asserts.
 //
@@ -28,6 +28,7 @@
 const DEFAULT_FIRST_CHUNK_MAX_CHARS = 60;
 const DEFAULT_MIN_CHARS = 60;
 const DEFAULT_MAX_CHARS = 220;
+const DEFAULT_FIRST_FLUSH_TIMEOUT_MS = 250;
 const DEFAULT_FLUSH_TIMEOUT_MS = 1200;
 // A bracketed expressive tag is at most this long including the brackets;
 // anything longer is treated as literal prose, matching the 40–60 char tag
@@ -48,6 +49,7 @@ function createSpeechChunker(options = {}) {
   const firstChunkMaxChars = positiveInt(options.firstChunkMaxChars, DEFAULT_FIRST_CHUNK_MAX_CHARS);
   const minChars = positiveInt(options.minChars, DEFAULT_MIN_CHARS);
   const maxChars = Math.max(positiveInt(options.maxChars, DEFAULT_MAX_CHARS), firstChunkMaxChars);
+  const firstFlushTimeoutMs = positiveInt(options.firstFlushTimeoutMs, DEFAULT_FIRST_FLUSH_TIMEOUT_MS);
   const flushTimeoutMs = positiveInt(options.flushTimeoutMs, DEFAULT_FLUSH_TIMEOUT_MS);
 
   let pending = "";
@@ -279,13 +281,19 @@ function createSpeechChunker(options = {}) {
       return emittedChunks;
     },
 
+    minPendingForForceBreak() {
+      return effectiveMin();
+    },
+
     nextDeadline() {
       if (!pending.trim()) {
         return 0;
       }
-      return (lastProgressAt || Date.now()) + flushTimeoutMs;
+      const timeoutMs = emittedChunks === 0 ? firstFlushTimeoutMs : flushTimeoutMs;
+      return (lastProgressAt || Date.now()) + timeoutMs;
     },
 
+    firstFlushTimeoutMs,
     flushTimeoutMs,
     minChars,
   };

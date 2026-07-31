@@ -1152,7 +1152,12 @@ enders (`. ! ? …` and Ethiopic `። ፧ ፨`) are the primary boundary, clause
 enders (`, ; :` and Ethiopic `፣ ፤ ፥`) apply once the pending text is already
 past a minimum length, and a hard split at the last whitespace applies past a
 maximum length. The first chunk of a reply uses tighter thresholds so the
-first sentence reaches TTS as fast as possible, and a bracketed
+first sentence reaches TTS as fast as possible. If punctuation has not arrived,
+the caller force-emits the first speakable phrase after a 250 ms microbatch;
+unlike the 700 ms later-phrase timer, that first timer has no 60-character
+floor. Model token deltas are therefore parsed immediately without issuing the
+fragmented, low-context TTS request that literal token-by-token synthesis would
+create. A bracketed
 expressive-speech tag (`[sigh]`, `[style: ...]`) always stays with the prose
 it modifies.
 

@@ -1,5 +1,14 @@
 # Tasks
 
+## 0. First-Reply Baseline Correction
+
+- [x] 0.1 Allow the first pending speakable phrase to leave the streaming
+  chunker below the normal 60-character later-chunk floor.
+- [x] 0.2 Use a separate 250 ms first-phrase microbatch timer while retaining
+  the 700 ms later-phrase quality timer, with deterministic chunker coverage.
+- [x] 0.3 Strengthen the required voice-mode instruction so replies lead with
+  a complete short spoken clause and omit screen-oriented formatting.
+
 ## 1. Clause-Boundary Measurement (ship first; decides whether more is worth building)
 
 - [ ] 1.1 In `gateway/lib/voice-stt-streaming.js`, add an optional

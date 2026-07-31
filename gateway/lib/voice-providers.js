@@ -1221,8 +1221,8 @@ class CascadedVoiceProvider {
       firstChunkMaxChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_FIRST_MAX_CHARS, 60)),
       minChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_MIN_CHARS, 60)),
       maxChars: Math.max(1, numberFrom(this.env.VOICE_CHUNK_MAX_CHARS, 220)),
-      // 700 (was 1200): a short trailing sentence was waiting 1.2s before it
-      // was force-emitted, a flat add to time-to-first-audio on short replies.
+      // Briefly microbatch the first incomplete phrase for natural, prompt TTS.
+      firstFlushTimeoutMs: Math.max(50, numberFrom(this.env.VOICE_CHUNK_FIRST_FLUSH_MS, 250)),
       flushTimeoutMs: Math.max(50, numberFrom(this.env.VOICE_CHUNK_FLUSH_MS, 700)),
     };
   }
@@ -1407,7 +1407,7 @@ class CascadedVoiceProvider {
         if (state.superseded || state.failed || state.finished) {
           return;
         }
-        if (chunker.pendingLength() >= chunker.minChars) {
+        if (chunker.pendingLength() >= chunker.minPendingForForceBreak()) {
           for (const chunk of chunker.forceBreak()) {
             enqueue(chunk);
           }

@@ -18,7 +18,8 @@ const {
 const PROFILE_FILENAME = "agent-profile.json";
 const PROFILE_VERSIONS_FILENAME = "agent-profile-versions.json";
 const DEVICE_OVERRIDES_FILENAME = "agent-profile-device-overrides.json";
-const REQUIRED_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Honor the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
+const LEGACY_VOICE_STYLE_RULE = "Voice style requirement: speak tersely. Honor the user's requested form of address, title, or roleplay style when provided. Keep replies short enough for voice.";
+const REQUIRED_VOICE_STYLE_RULE = "Voice mode: this reply will be heard. Lead with the answer. Start with a complete, natural clause of at most 12 words. Use one or two short spoken sentences unless the user asks for detail. Skip preambles, headings, markdown, repeated context, and long parentheticals. Do not read raw URLs aloud. Speak tersely. Honor the user's requested form of address, title, or roleplay style when provided.";
 const DEFAULT_SPEAKER_CONTEXT = "The speaker frequently discusses software engineering, authentication, APIs and protocols, speech systems, cloud infrastructure, and mathematics. Bias recognition toward technical terminology and technical senses of ambiguous words.";
 // Only these fields may be patched/persisted/overridden; anything else is ignored.
 const PROFILE_FIELDS = [
@@ -906,27 +907,15 @@ function safeSystemPromptForProvider(profile, fallback = "") {
 }
 
 function withRequiredVoiceStyle(prompt, fallback = "") {
-  const value = String(prompt || "").trim() || String(fallback || "").trim() || "You are Ag, the user's personal AI companion.";
-  const lower = value.toLowerCase();
-  const hasTerseStyle = lower.includes("terse") || lower.includes("tersely");
-  if (hasTerseStyle && hasAddressPreferenceRule(lower)) {
-    const requiredRuleIndex = value.indexOf(REQUIRED_VOICE_STYLE_RULE);
-    if (requiredRuleIndex >= 0) {
-      const prefix = value.slice(0, requiredRuleIndex).trim();
-      const suffix = value.slice(requiredRuleIndex + REQUIRED_VOICE_STYLE_RULE.length).trim();
-      return [prefix, REQUIRED_VOICE_STYLE_RULE, suffix].filter(Boolean).join("\n\n");
-    }
-    return value;
+  let value = String(prompt || "").trim() || String(fallback || "").trim() || "You are Ag, the user's personal AI companion.";
+  value = value.replace(LEGACY_VOICE_STYLE_RULE, "").trim();
+  const requiredRuleIndex = value.indexOf(REQUIRED_VOICE_STYLE_RULE);
+  if (requiredRuleIndex >= 0) {
+    const prefix = value.slice(0, requiredRuleIndex).trim();
+    const suffix = value.slice(requiredRuleIndex + REQUIRED_VOICE_STYLE_RULE.length).trim();
+    return [prefix, REQUIRED_VOICE_STYLE_RULE, suffix].filter(Boolean).join("\n\n");
   }
   return [value, REQUIRED_VOICE_STYLE_RULE].join("\n\n");
-}
-
-function hasAddressPreferenceRule(lowerText) {
-  return lowerText.includes("requested form of address")
-    || lowerText.includes("requested title")
-    || lowerText.includes("roleplay style")
-    || lowerText.includes("user's requested")
-    || lowerText.includes("users requested");
 }
 
 function freeze(profile) {

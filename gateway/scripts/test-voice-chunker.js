@@ -22,6 +22,7 @@ function main() {
   clauseEndersPastMinChars();
   mixedEnglishAmharic();
   minMaxAndForceBreak();
+  firstPhraseDeadline();
   tagAtomicity();
   emptyAndWhitespaceStreams();
   sanitizerBasics();
@@ -159,6 +160,21 @@ function minMaxAndForceBreak() {
   assert.equal(d.nextDeadline(), 0, "no deadline with an empty buffer");
   d.push("waiting");
   assert.ok(d.nextDeadline() > Date.now() - 1, "a pending buffer exposes a force-break deadline");
+}
+
+function firstPhraseDeadline() {
+  const c = chunker({ firstFlushTimeoutMs: 250, flushTimeoutMs: 700 });
+  const before = Date.now();
+  c.push("Fast response without punctuation");
+  const firstDelay = c.nextDeadline() - before;
+  assert.ok(firstDelay >= 200 && firstDelay <= 300, `first phrase deadline must be about 250ms (got ${firstDelay})`);
+  assert.equal(c.minPendingForForceBreak(), 1, "any nonempty first phrase becomes timer-eligible");
+  assert.deepEqual(c.forceBreak(), ["Fast response without"], "the first timer can emit below the normal 60-char floor");
+  assert.equal(c.minPendingForForceBreak(), 60, "later phrases retain the configured quality floor");
+  const laterStart = Date.now();
+  c.push("a later phrase remains buffered");
+  const laterDelay = c.nextDeadline() - laterStart;
+  assert.ok(laterDelay >= 650 && laterDelay <= 750, `later phrase deadline must be about 700ms (got ${laterDelay})`);
 }
 
 function tagAtomicity() {
