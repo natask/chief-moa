@@ -371,3 +371,16 @@ Observable acceptance check: launching AG starts literal dictation without
 reasoning or TTS. Launching again commits, copies the complete final transcript,
 and inserts it only into the still-focused safe editor. Android Assistant still
 starts a normal assistant voice turn.
+
+## 22. Latency-Tolerant Cascaded Voice
+
+- [x] 22.1 Replace the cascaded reasoner's fixed total-duration deadline with a
+      bounded inactivity deadline.
+- [x] 22.2 Reset that deadline on streamed speech, style, and interim tool
+      acknowledgment activity while keeping a silent provider bounded.
+- [x] 22.3 Keep gateway `turn_progress` events as the client-facing liveness
+      signal during both long reasoning and hosted TTS.
+
+Observable acceptance check: a deterministic reasoning operation that remains
+active across multiple timeout windows completes, while an operation that emits
+no activity for one full deadline fails with an explicit inactivity timeout.

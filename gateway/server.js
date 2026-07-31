@@ -12,6 +12,7 @@ const {
 } = require("./lib/agent-profile");
 const { voiceProviderNames, createVoiceProvider, reportVoiceStreamingFault } = require("./lib/voice-providers");
 const { createSpeakStreamSanitizer } = require("./lib/voice-chunker");
+const { withActivityTimeout } = require("./lib/activity-timeout");
 const {
   livekitConfigured,
   livekitStatus,
@@ -8843,7 +8844,18 @@ function writeVoiceTurnRecord(record) {
 // the profile-derived INPUT prompt languages. Control/agent-run turns return empty speak so
 // the cascaded provider skips TTS.
 async function runCascadedVoiceReasoning(input) {
-  return withTimeout(runCascadedVoiceReasoningInner(input), MODEL_FETCH_TIMEOUT_MS, "cascaded voice reasoning");
+  return withActivityTimeout((touch) => {
+    const activeInput = { ...(input || {}) };
+    for (const name of ["on_speak_delta", "on_speak_style", "on_speak_say"]) {
+      const callback = activeInput[name];
+      if (typeof callback !== "function") continue;
+      activeInput[name] = (...args) => {
+        touch();
+        return callback(...args);
+      };
+    }
+    return runCascadedVoiceReasoningInner(activeInput);
+  }, MODEL_FETCH_TIMEOUT_MS, "cascaded voice reasoning");
 }
 
 // Compatibility name for the Android voice provider. The provider connection

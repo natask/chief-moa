@@ -1056,8 +1056,11 @@ observability evidence only; it neither selects policy nor causes a transcript
 to be dropped.
 
 A voice turn can never end silently, and it must end honestly. Model and TTS
-calls run under bounded timeouts, every commit/text turn error also emits
-`turn_done{status:"error"}` (not just an `error` event), and completed
+calls run under bounded inactivity timeouts. Cascaded reasoning resets its
+deadline whenever streamed speech, style, or an interim tool acknowledgment
+arrives, so a long healthy stream may outlive one timeout window while a
+provider that stops making progress still fails closed. Every commit/text turn
+error also emits `turn_done{status:"error"}` (not just an `error` event), and completed
 cascaded turns carry `tts_spoke`, `reply_language`, `modality`, and (on a real
 synthesis fault) `tts_error` on `turn_done`. `modality:"text"` marks a
 deliberate text-only delivery, never a failure. Profile-control confirmations
