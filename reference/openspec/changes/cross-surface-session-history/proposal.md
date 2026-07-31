@@ -7,8 +7,9 @@ This change defines a narrow implementation target; each source-changing ticket
 still requires its own verification, commit, artifact, and promotion evidence.
 
 The shared projection is implemented. The browser transcript-history polish
-unit below is accepted follow-on product direction. It does not reopen the
-gateway ordering contract or the completed Android history slice.
+unit below is accepted follow-on product direction. It changes the canonical
+latest-N order to newest first and does not reopen the completed Android history
+slice beyond consuming that corrected order.
 
 ## Source Intent
 
@@ -61,17 +62,21 @@ inventing its own partial conversation history.
   floating overlay small and interruption-safe.
 - Permit read-only visibility of already-existing browser action receipts in
   message history, without expanding CDP or browser-action authority.
-- Present browser voice transcripts as a newest-first library. Keep the latest
-  final user transcript prominent and let the user copy any retained user
-  transcript exactly.
+- Return the canonical latest-N projection newest first. Keep user before
+  assistant within each turn. Present each retained recording as one outer
+  History card, with the newest recording first.
+- Keep the latest transcript revision prominent inside its recording card. Let
+  the user select and copy the original or any later revision exactly.
 - Keep the browser History view focused on retained messages. Remove repeated
   page, provider, session, agent, and developer status blocks from its default
   transcript list. Show an active error or action only when it affects the
   current history read or transcription.
 - Treat retained transcript display, exact copy, and audio re-transcription as
   different operations. History reads and copy use the stored final transcript
-  without provider work. An explicit Re-transcribe action may create a new
-  revision only when the turn has accessible retained audio.
+  without provider work. Each explicit Re-transcribe action may append another
+  revision when the turn has accessible retained audio.
+- Open the side-panel workspace when the user clicks the browser extension
+  toolbar action. Keep existing double-tap and session gestures unchanged.
 
 ## Non-Goals And Explicit Follow-Ons
 
@@ -85,6 +90,7 @@ after this recovery wave rather than silently dropped:
 - an iPhone/iOS product surface beyond the current protocol/library seam;
 - comparative STT and voice-provider evaluation;
 - cursor-complete or time-window history export and historical intent review;
+- transcript-history search;
 - Android overlay/native/remove ergonomics and remaining physical-phone gesture
   QA;
 - multimodal presentation input, including explicitly granted image, slide,
@@ -111,15 +117,21 @@ while durable work/status references remain attached to the canonical message.
   rely on content-script memory as conversation authority.
 - The Android full app renders the same messages and identifiers while the
   Android overlay remains a compact current-turn surface.
-- The browser History view places the newest retained user transcript first,
-  gives the latest final transcript the strongest visual emphasis, and copies
-  the exact selected transcript from any visible transcript card.
+- The gateway returns the newest turn first while preserving user then assistant
+  inside each turn. Browser History renders one outer card per recording in
+  that order.
+- Each recording card shows its latest completed transcript revision by
+  default. The inward revision stack lets the user select the original and
+  older revisions in chronological revision order and copy any selected version
+  exactly.
 - Opening History or copying a transcript starts no speech provider work.
-  Re-transcribe is available only for a turn with retained audio, preserves the
-  original transcript, and shows the resulting revision as derived from that
-  audio.
+  Re-transcribe is available only for a turn with retained audio. Repeated
+  explicit requests may append repeated revisions without replacing the
+  original or earlier revisions.
 - The default browser transcript list does not repeat page, provider, session,
   agent, or developer status chrome above or between transcript cards.
+- Clicking the extension toolbar action opens the side-panel workspace. Existing
+  double-tap and session gestures keep their current behavior.
 - Incognito turns, unauthorized sessions, and cross-session records do not leak
   into the projection.
 - Isolated verification proves the flow without activating a background browser

@@ -85,25 +85,35 @@ this recovery wave.
 
 ## 6. Browser Transcript-History Polish
 
-- [ ] 6.1 Present retained browser transcripts newest first while keeping the
-      canonical gateway response order unchanged. Give the latest completed
-      user voice transcript the primary card treatment.
-- [ ] 6.2 Add exact Copy to every retained user transcript card. Copy only the
-      selected stored transcript, with no label, timestamp, assistant response,
-      or metadata.
-- [ ] 6.3 Remove repeated page, provider, session, agent, developer, and
+- [ ] 6.1 Change the canonical gateway latest-N projection to return the newest
+      turn first. Keep the user message before the assistant message within each
+      turn and retain deterministic identity tie-breaking.
+- [ ] 6.2 Render one outer History card or section per recording, ordered newest
+      to oldest. Show the latest completed transcript version by default. Render
+      original and re-transcribed versions as an inward card stack with a
+      chronological revision selector.
+- [ ] 6.3 Add exact Copy to every selectable transcript version. Copy only the
+      selected text, with no label, timestamp, assistant response, or metadata.
+- [ ] 6.4 Remove repeated page, provider, session, agent, developer, and
       duplicate current-turn status blocks from the default History list. Keep
       current load errors and actions visible. Move linked run and receipt
       evidence behind a secondary detail view.
-- [ ] 6.4 Add explicit audio-backed Re-transcribe for messages whose canonical
-      record exposes accessible retained audio. Preserve the original
-      transcript, append the result as a labeled revision, and keep display and
-      copy available when re-transcription fails or audio is unavailable.
+- [ ] 6.5 Add explicit audio-backed Re-transcribe for messages whose canonical
+      record exposes accessible retained audio. Allow repeated explicit
+      attempts. Append each success as a labeled revision, make the latest
+      success the default, and preserve every older selectable version.
+- [ ] 6.6 Make the extension toolbar action open the side-panel workspace
+      without creating a turn or changing the active session. Preserve existing
+      double-tap and session gestures. Keep History search as a follow-on.
 
-Acceptance: an isolated browser fixture seeds three voice turns in canonical
-ascending order. History renders the newest transcript first, emphasizes it,
-and copies each transcript byte-for-byte. Opening History and copying make no
-transcription request. Only the audio-backed turn offers Re-transcribe; one
-explicit request appends a labeled revision without changing the original.
+Acceptance: a gateway fixture seeds three turns and proves latest-N returns
+turns newest first while each user message precedes its assistant message. An
+isolated browser fixture renders one outer card per recording in that order.
+The newest card shows its latest transcript version by default; its inward
+revision presenter lists the original and two successful re-transcriptions in
+chronological order. Every selected version copies byte-for-byte. Opening
+History and copying make no transcription request. Two explicit Re-transcribe
+actions append two revisions without changing older versions. The extension
+toolbar action opens the side panel without changing session or gesture state.
 The default list contains no repeated page, provider, session, agent, or
-developer status blocks.
+developer status blocks and no search field.

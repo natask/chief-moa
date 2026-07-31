@@ -39,7 +39,9 @@ metadata.
 
 - **WHEN** an authorized client requests the latest N messages for a session
 - **THEN** the gateway selects no more than the applied bounded limit
-- **AND** returns those messages in ascending event-time and canonical-identity order
+- **AND** returns the newest turn first
+- **AND** returns the user message before the assistant message within each turn
+- **AND** uses a deterministic canonical-identity tie-break for equal turn times
 - **AND** reports the applied limit, returned count, available count when known,
   included source counts, and excluded or unreadable counts
 
@@ -121,30 +123,31 @@ Reading session history SHALL NOT grant or expand local execution authority.
 - **AND** Android remains the authority for permission, approval, execution,
   and any future retry
 
-### Requirement: Browser Transcript History Is Newest First
+### Requirement: Recording History Uses One Card Per Recording
 
-The browser History view SHALL present retained user transcripts newest first
-without changing the canonical gateway response order. It SHALL give the latest
-completed user voice transcript the primary transcript-card treatment.
+The browser History view SHALL render one outer card or section per retained
+recording in canonical newest-first order. Each card SHALL keep its user
+transcript before its tied assistant response. Transcript revisions SHALL
+remain inside their recording card.
 
-#### Scenario: Canonical messages arrive in ascending order
+#### Scenario: History contains three recordings
 
-- **WHEN** History receives three retained user voice messages in canonical
-  ascending order
-- **THEN** it renders the newest transcript first
-- **AND** gives that latest completed transcript the strongest visual emphasis
-- **AND** keeps each canonical message identity unchanged
+- **WHEN** History receives three retained voice turns in canonical newest-first
+  order
+- **THEN** it renders one outer card per recording in that order
+- **AND** keeps each user transcript before its tied assistant response
+- **AND** does not render transcript revisions as peer history cards
 
 ### Requirement: Every Retained User Transcript Can Be Copied
 
-The browser History view SHALL expose an exact Copy action for every retained
-user transcript. Copy SHALL use the stored transcript shown on the selected
-card and SHALL NOT start speech-provider work.
+The browser History view SHALL expose an exact Copy action for every selectable
+transcript version. Copy SHALL use the selected stored transcript and SHALL NOT
+start speech-provider work.
 
 #### Scenario: User copies an older transcript
 
-- **WHEN** the user activates Copy on any prior user transcript
-- **THEN** the clipboard receives that transcript exactly
+- **WHEN** the user selects an older transcript version and activates Copy
+- **THEN** the clipboard receives that selected version exactly
 - **AND** excludes its label, timestamp, assistant response, and hidden metadata
 - **AND** no transcription request starts
 
@@ -168,19 +171,31 @@ the active history read or transcription.
 
 ### Requirement: Audio Re-Transcription Creates A Revision
 
-Opening or copying retained history SHALL use the stored final transcript and
+Opening or copying retained history SHALL use a stored transcript version and
 SHALL NOT re-run speech recognition. The browser MAY offer Re-transcribe only
-when the canonical turn exposes accessible retained audio. A successful
-re-transcription SHALL append a labeled revision linked to the same source turn
-and audio and SHALL preserve the original transcript.
+when the canonical turn exposes accessible retained audio. Each explicit
+request MAY start a new attempt. Every successful attempt SHALL append a labeled
+revision linked to the same source turn and audio. It SHALL preserve the
+original and every older revision.
 
 #### Scenario: Retained audio is available
 
-- **WHEN** the user explicitly activates Re-transcribe on a turn with accessible
-  retained audio
-- **THEN** the product runs speech recognition for that audio once
-- **AND** appends the completed result as a new labeled transcript revision
-- **AND** preserves the original transcript and its Copy action
+- **WHEN** the user explicitly activates Re-transcribe twice on a turn with
+  accessible retained audio and both attempts succeed
+- **THEN** the product runs two explicit speech-recognition attempts
+- **AND** appends two labeled transcript revisions
+- **AND** preserves the original and first revision after the second succeeds
+- **AND** makes the second revision the default displayed version
+
+#### Scenario: User reviews transcript revisions
+
+- **WHEN** one recording has an original transcript and later successful
+  re-transcriptions
+- **THEN** its outer card uses an inward stacked-card treatment for the versions
+- **AND** its revision selector presents the original then later revisions in
+  chronological order
+- **AND** selecting an older version shows and copies that version without
+  changing the default latest version
 
 #### Scenario: Retained audio is unavailable
 
@@ -196,3 +211,18 @@ and audio and SHALL preserve the original transcript.
 - **THEN** the original transcript and every completed revision remain visible
   and copyable
 - **AND** the affected turn shows a retryable error
+
+### Requirement: Extension Toolbar Opens The Workspace
+
+The browser extension toolbar action SHALL open the side-panel workspace for
+this unit. It SHALL NOT create a turn, start capture, or change the active
+session. Existing double-tap and session gestures SHALL keep their behavior.
+Transcript-history search SHALL remain a follow-on.
+
+#### Scenario: User clicks the extension toolbar action
+
+- **WHEN** the user clicks the browser extension toolbar action
+- **THEN** the side-panel workspace opens
+- **AND** no turn or recording starts
+- **AND** the active session and existing gesture behavior remain unchanged
+- **AND** this unit does not require a History search field

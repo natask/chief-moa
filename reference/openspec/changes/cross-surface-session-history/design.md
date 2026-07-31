@@ -40,12 +40,13 @@ one authorized session and optional branch. Each projected message contains:
   records without returning raw provider payloads.
 
 The request limit is bounded by a documented server maximum. The gateway selects
-the latest N canonical messages, then returns them in ascending stored event time
-with a deterministic identity tie-break. The endpoint reports the applied limit,
-returned count, available count when known, included counts by surface/kind, and
-excluded/unreadable counts. Cursor-complete export and time-window snapshots stay
-with the `historical-intent-to-implementation` follow-on rather than this UI
-recovery wave.
+the latest N canonical messages and returns the newest turn first. Within one
+turn, it returns the user message before the assistant message. A deterministic
+canonical identity tie-break resolves equal turn times. The endpoint reports the
+applied limit, returned count, available count when known, included counts by
+surface/kind, and excluded/unreadable counts. Cursor-complete export and
+time-window snapshots stay with the `historical-intent-to-implementation`
+follow-on rather than this UI recovery wave.
 
 ### Deduplication
 
@@ -91,16 +92,23 @@ as a fresh canonical read.
 
 ### Browser transcript-history polish
 
-The canonical latest-N response keeps its existing deterministic ascending
-order. The browser History view derives a presentation order and shows the
-newest retained user transcript first. This is a view rule, not a second
-gateway ordering contract.
+The canonical latest-N response returns the newest turn first. Browser History
+uses that order directly. Each retained recording owns one outer card or
+section. The card keeps the user transcript before its tied assistant response.
+Cards do not split transcript revisions into peer history rows.
 
-The latest completed user voice transcript is the primary result in History.
-It uses the strongest transcript-card treatment and exposes one exact Copy
-action. Older retained user transcripts follow in newest-first order and expose
-the same Copy action. Copy uses the exact stored transcript shown on that card.
-It does not copy labels, timestamps, assistant text, or hidden metadata.
+The newest recording appears first. Its latest completed transcript revision is
+the primary result in History and uses the strongest transcript treatment.
+Older recording cards follow in newest-first order. Copy uses the exact selected
+transcript version. It does not copy labels, timestamps, assistant text, or
+hidden metadata.
+
+Transcript revisions use an inward stacked-card treatment inside their recording
+card. The front card shows the latest completed version by default. A revision
+selector or presenter lists versions in chronological revision order: original,
+then each successful re-transcription. Selecting an older version brings that
+version forward for reading and Copy without changing the default latest
+version or creating another outer history card.
 
 History should read as a transcript library. Its default list contains
 transcript cards and the assistant response tied to each turn when one exists.
@@ -117,8 +125,12 @@ Retained transcript display and re-transcription have separate contracts:
 - Copy reads that stored transcript and starts no provider call.
 - Re-transcribe is an explicit action shown only when the canonical message
   carries an accessible retained-audio reference.
-- Re-transcription creates a new transcript revision linked to the same source
-  turn and audio. It never overwrites or hides the original transcript.
+- Every explicit Re-transcribe action starts a new attempt. There is no
+  product-level one-retry limit. Operational concurrency and abuse limits may
+  still reject an attempt honestly.
+- Each successful attempt appends a transcript revision linked to the same
+  source turn and audio. It becomes the default displayed version. It never
+  overwrites or hides the original or an older revision.
 - The UI labels which text is the retained original and which text came from a
   later re-transcription. It exposes Copy for each completed revision.
 - A turn without retained audio stays fully readable and copyable. The UI does
@@ -126,6 +138,13 @@ Retained transcript display and re-transcription have separate contracts:
 
 This unit does not change raw-audio retention defaults. It consumes only audio
 that the user already retained under the existing storage policy.
+
+### Browser workspace entry
+
+Clicking the browser extension toolbar action opens the side-panel workspace for
+this unit. It does not create a turn, start capture, or select another session.
+Existing double-tap and session gestures keep their current behavior. History
+search is a follow-on and does not add a search field in this unit.
 
 ### Transient on-page overlay
 
