@@ -73,7 +73,7 @@ After that archive merge:
 - local `entire/*` refs remain because they are session-linkage metadata, not
   development worktrees.
 
-## Promotion blocker
+## CI-disabled convergence decision
 
 `scripts/release/push-master.sh` opened PR #114 and correctly refused to move
 `master`. Every GitHub Actions job ended before acquiring a runner. The check
@@ -84,10 +84,13 @@ The job was not started because recent account payments have failed or your
 spending limit needs to be increased.
 ```
 
-Local verification is green, but the repository contract does not permit a
-direct push around the missing branch-side CI proof. Restore GitHub Actions
-billing or spending capacity, rerun PR #114, then let
-`scripts/release/push-master.sh` fast-forward `master` and prove the exact live
-gateway commit. Only after that promotion should the active candidate branch be
-deleted and the primary checkout switch to `master`.
+The user then explicitly directed that no CI runs execute and that GitHub
+Actions be disabled for now. Repository Actions permissions were changed from
+`enabled: true` to `enabled: false`; no run was queued or active when the switch
+was made. This is a temporary operator decision, not proof that CI passed.
 
+The exact locally verified candidate may therefore fast-forward `master` under
+that explicit exception. The active runtime remains a separate fact: with
+Actions disabled, a master push cannot move `vps-deploy` or prove a production
+gateway promotion. Re-enable or replace the CI/promotion plane deliberately;
+do not later infer deployment from the master ref alone.
