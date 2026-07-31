@@ -1,3 +1,4 @@
+- Added newest-first transcript cards, exact final-copy, retained-audio re-transcription, and selectable revision stacks in the side panel — agent: codex/gpt-5 team + claude-fable-5 — 5d21f6f1
 - Handled blocked content-page Web Audio resume promises so restricted pages such as OAuth sign-in do not leak an extension runtime error — agent: codex/gpt-5 — 12b0464c
 - Added source-reviewed, URL-scoped injected read tools that code-mode agents can discover, run in USER_SCRIPT, audit in the side panel, and verify through digest-bound receipts — agent: codex/gpt-5 — d969012d
 - Bound typed and finalized voice turns to an immutable send-time page snapshot, carried it through every linked agent run, prevented cross-tab visual capture, focused transcription in the user ribbon, and removed the companion's blue ring — agent: codex/gpt-5 team — 4a8d03a4
