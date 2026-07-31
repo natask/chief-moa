@@ -181,6 +181,31 @@ Alternative considered: have the gateway or execution machine remotely install
 APK updates on the phone. Rejected because package installation is a
 phone-local action and must remain under Android/user authority.
 
+### Decision: Bundled Gateway Bearer Is Temporary Bootstrap
+
+The direct-distribution build may read
+`MOA_ANDROID_BUNDLED_GATEWAY_TOKEN` and place it in
+`BuildConfig.BUNDLED_GATEWAY_TOKEN`. The repository contains no literal token.
+At runtime a non-empty user-saved gateway token takes precedence. The bundled
+value applies only when the saved token is empty.
+
+This fallback keeps a trusted APK usable before account onboarding is complete.
+It does not make the bearer safe. Anyone with the APK can extract it, and the
+shared bearer carries broad legacy gateway authority. It is not a per-user
+session, device credential, or secure secret store.
+
+The temporary OTA-only bootstrap makes the current manifest and latest APK
+routes public, including app-channel equivalents. An already-installed
+tokenless app can therefore download the token-bearing APK. Version-pinned APK
+reads, rollback, and publication mutations stay protected. Every non-OTA
+gateway route stays protected. Publishing the latest APK also publishes an
+extractable copy of the shared bearer. This is an explicitly temporary,
+high-risk single-user compromise.
+
+Account sign-in and revocable, scoped per-user/device credentials replace this
+bootstrap. Removing the fallback waits until normal chat, history, voice, and
+OTA onboarding use that scoped path.
+
 ## Risks / Trade-offs
 
 - Recognition quality is limited by Android `SpeechRecognizer` -> keep the interaction robust with final-result preference, partial fallback, and later replace with streaming STT.
@@ -194,6 +219,11 @@ phone-local action and must remain under Android/user authority.
   monotonically increasing version codes, manifest checksum verification, and
   Android package-installer approval.
 - Full app scope can expand too fast -> build it as an inspection/control center for the five core primitives only.
+- A bundled gateway bearer can be extracted from the public latest APK and
+  reused outside the intended phone -> keep its value out of Git and logs,
+  expose only current-manifest/latest-APK reads without authentication, keep
+  versioned reads, mutations, and other routes protected, let saved user
+  credentials override it, and replace it with scoped authentication.
 
 ## Migration Plan
 

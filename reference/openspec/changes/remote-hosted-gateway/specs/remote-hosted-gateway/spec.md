@@ -52,6 +52,15 @@ without holding provider keys or account passwords.
 - **AND** the device keeps calling the same endpoints with only a gateway URL and
   that token
 
+#### Scenario: Tokenless Android app bootstraps through OTA
+
+- **WHEN** an installed Android app has no gateway bearer token during the
+  transition to device registration
+- **THEN** it may read only the current OTA manifest and current APK without
+  authentication on its configured application channel
+- **AND** version-pinned APK reads, rollback, and every non-OTA gateway route
+  remain authenticated
+
 ### Requirement: User-Scoped Voice Ticket
 
 The voice WebSocket ticket flow SHALL stay one-use and become user-scoped.

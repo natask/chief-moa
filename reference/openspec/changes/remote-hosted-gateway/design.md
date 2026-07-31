@@ -104,6 +104,13 @@ device shows a short code or opens a registration URL
 The client still holds only a URL and a token. It never holds provider keys or
 account passwords. Registration is the only new step, and it is one approval.
 
+Before device registration is complete, Android OTA has one narrow bootstrap
+exception: the current manifest and current APK GETs are public on the default
+and configured application channels. Version-pinned APK reads, rollback, and
+all non-OTA gateway routes remain authenticated. This temporary exception lets
+an installed app without the shared bearer token download the signed build that
+contains the future per-user registration flow.
+
 ### Decision: client onboarding proves URL, auth, and voice separately
 
 Remote onboarding uses one stable HTTPS gateway origin such as

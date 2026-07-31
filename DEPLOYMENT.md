@@ -8,18 +8,54 @@ Read this file before planning, running, or reporting a deployment.
   `https://api.agee.app`.
 - The browser extension runs as an unpacked local extension during development.
   A deploy packages it and asks the loaded extension to reload.
-- The Android app uses direct distribution. The first install uses USB and ADB.
-  Later updates come from the gateway OTA endpoint.
+- The Android app uses OTA-only direct distribution through the gateway.
+  Do not use ADB as an install or update path.
 
 ## Android today
 
-The phone app was installed with:
+The installed app updates through the gateway OTA endpoint. The temporary
+tokenless bootstrap keeps only the current manifest and latest APK reads public.
 
-```sh
-cd android_app
-./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+### Temporary bundled gateway-token bootstrap
+
+Trusted local Android builds may receive
+`MOA_ANDROID_BUNDLED_GATEWAY_TOKEN` in the build process. Gradle writes the
+value into `BuildConfig.BUNDLED_GATEWAY_TOKEN`. The environment variable is the
+only input. Do not add a literal token to Gradle files, source, tracked
+properties, examples, logs, commit messages, or release metadata.
+
+If the user has saved a non-empty gateway token in AG, that saved token wins.
+The bundled token fills only an empty saved value. Omitting
+`MOA_ANDROID_BUNDLED_GATEWAY_TOKEN` builds a tokenless APK.
+
+This bootstrap is temporary. The bearer is embedded in the APK and can be
+extracted by anyone who downloads the artifact. It has the broad authority of
+the shared legacy gateway token and does not identify a user or device. The
+OTA-only bootstrap deliberately publishes that token-bearing APK through the
+public current-APK route. This is an explicitly temporary, high-risk
+single-user compromise.
+
+The only unauthenticated gateway reads in this exception are the current
+Android OTA manifest and latest APK, including their configured app-channel
+equivalents:
+
+```text
+GET /v1/android/updates/latest
+GET /v1/android/updates/latest.apk
+GET /v1/android/updates/apps/<app-id>/latest
+GET /v1/android/updates/apps/<app-id>/latest.apk
 ```
+
+Version-pinned APK reads, rollback, publication, and every other mutation remain
+authenticated. Every non-OTA gateway route remains authenticated. The installed
+tokenless app can therefore fetch the current manifest and token-bearing APK
+without gaining anonymous access to chat, history, voice, actions, or gateway
+administration. Android signer, digest, package-installer, and user-approval
+checks still apply.
+
+The replacement is account sign-in plus revocable, scoped per-user/device
+credentials. Remove the bundled fallback once normal chat, history, voice, and
+OTA bootstrap no longer depend on the shared bearer.
 
 Android accepts an update only when its application id and signer match the
 installed app. The current continuity signer is the debug certificate stored on
@@ -51,8 +87,7 @@ timestamp version code. After building, the wrapper rechecks HEAD and
 Android-input cleanliness and publishes only the exact artifact carrying that full SHA.
 
 This command builds a timestamp-versioned debug APK with the local continuity
-key, publishes it to the VPS OTA store, and installs the same APK over ADB when
-an authorized phone is connected. The repository entrypoint reads the canonical,
+key and publishes it to the VPS OTA store. The repository entrypoint reads the canonical,
 non-secret production target from `scripts/deploy-targets.json`;
 `MOA_VPS_SSH` overrides that target. The lower-level
 `android_app/deploy/ota/sync-vps.sh` accepts `MOA_VPS_SSH`/`--host` and
@@ -93,12 +128,14 @@ handy, the running gateway also reports it at `GET /health` as
    replaced atomically last. A failure here restores the prior snapshot
    before returning; if the restore itself cannot be verified, the store
    stays locked for manual recovery rather than guessing.
-6. **Public verification** — the running VPS gateway container uses its own
-   `MOA_GATEWAY_TOKEN` to fetch the authenticated public manifest and APK and
-   matches release id, version, size, and SHA-256 against the local
-   candidate. The verifier receives the declared HTTPS origin from the
-   deployment entrypoint; it does not depend on an optional runtime
-   environment alias for that origin. The token never leaves the container.
+6. **Public verification** — the running VPS gateway container fetches the
+   public current manifest and latest APK and matches release id, version, size,
+   and SHA-256 against the local candidate. The verifier may attach the
+   container's `MOA_GATEWAY_TOKEN`, but the temporary bootstrap does not require
+   authentication for these two reads. The verifier receives the declared HTTPS
+   origin from the deployment entrypoint; it does not depend on an optional
+   runtime environment alias for that origin. The token never leaves the
+   container.
    A verification failure prevents the deploy marker from moving and
    preserves the remote publication receipt for an exact retry.
 7. **Receipt / acknowledgement** — once public verification passes, a
@@ -107,9 +144,6 @@ handy, the running gateway also reports it at `GET /health` as
    acknowledgement leaves the receipt and lock in place; an exact retry
    reconciles it (see lock recovery below).
 
-Optional ADB installation produces a separate receipt: no attached phone or an
-install failure does not invalidate an already verified publication.
-
 ### Published vs. installed
 
 These are different facts and a deploy report must not conflate them:
@@ -117,9 +151,8 @@ These are different facts and a deploy report must not conflate them:
 - **published**: the VPS OTA store's `current` release, `latest.json`, and
   `/v1/android/updates/latest(.apk)` all serve the new release, verified
   through the running gateway container in step 6 above.
-- **installed**: a specific phone has actually applied the update, which
-  `scripts/deploy.sh android` only attempts when an authorized device is
-  already connected over ADB (`direct_install_android` in `scripts/deploy.sh`).
+- **installed**: a specific phone has applied the update through the app's OTA
+  flow and Android package installer.
 
 A publish can succeed with no phone connected; report that as "published, not
 installed" rather than as a deploy failure. The phone itself checks for
@@ -154,7 +187,7 @@ the version code is pinned, so treat an older rollback as a fresh publication
 with a new version code, not as a restore.
 
 Pruning happens in the acknowledgement step, which runs only after the new
-release is live **and** its authenticated public manifest/APK verification has
+release is live **and** its exact public manifest/APK verification has
 passed, so it can never remove a release the phone is about to be offered. It
 never touches the live release or the predecessor, keeps any release whose
 metadata it cannot read, and re-checks the live release and `current` pointer

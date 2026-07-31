@@ -104,6 +104,50 @@ The full Android app SHALL expose pending approvals and local action receipts.
 ### Requirement: Settings For Voice And Gateway
 The full Android app SHALL let the user configure gateway URL, gateway token, trigger words, wake mode, and spoken reply preference.
 
+#### Scenario: Trusted build provides a temporary gateway bootstrap
+- **GIVEN** the build received `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`
+- **AND** the user has not saved a gateway token
+- **WHEN** Android resolves the effective gateway token
+- **THEN** it uses the bundled value as a temporary fallback
+- **AND** the repository contains no literal value for that token
+
+#### Scenario: User saves a gateway token
+- **GIVEN** the APK contains a bundled fallback
+- **WHEN** the user saves a non-empty gateway token
+- **THEN** the saved token overrides the bundled value
+- **AND** later gateway calls use the saved token
+
+#### Scenario: Tokenless build starts without saved state
+- **GIVEN** the build omitted `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`
+- **AND** the user has not saved a token
+- **WHEN** the app resolves gateway authentication
+- **THEN** it remains tokenless
+- **AND** it can read the public current Android OTA manifest and latest APK
+
+### Requirement: Bundled Gateway Bearer Is Transitional
+The bundled gateway bearer SHALL be treated as extractable shared legacy
+authority. It SHALL NOT be treated as user identity, device identity, secure
+secret storage, or the permanent onboarding contract.
+
+#### Scenario: Tokenless installed app checks for an update
+- **GIVEN** the app has no saved or bundled token
+- **WHEN** it requests the current Android OTA manifest or latest APK
+- **THEN** the gateway permits the read without authentication
+- **AND** the token-bearing APK remains subject to signer, digest, installer,
+  and user-approval checks
+- **AND** the shared bearer is treated as extractable from that public artifact
+
+#### Scenario: Anonymous client requests broader authority
+- **WHEN** an unauthenticated client requests a version-pinned APK, OTA
+  rollback, publication, another mutation, or any non-OTA gateway route
+- **THEN** the gateway denies the request
+
+#### Scenario: Scoped authentication becomes available
+- **WHEN** Android can obtain a revocable credential bound to the signed-in user
+  and registered device
+- **THEN** chat, history, voice, and OTA onboarding use that scoped credential
+- **AND** the build-time shared-bearer fallback can be removed
+
 #### Scenario: User disables spoken replies
 - **WHEN** the user turns off spoken replies
 - **THEN** voice turns still display full text while TTS remains silent

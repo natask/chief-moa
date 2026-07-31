@@ -36,6 +36,20 @@ Android app
   and full-app history remain separate surfaces because they have distinct
   focus, placement, and lifecycle contracts.
 
+  Direct-distribution Android builds may receive the temporary build-only
+  `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`. Gradle places it in
+  `BuildConfig.BUNDLED_GATEWAY_TOKEN`; no literal belongs in Git. At runtime a
+  non-empty token saved by the user takes precedence, and the bundled value is
+  only the fallback for an empty saved token. This is a shared gateway bearer
+  embedded in the APK. It is extractable and grants the broad legacy gateway
+  scope, so it is not a device credential, user identity, or secret-storage
+  boundary. A build without it stays tokenless until the user saves a token.
+  During the temporary OTA-only bootstrap, an installed tokenless app may read
+  the public current manifest and latest APK. The token-bearing APK is therefore
+  public and the shared bearer is extractable. This is an explicitly temporary,
+  high-risk single-user compromise. Future account sign-in and scoped
+  per-user/device credentials replace it.
+
 Browser extension
   Owns: browser-local UI, text/voice capture, page context collection, and
   brokered page actions, including extension-local Chrome DevTools Protocol
@@ -1741,8 +1755,8 @@ command. The deterministic `echo` harness lets this loop run with no model key.
 commit or manual build
   -> CI/local script builds a versioned signed APK
   -> deploy copies latest.json and moa-assistant.apk to the gateway data dir
-  -> Android checks GET /v1/android/updates/latest with the gateway token
-  -> Android downloads GET /v1/android/updates/latest.apk with the same token
+  -> Android checks public GET /v1/android/updates/latest
+  -> Android downloads public GET /v1/android/updates/latest.apk
   -> Android verifies manifest size and SHA-256
   -> Android opens the platform package installer for local approval
 ```
@@ -1751,12 +1765,20 @@ The gateway publishes update artifacts, but it does not install them on the
 phone. The Android app remains the local authority and the platform package
 installer is the final approval step.
 
-The current app uses direct distribution. Its first install is a debug APK sent
-over USB with ADB. OTA updates must keep the same package id and debug signing
-certificate. The continuity key lives on the development Mac. A GitHub runner's
-temporary debug key produces a verification artifact that cannot update the
-installed app. `DEPLOYMENT.md` records the current certificate digest and the
-gates for moving signing into GitHub Actions.
+Until per-user device registration replaces the shared gateway token, the
+current-manifest and current-APK GETs are the only unauthenticated OTA routes,
+including their configured app-channel equivalents. Version-pinned release
+downloads and rollback mutations remain authenticated. This narrow bootstrap
+lets an already-installed tokenless app acquire the signed build that contains
+the later authentication flow without making the rest of the gateway public.
+It also makes the shared bearer extractable from a public artifact. This is an
+explicitly temporary, high-risk single-user compromise.
+
+The current Android distribution policy is OTA-only. OTA updates must keep the
+same package id and debug signing certificate. The continuity key lives on the
+development Mac. A GitHub runner's temporary debug key produces a verification
+artifact that cannot update the installed app. `DEPLOYMENT.md` records the
+current certificate digest and the gates for moving signing into GitHub Actions.
 
 VPS publication is a transaction over an immutable release directory. The
 publisher first validates the local `current` pointer and byte-consistent

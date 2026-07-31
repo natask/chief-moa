@@ -84,7 +84,8 @@
 - [x] 9.3 Add full-app update check, APK checksum verification, and package-installer handoff.
 - [x] 9.4 Add commit-triggered GitHub Actions build and main-machine OTA deploy workflow.
 - [x] 9.5 Verify with Android debug build, gateway syntax check, OpenSpec validation, and a main-machine OTA smoke test. Verified 2026-06-20: `assembleDebug` BUILD SUCCESSFUL (app-debug.apk produced); `npm run check` ok with all profile/voice checks passing; `openspec validate define-android-core-product-map --strict` valid; OTA endpoint `/v1/android/updates/latest` serves version 0.1.1781720954 (git_sha 9719b68). Note: the served OTA build is from 2026-06-17; publishing a fresh OTA from current HEAD is a separate deploy step.
-- [x] 9.6 Keep OTA publish as the deploy source of truth and install the published APK directly over ADB when an authorized phone is connected; skip direct install without failing when no device is available.
+- [ ] 9.6 Enforce OTA-only Android installation and updates. Remove or disable
+      direct ADB install from the deployment path.
 - [x] 9.7 Record deploy version metadata and monotonic target deploy sequences
       for gateway, Android OTA, and browser extension deploys; require changed
       browser-extension deploys to advance the manifest version after the first
@@ -325,3 +326,25 @@ Observable acceptance check: opening AG shows a clean History page without
 implementation status rows. Setup & developer reveals the existing operational
 controls. Copy turn copies the exact retained text. Merely opening or resuming
 the full app does not mutate the overlay.
+
+## 20. Temporary Gateway-Token Bootstrap
+
+- [x] 20.1 Read `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN` only at build time and
+      expose an empty default through `BuildConfig.BUNDLED_GATEWAY_TOKEN`.
+- [x] 20.2 Use the bundled value only when the saved gateway token is empty.
+      Keep a non-empty saved user token authoritative.
+- [x] 20.3 Keep every literal token out of tracked Gradle, source, test,
+      documentation, and deployment files.
+- [x] 20.4 Expose only current Android OTA manifest and latest APK reads without
+      authentication, including app-channel equivalents. Keep version-pinned
+      reads, rollback, publication, every mutation, and all non-OTA gateway
+      routes protected.
+- [ ] 20.5 Replace the shared bearer with account sign-in and revocable,
+      scoped per-user/device credentials for chat, history, voice, and OTA
+      onboarding.
+
+Observable acceptance check: focused Android tests prove empty saved state uses
+the build fallback, a saved token overrides it, and an empty build fallback
+remains tokenless. An unauthenticated client can read only the current Android
+OTA manifest and latest APK. It cannot read a version-pinned APK or call
+rollback, publication, another mutation, or a non-OTA gateway route.

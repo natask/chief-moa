@@ -72,6 +72,19 @@ The hosted product should use normal account sign-in. Android and browser
 clients should register as user-bound devices instead of asking the user to
 copy a long-lived gateway token.
 
+Android currently has a temporary build-time bootstrap for direct distribution.
+A trusted local build may pass `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`; the APK uses
+that value only when the user has not saved a token. The repository stores no
+literal token. This shared bearer is broad and extractable from the APK, so it
+is deployment continuity only. It is not account sign-in, device identity, or
+user isolation. The temporary OTA-only bootstrap makes the current Android
+manifest and latest APK routes public so an installed tokenless app can acquire
+that build. This also makes the token-bearing APK a public, extractable
+artifact. Version-pinned reads, OTA mutations, and every non-OTA gateway route
+remain authenticated. This is an explicitly temporary, high-risk single-user
+compromise. Scoped per-user authentication and device credentials must replace
+it.
+
 Every database row, object, session, agent run, transcript, audio file,
 screenshot, and artifact should have a tenant and owner. Every read and write
 should enforce that ownership. Storage paths and signed object access should
@@ -223,7 +236,7 @@ Do not delete uncertain user knowledge.
 | Privacy policy | `missing` | The repo and production site do not provide the required hosted-data privacy policy. |
 | Agent-assisted self-hosting | `partial` | Container, VPS, backup, restore, and setup docs exist. The conversational provisioning tool and end-to-end user flow remain open. |
 | Android core runtime | `partial` | Overlay, history-first app, actions, receipts, sessions, and OTA paths exist. Physical-phone QA remains open. The two visible apps are likely the intentional legacy `ai.moa.assistant` and current `ag.companion` packages. |
-| Android account onboarding | `partial` | Short-lived device enrollment exists, but normal chat, history, and voice still use the legacy gateway token. |
+| Android account onboarding | `partial` | Short-lived device enrollment exists. Public current-manifest/latest-APK reads can deliver a build-only bundled legacy token to an installed tokenless app, and a saved user token overrides it. The public APK makes the broad shared bearer extractable. This high-risk single-user bootstrap must yield to scoped per-user auth. |
 | Cross-surface UI consistency | `partial` | Shared interaction direction exists. Current installed visuals, bubble consistency, and workspace cleanup need visual QA and implementation. |
 | Provider-neutral voice | `done` | Production runs streaming Chirp 3 STT, gateway reasoning, and streaming Gemini TTS behind the provider registry. A user-facing provider comparison flow remains follow-on work. |
 | Instant voice response | `partial` | Partial STT, streamed reasoning/TTS, and stage timings exist. Prewarm and one client-observed metric from microphone start through first transcript, text, audio receipt, and playout remain open. |
@@ -257,6 +270,11 @@ Do not delete uncertain user knowledge.
   isolated candidates.
 
 ## Change log
+
+### 2026-07-30
+
+- Recorded the temporary Android build-time gateway-token bootstrap and kept
+  scoped per-user authentication as the required replacement.
 
 ### 2026-07-29
 

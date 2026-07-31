@@ -9,6 +9,10 @@ The Android app already has enough working pieces to become the first real Moa s
 - Turn the current implementation into a staged roadmap with acceptance criteria and verification checks.
 - Preserve the trust boundary: the phone owns UI, permissions, approvals, and phone actions; the gateway/execution machine owns model access, memory, and long-running agents.
 - Support standard Android assistant and voice-command launch paths for system gestures and compatible earbuds/headsets.
+- Record the temporary OTA-only gateway-token bootstrap: public current-manifest
+  and latest-APK reads may deliver a build with an extractable shared bearer, a
+  saved user token overrides it, and scoped per-user/device authentication
+  remains the required replacement.
 - Defer non-core work such as custom earbuds hardware, raw audio retention, marketplace integrations, and polished hosted TTS until the Android loop is usable.
 
 ## Capabilities
