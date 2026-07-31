@@ -487,6 +487,19 @@ test("GET release APK requires auth", async () => {
   assert.equal(res.status, 401);
 });
 
+test("GET current manifest and APK are public for tokenless OTA bootstrap", async () => {
+  const manifest = await request("GET", "/v1/android/updates/latest");
+  assert.equal(manifest.status, 200);
+  assert.equal(manifest.json.version_code, 11);
+  assert.match(manifest.json.download_url, /\/v1\/android\/updates\/latest\.apk$/);
+
+  const apk = await request("GET", "/v1/android/updates/latest.apk");
+  assert.equal(apk.status, 200);
+  assert.equal(apk.headers["content-type"], "application/vnd.android.package-archive");
+  const onDisk = fs.readFileSync(path.join(HTTP_OTA_DIR, "moa-assistant.apk"));
+  assert.ok(apk.body.equals(onDisk));
+});
+
 test("POST rollback repoints current to the previous release", async () => {
   const res = await request("POST", "/v1/android/updates/rollback", { token: GATEWAY_TOKEN });
   assert.equal(res.status, 200);

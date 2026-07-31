@@ -172,7 +172,16 @@ async function assertAuthRequired(baseUrl) {
   assert.equal(agentRuns.status, 401);
 
   const ota = await requestJson(`${baseUrl}/v1/android/updates/latest`, { auth: false });
-  assert.equal(ota.status, 401);
+  assert.equal(ota.status, 404, "public OTA bootstrap must not turn a missing artifact into an auth error");
+
+  const release = await requestJson(
+    `${baseUrl}/v1/android/updates/releases/not-a-public-release.apk`,
+    { auth: false },
+  );
+  assert.equal(release.status, 401, "version-pinned OTA artifacts must remain protected");
+
+  const rollback = await postJson(`${baseUrl}/v1/android/updates/rollback`, {}, { auth: false });
+  assert.equal(rollback.status, 401, "OTA rollback must remain protected");
 }
 
 async function assertHealth(baseUrl) {
@@ -1096,7 +1105,7 @@ async function assertAndroidOtaRoutes(baseUrl, otaDir) {
   assert.match(manifest.download_url, /\/v1\/android\/updates\/latest\.apk$/);
 
   const apkResponse = await fetch(`${baseUrl}/v1/android/updates/latest.apk`, {
-    headers: authHeaders(),
+    headers: {},
   });
   assert.equal(apkResponse.status, 200);
   assert.equal(apkResponse.headers.get("content-type"), "application/vnd.android.package-archive");

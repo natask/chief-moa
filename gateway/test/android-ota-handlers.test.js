@@ -62,21 +62,64 @@ function harness(overrides = {}) {
 const request = (method) => ({ method });
 const url = (pathname) => new URL(`https://gateway.test${pathname}`);
 
-test("router ignores unrelated requests and protects every OTA route", async (t) => {
+test("router exposes only current reads and protects versioned artifacts and mutations", async (t) => {
   let state = harness();
   t.after(() => fs.rmSync(state.otaDir, { recursive: true, force: true }));
   assert.equal(await state.handlers.routeAndroidOta(request("GET"), {}, url("/elsewhere")), false);
 
   state = harness({ authorized: () => false });
   t.after(() => fs.rmSync(state.otaDir, { recursive: true, force: true }));
+  const manifestResponse = {};
+  assert.equal(
+    await state.handlers.routeAndroidOta(request("GET"), manifestResponse, url("/v1/android/updates/latest")),
+    true,
+  );
+  assert.equal(manifestResponse.status, 200);
+
+  const apkResponse = responseStream();
+  assert.equal(
+    await state.handlers.routeAndroidOta(request("GET"), apkResponse, url("/v1/android/updates/latest.apk")),
+    true,
+  );
+  await finished(apkResponse);
+  assert.equal(apkResponse.status, 200);
+  assert.equal(apkResponse.body().toString(), "apk-body");
+
   for (const [method, pathname] of [
-    ["GET", "/v1/android/updates/latest"],
-    ["GET", "/v1/android/updates/latest.apk"],
     ["GET", "/v1/android/updates/releases/release-1.apk"],
     ["POST", "/v1/android/updates/rollback"],
   ]) {
     const response = {};
     assert.equal(await state.handlers.routeAndroidOta(request(method), response, url(pathname)), true);
+    assert.deepEqual(response, { status: 401, payload: { error: "missing or invalid gateway token" } });
+  }
+});
+
+test("configured app channels expose only current reads without authentication", async (t) => {
+  const state = twoChannelHarness({ authorized: () => false });
+  t.after(state.cleanup);
+
+  const manifestResponse = {};
+  await state.handlers.routeAndroidOta(
+    request("GET"), manifestResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest`),
+  );
+  assert.equal(manifestResponse.status, 200);
+  assert.equal(manifestResponse.payload.release_id, "companion-release-5");
+
+  const apkResponse = responseStream();
+  await state.handlers.routeAndroidOta(
+    request("GET"), apkResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest.apk`),
+  );
+  await finished(apkResponse);
+  assert.equal(apkResponse.status, 200);
+  assert.equal(apkResponse.body().toString(), "other-apk-body");
+
+  for (const [method, pathname] of [
+    ["GET", `/v1/android/updates/apps/${OTHER_APP_ID}/releases/companion-release-4.apk`],
+    ["POST", `/v1/android/updates/apps/${OTHER_APP_ID}/rollback`],
+  ]) {
+    const response = {};
+    await state.handlers.routeAndroidOta(request(method), response, url(pathname));
     assert.deepEqual(response, { status: 401, payload: { error: "missing or invalid gateway token" } });
   }
 });

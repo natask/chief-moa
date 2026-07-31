@@ -44,7 +44,13 @@ function createAndroidOtaHandlers(deps) {
     const appRollback = request.method === "POST" && path.match(/^\/v1\/android\/updates\/apps\/([^/]+)\/rollback$/);
     if (!(manifest || currentApk || releaseMatch || rollback
       || appManifest || appApk || appReleaseMatch || appRollback)) return false;
-    if (!authorized(request)) {
+    // Temporary pre-device-auth bootstrap: an installed Android app must be
+    // able to discover and download the current signed update without carrying
+    // the shared gateway bearer token. Keep the public surface exact: only the
+    // current manifest and its current APK, on the default or a configured app
+    // channel. Version-pinned artifacts and every mutation remain protected.
+    const publicCurrentRead = Boolean(manifest || currentApk || appManifest || appApk);
+    if (!publicCurrentRead && !authorized(request)) {
       sendJson(response, 401, { error: "missing or invalid gateway token" }); return true;
     }
 
