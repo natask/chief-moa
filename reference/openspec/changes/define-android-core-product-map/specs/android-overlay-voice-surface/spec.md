@@ -33,10 +33,11 @@ The overlay SHALL make the primary voice loop available through simple orb gestu
 - **AND** release stops and sends it exactly once
 - **WHEN** movement crosses the drag threshold
 - **THEN** the app cancels capture without sending and repositions the companion
-- **AND** after touch slop Android moves the companion and compact ribbons as one
-  bounded overlay root with exactly one WindowManager layout submission per
-  display frame
-- **AND** transparent space outside that compact root remains touch-pass-through
+- **AND** after touch slop Android moves the companion and compact ribbons from
+  one anchor on the same coalesced display frame
+- **AND** each visible element keeps its own bounded WindowManager hit area
+- **AND** transparent space between and outside those elements remains
+  touch-pass-through
 
 #### Scenario: Voice-first double and triple clicks have explicit meanings
 - **WHEN** voice-first gestures are enabled and the user double-clicks the idle orb

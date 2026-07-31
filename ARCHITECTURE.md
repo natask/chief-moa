@@ -33,16 +33,16 @@ Android app
   Android Assistant and voice-command intents remain reasoning-capable assistant
   turns.
 
-  The companion and compact conversation ribbons share one bounded overlay
-  root. Voice capture disposition stays on the companion's origin-matched
-  gesture; entering capture creates no separate cancel/send window and reserves
-  no side-control space. A deliberate drag therefore submits one compact
-  WindowManager layout per display frame instead of moving several surfaces.
-  Transparent space outside the compact root remains pass-through; platform
-  builds that expose a precision touch-region hook also exclude gaps between
-  its visible children. The focused composer, removal target, undo affordance,
-  and full-app history remain separate surfaces because they have distinct
-  focus, placement, and lifecycle contracts.
+  The companion and compact conversation ribbons use separate, tightly bounded
+  overlay windows coordinated from one anchor. Voice capture disposition stays
+  on the companion's origin-matched gesture; entering capture creates no
+  separate cancel/send window and reserves no side-control space. A deliberate
+  drag coalesces their window updates onto one display frame. Android therefore
+  sends touches to Ag only inside the visible companion or ribbon bounds; the
+  transparent rectangle between the diagonally placed surfaces remains
+  touch-pass-through on every supported platform build. The focused composer,
+  removal target, undo affordance, and full-app history remain separate surfaces
+  because they have distinct focus, placement, and lifecycle contracts.
 
   Direct-distribution Android builds may receive the temporary build-only
   `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`. Gradle places it in

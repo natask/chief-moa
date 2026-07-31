@@ -150,6 +150,13 @@ the manual QA check.
       makes exactly one WindowManager layout submission while preserving touch
       pass-through outside the root, streaming state, removal, and Undo.
 
+- [x] 11.12 Replace that single rectangular root after phone use showed it
+      swallowed taps in transparent gaps between the diagonal ribbons and the
+      companion. Keep one anchor and one coalesced display frame, but attach each
+      visible element as its own tightly bounded window. Acceptance: a coordinate
+      inside the old union rectangle but outside every rendered element has no
+      touchable Ag window and reaches the app underneath.
+
 Release note: commit `5106d52` produced Android artifact
 `android-ota-5106d52d7fcc527ee05b0c2197c1b8b38124eb52-1` and browser artifact
 `agee-chrome-0.1.35-5106d52d7fcc527ee05b0c2197c1b8b38124eb52`.

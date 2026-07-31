@@ -2,7 +2,7 @@ package ag.companion;
 
 import java.util.List;
 
-/** Pure geometry for the one-window compact overlay. */
+/** Pure geometry for reporting the compact overlay surfaces' combined footprint. */
 final class MoaCompactOverlayGeometry {
     private MoaCompactOverlayGeometry() {}
 

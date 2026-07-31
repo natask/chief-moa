@@ -100,7 +100,7 @@ public final class OverlayService extends Service {
     private final MoaComposerPanelController composerPanel =
             new MoaComposerPanelController(composerPanelHost());
     // The overlay unit: companion between two ribbons, owned by its own
-    // controller inside one bounded WindowManager root.
+    // controller as separate bounded windows coordinated from one anchor.
     private final MoaOverlayUnitController overlayUnit =
             new MoaOverlayUnitController(overlayUnitHost());
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;

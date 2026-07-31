@@ -52,6 +52,9 @@
       `MoaFrameCoalescer` as orb and ribbon drag. Eight queued moves are pinned
       by test to one requested frame, zero early orb submissions, and one latest
       anchor submission on the frame.
+- [x] Restore reliable touch pass-through between the companion and diagonal
+      ribbons by keeping each visible element in its own bounded Android window;
+      do not depend on the hidden precision-touch-region hook.
 
 ## Open
 
