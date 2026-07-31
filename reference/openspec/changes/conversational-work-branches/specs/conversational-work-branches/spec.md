@@ -45,6 +45,32 @@ remembering its identifier.
 - **THEN** the companion asks a short disambiguating question
 - **AND** does not silently change the active thread
 
+### Requirement: Accepted speech is retried from retained audio
+After explicit SEND, the system SHALL retain the exact accepted audio and SHALL
+keep a failed turn recoverable until terminal success or explicit user discard.
+
+#### Scenario: A transient provider or connection failure occurs
+- **WHEN** STT, reasoning, TTS, transport, or the gateway process fails after
+  accepting a turn
+- **THEN** the turn remains visibly pending with its exact failure stage
+- **AND** recovery retries with bounded increasing delay until it succeeds
+- **AND** the user may request an immediate retry of the retained utterance
+- **AND** the user is not required to record the message again
+
+#### Scenario: A recovery attempt repeats after partial progress
+- **WHEN** a retry starts after one or more stages already produced durable
+  artifacts or dispatch items
+- **THEN** it reuses valid artifacts where safe
+- **AND** stable source-turn and dispatch identities prevent duplicate turns,
+  runs, proposals, approvals, receipts, or side effects
+
+#### Scenario: The failure needs configuration repair
+- **WHEN** retry cannot currently succeed because of deterministic configuration
+  or policy failure
+- **THEN** the message and audio remain retained with an actionable waiting state
+- **AND** recovery resumes after the blocking condition changes
+- **AND** mobile does not collapse the state into an unactionable `Voice failed`
+
 ### Requirement: Transcript snapshots never accumulate on clients
 Gateway transcript events SHALL carry authoritative whole-turn snapshots and
 clients SHALL replace the current transcript rather than concatenate events.

@@ -16,6 +16,8 @@
 //   E. End to end through the real VoiceSessionConnection: audio frames teed
 //      during capture broadcast `transcript_partial` to the client and the
 //      final transcript is produced on commit without re-reading the file.
+//   F. A retired Google stream's delayed deadline error is quarantined instead
+//      of becoming an unhandled EventEmitter error that crashes the gateway.
 
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -117,6 +119,38 @@ async function testRotationAndPartials() {
   assert.ok(partials.includes("hello there"), "committed-so-far partial was emitted");
 
   console.log("  A rotation+partials: ok");
+}
+
+async function testRetiredStreamDelayedErrorIsQuarantined() {
+  const opened = [];
+  const diagnostics = [];
+  const session = createStreamingSttSession({
+    openStream: () => {
+      const stream = new FakeGrpcStream();
+      opened.push(stream);
+      return stream;
+    },
+    configMessage: { cfg: true },
+    parseResults: (data) => data.results,
+    rotateAfterMs: 60000,
+    logger: (event, detail) => diagnostics.push({ event, detail }),
+  });
+
+  const retired = opened[0];
+  retired.emit("end");
+  await settle(() => opened.length === 2, 1000, "stream did not rotate before delayed error");
+
+  assert.doesNotThrow(() => retired.emit("error", Object.assign(
+    new Error("10 ABORTED: Max duration of 5 minutes reached for stream."),
+    { code: 10 },
+  )), "a delayed error from the retired StreamProxy must not escape EventEmitter");
+  assert.ok(diagnostics.some((entry) => entry.event === "stt_retired_stream_error"),
+    "the quarantined provider deadline remains diagnosable");
+  assert.equal(session._state.fatal, false,
+    "a retired stream deadline must not poison the healthy replacement stream");
+
+  await session.finalize();
+  console.log("  A1 retired-stream delayed error quarantine: ok");
 }
 
 async function testProviderRetryAndOverlapReconciliation() {
@@ -557,6 +591,7 @@ function sentEvents(ws) {
 
 async function main() {
   await testRotationAndPartials();
+  await testRetiredStreamDelayedErrorIsQuarantined();
   await testProviderRetryAndOverlapReconciliation();
   await testCumulativeFinalStaircaseReplacement();
   await testPartialsAreWholeTranscriptSoFar();

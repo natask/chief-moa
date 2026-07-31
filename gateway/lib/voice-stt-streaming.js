@@ -187,6 +187,19 @@ function createStreamingSttSession(options) {
       stream.removeAllListeners("data");
       stream.removeAllListeners("error");
       stream.removeAllListeners("end");
+      // google-gax's StreamProxy can emit a second, delayed `error` after its
+      // readable side already emitted `end` (notably the five-minute ABORTED
+      // deadline). This stream is retired, so the error cannot affect capture,
+      // but EventEmitter treats an unobserved `error` as process-fatal. Keep a
+      // terminal listener on every detached stream instead of letting an old
+      // provider call crash the gateway and drop unrelated mobile sessions.
+      stream.on("error", (error) => {
+        try {
+          logger("stt_retired_stream_error", { error: String(error?.message || error) });
+        } catch {
+          // Diagnostics must not restore the process-fatal path being contained.
+        }
+      });
     } catch {
       // best effort
     }

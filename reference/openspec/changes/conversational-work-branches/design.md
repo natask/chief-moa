@@ -57,6 +57,26 @@ the selected branch. Stable prefixes and summaries may improve cache reuse; KV
 cache behavior is an optimization and never the source of thread identity or
 durability.
 
+## Failure recovery
+
+Explicit SEND transfers custody of the captured PCM to the gateway before STT,
+reasoning, TTS, or dispatch begins. The gateway retains that immutable source
+until the accepted turn reaches terminal success or the user explicitly
+discards it under the retention policy.
+
+A transient stage or connection failure leaves the turn pending and schedules
+another attempt with increasing delay up to a bounded maximum interval. There
+is no small attempt-count cliff that silently abandons the user's message.
+Recovery survives client disconnect and gateway restart. A user-facing
+"retry now" operation reuses the retained source rather than recording again.
+
+Retries resume from the earliest unproven stage when a valid prior-stage
+artifact exists. The source turn and dispatch-item identities remain stable, so
+recovery cannot duplicate conversation turns, agent runs, tool proposals, or
+side effects. A deterministic configuration or policy error waits visibly for
+repair and becomes retryable after the condition changes; it never destroys the
+audio or degrades to a generic mobile "Voice failed" message.
+
 ## Latency contract
 
 - Transcript events are whole-turn snapshots and replace prior client text.
@@ -65,6 +85,8 @@ durability.
 - Background branch creation and agent execution never block first audio.
 - Every stage records admission, first transcript, model first token, TTS first
   audio, client playout, and final completion timing.
+- Failed accepted turns remain queryable as pending recovery with the failed
+  stage, next attempt time, attempt count, and retained-audio receipt.
 
 ## Safety and ownership
 

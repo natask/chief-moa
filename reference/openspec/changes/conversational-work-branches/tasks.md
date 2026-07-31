@@ -42,3 +42,16 @@
   fan-out, and thread-return QA.
 - [ ] 5.4 Create release artifacts and promote only after the active-promotion
   no-interruption, rollback, compatibility, backup/restore, and smoke gate.
+
+## 6. Durable failure recovery
+
+- [ ] 6.1 Persist accepted PCM custody and a stage-aware recovery record before
+  downstream provider work.
+- [ ] 6.2 Add restart-safe increasing-backoff retries and a user-triggered
+  `retry now` operation over the same retained source.
+- [ ] 6.3 Prove repeated attempts cannot duplicate turns, agent runs, tool
+  proposals, approvals, receipts, or side effects.
+- [ ] 6.4 Replace generic mobile failure with the exact pending/retrying/waiting
+  state and reserve `Record again` for missing or unusable source audio.
+- [ ] 6.5 Fault-inject every pipeline stage plus socket and gateway restart, then
+  prove the same accepted message reaches terminal success without re-recording.

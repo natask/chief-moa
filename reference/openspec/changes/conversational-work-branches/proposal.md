@@ -12,6 +12,8 @@ stay immediate while those independent threads remain durable and recoverable.
   not wait for agent work to complete.
 - Let one accepted message create several durable first-class work branches and
   runs without changing the active conversation unless the user asks.
+- Retain sent audio until terminal success and recover failed turns without
+  requiring the user to repeat the utterance.
 - Make prior threads listable, describable, and switchable by voice.
 - Preserve separate histories and provider caches per branch while presenting
   one continuous companion identity to the user.
@@ -23,6 +25,7 @@ stay immediate while those independent threads remain durable and recoverable.
 - Do not treat detached work as an in-process subagent owned by a voice socket.
 - Do not let model output execute phone, browser, shell, or deployment actions.
 - Do not infer publication or other external side effects from a brainstorm.
+- Do not retry side effects without the source turn's idempotency identity.
 
 ## Impact
 
