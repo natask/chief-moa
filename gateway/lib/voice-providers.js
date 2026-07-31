@@ -21,6 +21,7 @@ const {
   serviceAccountAccessToken,
 } = require("./google-auth");
 const { readAgentSettingsGeminiDeclaration } = require("./profile-settings-reader");
+const { realtimeProviderDefinitions } = require("./realtime-audio-voice-provider");
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
   sample_rate: 16000,
@@ -57,6 +58,7 @@ const PROVIDER_ALIASES = Object.freeze({
 });
 const VOICE_PROVIDER_REGISTRY = Object.freeze({
   native_live: Object.freeze({
+    ...realtimeProviderDefinitions(providerRegistryEntry),
     loopback: providerRegistryEntry({
       id: "loopback",
       label: "Loopback transport QA",
@@ -2070,8 +2072,6 @@ class GeminiLiveVoiceProvider {
     this.model = this.authMode === "vertex"
       ? env.VERTEX_LIVE_MODEL || env.GEMINI_LIVE_MODEL || env.VOICE_LLM_MODEL || providerOptions?.defaultModel || DEFAULT_VERTEX_LIVE_MODEL
       : env.GEMINI_LIVE_MODEL || env.VOICE_LLM_MODEL || providerOptions?.defaultModel || DEFAULT_GEMINI_LIVE_MODEL;
-    // The env voice is the default. The effective voice is read PER SESSION from
-    // the runtime agent profile (if wired in), so the agent changing its own
     // `voice` by talking takes effect on the next turn with no restart.
     this.envVoiceName = env.GEMINI_LIVE_VOICE || "Kore";
     this.agentProfile = options?.agentProfile || null;

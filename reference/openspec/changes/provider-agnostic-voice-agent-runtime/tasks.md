@@ -70,6 +70,20 @@
 - [ ] 8.2 Add one non-Gemini reasoning provider behind the gateway boundary with no Android protocol change.
 - [x] 8.3 Add one non-Gemini STT or TTS provider behind the gateway boundary with capability metadata and fallback behavior.
 - [ ] 8.4 Verify a provider-mix smoke path and compare transcript/audio/runtime events against Gemini Live.
+- [x] 8.5 Add a credential-safe experiment catalog for Vertex Live, OpenAI
+      Realtime, and Grok Voice duplex sessions, and label Claude accurately as
+      an HTTPS/SSE streaming reasoner rather than inventing a Claude Live audio
+      API. Include a bounded Vertex PCM runner and retain the existing opt-in
+      OpenAI/xAI runner; status inspection must make no paid calls.
+- [x] 8.6 Define one phone-facing speech-to-speech experiment contract with
+      caller-controlled prompt, input languages, output language, and voice.
+      Build private replay manifests from retained audio, original turn output,
+      timing, and the following user turn so every backend sees the same real
+      conversations without committing private recordings or transcripts.
+- [x] 8.7 Register OpenAI Realtime and Grok Voice as native-live gateway
+      implementations behind the existing phone WebSocket and event contract.
+      Buffer microphone frames across provider setup, preserve caller prompt,
+      language, and voice inputs, and convert provider PCM to the client format.
 
 ## 9. Documentation And Validation
 

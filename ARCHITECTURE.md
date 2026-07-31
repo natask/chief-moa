@@ -1099,6 +1099,42 @@ gateway LLM turn streams text deltas (Vertex SSE / OpenAI-compatible SSE)
      turn_done close the turn
 ```
 
+The user-facing connection is one authenticated TLS WebSocket from Android or
+the browser to `wss://api.agee.app/v1/voice/sessions`. It carries PCM16 16 kHz
+binary input frames and JSON controls upstream, then JSON events and PCM16 audio
+frames downstream. In cascaded mode the VPS separately holds a streaming Chirp
+gRPC recognition stream while recording, issues one HTTPS/SSE reasoning request
+after commit, and issues one HTTPS synthesis request for each TTS phrase. Those
+phrase requests overlap with continued model generation, but they are not a
+provider audio-delta stream.
+
+Native-audio provider experiments keep credentials on the gateway and use one
+provider WebSocket per admitted turn today. Vertex, OpenAI Realtime, and Grok
+Voice fit that duplex experiment shape. Claude does not: Anthropic's documented
+API streams text over HTTPS/SSE and has no documented first-party duplex audio
+session, so Claude is evaluated only as a replaceable reasoning stage between
+explicit-language STT and controlled TTS. `npm run eval:voice:providers:status`
+reports this capability matrix and credential readiness without making paid
+calls or exposing credential values.
+
+`openai-realtime` and `xai-voice` are registered native-live implementations of
+the same `createLiveTurnSession` gateway seam used by Vertex. They accept PCM
+before provider setup completes, wait for `session.updated`, stream buffered and
+new input frames, explicitly commit the input buffer, and forward provider audio
+deltas as the existing 16 kHz client PCM stream. Selecting either backend does
+not change Android or browser code.
+
+These are implementations of one gateway-owned speech-to-speech contract, not
+new phone protocols. Every turn supplies audio frames, a caller-controlled voice
+prompt, input-language hints, an output-language target, and a voice selection.
+Every implementation returns the existing transcript, assistant-text, audio,
+and completion events. A private `moa-voice-replay/v1` manifest can be built
+from retained `voice-turns` plus `voice-sessions`; it keeps the original
+transcript, response, timing, and the following user turn beside each audio
+reference so backend comparisons use real conversations and downstream user
+reaction rather than synthetic prompts. Raw audio and generated manifests stay
+outside Git.
+
 Cascaded voice turns stream by default (`VOICE_STREAMING`, unset or `1`). The
 wire protocol keeps the event set used everywhere else: one
 `assistant_audio_start`, N binary PCM16 frames, one `assistant_audio_done`,
