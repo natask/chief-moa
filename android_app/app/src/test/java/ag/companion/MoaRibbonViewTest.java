@@ -17,10 +17,9 @@ import org.robolectric.annotation.Config;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * View-level tests for the dark-user-plate + compact-control contract: the
- * you-bubble keeps its persistent Copy and History rail whenever it holds
- * text, the reply bubble keeps its rails behind engagement/expansion as
- * before, and the geometry, touch, and accessibility contracts still hold.
+ * View-level tests for the dark-user-plate + compact-control contract.
+ * Collapsed streaming work stays bounded to the visible tail, while Copy and
+ * History remain in the full app rather than consuming overlay space.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 26)
@@ -44,6 +43,7 @@ public final class MoaRibbonViewTest {
     private MoaRibbonView laidOut(boolean reply, String text) {
         MoaRibbonView view = new MoaRibbonView(context(), reply);
         view.setContentWidth(WIDTH);
+        view.setWindowText(text);
         view.setFullText(text);
         relayout(view);
         return view;
@@ -56,84 +56,46 @@ public final class MoaRibbonViewTest {
         view.layout(0, 0, view.getMeasuredWidth(), view.getMeasuredHeight());
     }
 
-    private int railHitWidthPx() {
-        float density = context().getResources().getDisplayMetrics().density;
-        return Math.round(MoaRibbonTokens.RAIL_HIT_W_DP * density);
-    }
-
-    private int railGlyphWidthPx() {
-        float density = context().getResources().getDisplayMetrics().density;
-        return Math.round((MoaRibbonTokens.RAIL_GLYPH_DP + 4) * density);
-    }
-
-    // --- Persistent rails on the you-bubble; gated rails on the reply -------
-
     @Test
-    public void collapsedUserBubbleShowsPersistentCopyAndHistoryRail() {
+    public void compactBubbleExposesNoCopyOrHistoryRail() {
         MoaRibbonView you = laidOut(false, LONG_TEXT);
         float mid = you.ribbonHeightPx() / 2f;
 
-        assertTrue("copy is persistent on the you-bubble even collapsed",
-                you.hitsRail(WIDTH - 1, mid));
-        assertTrue("history is persistent on the you-bubble even collapsed",
-                you.hitsHistory(WIDTH - railHitWidthPx() - 1, mid));
+        assertFalse(you.hitsRail(WIDTH - 1, mid));
+        assertFalse(you.hitsHistory(WIDTH - 1, mid));
+        you.setPresenceState(MoaRibbonPresence.State.ENGAGED);
+        you.setExpanded(true);
+        assertFalse(you.hitsRail(WIDTH - 1, mid));
+        assertFalse(you.hitsHistory(WIDTH - 1, mid));
     }
 
     @Test
-    public void replyBubbleCopyWaitsForEngagementHistoryWaitsForExpansion() {
-        MoaRibbonView reply = laidOut(true, LONG_TEXT);
-        float mid = reply.ribbonHeightPx() / 2f;
-
-        assertFalse("dormant reply carries no copy rail", reply.hitsRail(WIDTH - 1, mid));
-        assertFalse("dormant reply carries no history rail",
-                reply.hitsHistory(WIDTH - railHitWidthPx() - 1, mid));
-
-        reply.setPresenceState(MoaRibbonPresence.State.ENGAGED);
-        assertTrue("engagement reveals the copy rail", reply.hitsRail(WIDTH - 1, mid));
-        assertFalse("history still withheld until expansion",
-                reply.hitsHistory(WIDTH - railHitWidthPx() - 1, mid));
-        assertFalse("Copy is only at the right edge, not mid-bubble",
-                reply.hitsRail(WIDTH / 2f, mid));
-
-        reply.setExpanded(true);
-        relayout(reply);
-        assertTrue("expansion also reveals history",
-                reply.hitsHistory(WIDTH - railHitWidthPx() - 1, mid));
-    }
-
-    // --- Geometry: each revealed rail narrows the wrapped-text viewport -----
-
-    @Test
-    public void replyBubbleViewportNarrowsByOneRailPerRevealedAffordance() {
-        MoaRibbonView reply = new MoaRibbonView(context(), true);
-        reply.setContentWidth(WIDTH);
-        reply.setFullText(LONG_TEXT);
-
-        int dormantViewport = reply.textViewportWidthPx();
-        reply.setPresenceState(MoaRibbonPresence.State.ENGAGED);
-        int engagedViewport = reply.textViewportWidthPx();
-        reply.setExpanded(true);
-        int expandedViewport = reply.textViewportWidthPx();
-
-        assertEquals("the copy rail narrows the viewport by exactly one rail width",
-                railGlyphWidthPx(), dormantViewport - engagedViewport);
-        assertEquals("the history rail narrows the viewport by exactly one more rail width",
-                railGlyphWidthPx(), engagedViewport - expandedViewport);
-    }
-
-    @Test
-    public void youBubbleViewportAlreadyAccountsForBothPersistentRails() {
+    public void expansionDoesNotChangeTheTextViewportWidth() {
         MoaRibbonView you = new MoaRibbonView(context(), false);
         you.setContentWidth(WIDTH);
+        you.setWindowText(LONG_TEXT);
         you.setFullText(LONG_TEXT);
 
         int collapsedViewport = you.textViewportWidthPx();
         you.setExpanded(true);
         int expandedViewport = you.textViewportWidthPx();
 
-        assertEquals("both rails are already visible collapsed, so expanding "
-                        + "the you-bubble does not change the text viewport",
-                collapsedViewport, expandedViewport);
+        assertEquals(collapsedViewport, expandedViewport);
+    }
+
+    @Test
+    public void collapsedLayoutUsesBoundedTailAndExpansionUsesFullTurn() {
+        MoaRibbonView you = new MoaRibbonView(context(), false);
+        you.setContentWidth(WIDTH);
+        you.setWindowText("short tail");
+        you.setFullText((LONG_TEXT + " ").repeat(24));
+        int collapsedHeight = you.desiredHeightPx();
+
+        you.setExpanded(true);
+        int expandedHeight = you.desiredHeightPx();
+
+        assertEquals(you.ribbonHeightPx(), collapsedHeight);
+        assertTrue(expandedHeight > collapsedHeight);
     }
 
     @Test
@@ -160,7 +122,7 @@ public final class MoaRibbonViewTest {
     // --- Accessibility ------------------------------------------------------
 
     @Test
-    public void youBubbleAdvertisesPersistentCopyAndHistoryActionsWhileCollapsed() {
+    public void compactBubbleAdvertisesNoCopyOrHistoryActions() {
         MoaRibbonView you = laidOut(false, LONG_TEXT);
         AtomicInteger copies = new AtomicInteger();
         AtomicInteger histories = new AtomicInteger();
@@ -171,14 +133,13 @@ public final class MoaRibbonViewTest {
         int copyAction = actionId(info, "Copy");
         int historyAction = actionId(info, "History");
 
-        assertTrue("you-bubble Copy is persistent even collapsed", copyAction != 0);
-        assertTrue("you-bubble History is persistent even collapsed", historyAction != 0);
-        assertTrue(you.performAccessibilityAction(copyAction, null));
-        assertTrue(you.performAccessibilityAction(historyAction, null));
-        assertEquals(1, copies.get());
-        assertEquals(1, histories.get());
+        assertEquals(0, copyAction);
+        assertEquals(0, historyAction);
+        assertEquals(0, copies.get());
+        assertEquals(0, histories.get());
         String label = String.valueOf(info.getContentDescription());
-        assertTrue(label.contains("Copy and History buttons are at the right edge"));
+        assertFalse(label.contains("Copy"));
+        assertFalse(label.contains("History"));
         info.recycle();
     }
 
@@ -197,7 +158,7 @@ public final class MoaRibbonViewTest {
     }
 
     @Test
-    public void engagedThenExpandedReplyBubbleAddsCopyThenHistoryActions() {
+    public void engagedAndExpandedReplyStillExposesNoCompactActions() {
         MoaRibbonView reply = laidOut(true, LONG_TEXT);
         AtomicInteger copies = new AtomicInteger();
         AtomicInteger histories = new AtomicInteger();
@@ -206,21 +167,17 @@ public final class MoaRibbonViewTest {
 
         AccessibilityNodeInfo engagedInfo = AccessibilityNodeInfo.obtain();
         reply.onInitializeAccessibilityNodeInfo(engagedInfo);
-        int copyAction = actionId(engagedInfo, "Copy");
-        assertTrue("engagement exposes a Copy action", copyAction != 0);
-        assertEquals("History still withheld before expansion",
-                0, actionId(engagedInfo, "History"));
-        assertTrue(reply.performAccessibilityAction(copyAction, null));
-        assertEquals(1, copies.get());
+        assertEquals(0, actionId(engagedInfo, "Copy"));
+        assertEquals(0, actionId(engagedInfo, "History"));
         engagedInfo.recycle();
 
         reply.setExpanded(true);
         AccessibilityNodeInfo expandedInfo = AccessibilityNodeInfo.obtain();
         reply.onInitializeAccessibilityNodeInfo(expandedInfo);
-        int historyAction = actionId(expandedInfo, "History");
-        assertTrue("expansion exposes a History action", historyAction != 0);
-        assertTrue(reply.performAccessibilityAction(historyAction, null));
-        assertEquals(1, histories.get());
+        assertEquals(0, actionId(expandedInfo, "Copy"));
+        assertEquals(0, actionId(expandedInfo, "History"));
+        assertEquals(0, copies.get());
+        assertEquals(0, histories.get());
         expandedInfo.recycle();
     }
 

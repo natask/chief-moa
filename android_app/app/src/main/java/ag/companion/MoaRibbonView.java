@@ -26,14 +26,13 @@ import android.view.accessibility.AccessibilityNodeInfo;
  * a tap expands it to a taller, still-bounded, vertically scrollable read.
  * Nothing here may become a chat panel.
  *
- * Actions are explicit, not gestures: the you-bubble shows exactly one Copy
- * button and one History button whenever it holds text. The reply bubble keeps
- * its copy rail behind engagement, and its History rail behind expansion, as
- * before. The you-bubble's plate is deliberately near-black in BOTH system
- * themes ({@link MoaRibbonTokens#plateColor}), so its Copy/History glyphs and
- * text always use the paired light ink ({@link MoaRibbonTokens#inkColor}) —
- * never the theme's plain {@code palette.ink}, which is dark in light theme
- * and would vanish against that near-black plate.
+ * Copy and History stay in the retained full-app History surface. The compact
+ * bubble spends no width, touch targets, or accessibility actions on them.
+ * The you-bubble's plate is deliberately near-black in BOTH system themes
+ * ({@link MoaRibbonTokens#plateColor}), so its text always uses the paired
+ * light ink ({@link MoaRibbonTokens#inkColor}) — never the theme's plain
+ * {@code palette.ink}, which is dark in light theme and would vanish against
+ * that near-black plate.
  *
  * Painting by state (see {@link MoaRibbonPresence}):
  * <ul>
@@ -45,9 +44,6 @@ import android.view.accessibility.AccessibilityNodeInfo;
  * </ul>
  */
 final class MoaRibbonView extends View {
-    private static final int ACTION_COPY = View.generateViewId();
-    private static final int ACTION_HISTORY = View.generateViewId();
-
     private final boolean reply;
     private final float density;
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -79,8 +75,6 @@ final class MoaRibbonView extends View {
     private ValueAnimator caretAnimator;
     private ValueAnimator dotAnimator;
     private Runnable accessibilityTap;
-    private Runnable accessibilityCopy;
-    private Runnable accessibilityHistory;
 
     private final int ribbonHeightPx;
     private final int padXPx;
@@ -88,8 +82,6 @@ final class MoaRibbonView extends View {
     private final int dotSizePx;
     private final int radiusPx;
     private final int hairlinePx;
-    private final int railWidthPx;
-    private final int railHitWidthPx;
     private final int hitInflatePx;
     private final int caretWidthPx;
     private final int caretHeightPx;
@@ -108,8 +100,6 @@ final class MoaRibbonView extends View {
         gutterPx = dp(MoaRibbonTokens.DOT_OFFSET_DP) + dotSizePx;
         radiusPx = dp(MoaRibbonTokens.RADIUS_RIBBON_DP);
         hairlinePx = Math.max(1, dp(MoaRibbonTokens.HAIRLINE_DP));
-        railWidthPx = dp(MoaRibbonTokens.RAIL_GLYPH_DP + 4);
-        railHitWidthPx = dp(MoaRibbonTokens.RAIL_HIT_W_DP);
         hitInflatePx = dp(MoaRibbonTokens.HIT_INFLATE_DP);
         caretWidthPx = Math.max(1, dp(MoaRibbonTokens.CARET_W_DP));
         caretHeightPx = dp(MoaRibbonTokens.CARET_H_DP);
@@ -135,8 +125,6 @@ final class MoaRibbonView extends View {
 
     void setAccessibilityActions(Runnable tap, Runnable copy, Runnable history) {
         accessibilityTap = tap;
-        accessibilityCopy = copy;
-        accessibilityHistory = history;
         sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
     }
 
@@ -186,6 +174,10 @@ final class MoaRibbonView extends View {
             return;
         }
         line = next;
+        if (!expanded && !collapsedSpokenActive) {
+            textLayout = null;
+            requestLayout();
+        }
         setContentDescription(accessibilityLabel());
         invalidate();
     }
@@ -194,15 +186,21 @@ final class MoaRibbonView extends View {
         return line;
     }
 
-    /** The whole retained turn: what the bubble wraps and what Copy takes. */
+    /** The whole retained turn: expansion and the full-app History surface use it. */
     void setFullText(String value) {
         String next = value == null ? "" : value;
         if (next.equals(fullText)) {
             return;
         }
         fullText = next;
-        textLayout = null;
-        requestLayout();
+        // The collapsed surface paints only the bounded tail window. Retaining
+        // another streaming delta must not rebuild and remeasure the complete
+        // turn on the UI thread. Expansion is the only state that lays out the
+        // full retained text.
+        if (expanded || line.isEmpty()) {
+            textLayout = null;
+            requestLayout();
+        }
         invalidate();
         sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
     }
@@ -219,7 +217,7 @@ final class MoaRibbonView extends View {
      * Collapsed paint-time override for a spoken reply: the collapsed bubble
      * shows only the text the AudioTrack playback head has actually crossed,
      * while {@link #setFullText} retains the complete response for expansion
-     * and Copy. Never active outside a live hosted-audio reply.
+     * and History. Never active outside a live hosted-audio reply.
      */
     void setCollapsedSpoken(String text, boolean active) {
         String next = text == null ? "" : text;
@@ -233,9 +231,15 @@ final class MoaRibbonView extends View {
         invalidate();
     }
 
-    /** What the bounded viewport wraps right now. Copy never reads this. */
+    /** What the bounded viewport wraps right now. */
     private String displayedText() {
-        return !expanded && collapsedSpokenActive ? collapsedSpokenText : fullText;
+        if (expanded) {
+            return fullText;
+        }
+        if (collapsedSpokenActive) {
+            return collapsedSpokenText;
+        }
+        return line.isEmpty() ? fullText : line;
     }
 
     /**
@@ -305,15 +309,8 @@ final class MoaRibbonView extends View {
         if (next == state) {
             return;
         }
-        boolean copyWasVisible = copyRailVisible();
-        boolean historyWasVisible = historyRailVisible();
         MoaRibbonPresence.State previous = state;
         state = next;
-        if (copyWasVisible != copyRailVisible() || historyWasVisible != historyRailVisible()) {
-            textLayout = null;
-            requestLayout();
-            sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
-        }
         animateTo(MoaRibbonPresence.plateAlpha(state, highContrast),
                 MoaRibbonPresence.ribbonAlpha(state),
                 MoaRibbonPresence.solidifyDurationMs(previous, state));
@@ -452,41 +449,14 @@ final class MoaRibbonView extends View {
         return x >= gutterPx - hitInflatePx && x <= getWidth() && y >= 0 && y <= getHeight();
     }
 
-    /** The one Copy button. Hit box is padded, paint is not. */
+    /** Kept for the touch listener contract; compact Copy is intentionally absent. */
     boolean hitsRail(float x, float y) {
-        if (!copyRailVisible()) {
-            return false;
-        }
-        return x >= getWidth() - railHitWidthPx && x <= getWidth()
-                && y >= 0 && y <= ribbonHeightPx;
+        return false;
     }
 
-    /** The one History button beside Copy; history remains a full-app surface. */
+    /** Kept for the touch listener contract; History is a full-app surface. */
     boolean hitsHistory(float x, float y) {
-        if (!historyRailVisible()) {
-            return false;
-        }
-        float right = getWidth() - railHitWidthPx;
-        return x >= right - railHitWidthPx && x < right && y >= 0 && y <= ribbonHeightPx;
-    }
-
-    /**
-     * The you-bubble's Copy and History are persistent whenever it has text —
-     * exactly one visible copy affordance, no menu and no hidden gesture. The
-     * reply bubble keeps its copy rail behind engagement.
-     */
-    private boolean copyRailVisible() {
-        if (fullText.isEmpty()) {
-            return false;
-        }
-        return !reply || expanded || MoaRibbonPresence.railVisible(state);
-    }
-
-    private boolean historyRailVisible() {
-        if (fullText.isEmpty()) {
-            return false;
-        }
-        return !reply || expanded;
+        return false;
     }
 
     private float viewportLeft() {
@@ -494,18 +464,14 @@ final class MoaRibbonView extends View {
     }
 
     private float viewportRight() {
-        float rail = copyRailVisible() ? railWidthPx : 0;
-        if (historyRailVisible()) {
-            rail += railWidthPx;
-        }
         int width = getWidth() > 0 ? getWidth() : contentWidthPx;
-        return Math.max(viewportLeft(), width - padXPx - rail);
+        return Math.max(viewportLeft(), width - padXPx);
     }
 
     /**
      * The width in px that the wrapped turn text is laid out into: the fixed
-     * window minus the gutter, padding, and whichever rails are currently
-     * visible. This is the geometry the browser overlay mirrors.
+     * window minus the gutter and padding. This is the geometry the browser
+     * overlay mirrors.
      */
     int textViewportWidthPx() {
         return Math.round(viewportRight() - viewportLeft());
@@ -556,12 +522,6 @@ final class MoaRibbonView extends View {
             canvas.drawRoundRect(scratch, radiusPx, radiusPx, fillPaint);
         }
         drawText(canvas);
-        if (historyRailVisible()) {
-            drawHistory(canvas);
-        }
-        if (copyRailVisible()) {
-            drawRail(canvas);
-        }
     }
 
     // One paint path for both states: the wrapped turn inside a bounded
@@ -626,45 +586,6 @@ final class MoaRibbonView extends View {
         canvas.drawRoundRect(scratch, radiusPx, radiusPx, strokePaint);
     }
 
-    /**
-     * The copy glyph: two offset rounded outlines. One button, nothing else.
-     * Uses the same role-aware ink as the text ({@link MoaRibbonTokens#inkColor})
-     * rather than the raw theme {@code palette.ink}/{@code palette.muted}: the
-     * you-bubble's plate is near-black in both themes, and the plain light-theme
-     * ink is itself dark, so it would be nearly invisible on that plate.
-     */
-    private void drawRail(Canvas canvas) {
-        float size = dp(9);
-        float cx = getWidth() - padXPx - size;
-        float cy = ribbonHeightPx / 2f;
-        int ink = MoaRibbonTokens.inkColor(palette, reply);
-        strokePaint.setColor(withAlpha(ink, 0.62f));
-        scratch.set(cx - size / 2f - dp(1.5f), cy - size / 2f - dp(1.5f),
-                cx + size / 2f - dp(1.5f), cy + size / 2f - dp(1.5f));
-        canvas.drawRoundRect(scratch, dp(2), dp(2), strokePaint);
-        strokePaint.setColor(ink);
-        scratch.set(cx - size / 2f + dp(1.5f), cy - size / 2f + dp(1.5f),
-                cx + size / 2f + dp(1.5f), cy + size / 2f + dp(1.5f));
-        canvas.drawRoundRect(scratch, dp(2), dp(2), strokePaint);
-        strokePaint.setColor(palette.hairline);
-    }
-
-    /**
-     * The history glyph: a clock face. Explicit full-app handoff, never inline
-     * chat. Uses the same role-aware ink as {@link #drawRail} so it stays
-     * readable on the you-bubble's near-black plate in either theme.
-     */
-    private void drawHistory(Canvas canvas) {
-        float cx = getWidth() - railHitWidthPx - railHitWidthPx / 2f;
-        float cy = ribbonHeightPx / 2f;
-        float radius = dp(4.5f);
-        strokePaint.setColor(MoaRibbonTokens.inkColor(palette, reply));
-        canvas.drawCircle(cx, cy, radius, strokePaint);
-        canvas.drawLine(cx, cy, cx, cy - dp(3), strokePaint);
-        canvas.drawLine(cx, cy, cx + dp(2.5f), cy + dp(1.5f), strokePaint);
-        strokePaint.setColor(palette.hairline);
-    }
-
     @Override
     public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
         super.onInitializeAccessibilityNodeInfo(info);
@@ -673,12 +594,6 @@ final class MoaRibbonView extends View {
         info.setClickable(true);
         info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
                 AccessibilityNodeInfo.ACTION_CLICK, expanded ? "Collapse" : "Expand"));
-        if (copyRailVisible()) {
-            info.addAction(new AccessibilityNodeInfo.AccessibilityAction(ACTION_COPY, "Copy"));
-        }
-        if (historyRailVisible()) {
-            info.addAction(new AccessibilityNodeInfo.AccessibilityAction(ACTION_HISTORY, "History"));
-        }
     }
 
     @Override
@@ -687,25 +602,13 @@ final class MoaRibbonView extends View {
             accessibilityTap.run();
             return true;
         }
-        if (action == ACTION_COPY && copyRailVisible() && accessibilityCopy != null) {
-            accessibilityCopy.run();
-            return true;
-        }
-        if (action == ACTION_HISTORY && historyRailVisible() && accessibilityHistory != null) {
-            accessibilityHistory.run();
-            return true;
-        }
         return super.performAccessibilityAction(action, arguments);
     }
 
     private String accessibilityLabel() {
         String speaker = reply ? "Ag reply" : "You said";
         String body = line.isEmpty() ? "nothing yet" : line;
-        // A screen-reader user cannot discover buttons on a floating window, so
-        // the affordances are named. The Copy and History buttons sit at the
-        // bubble's right edge whenever it holds text.
-        return speaker + ": " + body
-                + ". Tap to expand. Copy and History buttons are at the right edge.";
+        return speaker + ": " + body + ". Tap to expand.";
     }
 
     private int withAlpha(int color, float fraction) {
@@ -726,7 +629,5 @@ final class MoaRibbonView extends View {
         caretAnimator = null;
         dotAnimator = null;
         accessibilityTap = null;
-        accessibilityCopy = null;
-        accessibilityHistory = null;
     }
 }

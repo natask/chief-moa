@@ -204,6 +204,10 @@ signal completed without a client acknowledgement.
       vertically scrollable, and expose one persistent user Copy action plus a
       separate History action without a hidden double-tap duplicate. Verify the
       actions through Android 8 accessibility as well as touch.
+- [x] 13.9 Supersede the compact Copy/History rails with the History-first
+      product contract. Lay out only the bounded visible tail while collapsed,
+      retain the complete turn for expansion and full-app History, and expose no
+      compact touch or Android 8 accessibility action for Copy or History.
 
 Release evidence: commit `b99379b0` built candidate
 `ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256

@@ -98,6 +98,11 @@ earbud or headset buttons.
 ### Requirement: Transcript Visibility
 The Android app SHALL show current speech text while the user is speaking.
 
+The collapsed overlay SHALL lay out only its bounded visible transcript tail,
+while retaining the complete current turn for expansion and full-app History.
+Copy and History actions SHALL remain in retained History instead of consuming
+space or accessibility actions in the compact overlay.
+
 #### Scenario: Partial recognition received
 - **WHEN** Android speech recognition emits partial text
 - **THEN** the overlay updates visible transcript text without opening the full chat panel
