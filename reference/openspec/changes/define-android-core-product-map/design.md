@@ -65,6 +65,20 @@ earbud-specific integrations. Rejected because media buttons are owned by active
 media sessions and vendor integrations would expand hardware scope before the
 core Android loop is reliable.
 
+### Decision: Normal Launcher Is Literal Dictation
+
+The `MAIN`/`LAUNCHER` entry uses the same overlay and streaming microphone path
+but marks its gateway session transcription-only. The first launch starts
+capture and the next launch commits it. Android always copies the authoritative
+final transcript. When Accessibility can prove the same non-sensitive focused
+editor is still current, Android pastes at that editor's cursor; stale,
+changed, unavailable, and password targets fall back to clipboard only.
+Standard Assistant and voice-command actions remain normal assistant turns.
+
+Alternative considered: send every launcher capture through reasoning and TTS.
+Rejected because launching the app is a text-creation gesture; model latency and
+assistant failures must not stand between speech and the literal transcript.
+
 ### Decision: Agent Runs Are Async By Default
 
 Voice-started agent work must return quickly with a run ID and status. The phone polls or subscribes for lifecycle updates and displays completion later.

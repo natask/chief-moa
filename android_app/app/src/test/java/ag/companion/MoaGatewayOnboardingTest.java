@@ -1,6 +1,7 @@
 package ag.companion;
 
 import org.junit.Test;
+import org.json.JSONObject;
 
 import java.net.SocketTimeoutException;
 
@@ -9,6 +10,17 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class MoaGatewayOnboardingTest {
+    @Test
+    public void launcherDictationMarksOnlyItsVoiceSessionTranscriptionOnly() throws Exception {
+        JSONObject dictation = MoaVoiceGatewaySocket.applyTranscriptionMode(
+                new JSONObject(), true);
+        JSONObject assistant = MoaVoiceGatewaySocket.applyTranscriptionMode(
+                new JSONObject(), false);
+
+        assertEquals(true, dictation.getBoolean("transcription_only"));
+        assertEquals(false, assistant.has("transcription_only"));
+    }
+
     @Test
     public void preferredYoutubeDefaultsToRevancedAndRejectsMalformedPackages() {
         assertEquals("app.revanced.android.youtube", MoaPrefs.DEFAULT_YOUTUBE_PACKAGE);

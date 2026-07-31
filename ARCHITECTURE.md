@@ -25,6 +25,14 @@ Android app
   permissions, approvals, phone-local actions, local action receipts, and
   package-installer handoff for app updates.
 
+  The normal launcher entry is literal dictation, not an assistant turn. The
+  first launch starts one manual transcription-only capture and the next launch
+  commits it. Android copies only the authoritative final transcript and may
+  paste it into the same still-focused, non-sensitive Accessibility editor.
+  Missing, stale, changed, or sensitive focus falls back to clipboard only.
+  Android Assistant and voice-command intents remain reasoning-capable assistant
+  turns.
+
   The companion and compact conversation ribbons share one bounded overlay
   root. Voice capture disposition stays on the companion's origin-matched
   gesture; entering capture creates no separate cancel/send window and reserves

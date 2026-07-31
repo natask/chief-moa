@@ -92,6 +92,7 @@ final class MoaStreamingVoiceSessionController {
     private String deviceId = "";
     private final String branchId;
     private final boolean autoCommitOnSilence;
+    private boolean transcriptionOnly;
     private final Callback callback;
     private final Context metricsContext;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -200,6 +201,14 @@ final class MoaStreamingVoiceSessionController {
 
     void setPlaybackEnabled(boolean enabled) {
         playbackEnabled = enabled;
+    }
+
+    void setTranscriptionOnly(boolean enabled) {
+        synchronized (lock) {
+            if (!active) {
+                transcriptionOnly = enabled;
+            }
+        }
     }
 
     String sessionId() {
@@ -508,7 +517,8 @@ final class MoaStreamingVoiceSessionController {
         }
 
         if (socket == null || !socket.sendSessionStart(currentSessionId, currentTurnId, branchId,
-                null, "android-overlay", deviceId)) {
+                null, transcriptionOnly ? "android-launcher-dictation" : "android-overlay",
+                deviceId, transcriptionOnly)) {
             reportError("Could not send session_start to voice gateway.", null);
             return;
         }

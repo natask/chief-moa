@@ -352,3 +352,22 @@ the build fallback, a saved token overrides it, and an empty build fallback
 remains tokenless. An unauthenticated client can read only the current Android
 OTA manifest and latest APK. It cannot read a version-pinned APK or call
 rollback, publication, another mutation, or a non-OTA gateway route.
+
+## 21. Launcher Literal Dictation
+
+- [x] 21.1 Route only the normal `MAIN` launcher entry into a
+      transcription-only streaming turn; keep Android Assistant and
+      voice-command intents reasoning-capable.
+- [x] 21.2 On successful finalization, copy the exact authoritative transcript.
+- [x] 21.3 Paste only when Accessibility proves the same non-sensitive focused
+      editor remains current; otherwise keep the clipboard-only result.
+- [x] 21.4 Keep first launch as start and repeated launch as explicit commit,
+      with no silence auto-submit.
+- [ ] 21.5 Complete physical-phone QA for clipboard fallback, same-field cursor
+      insertion, changed focus, password refusal, repeated launch commit, and
+      Assistant-mode separation.
+
+Observable acceptance check: launching AG starts literal dictation without
+reasoning or TTS. Launching again commits, copies the complete final transcript,
+and inserts it only into the still-focused safe editor. Android Assistant still
+starts a normal assistant voice turn.

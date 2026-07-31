@@ -174,6 +174,57 @@ public final class MoaAccessibilityService extends AccessibilityService {
         return packageName == null ? "" : packageName.toString().trim();
     }
 
+    static FocusedEditorTarget currentFocusedEditorTarget() {
+        MoaAccessibilityService service = activeService;
+        AccessibilityNodeInfo root = service == null ? null : service.getRootInActiveWindow();
+        AccessibilityNodeInfo focused = root == null
+                ? null : root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        if (focused == null || !focused.isEditable() || isSensitiveTextField(focused)
+                || focused.getPackageName() == null) {
+            return null;
+        }
+        return new FocusedEditorTarget(
+                focused.getPackageName().toString(),
+                focused.getWindowId(),
+                normalize(focused.getViewIdResourceName()),
+                normalize(focused.getClassName()));
+    }
+
+    static SemanticActionResult pasteIntoFocusedEditor(FocusedEditorTarget target) {
+        MoaAccessibilityService service = activeService;
+        if (service == null || target == null) return SemanticActionResult.UNAVAILABLE;
+        AccessibilityNodeInfo root = validatedRoot(
+                service, target.packageName, target.windowId);
+        AccessibilityNodeInfo focused = root == null
+                ? null : root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        if (focused == null || !focused.isEditable() || isSensitiveTextField(focused)) {
+            return root == null ? SemanticActionResult.STALE_TARGET
+                    : SemanticActionResult.NOT_FOUND;
+        }
+        String viewId = normalize(focused.getViewIdResourceName());
+        String className = normalize(focused.getClassName());
+        if ((!target.viewId.isEmpty() && !target.viewId.equals(viewId))
+                || (!target.className.isEmpty() && !target.className.equals(className))) {
+            return SemanticActionResult.STALE_TARGET;
+        }
+        return focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                ? SemanticActionResult.PERFORMED : SemanticActionResult.FAILED;
+    }
+
+    static final class FocusedEditorTarget {
+        final String packageName;
+        final int windowId;
+        final String viewId;
+        final String className;
+
+        FocusedEditorTarget(String packageName, int windowId, String viewId, String className) {
+            this.packageName = normalize(packageName);
+            this.windowId = windowId;
+            this.viewId = normalize(viewId);
+            this.className = normalize(className);
+        }
+    }
+
     static TapResult clickByText(String label, String expectedPackage) {
         MoaAccessibilityService service = activeService;
         String target = normalize(label);

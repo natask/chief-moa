@@ -147,6 +147,12 @@ final class MoaVoiceGatewaySocket {
     }
 
     boolean sendSessionStart(String sessionId, String turnId, String branchId, JSONObject profileOverride, String source, String deviceId) {
+        return sendSessionStart(sessionId, turnId, branchId, profileOverride, source, deviceId, false);
+    }
+
+    boolean sendSessionStart(String sessionId, String turnId, String branchId,
+            JSONObject profileOverride, String source, String deviceId,
+            boolean transcriptionOnly) {
         try {
             JSONObject format = new JSONObject();
             format.put("encoding", MoaAudioCaptureController.ENCODING);
@@ -162,6 +168,7 @@ final class MoaVoiceGatewaySocket {
             body.put("format", format);
             body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
             if (!safe(deviceId).isEmpty()) body.put("device_id", safe(deviceId));
+            applyTranscriptionMode(body, transcriptionOnly);
             if (profileOverride != null && profileOverride.length() > 0) {
                 body.put("profile_override", profileOverride);
             }
@@ -170,6 +177,14 @@ final class MoaVoiceGatewaySocket {
             reportFailure("Could not build session_start event.", error);
             return false;
         }
+    }
+
+    static JSONObject applyTranscriptionMode(JSONObject body, boolean transcriptionOnly)
+            throws JSONException {
+        if (transcriptionOnly) {
+            body.put("transcription_only", true);
+        }
+        return body;
     }
 
     boolean sendTextTurn(String turnId, String text) {

@@ -46,6 +46,7 @@ public final class OverlayService extends Service {
     private static final String TAG = "MoaOverlay";
 
     static final String ACTION_ASSIST_BUTTON = "ag.companion.action.ASSIST_BUTTON";
+    static final String ACTION_DICTATION_BUTTON = "ag.companion.action.DICTATION_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ag.companion.action.COLLAPSE_SURFACES";
     static final String ACTION_HIDE_OVERLAY = "ag.companion.action.HIDE_OVERLAY";
     static final String ACTION_REFRESH_ORB_SCALE = "ag.companion.REFRESH_ORB_SCALE";
@@ -150,6 +151,9 @@ public final class OverlayService extends Service {
     private final MoaContinuousCaptureLoop captureLoop =
             new MoaContinuousCaptureLoop(continuousCaptureSink());
     private boolean voiceInvocationLatched;
+    private boolean launcherDictationLatched;
+    private boolean nextStreamingTurnTranscriptionOnly;
+    private MoaAccessibilityService.FocusedEditorTarget launcherDictationTarget;
     private boolean suppressFirstTapTurnEmptyCue;
     private boolean pushToTalkVoiceTurn;
     private final MoaPushToTalkFinish pushToTalkFinish = new MoaPushToTalkFinish();
@@ -215,6 +219,10 @@ public final class OverlayService extends Service {
             }
             @Override
             public void onVoiceTurn(String text) {
+                if (launcherDictationLatched) {
+                    deliverLauncherDictation(text);
+                    return;
+                }
                 sendUserMessage(text, true);
             }
             @Override
@@ -282,7 +290,9 @@ public final class OverlayService extends Service {
             return START_STICKY;
         }
         if (isVoiceInvocation(intent)) {
-            mainHandler.post(this::handleVoiceInvocation);
+            mainHandler.post(ACTION_DICTATION_BUTTON.equals(intent.getAction())
+                    ? this::handleLauncherDictationInvocation
+                    : this::handleVoiceInvocation);
         }
         return START_STICKY;
     }
@@ -1121,6 +1131,9 @@ public final class OverlayService extends Service {
     private void discardVoiceDraft() {
         copyUserTranscriptWhenFinal = false;
         voiceInvocationLatched = false;
+        launcherDictationLatched = false;
+        nextStreamingTurnTranscriptionOnly = false;
+        launcherDictationTarget = null;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         suppressFirstTapTurnEmptyCue = false;
         setContinuousVoiceLoop(false);
@@ -2211,6 +2224,23 @@ public final class OverlayService extends Service {
         }
     }
 
+    private void handleLauncherDictationInvocation() {
+        if (launcherDictationLatched) {
+            if (!currentStreamingTurnCommitRequested) {
+                sendVoiceDraft();
+            }
+            return;
+        }
+        if (pushToTalkVoiceTurn || audioNoteActive) {
+            return;
+        }
+        launcherDictationLatched = true;
+        voiceInvocationLatched = true;
+        nextStreamingTurnTranscriptionOnly = true;
+        launcherDictationTarget = MoaAccessibilityService.currentFocusedEditorTarget();
+        handleOrbStartTalkLoop();
+    }
+
     private void handleOrbStartFreshTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
@@ -2919,6 +2949,7 @@ public final class OverlayService extends Service {
         streamingTurnContinuous = continuousLoop;
         streamingTurnRetried = false;
         streamingTurnIncognito = incognito;
+        final boolean transcriptionOnly = nextStreamingTurnTranscriptionOnly;
         final int generation = ++streamingVoiceGeneration;
         currentStreamingTurnRouted = false;
         currentStreamingTurnCommitRequested = false;
@@ -3141,6 +3172,10 @@ public final class OverlayService extends Service {
                     sessionSpeakLanguage = replyShort;
                     updateVoiceHeaderState();
                 }
+                if (transcriptionOnly && launcherDictationLatched) {
+                    completeLauncherDictation(status);
+                    return;
+                }
                 if (transcriptionOnly && !currentStreamingTurnRouted && !currentStreamingTranscript.isEmpty()) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript, !voiceUserTranscriptFinal);
                     return;
@@ -3306,6 +3341,7 @@ public final class OverlayService extends Service {
                 showStreamingVoiceFailure(notice, generation);
             }
         }, this);
+        streamingVoiceController.setTranscriptionOnly(transcriptionOnly);
         if (!pendingReplacementTurnId.isEmpty()) {
             streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());
             pendingReplacementTurnId = "";
@@ -3559,7 +3595,44 @@ public final class OverlayService extends Service {
             return false;
         }
         return intent.getBooleanExtra(EXTRA_START_VOICE, false)
-                || ACTION_ASSIST_BUTTON.equals(intent.getAction());
+                || ACTION_ASSIST_BUTTON.equals(intent.getAction())
+                || ACTION_DICTATION_BUTTON.equals(intent.getAction());
+    }
+
+    private void completeLauncherDictation(String status) {
+        String transcript = safe(currentStreamingTranscript);
+        if (!"completed".equals(safe(status)) || transcript.isEmpty()) {
+            launcherDictationLatched = false;
+            nextStreamingTurnTranscriptionOnly = false;
+            launcherDictationTarget = null;
+            showStreamingVoiceFailure("Dictation failed. Record again.", streamingVoiceGeneration);
+            return;
+        }
+        deliverLauncherDictation(transcript);
+    }
+
+    private void deliverLauncherDictation(String transcript) {
+        launcherDictationLatched = false;
+        nextStreamingTurnTranscriptionOnly = false;
+        String value = safe(transcript);
+        if (value.isEmpty()) {
+            launcherDictationTarget = null;
+            return;
+        }
+        android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                    "Ag dictation", value));
+        }
+        MoaAccessibilityService.SemanticActionResult paste =
+                MoaAccessibilityService.pasteIntoFocusedEditor(launcherDictationTarget);
+        launcherDictationTarget = null;
+        updateVoiceAssistantTranscript(
+                paste == MoaAccessibilityService.SemanticActionResult.PERFORMED
+                        ? "Inserted."
+                        : "Copied.");
+        showReadyForNextVoiceTurn(streamingVoiceGeneration);
     }
 
     private boolean streamingVoiceActive() {

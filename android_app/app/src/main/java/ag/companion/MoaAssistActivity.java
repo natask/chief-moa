@@ -54,7 +54,10 @@ public final class MoaAssistActivity extends Activity {
             source = getIntent().getAction();
         }
         Log.i(TAG, "startVoiceService source=" + source);
-        MoaAssistantLaunchCoordinator.startVoiceService(this, source);
+        MoaAssistantLaunchCoordinator.startVoiceService(
+                this,
+                source,
+                Intent.ACTION_MAIN.equals(getIntent().getAction()));
     }
 
     private void finishAndSuppressAnimation() {

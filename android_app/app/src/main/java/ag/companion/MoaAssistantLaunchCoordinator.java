@@ -21,8 +21,12 @@ final class MoaAssistantLaunchCoordinator {
     }
 
     static void startVoiceService(Context context, String source) {
+        startVoiceService(context, source, false);
+    }
+
+    static void startVoiceService(Context context, String source, boolean transcriptionOnly) {
         Intent service = new Intent(context, OverlayService.class)
-                .setAction(OverlayService.ACTION_ASSIST_BUTTON)
+                .setAction(serviceAction(transcriptionOnly))
                 .putExtra(OverlayService.EXTRA_START_VOICE, true)
                 .putExtra(EXTRA_SOURCE, source == null ? "unknown" : source);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -30,6 +34,12 @@ final class MoaAssistantLaunchCoordinator {
         } else {
             context.startService(service);
         }
+    }
+
+    static String serviceAction(boolean transcriptionOnly) {
+        return transcriptionOnly
+                ? OverlayService.ACTION_DICTATION_BUTTON
+                : OverlayService.ACTION_ASSIST_BUTTON;
     }
 
     static boolean isAssistAction(String action) {

@@ -9,6 +9,9 @@ The Android app already has enough working pieces to become the first real Moa s
 - Turn the current implementation into a staged roadmap with acceptance criteria and verification checks.
 - Preserve the trust boundary: the phone owns UI, permissions, approvals, and phone actions; the gateway/execution machine owns model access, memory, and long-running agents.
 - Support standard Android assistant and voice-command launch paths for system gestures and compatible earbuds/headsets.
+- Make the normal launcher a literal dictation toggle that copies the final
+  transcript and inserts only into a still-focused, non-sensitive field;
+  preserve system Assistant entry as the reasoning-capable voice path.
 - Record the temporary OTA-only gateway-token bootstrap: public current-manifest
   and latest-APK reads may deliver a build with an extractable shared bearer, a
   saved user token overrides it, and scoped per-user/device authentication

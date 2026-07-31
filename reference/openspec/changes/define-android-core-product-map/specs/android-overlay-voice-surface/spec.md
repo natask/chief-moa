@@ -117,16 +117,26 @@ space or accessibility actions in the compact overlay.
 - **AND** the assistant response appears in the same compact voice surface
 - **AND** previous voice-turn messages are not shown in that surface
 
-### Requirement: Launcher Opens The Overlay
-The normal Android launcher entry SHALL invoke the same single overlay voice
-surface as Android Assistant rather than opening the full control center.
+### Requirement: Launcher Opens Literal Dictation
+The normal Android launcher entry SHALL invoke transcription-only capture in the
+same single overlay rather than opening the full control center or starting an
+assistant reasoning turn.
 
 #### Scenario: User taps the app icon
 - **WHEN** the required overlay and microphone permissions are available and the
   user taps the A.G. launcher icon
 - **THEN** Android starts or reuses the one overlay service
-- **AND** starts or commits the current latched manual turn
+- **AND** starts or commits the current latched literal dictation
+- **AND** copies only the authoritative final transcript
+- **AND** inserts it only when the same non-sensitive focused editor remains
+  current, otherwise retaining the clipboard result
 - **AND** does not render `MainActivity`
+
+#### Scenario: Android Assistant invokes AG
+- **WHEN** Android invokes AG through `ACTION_ASSIST`, `ACTION_VOICE_ASSIST`, or
+  `ACTION_VOICE_COMMAND`
+- **THEN** AG starts or commits the reasoning-capable assistant turn
+- **AND** does not silently change that system Assistant entry into dictation
 
 ### Requirement: Recoverable Voice Failure
 Unexpected voice failures SHALL remain recoverable from the compact voice
