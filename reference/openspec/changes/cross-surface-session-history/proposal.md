@@ -6,6 +6,10 @@ Proposed as the first coherent recovery wave for the current product direction.
 This change defines a narrow implementation target; each source-changing ticket
 still requires its own verification, commit, artifact, and promotion evidence.
 
+The shared projection is implemented. The browser transcript-history polish
+unit below is accepted follow-on product direction. It does not reopen the
+gateway ordering contract or the completed Android history slice.
+
 ## Source Intent
 
 The current user direction is to recover a recent long Android-authored message,
@@ -57,6 +61,17 @@ inventing its own partial conversation history.
   floating overlay small and interruption-safe.
 - Permit read-only visibility of already-existing browser action receipts in
   message history, without expanding CDP or browser-action authority.
+- Present browser voice transcripts as a newest-first library. Keep the latest
+  final user transcript prominent and let the user copy any retained user
+  transcript exactly.
+- Keep the browser History view focused on retained messages. Remove repeated
+  page, provider, session, agent, and developer status blocks from its default
+  transcript list. Show an active error or action only when it affects the
+  current history read or transcription.
+- Treat retained transcript display, exact copy, and audio re-transcription as
+  different operations. History reads and copy use the stored final transcript
+  without provider work. An explicit Re-transcribe action may create a new
+  revision only when the turn has accessible retained audio.
 
 ## Non-Goals And Explicit Follow-Ons
 
@@ -96,6 +111,15 @@ while durable work/status references remain attached to the canonical message.
   rely on content-script memory as conversation authority.
 - The Android full app renders the same messages and identifiers while the
   Android overlay remains a compact current-turn surface.
+- The browser History view places the newest retained user transcript first,
+  gives the latest final transcript the strongest visual emphasis, and copies
+  the exact selected transcript from any visible transcript card.
+- Opening History or copying a transcript starts no speech provider work.
+  Re-transcribe is available only for a turn with retained audio, preserves the
+  original transcript, and shows the resulting revision as derived from that
+  audio.
+- The default browser transcript list does not repeat page, provider, session,
+  agent, or developer status chrome above or between transcript cards.
 - Incognito turns, unauthorized sessions, and cross-session records do not leak
   into the projection.
 - Isolated verification proves the flow without activating a background browser

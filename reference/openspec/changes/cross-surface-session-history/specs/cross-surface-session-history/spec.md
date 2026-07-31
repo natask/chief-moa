@@ -120,3 +120,79 @@ Reading session history SHALL NOT grant or expand local execution authority.
 - **THEN** the full app may display a bounded read-only receipt summary
 - **AND** Android remains the authority for permission, approval, execution,
   and any future retry
+
+### Requirement: Browser Transcript History Is Newest First
+
+The browser History view SHALL present retained user transcripts newest first
+without changing the canonical gateway response order. It SHALL give the latest
+completed user voice transcript the primary transcript-card treatment.
+
+#### Scenario: Canonical messages arrive in ascending order
+
+- **WHEN** History receives three retained user voice messages in canonical
+  ascending order
+- **THEN** it renders the newest transcript first
+- **AND** gives that latest completed transcript the strongest visual emphasis
+- **AND** keeps each canonical message identity unchanged
+
+### Requirement: Every Retained User Transcript Can Be Copied
+
+The browser History view SHALL expose an exact Copy action for every retained
+user transcript. Copy SHALL use the stored transcript shown on the selected
+card and SHALL NOT start speech-provider work.
+
+#### Scenario: User copies an older transcript
+
+- **WHEN** the user activates Copy on any prior user transcript
+- **THEN** the clipboard receives that transcript exactly
+- **AND** excludes its label, timestamp, assistant response, and hidden metadata
+- **AND** no transcription request starts
+
+### Requirement: Transcript History Keeps Only Useful Default Content
+
+The default browser transcript list SHALL center retained user transcripts and
+their tied assistant responses. It SHALL NOT repeat page, provider, session,
+agent, developer, or duplicate current-turn status blocks above or between
+transcript cards. Current errors and actions MAY remain visible when they affect
+the active history read or transcription.
+
+#### Scenario: User opens populated History
+
+- **WHEN** retained transcripts are available and no history error or
+  re-transcription is active
+- **THEN** the default list shows transcript cards and tied assistant responses
+- **AND** omits repeated page, provider, session, agent, developer, and
+  current-turn status blocks
+- **AND** keeps linked run or receipt evidence available through a secondary
+  detail view when present
+
+### Requirement: Audio Re-Transcription Creates A Revision
+
+Opening or copying retained history SHALL use the stored final transcript and
+SHALL NOT re-run speech recognition. The browser MAY offer Re-transcribe only
+when the canonical turn exposes accessible retained audio. A successful
+re-transcription SHALL append a labeled revision linked to the same source turn
+and audio and SHALL preserve the original transcript.
+
+#### Scenario: Retained audio is available
+
+- **WHEN** the user explicitly activates Re-transcribe on a turn with accessible
+  retained audio
+- **THEN** the product runs speech recognition for that audio once
+- **AND** appends the completed result as a new labeled transcript revision
+- **AND** preserves the original transcript and its Copy action
+
+#### Scenario: Retained audio is unavailable
+
+- **WHEN** audio was not retained or is deleted, expired, or unauthorized
+- **THEN** the original transcript remains visible and copyable
+- **AND** the UI does not offer an enabled Re-transcribe action
+- **AND** it does not imply that retained transcript display came from a new
+  provider request
+
+#### Scenario: Re-transcription fails
+
+- **WHEN** an explicit audio re-transcription request fails
+- **THEN** the original transcript and every completed revision remain visible
+  and copyable
+- **AND** the affected turn shows a retryable error

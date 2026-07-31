@@ -89,6 +89,44 @@ This wave does not require a last-good client cache. If the implementation keeps
 an existing bounded display value during a retry, it must not present that value
 as a fresh canonical read.
 
+### Browser transcript-history polish
+
+The canonical latest-N response keeps its existing deterministic ascending
+order. The browser History view derives a presentation order and shows the
+newest retained user transcript first. This is a view rule, not a second
+gateway ordering contract.
+
+The latest completed user voice transcript is the primary result in History.
+It uses the strongest transcript-card treatment and exposes one exact Copy
+action. Older retained user transcripts follow in newest-first order and expose
+the same Copy action. Copy uses the exact stored transcript shown on that card.
+It does not copy labels, timestamps, assistant text, or hidden metadata.
+
+History should read as a transcript library. Its default list contains
+transcript cards and the assistant response tied to each turn when one exists.
+It does not repeat page identity, provider details, session selectors, agent
+selectors, developer diagnostics, or duplicate current-turn status between
+cards. A load error, missing-audio reason, or active re-transcription state may
+appear because it changes what the user can do now. Linked run and receipt
+details remain available through a secondary detail view when present.
+
+Retained transcript display and re-transcription have separate contracts:
+
+- A normal history read shows the stored final transcript and starts no
+  provider call.
+- Copy reads that stored transcript and starts no provider call.
+- Re-transcribe is an explicit action shown only when the canonical message
+  carries an accessible retained-audio reference.
+- Re-transcription creates a new transcript revision linked to the same source
+  turn and audio. It never overwrites or hides the original transcript.
+- The UI labels which text is the retained original and which text came from a
+  later re-transcription. It exposes Copy for each completed revision.
+- A turn without retained audio stays fully readable and copyable. The UI does
+  not imply that audio recovery is possible.
+
+This unit does not change raw-audio retention defaults. It consumes only audio
+that the user already retained under the existing storage policy.
+
 ### Transient on-page overlay
 
 The on-page overlay remains optimized for immediate interaction. It may show
@@ -128,6 +166,10 @@ infer success from that history read.
 - A missing or corrupt backing record increments excluded/unreadable metadata.
 - A message without assistant text remains valid; the UI labels the unavailable
   representation rather than inventing a transcript.
+- A re-transcription failure leaves every retained transcript visible and
+  copyable, and shows a retryable error on the affected turn.
+- Missing, deleted, expired, or unauthorized audio disables re-transcription
+  without disabling transcript display or copy.
 - Surface restart does not duplicate a message because render identity is the
   canonical `message_id`.
 
