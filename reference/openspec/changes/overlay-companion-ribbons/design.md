@@ -60,6 +60,11 @@ forwarded, and the API that would express a sub-window touchable region
 
 What ships instead:
 
+- The companion and each ribbon use separate, tightly bounded windows. This is
+  deliberate: joining their diagonal layout into one union window made the
+  broad transparent gaps touch-modal on platform builds where the hidden region
+  hook was unavailable.
+
 - A ribbon with no text has `FLAG_NOT_TOUCHABLE` set on its window, so it is
   completely transparent to touch. This is the common case — an idle overlay.
 - A ribbon with text is touchable, and `MoaRibbonView.hitsInteractive` still

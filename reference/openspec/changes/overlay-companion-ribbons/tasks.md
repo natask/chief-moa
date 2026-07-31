@@ -54,6 +54,9 @@
       anchor submission on the frame.
 - [x] Lock Android and browser streaming bubbles to one fixed line; only a user
       tap opens an exactly three-line vertically scrollable viewport.
+- [x] Restore reliable touch pass-through between the companion and diagonal
+      ribbons by keeping each visible element in its own bounded Android window;
+      do not depend on the hidden precision-touch-region hook.
 
 ## Open
 
