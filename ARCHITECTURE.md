@@ -113,6 +113,14 @@ Moa Gateway
   browser still store only that gateway URL plus a token; voice uses the matching
   `wss://.../v1/voice/sessions` URL.
 
+  The relational identity spine keeps user identity and tenant authority as
+  separate axes. Better Auth user ids bind uniquely to internal identities;
+  personal V0 seeds one owner tenant and active owner membership. Tenant and
+  membership reads run under forced RLS using both `moa.user_id` and
+  `moa.tenant_id`, so selecting a tenant id without an active membership grants
+  no visibility. This additive schema does not by itself migrate existing
+  request handlers to multi-tenant authority.
+
   `GET /v1/sessions/:id/messages` is the canonical bounded read model for
   cross-surface conversation history. It merges gateway-owned chat, voice,
   browser, and broker records into stable user/assistant messages, preserves
@@ -258,6 +266,13 @@ receipts. Development machines, hosted runners, Master-Orch workers, CI, and
 application clients are scoped actors of that plane rather than alternate
 sources of release truth. The gateway may serve artifacts or bridge product
 identity, but does not silently inherit release-administration authority.
+
+Development coordination may also claim normalized repository files or trees
+under bounded leases. Claims are repository-scoped, idempotent, explicitly
+renewed or released, and emit ordered lifecycle events. A file conflicts with
+the same file or any containing tree; tree overlap is symmetric. This domain
+prevents cooperating runners from accepting overlapping work, but it grants no
+Git, filesystem, build, merge, or promotion authority by itself.
 
 The gateway candidate can host the release-control HTTP protocol while the
 control plane remains in a separate logical Postgres database. The runtime

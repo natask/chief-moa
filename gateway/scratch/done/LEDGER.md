@@ -1,3 +1,4 @@
+- Added the personal-first tenant identity spine with unique Better Auth bindings, owner membership, and two-axis forced RLS — agent: codex/gpt-5 — 6e03d51e
 - Pinned the streaming-STT contract the browser now relies on: every partial is the whole transcript so far, and a revised interim replaces the words it corrects instead of repeating them — agent: claude/opus-5 — fix/live-transcript-staggered-repeat
 - Added a default-off live phrase-assist WebSocket side channel with transcript-revision binding, bounded no-tool/no-search generation, cancellation/idempotency/rate limiting, stale suppression, and content-free diagnostics without turn, tool, run, profile, or history side effects — agent: Codex/GPT-5 — bb3a96fd
 - Proved model-driven Android useful actions across typed and voice entrypoints, repaired spoken playlist routing, and kept cross-device Live availability with ambiguity and fresh-context fail-closed checks — agent: Codex/GPT-5 — this commit

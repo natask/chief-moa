@@ -25,6 +25,11 @@
 
 ## 4. Runner and QA fabric
 
+- [x] 4.0 Define deterministic repository file/tree claims with repository
+      scope, bounded leases, idempotent acquisition, explicit renewal/release,
+      overlap receipts, and ordered lifecycle events. This in-memory domain is
+      admission policy only; durable storage and transport remain follow-up
+      work.
 - [ ] 4.1 Define short-lived, job-scoped runner tokens and append-only artifact
       upload/evidence APIs with no promotion authority.
 - [ ] 4.2 Add local and hosted runner registration/lease/heartbeat/retry semantics.

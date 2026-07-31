@@ -88,6 +88,15 @@ Projection builders over the event log are no longer the read path.)
   container: migrate up idempotent on second run, relational tables present,
   `moa_app` isolation enforced — full `npm test` 133 pass / 0 fail.
 
+- [x] 1.0a Add the personal-first tenant identity spine without switching
+  request authority: seed the owner tenant/membership, bind Better Auth ids
+  uniquely to internal identities, and force tenant plus membership RLS across
+  both `moa.user_id` and `moa.tenant_id`.
+  Acceptance: SQL-shape tests prove the migration is additive and an isolated
+  Postgres integration test proves an app-role principal cannot see or create a
+  cross-user membership. Existing request handlers remain on their current
+  authority until a later staged rollout sets both principal axes.
+
 - [x] 1.1 `[ready]` Dual-write each store: business row + `product_events`
   append in one transaction, replacing the current fire-and-forget event
   mirror for migrated stores.
