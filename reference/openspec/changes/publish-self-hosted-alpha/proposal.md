@@ -5,6 +5,13 @@
 Proposed for user alignment. This change does not make the repository public,
 publish a package, tag a release, or deploy a new service.
 
+Direction reconfirmed on 2026-07-30: the repository should become a transferable
+product blueprint that other builders can run and extend. Android and browser
+are the current reference products; iPhone and Windows should become explicit
+contributor-owned surface tracks rather than waiting for the current owner to
+personally refine platforms they do not use. This confirms the public-alpha
+goal, not the unresolved legal and release gates below.
+
 ## Intent
 
 Chief Moa should stop waiting for product completeness before people can use
@@ -206,6 +213,11 @@ Visible blockers or incomplete evidence:
 3. Confirm that the browser extension is the required first client and Android
    is included only if its release evidence is ready.
 4. Confirm the proposed first tag: `v0.1.0-alpha.1`.
+
+The configured GitHub repository is currently private. The working application
+branch was fully backed up to that private remote on 2026-07-30; changing
+visibility remains blocked on the root-license choice and final public-tree
+audit.
 
 ## Impact
 
