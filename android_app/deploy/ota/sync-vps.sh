@@ -831,6 +831,14 @@ fi
 # canonical artifacts and immutable release readable by the unprivileged
 # gateway container. Private staging, snapshots, and publisher locks stay 0700.
 chmod 755 "$root" "$root/releases" "$target"
+case "$root" in
+  */channels/ag.companion)
+    # `mkdir -p "$root"` runs under the publisher's 077 umask. Without fixing
+    # this routing parent, the gateway uid cannot traverse from the dedicated
+    # OTA volume into the otherwise-readable app channel.
+    chmod 755 "${root%/ag.companion}"
+    ;;
+esac
 chmod 644 "$target/moa-assistant.apk" "$target/release.json" \
   "$root/moa-assistant.apk" "$root/latest.json"
 
@@ -848,6 +856,11 @@ chmod 644 "$target/moa-assistant.apk" "$target/release.json" \
 # to chown is a real error.
 if [ "$owner_uid" -ne 0 ] && [ "$(id -u)" = "0" ]; then
   chown -R "$owner_uid:$owner_gid" "$root" || exit 1
+  case "$root" in
+    */channels/ag.companion)
+      chown "$owner_uid:$owner_gid" "${root%/ag.companion}" || exit 1
+      ;;
+  esac
 fi
 
 printf '%s %s %s %s %s %s\n' \

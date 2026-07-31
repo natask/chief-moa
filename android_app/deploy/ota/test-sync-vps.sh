@@ -885,6 +885,9 @@ run_sync "$local_dir" "$remote_dir" "$case_dir/output"
 [ ! -e "$remote_dir/.publish-lock" ]
 [ "$(readlink "$remote_dir/channels/ag.companion/current")" = releases/ag.companion-401 ]
 [ -f "$remote_dir/channels/ag.companion/releases/ag.companion-401/moa-assistant.apk" ]
+channel_mode="$(stat -c %a "$remote_dir/channels" 2>/dev/null \
+  || stat -f %Lp "$remote_dir/channels")"
+[ "$channel_mode" = 755 ]
 [ ! -e "$remote_dir/channels/ag.companion/.publish-lock" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
