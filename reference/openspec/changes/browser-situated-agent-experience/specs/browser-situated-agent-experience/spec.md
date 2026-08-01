@@ -51,6 +51,17 @@ local execution authority.
 - **AND** the absence of DOM text does not cause the gateway to discard the
   visual evidence
 
+#### Scenario: Active-page observation stays inside the Ag surface
+
+- **WHEN** Ag reads DOM evidence and captures the visible active tab for an
+  explicit turn
+- **THEN** the extension uses content-script and visible-tab capture paths that
+  do not attach Chrome's debugger to the user's page
+- **AND** an Ag-owned viewport rim changes from semantic-reading to visual-
+  capture color and disappears when observation ends
+- **AND** debugger attachment remains reserved for separately authorized CDP
+  automation and diagnostics
+
 ### Requirement: Browser invocation context is bound at submission
 
 Each typed browser message and finalized browser-voice message SHALL atomically

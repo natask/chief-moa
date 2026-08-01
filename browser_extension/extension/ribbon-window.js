@@ -9,8 +9,8 @@
 //
 // There is no rendered window any more. WINDOW_CHARS, windowFor and overflowFor
 // existed to keep a single unwrapping line inside a fixed 28px box by sliding
-// it under a clip; a bubble that wraps to five lines and pins to its tail bounds
-// the same thing in the layout, where it belongs. What survives is the buffer
+// it under a clip; the current one-line collapsed / three-line expanded window
+// bounds the same thing in layout. What survives is the buffer
 // cap: the whole turn is retained for copy and expand, just not without limit.
 (function initAgeeRibbonWindow(global) {
   "use strict";

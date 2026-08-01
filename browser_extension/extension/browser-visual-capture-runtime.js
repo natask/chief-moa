@@ -14,6 +14,35 @@ function sameDocument(left, right) {
     && left.url === right.url);
 }
 
+function sameActiveTab(left, right) {
+  return Boolean(left && right
+    && left.id === right.id
+    && left.windowId === right.windowId
+    && left.active === true
+    && right.active === true
+    && String(left.url || "") === String(right.url || ""));
+}
+
+async function captureActiveTabJpeg(tabId, adapter = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return null;
+  if (typeof adapter.getTab !== "function"
+    || typeof adapter.captureVisibleTab !== "function") return null;
+  try {
+    const before = await adapter.getTab(tabId);
+    if (!before || before.id !== tabId || before.active !== true || !Number.isInteger(before.windowId)) return null;
+    const dataUrl = String(await adapter.captureVisibleTab(before.windowId, {
+      format: "jpeg",
+      quality: 45,
+    }) || "");
+    const after = await adapter.getTab(tabId);
+    if (!sameActiveTab(before, after)) return null;
+    const match = dataUrl.match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
+    return match?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
 async function captureBoundTabJpeg(tabId, adapter = {}) {
   if (!Number.isInteger(tabId) || tabId < 0) return null;
   if (typeof adapter.attach !== "function"
@@ -42,4 +71,4 @@ async function captureBoundTabJpeg(tabId, adapter = {}) {
   }
 }
 
-export { captureBoundTabJpeg, sameDocument, topDocumentIdentity };
+export { captureActiveTabJpeg, captureBoundTabJpeg, sameActiveTab, sameDocument, topDocumentIdentity };

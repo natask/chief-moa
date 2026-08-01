@@ -12,7 +12,7 @@ import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { pcm16VoiceActivity } from "./browser-voice-activity.js";
-import { captureBoundTabJpeg } from "./browser-visual-capture-runtime.js";
+import { captureActiveTabJpeg, captureBoundTabJpeg } from "./browser-visual-capture-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { devReloadDecision } from "./dev-reload-gate.js";
 import { browserDelegationEnvelope, normalizeBrowserAgentRole } from "./browser-agent-role-runtime.js";
@@ -890,7 +890,7 @@ async function executeBrowserToolRequest(request) {
 const browserAutomationRuntime = createBrowserAutomationRuntime({
   chromeApi: chrome, allowedUrl: allowedBrowserTaskUrl,
   authorizeUrl: (value) => authorizeBrowserUrl(chrome, value, ALLOWED_NAVIGATION_PROTOCOLS),
-  captureScreenshot: captureScreenshotViaDebugger,
+  captureScreenshot,
   activeTab: async () => (await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []))[0] || null,
   snapshot: async (tabId) => (await ensureContent(tabId), normalizeBrowserSnapshot(await ask(tabId, { cmd: "snapshot" }))),
   act: (tabId, request) => ask(tabId, { cmd: "act", ...request }),
@@ -1434,6 +1434,8 @@ async function ensureAgentLoopContent(tabId) {
 async function buildAgentLoopObservation(tabId, step, { withScreenshot, lastAction, lastActionResult }) {
   await ensureAgentLoopContent(tabId);
   const snapshot = await collectBrowserSnapshot(tabId);
+  // Agent-loop tabs stay inactive by contract, so this explicit automation
+  // lane still needs CDP. User-visible active-page observation does not.
   const screenshot = withScreenshot ? await captureScreenshotViaDebugger(tabId) : "";
   return buildAgentLoopObservationPayload(snapshot, step, {
     withScreenshot,
@@ -3772,7 +3774,10 @@ async function saveTaskState(id, patch) {
 }
 
 async function captureScreenshot(tabId) {
-  return captureScreenshotViaDebugger(tabId);
+  return captureActiveTabJpeg(tabId, {
+    getTab: (id) => chrome.tabs.get(id),
+    captureVisibleTab: (windowId, options) => chrome.tabs.captureVisibleTab(windowId, options),
+  });
 }
 
 async function captureScreenshotViaDebugger(tabId) {
@@ -3925,13 +3930,33 @@ async function collectBrowserSnapshot(tabId) {
 }
 
 async function collectBrowserInvocationContext(tabId, input, { withVisual = false } = {}) {
-  const snapshot = Number.isInteger(tabId) && tabId >= 0
-    ? await collectBrowserSnapshot(tabId)
-    : normalizeBrowserSnapshot(null);
-  const visualEvidence = withVisual && Number.isInteger(tabId) && tabId >= 0
-    ? agentLoopScreenshotObservation(await captureScreenshot(tabId))
-    : null;
-  return browserInvocationContext(snapshot, { tabId, input, visualEvidence });
+  const canObserve = Number.isInteger(tabId) && tabId >= 0;
+  const observationId = canObserve ? `observe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}` : "";
+  if (canObserve) send(tabId, { cmd: "browserPageObservation", observationId, phase: "reading" });
+  try {
+    const snapshot = canObserve
+      ? await collectBrowserSnapshot(tabId)
+      : normalizeBrowserSnapshot(null);
+    if (withVisual && canObserve) {
+      send(tabId, { cmd: "browserPageObservation", observationId, phase: "seeing" });
+    }
+    const visualEvidence = withVisual && canObserve
+      ? agentLoopScreenshotObservation(await captureScreenshot(tabId))
+      : null;
+    return browserInvocationContext(snapshot, { tabId, input, visualEvidence });
+  } finally {
+    if (canObserve) send(tabId, { cmd: "browserPageObservation", observationId, phase: "done" });
+  }
+}
+
+async function captureObservedPageScreenshot(tabId) {
+  const observationId = `observe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  send(tabId, { cmd: "browserPageObservation", observationId, phase: "seeing" });
+  try {
+    return agentLoopScreenshotObservation(await captureScreenshot(tabId));
+  } finally {
+    send(tabId, { cmd: "browserPageObservation", observationId, phase: "done" });
+  }
 }
 
 async function resolveBrowserInvocationContext(candidate, tabId, input) {
@@ -3967,7 +3992,8 @@ async function runBrowserAgentTurn(tabId, instruction, cfg, signal, cueId, optio
   const snapshot = normalizeBrowserSnapshot(invocationContext.snapshot);
   await noteBrowserAgentProgress(tabId, cueId, text, 1, "capturing_visual_context", "capturing visual context");
   throwIfAborted(signal);
-  const screenshot = agentLoopScreenshotObservation(await captureScreenshot(tabId));
+  const screenshot = invocationContext.visual_evidence
+    || await captureObservedPageScreenshot(tabId);
 
   const delegationEnvelope = role === "delegate"
     ? browserDelegationEnvelope(text, snapshot.url)

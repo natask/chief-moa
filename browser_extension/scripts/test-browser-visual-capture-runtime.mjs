@@ -1,6 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureBoundTabJpeg } from "../extension/browser-visual-capture-runtime.js";
+import { captureActiveTabJpeg, captureBoundTabJpeg } from "../extension/browser-visual-capture-runtime.js";
+
+test("active-page capture uses the normal visible-tab API without a debugger attachment", async () => {
+  const calls = [];
+  const tab = { id: 22, windowId: 4, active: true, url: "https://visible.test/tasks" };
+  const result = await captureActiveTabJpeg(22, {
+    async getTab(tabId) { calls.push(["getTab", tabId]); return { ...tab }; },
+    async captureVisibleTab(windowId, options) {
+      calls.push(["captureVisibleTab", windowId, options]);
+      return "data:image/jpeg;base64,dmlzaWJsZS10YWItanBlZw==";
+    },
+  });
+  assert.equal(result, "dmlzaWJsZS10YWItanBlZw==");
+  assert.deepEqual(calls[1], ["captureVisibleTab", 4, { format: "jpeg", quality: 45 }]);
+  assert.equal(calls.some((call) => call[0] === "attach"), false);
+});
+
+test("active-page capture fails closed if focus or navigation changes", async () => {
+  let reads = 0;
+  assert.equal(await captureActiveTabJpeg(22, {
+    async getTab() {
+      reads += 1;
+      return { id: 22, windowId: 4, active: reads === 1, url: reads === 1 ? "https://one.test" : "https://two.test" };
+    },
+    async captureVisibleTab() { return "data:image/jpeg;base64,c3RhbGU="; },
+  }), null);
+  assert.equal(await captureActiveTabJpeg(22, {
+    async getTab() { return { id: 22, windowId: 4, active: false, url: "https://one.test" }; },
+    async captureVisibleTab() { throw new Error("must not capture an inactive target"); },
+  }), null);
+});
 
 test("capture stays bound to the requested tab while browser focus changes", async () => {
   let activeTabId = 11;

@@ -830,19 +830,20 @@ if (
 
 if (
   !/capturing visual context/.test(browserAgentTurnBody) ||
-  !/captureScreenshot\(tabId\)/.test(browserAgentTurnBody) ||
+  !/invocationContext\.visual_evidence[\s\S]{0,100}captureObservedPageScreenshot\(tabId\)/.test(browserAgentTurnBody) ||
   !/screenshot,/.test(browserAgentTurnBody)
 ) {
   throw new Error("explicit browser-agent turns must attach bounded visual evidence to the DOM projection");
 }
 
 if (
-  /captureVisibleTab/.test(backgroundSource) ||
+  !/captureActiveTabJpeg\(tabId/.test(backgroundSource) ||
+  !/chrome\.tabs\.captureVisibleTab\(windowId, options\)/.test(backgroundSource) ||
   !/captureBoundTabJpeg\(tabId/.test(backgroundSource) ||
   !/collectBrowserInvocationContext\(invocationTabId, "voice", \{ withVisual: true \}\)/.test(backgroundSource) ||
   !/invocation_context: invocationContext/.test(backgroundSource)
 ) {
-  throw new Error("browser screenshots must stay target-tab-bound, and finalized voice must carry that bounded visual evidence");
+  throw new Error("active-page screenshots must avoid debugger attachment, while CDP and finalized voice remain explicitly bounded");
 }
 
 if (
@@ -1677,7 +1678,7 @@ if (
 }
 
 // It is a bubble (overlay-2026-07-28 section 5). Text WRAPS; the hard cap is
-// the five-line height, not a refusal to wrap. The sliding window is deleted,
+// the fixed viewport height, not a refusal to wrap. The sliding window is deleted,
 // and it must stay deleted — a rendered tail inside a wrapping box would drop
 // the top of a turn that is still on screen, silently.
 if (
@@ -1688,21 +1689,21 @@ if (
   throw new Error("the sliding window is gone: no WINDOW_CHARS, no translateX, no white-space: pre");
 }
 // The whole turn is still bounded, just in the layout instead of the model:
-// 8000 retained chars for copy and expand, five rendered lines, 240px opened.
+// 8000 retained chars for copy and expand, one line collapsed, three opened.
 if (
   !/const BUFFER_MAX_CHARS = 8000;/.test(ribbonWindowSource) ||
   !/function graphemeTail\(/.test(ribbonWindowSource) ||
   !/--agee-ribbon-w:\s*clamp\(260px, 40vw, 380px\);/.test(ribbonsCssSource) ||
-  !/--agee-ribbon-lines:\s*5;/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-lines:\s*1;/.test(ribbonsCssSource) ||
+  !/--agee-ribbon-expanded-lines:\s*3;/.test(ribbonsCssSource) ||
   !/--agee-ribbon-line-h:\s*20px;/.test(ribbonsCssSource) ||
   !/--agee-ribbon-radius:\s*14px;/.test(ribbonsCssSource) ||
-  !/--agee-ribbon-expanded-h:\s*240px;/.test(ribbonsCssSource) ||
-  !/\.agee-ribbon\s*\{[^}]*max-height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\)/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon\s*\{[^}]*height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\)/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-viewport\s*\{[^}]*overflow:\s*hidden;/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-line\s*\{[^}]*white-space:\s*pre-wrap;/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-line\s*\{[^}]*font-size:\s*14px;/.test(ribbonsCssSource)
 ) {
-  throw new Error("bubble geometry must be the Android numbers: 260-380px wide, 5 lines of 20px, radius 14, 240px opened, 8000-char buffer");
+  throw new Error("bubble geometry must be fixed: 260-380px wide, one 20px line collapsed, three lines opened, radius 14, 8000-char buffer");
 }
 // Streaming is one rAF-coalesced append into a text node. innerHTML on model
 // output would be an injection surface; textContent per frame would tear the
@@ -1781,8 +1782,8 @@ if (
   throw new Error("dragging any ribbon must move the whole unit through the companion anchor");
 }
 
-// Tap expands the bubble past its five collapsed lines to the whole turn,
-// inside a 240px scroll, and reveals the copy rail in the same gesture. Latch
+// Tap expands the bubble from one line to the whole turn inside a three-line
+// scroll, and reveals the copy rail in the same gesture. Latch
 // expiry releases it so the overlay is never left occluding — except while a
 // caret is in the buffer, which no timer may interrupt.
 if (
@@ -1790,10 +1791,10 @@ if (
   !/function collapse\(ribbon\)/.test(ribbonRuntimeSource) ||
   !/engage\(true\);\s*\n\s*toggleExpanded\(ribbon\);/.test(ribbonRuntimeSource) ||
   !/latchTimer = setTimeout\(\(\) => \{[\s\S]{0,120}unlatch\(\);\s*\}, LATCH_MS\);/.test(ribbonRuntimeSource) ||
-  !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*max-height:\s*calc\(var\(--agee-ribbon-expanded-h\)/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon\.agee-ribbon-expanded\s*\{[^}]*height:\s*calc\(var\(--agee-ribbon-expanded-lines\) \* var\(--agee-ribbon-line-h\)/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-expanded \.agee-ribbon-viewport\s*\{[^}]*overflow-y:\s*auto;/.test(ribbonsCssSource)
 ) {
-  throw new Error("a ribbon tap must expand the bubble to the whole turn inside the 240px scroll and reveal the copy rail");
+  throw new Error("a ribbon tap must expand the bubble to the whole turn inside a three-line scroll and reveal the copy rail");
 }
 // The expanded bar grows AWAY from the companion, so the companion never moves
 // and the page never reflows: the upper ribbon is bottom-anchored, always. It

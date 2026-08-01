@@ -40,19 +40,18 @@ test("the you-line is the text input", () => {
   assert.match(rule, /cursor:\s*text/);
 });
 
-// Collapsed is five lines and opened is a 240px scroll — the Android
-// COLLAPSED_MAX_LINES and EXPANDED_MAX_H_DP, identically. Both are caps: an
-// opened bubble is still a box sitting on the user's page.
-test("the bubble is capped collapsed and opened", () => {
-  assert.match(ribbons, /--agee-ribbon-lines:\s*5;/);
-  assert.match(ribbons, /--agee-ribbon-expanded-h:\s*240px;/);
+// Collapsed is one fixed streaming line and opened is exactly three scrollable
+// lines, matching Android.
+test("the bubble is one line collapsed and three lines opened", () => {
+  assert.match(ribbons, /--agee-ribbon-lines:\s*1;/);
+  assert.match(ribbons, /--agee-ribbon-expanded-lines:\s*3;/);
   assert.match(
     ruleIn(ribbons, ".agee-ribbon-expanded .agee-ribbon-viewport"),
-    /max-height:\s*var\(--agee-ribbon-expanded-h\)/,
+    /height:\s*calc\(var\(--agee-ribbon-expanded-lines\) \* var\(--agee-ribbon-line-h\)\)/,
   );
   assert.match(
     ruleIn(ribbons, ".agee-ribbon"),
-    /max-height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\) \+ 2 \* var\(--agee-ribbon-pad-y\)\)/,
+    /height:\s*calc\(var\(--agee-ribbon-lines\) \* var\(--agee-ribbon-line-h\) \+ 2 \* var\(--agee-ribbon-pad-y\)\)/,
   );
 });
 

@@ -55,17 +55,13 @@
     // The AG mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
     audioCtx = null;
-  // Custom tooltip chip + viewport-resize batching for the overlay.
   let tipEl = null,
     tipTimer = null,
     tipTarget = null,
     resizeRaf = null;
-  const assistantPlaybackSources = new Set();
-  const liveVoiceStates = new Set();
-  const liveVoiceBySessionId = new Map();
+  const assistantPlaybackSources = new Set(), liveVoiceStates = new Set(), liveVoiceBySessionId = new Map();
   let steeringGeneration = 0;
-  const DOUBLE_CLICK_HOLD_MS = 260;
-  const LAUNCHER_DOUBLE_CLICK_MS = 280;
+  const DOUBLE_CLICK_HOLD_MS = 260, LAUNCHER_DOUBLE_CLICK_MS = 280;
   const LAUNCHER_TAP_MAX_MS = 500;
   const LAUNCHER_DOUBLE_CLICK_SLOP = 28;
   const LAUNCHER_DRAG_SLOP = 4;
@@ -4286,6 +4282,7 @@
           msg.state === "error" ? "error" : msg.state === "done" ? "done" : "running"
         );
         return false;
+      case "browserPageObservation": ribbons?.setPageObservation(msg.phase, msg.observationId); return false;
       case "done":
         updateCue(msg.cueId, msg.summary, "done");
         // A page_tweak apply carries pageTweak: the done cue gets a small

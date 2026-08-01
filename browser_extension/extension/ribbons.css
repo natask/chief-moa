@@ -11,12 +11,9 @@
    Bubbles: the companion between two chat bubbles.
    Contract: reference/design/overlay-2026-07-28/spec.md sections 5, 5.1, 5.2
 
-   A bubble is a bounded translucent plate that WRAPS. It grows in height only,
-   to at most five lines, and then pins to its tail: new text arrives at the
-   bottom and old text scrolls off the top under a short fade. Its width never
-   changes mid-stream and its position never changes mid-stream, because each
-   bubble is anchored on the edge furthest from the companion and grows away
-   from it. The page is never reflowed and the companion never moves.
+   A bubble is a bounded translucent plate. Streaming stays inside one fixed
+   line and pins to its tail. A deliberate click opens exactly three visible
+   lines with vertical scrolling. Text never changes the window geometry.
 
    This replaces the single `white-space: pre` line slid by translateX. That
    was the anti-reflow device for a fixed 28px box, and it cost more than it
@@ -29,12 +26,11 @@
   /* geometry — the Android MoaRibbonView numbers, per spec section 5 */
   --agee-ribbon-w: clamp(260px, 40vw, 380px);
   --agee-ribbon-line-h: 20px;
-  --agee-ribbon-lines: 5;
+  --agee-ribbon-lines: 1;
+  --agee-ribbon-expanded-lines: 3;
   --agee-ribbon-pad-x: 12px;
   --agee-ribbon-pad-y: 8px;
   --agee-ribbon-radius: 14px;
-  /* How far a bubble may open on a tap before it scrolls inside itself. */
-  --agee-ribbon-expanded-h: 240px;
   /* The tail-pin fade: old text leaves under this, it is not cut off. */
   --agee-ribbon-fade: 12px;
   --agee-ribbon-gap: 8px;
@@ -99,16 +95,14 @@
   --agee-ribbon-menu-hover: rgba(0, 0, 0, 0.05);
 }
 
-/* The bubble grows in height only, and only to five lines. Width is fixed by
-   position(), which writes the room available on that side of the seam, so a
-   stream can never widen the box under the reader. The rail sits at the
-   bottom-right of whatever height the text settled at. */
+/* Collapsed geometry is fixed at one line. Neither a short nor a long stream
+   may change this box. Width is fixed by position(). */
 .agee-ribbon {
   position: absolute;
   left: 0;
   top: 0;
   width: var(--agee-ribbon-w);
-  height: auto;
+  height: calc(var(--agee-ribbon-lines) * var(--agee-ribbon-line-h) + 2 * var(--agee-ribbon-pad-y));
   max-height: calc(var(--agee-ribbon-lines) * var(--agee-ribbon-line-h) + 2 * var(--agee-ribbon-pad-y));
   display: flex;
   align-items: flex-end;
@@ -143,7 +137,7 @@
 }
 /* The plate is permanent. It used to materialise only once you pressed the
    unit, so the box changed shape under the cursor and the copy rail appeared
-   out of nowhere. A click now changes only the SIZE (five lines); everything
+   out of nowhere. A click now changes only the SIZE (three lines); everything
    else about the box looks the same before and after.
    The hairline is an inset shadow, not a border, so it costs no layout. */
 .agee-ribbon.agee-ribbon-live {
@@ -160,16 +154,15 @@
   transform: translateY(-4px);
 }
 
-/* Viewport: the anti-reflow guarantee, now expressed as a bounded scroll
-   instead of a fixed line. Five lines of room, hidden overflow, and the runtime
-   pins scrollTop to the bottom after every write — so the newest text is always
-   the text you are looking at and the box never grows past the cap.
+/* Viewport: the anti-reflow guarantee. Collapsed is one fixed line with hidden
+   overflow, and the runtime pins scrollTop to the bottom after every write.
 
    A block box, not a flex row: the line is a paragraph now and has to wrap. */
 .agee-ribbon-viewport {
   position: relative;
   flex: 1;
   min-width: 0;
+  height: calc(var(--agee-ribbon-lines) * var(--agee-ribbon-line-h));
   max-height: calc(var(--agee-ribbon-lines) * var(--agee-ribbon-line-h));
   overflow: hidden;
   display: block;
@@ -246,7 +239,7 @@
   color: var(--agee-ribbon-muted);
   pointer-events: none;
 }
-/* Overflowing the five-line cap: the oldest line leaves under a short fade at
+/* Overflowing the one-line cap: the oldest line leaves under a short fade at
    the TOP, because the tail is what is being written. The old horizontal fade
    belonged to a line sliding sideways and has no meaning in a bubble. */
 .agee-ribbon-clipped .agee-ribbon-viewport {
@@ -527,20 +520,22 @@
 }
 
 /* ---- Expanded: the bubble opens ------------------------------------------
-   Collapsed keeps the bubble to five lines; expand is how the user reads past
-   them. A tap opens the whole turn inside a 240px scroll — the Android
-   EXPANDED_MAX_H_DP, identically — and brings the copy rail with it. The
+   Collapsed stays at one line. A tap opens the whole retained turn inside an
+   exactly three-line scroll — the Android EXPANDED_MAX_LINES, identically —
+   and brings the copy rail with it. The
    bubble grows AWAY from the companion (the upper one is bottom-anchored, the
    lower one top-anchored), so the companion never moves, the other bubble
    never moves, and the page never reflows. Expanded is an occluding state and
    that is correct: the user is touching it, and it collapses the moment they
    are not. */
 .agee-ribbon.agee-ribbon-expanded {
-  max-height: calc(var(--agee-ribbon-expanded-h) + 2 * var(--agee-ribbon-pad-y));
+  height: calc(var(--agee-ribbon-expanded-lines) * var(--agee-ribbon-line-h) + 2 * var(--agee-ribbon-pad-y));
+  max-height: calc(var(--agee-ribbon-expanded-lines) * var(--agee-ribbon-line-h) + 2 * var(--agee-ribbon-pad-y));
   z-index: 2;
 }
 .agee-ribbon-expanded .agee-ribbon-viewport {
-  max-height: var(--agee-ribbon-expanded-h);
+  height: calc(var(--agee-ribbon-expanded-lines) * var(--agee-ribbon-line-h));
+  max-height: calc(var(--agee-ribbon-expanded-lines) * var(--agee-ribbon-line-h));
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-mask-image: none;

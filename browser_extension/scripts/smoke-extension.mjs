@@ -598,7 +598,7 @@ async function main() {
       || overlayMetrics.composeCopyDisplay !== "none"
       || overlayMetrics.sendInsideBox !== true
       || overlayMetrics.composeCaretBoxHeight !== 20
-      || overlayMetrics.youHeight !== 40) {
+      || overlayMetrics.youHeight !== 36) {
       throw new Error(`the typing box does not open at one bubble line: ${JSON.stringify(overlayMetrics)}`);
     }
     // The companion may only sit where both streams keep their minimum room, so
@@ -1060,7 +1060,7 @@ async function main() {
     // This drives the real worker-owned presentation broadcast (the same path
     // that carries a turn across tabs) and then asserts the properties the
     // whole redesign rests on: the unit renders both streams whole, wraps and
-    // pins to the tail inside a five-line cap instead of growing, keeps one
+    // pins to the tail inside one fixed line instead of growing, keeps one
     // plate, and opens to the bounded scroll on a tap.
     const ribbons = await evaluate(workerCdp, `
       (async () => {
@@ -1130,7 +1130,7 @@ async function main() {
                 boxShadow: style.boxShadow,
                 pointerEvents: style.pointerEvents,
                 // The bubble wraps and pins to its tail: the text overflows the
-                // five-line viewport, and what is on screen is the END of it.
+                // fixed one-line viewport, and what is on screen is the END of it.
                 inlineTransform: line.style.transform || "",
                 lineWraps: line.scrollHeight > viewport.clientHeight + 1,
                 pinnedToTail: viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1,
@@ -1224,8 +1224,8 @@ async function main() {
       throw new Error(`ribbons did not render the worker presentation: ${JSON.stringify(ribbonBefore)}`);
     }
     // The bubble bounds by height instead of by truncating: the whole turn is
-    // rendered, it wraps, the box never passes five lines (5 x 20px of text
-    // plus 8px of padding either side = 116), the oldest lines fade off the
+    // rendered, it wraps, and the collapsed box is exactly one line (20px of
+    // text plus 8px of padding either side = 36). The oldest lines fade off the
     // top, and what you are looking at is the tail. A bubble may be SHORTER
     // than the cap when the layout gave that side of the companion less room —
     // that budget is the point of place.youMaxHeight/replyMaxHeight — but it
@@ -1239,20 +1239,18 @@ async function main() {
         ribbon.pinnedToTail !== true ||
         ribbon.clipped !== true ||
         !/linear-gradient/.test(ribbon.faded || "") ||
-        ribbon.height > 116 ||
-        ribbon.height < 36 ||
+        ribbon.height !== 36 ||
         ribbon.width < 260 ||
         ribbon.width > 380 ||
         (ribbon.inlineTransform && ribbon.inlineTransform !== "none")
       ) {
-        throw new Error(`${key} bubble must wrap and pin to its tail inside five lines, not slide: ${JSON.stringify(ribbon)}`);
+        throw new Error(`${key} bubble must wrap and pin to its tail inside one fixed line, not resize or slide: ${JSON.stringify(ribbon)}`);
       }
     }
     // The you-bubble has the whole space above the companion, so this text —
-    // far longer than five lines — must actually reach the cap. Otherwise the
-    // loop above would pass on a bubble that simply never grew.
-    if (ribbonBefore.you.height !== 116) {
-      throw new Error(`the five-line cap must be what stops the bubble: ${JSON.stringify(ribbonBefore.you)}`);
+    // A long stream must not grow the fixed collapsed window.
+    if (ribbonBefore.you.height !== 36) {
+      throw new Error(`streaming resized the collapsed bubble: ${JSON.stringify(ribbonBefore.you)}`);
     }
     // Ambient paints nothing and intercepts nothing.
     if (
@@ -1364,7 +1362,7 @@ async function main() {
               // The bounded scroll lives on the viewport, not on the box: the
               // box's own max-height is written inline by position() as the
               // room available on that side of the companion, which may be
-              // looser than the design cap. The viewport is what holds 240.
+              // looser than the design cap. The viewport holds three lines.
               viewportMaxHeight: getComputedStyle(you.querySelector(".agee-ribbon-viewport")).maxHeight,
               viewportOverflowY: getComputedStyle(you.querySelector(".agee-ribbon-viewport")).overflowY,
               launcherTop: Math.round(launcher.getBoundingClientRect().top),
@@ -1404,11 +1402,11 @@ async function main() {
       expanded.rendered !== ribbonBefore.expectedUserLength ||
       expanded.whiteSpace !== "pre-wrap" ||
       expanded.height <= ribbonBefore.you.height ||
-      expanded.height !== 256 ||
-      expanded.viewportMaxHeight !== "240px" ||
+      expanded.height !== 76 ||
+      expanded.viewportMaxHeight !== "60px" ||
       expanded.viewportOverflowY !== "auto"
     ) {
-      throw new Error(`tap must open the bubble past five lines into the 240px scroll: ${JSON.stringify(expanded)}`);
+      throw new Error(`tap must open the bubble from one line into a three-line scroll: ${JSON.stringify(expanded)}`);
     }
     // Grew away from the companion: the bottom edge, the companion, the other
     // ribbon, and the page are all exactly where they were.

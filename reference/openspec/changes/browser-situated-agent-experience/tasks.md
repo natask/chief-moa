@@ -188,6 +188,14 @@ injected tools; receipts bind source and input digests without raw source.
 
 ## 4. Grounded On-Page Explanation
 
+- [x] 4.0 Keep ordinary active-page observation free of Chrome's debugger
+      banner and show a transient Ag-owned viewport rim while semantic and
+      visual evidence are captured.
+
+Acceptance: a unit check proves visible-tab capture never attaches the debugger,
+fails closed if the requested tab loses active identity, and the packaged
+surface carries distinct reading/seeing rim states that clear after capture.
+
 - [ ] 4.1 Render one packaged-code annotation bound to a valid anchor and
       reproject it locally during scroll without a gateway/model call.
 

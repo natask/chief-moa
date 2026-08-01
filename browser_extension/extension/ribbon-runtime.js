@@ -7,14 +7,10 @@
 // in ribbon-layout.js; both are pure and unit-tested. This file holds only what
 // genuinely needs a document.
 //
-// A bubble WRAPS inside a bounded viewport and pins to its tail. It grows in
-// height only, to at most five lines, and then the oldest line scrolls off the
-// top under a fade. It never changes width mid-stream and never changes
-// position mid-stream, because it is anchored on the edge furthest from the
-// companion and grows away from it. The overlay still never reflows the page
-// and never pushes the persistent line out of view — that bound is the whole
-// point, asked for twice (2026-07-16, 2026-07-23) — it is just enforced by a
-// height cap now instead of by refusing to wrap.
+// A bubble wraps inside a bounded viewport and pins to its tail. Streaming is
+// always one fixed line. A deliberate tap opens exactly three visible lines
+// with vertical scrolling. Text never changes the window geometry or reflows
+// the page.
 //
 // The runtime owns no conversation state. It renders the worker-owned active
 // turn, so the visible turn follows the user across tabs and navigations.
@@ -132,6 +128,7 @@
     } = deps || {};
     if (!root || !launcher) return null;
 
+    let activePageObservationId = "";
     let unitState = "dormant";
     let latched = false;
     let latchTimer = null;
@@ -147,6 +144,19 @@
     let userCaptureOpen = false;
     let geometryBreaches = [];
     let geometryAuditPending = false;
+
+    function setPageObservation(rawPhase, rawId) {
+      const phase = String(rawPhase || "");
+      const id = String(rawId || "");
+      if (phase === "reading" || phase === "seeing") {
+        activePageObservationId = id;
+        root.classList.toggle("agee-page-observing-reading", phase === "reading");
+        root.classList.toggle("agee-page-observing-seeing", phase === "seeing");
+      } else if (!id || id === activePageObservationId) {
+        activePageObservationId = "";
+        root.classList.remove("agee-page-observing-reading", "agee-page-observing-seeing");
+      }
+    }
 
     const menuEl = root.querySelector("#agee-ribbon-menu");
     const copyMenuEl = root.querySelector("#agee-copy-menu");
@@ -315,8 +325,7 @@
     // ---- Rendering --------------------------------------------------------
     // One write per animation frame, so a token-per-event stream cannot thrash
     // layout. The bubble's width is written by position() and never by a
-    // stream, so a frame can only ever change its height, and only up to the
-    // five-line cap the stylesheet holds.
+    // stream, and the stylesheet fixes both collapsed and expanded heights.
 
     // A stream is almost always an append, so append: appendData mutates the
     // existing text node in place and the browser reflows the new run, not the
@@ -363,7 +372,7 @@
         ribbon.variants.literal = ribbon.target || ribbon.buffer;
         // The caret lives in this node while composing; rewriting it would move
         // the caret to the start on every keystroke. Still pin, so a typed line
-        // that has passed five rows keeps the caret in view.
+        // that has passed the single collapsed row keeps the caret in view.
         if (composing && ribbon === you) return pinToTail(ribbon);
         // Expanded shows everything Ag has said. Opening a bubble is the "show
         // me all of it now" gesture, so it reads the target, not the paced
@@ -1201,6 +1210,7 @@
     return {
       position,
       scheduleThemeSample,
+      setPageObservation,
 
       // The upper ribbon is the live transcription stream. An empty transcript
       // only stops the caret: the ribbon retires on its own linger timer so the
