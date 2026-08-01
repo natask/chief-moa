@@ -416,6 +416,7 @@ async function main() {
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
     await waitForEval(pageCdp, `Boolean(document.querySelector("#agee-ribbon-you .agee-ribbon-text"))`);
     const contentCtx = await resolveContentContext(pageCdp, isolatedContexts);
+    await pageCdp.send("Page.bringToFront");
     await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
     await evaluate(pageCdp, submitTypedExpr("explain summarize this page"), { contextId: contentCtx });
     const typed = await waitForEval(pageCdp, latestResultExpr(), 20000, { contextId: contentCtx });
@@ -437,6 +438,7 @@ async function main() {
       throw new Error(`gateway action proposal was executed unexpectedly: ${JSON.stringify(typed)}`);
     }
 
+    await pageCdp.send("Page.bringToFront");
     await evaluate(pageCdp, installProgressRecorderExpr(), { contextId: contentCtx });
     await evaluate(pageCdp, `chrome.runtime.sendMessage({ cmd: "describe", cueId: "describe-smoke" }).catch(() => {}); true;`, { contextId: contentCtx });
     await waitForCondition(
