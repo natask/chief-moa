@@ -8,7 +8,7 @@ public struct CommandPaletteView: View {
     private let shortcutLabel: String
     @FocusState private var promptFocused: Bool
     @State private var editingConnection = false
-    @State private var voicePressActive = false
+    @State private var boundaryPulse = false
 
     public init(model: CommandModel, shortcutLabel: String = "Control-Space", dismiss: @escaping () -> Void = {}) {
         self.model = model
@@ -89,23 +89,16 @@ public struct CommandPaletteView: View {
                     .lineLimit(1...5)
                     .focused($promptFocused)
                     .onSubmit { send() }
-                Image(systemName: model.voiceState.isActive ? "waveform.circle.fill" : "mic.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(model.voiceState.isActive ? .red : .purple)
-                    .contentShape(Circle())
-                    .help("Hold to transcribe")
-                    .accessibilityLabel("Hold to transcribe")
-                    .onLongPressGesture(minimumDuration: 0.05, maximumDistance: 80) {
-                        // The pressing callback owns capture start/stop.
-                    } onPressingChanged: { pressing in
-                        if pressing, !voicePressActive {
-                            voicePressActive = true
-                            Task { await model.startVoice() }
-                        } else if !pressing, voicePressActive {
-                            voicePressActive = false
-                            Task { await model.finishVoice() }
-                        }
-                    }
+                Button {
+                    Task { await model.handleSummon() }
+                } label: {
+                    Image(systemName: model.voiceState.isActive ? "stop.circle.fill" : "mic.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(model.voiceState.isActive ? .red : .purple)
+                }
+                .buttonStyle(.plain)
+                .help(model.voiceState.isActive ? "Finish and send" : "Start listening")
+                .accessibilityLabel(model.voiceState.isActive ? "Finish and send" : "Start listening")
                 Button(action: send) {
                     if model.isSending { ProgressView().controlSize(.small) }
                     else { Image(systemName: "arrow.up.circle.fill").font(.title2) }
@@ -120,17 +113,35 @@ public struct CommandPaletteView: View {
                 .font(.caption2)
                 .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
 
-            Text("\(shortcutLabel) again to finish · hold the mic for push-to-talk · no screen context attached")
+            Text("\(shortcutLabel) or the mic toggles listening · no screen context attached")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding(16)
         .frame(minWidth: 480, maxWidth: 480, minHeight: 300, maxHeight: 420, alignment: .top)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.16)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(boundaryColor, lineWidth: model.voiceState.isActive ? 3 : 1)
+                .opacity(boundaryPulse ? 1 : (model.voiceState.isActive ? 0.9 : 0.34))
+        )
+        .shadow(color: boundaryColor.opacity(model.voiceState.isActive ? 0.42 : 0), radius: 18)
         .animation(.snappy(duration: 0.22), value: model.voiceState.phase)
         .onAppear { promptFocused = true }
+        .onChange(of: model.interactionPulse) {
+            boundaryPulse = true
+            withAnimation(.easeOut(duration: 0.42)) { boundaryPulse = false }
+        }
         .onExitCommand(perform: cancelAndDismiss)
+    }
+
+    private var boundaryColor: Color {
+        switch model.voiceState.phase {
+        case .listening, .requestingPermission, .connecting: .purple
+        case .finalizing: .orange
+        case .denied, .interrupted, .failed: .red
+        default: .white
+        }
     }
 
     private var connectionEditor: some View {

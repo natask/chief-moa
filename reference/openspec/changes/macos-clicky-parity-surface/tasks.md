@@ -28,6 +28,12 @@
 - [x] 3.2 Make app launch and global summon open the one compact panel directly
       in latched capture; a second summon commits, while Escape cancels before
       hiding.
+- [x] 3.3 Request assistant-voice delivery, render streamed assistant text, and
+      play bounded gateway PCM audio through the native output device.
+- [x] 3.4 Make summon and the microphone control toggle capture, with a visible
+      active boundary/pulse and native haptics but no repetitive cue sounds.
+- [x] 3.5 Route the double-Command macOS helper directly to `Ag.app` without
+      raising Chrome or attaching browser, Accessibility, or pixel context.
 - Acceptance: one explicit launch/summon produces one visible capture surface,
   repeating the summon commits the same turn, and no active capture becomes
   hidden.
@@ -36,8 +42,8 @@
 
 - [x] 4.1a Add a bounded authenticated recent-session history view backed only
       by the canonical gateway projection.
-- [ ] 4.1b Add full shared Aggie thread/run event and audio-attachment
-      presentation.
+- [ ] 4.1b Add full shared Aggie thread/run event and retained audio-attachment
+      presentation beyond the live assistant reply.
 - [x] 4.1c Add local PCM-derived waveform feedback alongside existing live
       partial/final transcript presentation.
 - [ ] 4.2 Add visual pointer/caption guidance as inert overlays.

@@ -19,7 +19,7 @@ import MoaMacShell
     #expect(body["session_id"] as? String == "mac-session")
     #expect(body["conversation_id"] as? String == "mac-session")
     #expect(body["turn_id"] as? String == "turn-one")
-    #expect(body["delivery_intent"] as? String == "literal_text")
+    #expect(body["delivery_intent"] as? String == "assistant_voice")
     #expect(body["screen"] == nil)
     #expect(body["ax"] == nil)
     let format = try #require(body["format"] as? [String: Any])
@@ -76,7 +76,11 @@ import MoaMacShell
     (#"{"type":"turn_done","status":"completed"}"#, .turnDone(status: "completed", reason: nil)),
     (#"{"type":"turn_done","status":"no_speech","reason":"stt_empty"}"#, .turnDone(status: "no_speech", reason: "stt_empty")),
     (#"{"type":"error","message":"provider unavailable"}"#, .failure("provider unavailable")),
-    (#"{"type":"assistant_text","text":"ignored"}"#, .ignored),
+    (#"{"type":"assistant_text","text":"spoken reply"}"#, .assistantText("spoken reply")),
+    (#"{"type":"assistant_text_delta","delta":"spoken"}"#, .assistantTextDelta("spoken")),
+    (#"{"type":"assistant_audio_start","format":{"encoding":"pcm16","sample_rate":24000,"channels":1}}"#,
+      .assistantAudioStart(try! GatewayVoiceAudioFormat(encoding: "pcm16", sampleRate: 24_000, channels: 1))),
+    (#"{"type":"assistant_audio_done"}"#, .assistantAudioDone),
 ])
 func voiceServerEventsAreBoundedAndTyped(fixture: (String, GatewayVoiceServerEvent)) throws {
     #expect(try GatewayVoiceServerEventDecoder.decode(Data(fixture.0.utf8)) == fixture.1)
@@ -216,6 +220,18 @@ private actor StubVoiceTransport: GatewayVoiceTransporting {
     func emit(_ event: GatewayVoiceServerEvent) async { if let handler { await handler(event) } }
 }
 
+@MainActor private final class StubAssistantAudioPlayer: AssistantAudioPlaying {
+    var starts: [GatewayVoiceAudioFormat] = []
+    var frames: [Data] = []
+    var finishes = 0
+    var stops = 0
+
+    func start(format: GatewayVoiceAudioFormat) throws { starts.append(format) }
+    func enqueue(_ data: Data) throws { frames.append(data) }
+    func finish() { finishes += 1 }
+    func stop() { stops += 1 }
+}
+
 private struct VoiceTestConnectionStore: GatewayConnectionStore {
     func loadOrigin() -> String { "https://moa.example" }
     func loadSessionID() -> String { "mac-test-session" }
@@ -261,6 +277,7 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     func stopAndCommit() async throws {
         commits += 1
         handler?(.transcriptFinal("protected fixture phrase"))
+        handler?(.assistantText("audible assistant reply"))
         handler?(.turnDone(status: "completed", reason: nil))
     }
 
@@ -270,10 +287,12 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
 @MainActor @Test func voiceControllerRequestsPermissionStreamsPCMAndCommits() async throws {
     let microphone = StubMicrophone()
     let transport = StubVoiceTransport()
+    let player = StubAssistantAudioPlayer()
     let controller = VoiceCaptureController(
         permission: StubPermission(allowed: true),
         microphone: microphone,
-        transport: transport
+        transport: transport,
+        audioPlayer: player
     )
     var events: [GatewayVoiceServerEvent] = []
     try await controller.start(
@@ -290,6 +309,14 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     #expect(await transport.audio == [Data([0, 0, 1, 0])])
     await transport.emit(.transcriptPartial("fixture phrase"))
     #expect(events == [.transcriptPartial("fixture phrase")])
+    let outputFormat = try GatewayVoiceAudioFormat(encoding: "pcm16", sampleRate: 24_000, channels: 1)
+    let outputPCM = Data([0, 0, 1, 0])
+    await transport.emit(.assistantAudioStart(outputFormat))
+    await transport.emit(.assistantAudio(outputPCM))
+    await transport.emit(.assistantAudioDone)
+    #expect(player.starts == [outputFormat])
+    #expect(player.frames == [outputPCM])
+    #expect(player.finishes == 1)
     try await controller.stopAndCommit()
     #expect(microphone.stops == 1)
     #expect(await transport.commits == 1)
@@ -365,6 +392,7 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     #expect(capture.commits == 1)
     #expect(model.voiceState.phase == .completed)
     #expect(model.voiceState.final == "protected fixture phrase")
+    #expect(model.reply == "audible assistant reply")
     #expect(model.prompt.isEmpty)
     await model.cancelVoice()
     #expect(capture.cancels == 1)

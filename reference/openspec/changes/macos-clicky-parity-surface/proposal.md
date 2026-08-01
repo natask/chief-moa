@@ -15,6 +15,9 @@ other surfaces.
 - Add a global `Control+Space` summon shortcut and one compact floating command
   panel for voice capture and typed turns. App launch and first summon begin
   latched capture; the next summon commits it.
+- Render gateway assistant text and play its bounded hosted PCM reply in that
+  same panel. Keep capture state obvious with a boundary pulse and native
+  haptic feedback, without repetitive interface cue sounds.
 - Persist only the non-secret configured gateway origin. Keep the bearer token
   in process memory for the current app session, default it to empty, and clear
   it on disconnect or termination. Raw provider credentials and
@@ -31,7 +34,7 @@ other surfaces.
 ## Milestone
 
 The first artifact is a private QA application. It proves the daily typed and
-literal voice-capture companion loop against a configured self-hosted or hosted
-gateway. Assistant voice replies, session-event history, semantic actions,
-signed universal distribution, and conversational self-host provisioning remain
-separately reviewable stages.
+assistant voice companion loop against a configured self-hosted or hosted
+gateway. Full session-event history, semantic actions, signed universal
+distribution, and conversational self-host provisioning remain separately
+reviewable stages.

@@ -7,6 +7,24 @@ public enum GatewayVoiceError: Error, Equatable, Sendable {
     case emptyAudioFrame
     case invalidAudioFrame
     case audioFrameTooLarge
+    case invalidAssistantAudioFormat
+}
+
+public struct GatewayVoiceAudioFormat: Equatable, Sendable {
+    public let encoding: String
+    public let sampleRate: Double
+    public let channels: Int
+
+    public init(encoding: String, sampleRate: Double, channels: Int) throws {
+        guard encoding == "pcm16",
+              (8_000...48_000).contains(sampleRate),
+              (1...2).contains(channels) else {
+            throw GatewayVoiceError.invalidAssistantAudioFormat
+        }
+        self.encoding = encoding
+        self.sampleRate = sampleRate
+        self.channels = channels
+    }
 }
 
 public struct GatewayVoiceAudioFrame: Equatable, Sendable {
@@ -69,7 +87,7 @@ public struct GatewayVoiceSessionStart: Sendable {
             conversationID: sessionID,
             branchID: "default",
             turnID: turnID,
-            deliveryIntent: "literal_text",
+            deliveryIntent: "assistant_voice",
             client: .init(platform: "macos", source: "moa-macos", input: "voice"),
             playbackPolicy: .init(assistantOverlap: false),
             format: .init(encoding: "pcm16", sampleRate: 16_000, channels: 1)
@@ -141,6 +159,11 @@ public enum GatewayVoiceServerEvent: Equatable, Sendable {
     case sessionReady
     case transcriptPartial(String)
     case transcriptFinal(String)
+    case assistantText(String)
+    case assistantTextDelta(String)
+    case assistantAudioStart(GatewayVoiceAudioFormat)
+    case assistantAudio(Data)
+    case assistantAudioDone
     case turnDone(status: String, reason: String?)
     case failure(String)
     case ignored
@@ -161,6 +184,23 @@ public enum GatewayVoiceServerEventDecoder {
             return .transcriptPartial(try transcript(object))
         case "transcript_final":
             return .transcriptFinal(try transcript(object))
+        case "assistant_text":
+            return .assistantText(try transcript(object))
+        case "assistant_text_delta":
+            return .assistantTextDelta(try transcript(object, key: "delta"))
+        case "assistant_audio_start":
+            guard let raw = object["format"] as? [String: Any],
+                  let encoding = raw["encoding"] as? String,
+                  let sampleRate = raw["sample_rate"] as? Double
+                    ?? (raw["sample_rate"] as? Int).map(Double.init),
+                  let channels = raw["channels"] as? Int else {
+                throw GatewayVoiceError.invalidAssistantAudioFormat
+            }
+            return .assistantAudioStart(try GatewayVoiceAudioFormat(
+                encoding: encoding, sampleRate: sampleRate, channels: channels
+            ))
+        case "assistant_audio_done":
+            return .assistantAudioDone
         case "turn_done":
             guard let status = object["status"] as? String, !status.isEmpty else {
                 throw GatewayVoiceError.invalidEvent
@@ -177,8 +217,8 @@ public enum GatewayVoiceServerEventDecoder {
         }
     }
 
-    private static func transcript(_ object: [String: Any]) throws -> String {
-        let text = (object["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func transcript(_ object: [String: Any], key: String = "text") throws -> String {
+        let text = (object[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !text.isEmpty else { throw GatewayVoiceError.invalidEvent }
         guard text.utf8.count <= maximumTranscriptBytes else { throw GatewayVoiceError.transcriptTooLarge }
         return text
@@ -272,6 +312,14 @@ public struct VoiceTranscriptState: Equatable, Sendable {
             final = text
             phase = .completed
             message = "Transcript ready"
+        case .assistantText, .assistantTextDelta:
+            break
+        case .assistantAudioStart:
+            message = "Ag is speaking…"
+        case .assistantAudio:
+            break
+        case .assistantAudioDone:
+            message = "Reply ready"
         case let .turnDone(status, reason):
             if status == "completed", !final.isEmpty {
                 phase = .completed

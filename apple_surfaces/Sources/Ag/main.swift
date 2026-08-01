@@ -22,6 +22,11 @@ private final class CommandPanel: NSPanel {
     func setShortcutLabel(_ value: String) { shortcutLabel = value }
 
     func invoke() {
+        let wasActive = model.voiceState.isActive
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            wasActive ? .levelChange : .alignment,
+            performanceTime: .now
+        )
         show()
         Task { await model.handleSummon() }
     }
@@ -37,6 +42,7 @@ private final class CommandPanel: NSPanel {
     }
 
     func hide() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         Task {
             await model.cancelVoice()
             panel?.orderOut(nil)

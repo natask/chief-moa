@@ -29,6 +29,40 @@ capture pixels.
 - **THEN** capture is canceled before the sole panel is hidden
 - **AND** no second or persistent settings panel is opened
 
+### Requirement: Assistant replies remain on the native audio surface
+
+Committed native voice turns SHALL request assistant-voice delivery. The Mac
+surface SHALL render bounded assistant text and play only gateway-announced,
+bounded PCM16 assistant audio. Summoning SHALL NOT raise a browser, infer page
+context, or add repetitive interface cue sounds.
+
+#### Scenario: Gateway streams an assistant reply
+
+- **WHEN** a committed native turn receives assistant text and valid PCM frames
+- **THEN** the same compact panel renders the text and plays the frames in order
+- **AND** no browser window or captured page becomes part of the turn
+
+#### Scenario: Audio metadata is invalid
+
+- **WHEN** the gateway announces an unsupported format or an oversized frame
+- **THEN** playback fails visibly and safely
+- **AND** the bytes are not decoded as executable or JSON instructions
+
+### Requirement: Capture state is visible and tactile without cue noise
+
+The summon command and microphone control SHALL toggle between start and commit.
+While the microphone is active, the compact panel SHALL retain an unmistakable
+boundary treatment. Invocation SHALL provide a short visual pulse and native
+haptic feedback where available. The surface SHALL NOT play dedicated start,
+pause, continue, cancel, copy, or finalize cue sounds.
+
+#### Scenario: User toggles capture
+
+- **WHEN** the user summons once and later summons again
+- **THEN** the first invocation starts visible capture and the second commits it
+- **AND** each transition is confirmed visually and, where supported, tactually
+- **AND** no non-assistant audio cue is played
+
 ### Requirement: Typed turns use the configured Aggie gateway
 
 The macOS command panel SHALL send bounded typed turns to authenticated

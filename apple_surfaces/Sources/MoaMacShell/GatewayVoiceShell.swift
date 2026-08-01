@@ -194,7 +194,13 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
                 let message = try await webSocket.receive()
                 let data: Data
                 switch message {
-                case let .data(value): data = value
+                case let .data(value):
+                    guard value.count <= 2 * 1024 * 1024,
+                          value.count.isMultiple(of: MemoryLayout<Int16>.size) else {
+                        throw GatewayVoiceError.audioFrameTooLarge
+                    }
+                    if let eventHandler { await eventHandler(.assistantAudio(value)) }
+                    continue
                 case let .string(value): data = Data(value.utf8)
                 @unknown default: continue
                 }
@@ -225,6 +231,70 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
     }
 }
 
+@MainActor public protocol AssistantAudioPlaying: AnyObject {
+    func start(format: GatewayVoiceAudioFormat) throws
+    func enqueue(_ data: Data) throws
+    func finish()
+    func stop()
+}
+
+@MainActor public final class SystemAssistantAudioPlayer: AssistantAudioPlaying {
+    private var engine: AVAudioEngine?
+    private var player: AVAudioPlayerNode?
+    private var format: AVAudioFormat?
+
+    public init() {}
+
+    public func start(format value: GatewayVoiceAudioFormat) throws {
+        stop()
+        guard let audioFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: value.sampleRate,
+            channels: AVAudioChannelCount(value.channels),
+            interleaved: true
+        ) else { throw VoiceCaptureError.invalidAudioFormat }
+        let nextEngine = AVAudioEngine()
+        let nextPlayer = AVAudioPlayerNode()
+        nextEngine.attach(nextPlayer)
+        nextEngine.connect(nextPlayer, to: nextEngine.mainMixerNode, format: audioFormat)
+        nextEngine.prepare()
+        try nextEngine.start()
+        nextPlayer.play()
+        engine = nextEngine
+        player = nextPlayer
+        format = audioFormat
+    }
+
+    public func enqueue(_ data: Data) throws {
+        guard let player, let format else { throw VoiceCaptureError.invalidAudioFormat }
+        let bytesPerFrame = MemoryLayout<Int16>.size * Int(format.channelCount)
+        guard !data.isEmpty, data.count.isMultiple(of: bytesPerFrame) else {
+            throw GatewayVoiceError.invalidAudioFrame
+        }
+        let frames = AVAudioFrameCount(data.count / bytesPerFrame)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+              let destination = buffer.mutableAudioBufferList.pointee.mBuffers.mData else {
+            throw VoiceCaptureError.invalidAudioFormat
+        }
+        buffer.frameLength = frames
+        data.copyBytes(to: destination.assumingMemoryBound(to: UInt8.self), count: data.count)
+        player.scheduleBuffer(buffer)
+    }
+
+    public func finish() {
+        // Frames are already scheduled. Keep the engine alive until they drain;
+        // the next turn or explicit cancel calls stop.
+    }
+
+    public func stop() {
+        player?.stop()
+        engine?.stop()
+        player = nil
+        engine = nil
+        format = nil
+    }
+}
+
 @MainActor public protocol VoiceCaptureControlling: AnyObject {
     func start(
         origin: URL,
@@ -242,24 +312,28 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
     private let permission: any MicrophonePermissionRequesting
     private let microphone: any PCM16MicrophoneCapturing
     private let transport: any GatewayVoiceTransporting
+    private let audioPlayer: any AssistantAudioPlaying
     private var active = false
 
     public convenience init() {
         self.init(
             permission: SystemMicrophonePermission(),
             microphone: AVAudioEnginePCM16Capture(),
-            transport: URLSessionGatewayVoiceTransport()
+            transport: URLSessionGatewayVoiceTransport(),
+            audioPlayer: SystemAssistantAudioPlayer()
         )
     }
 
     public init(
         permission: any MicrophonePermissionRequesting,
         microphone: any PCM16MicrophoneCapturing,
-        transport: any GatewayVoiceTransporting
+        transport: any GatewayVoiceTransporting,
+        audioPlayer: (any AssistantAudioPlaying)? = nil
     ) {
         self.permission = permission
         self.microphone = microphone
         self.transport = transport
+        self.audioPlayer = audioPlayer ?? SystemAssistantAudioPlayer()
     }
 
     public func start(
@@ -273,7 +347,23 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         guard !active else { throw VoiceCaptureError.alreadyActive }
         guard await permission.requestPermission() else { throw VoiceCaptureError.microphoneDenied }
         let start = try GatewayVoiceSessionStart(origin: origin, sessionID: sessionID, turnID: turnID)
-        try await transport.connect(start: start, bearerToken: bearerToken, turnID: turnID, eventHandler: eventHandler)
+        audioPlayer.stop()
+        try await transport.connect(start: start, bearerToken: bearerToken, turnID: turnID) { [weak self] event in
+            guard let self else { return }
+            do {
+                switch event {
+                case let .assistantAudioStart(format): try self.audioPlayer.start(format: format)
+                case let .assistantAudio(data): try self.audioPlayer.enqueue(data)
+                case .assistantAudioDone: self.audioPlayer.finish()
+                case .failure: self.audioPlayer.stop()
+                default: break
+                }
+                eventHandler(event)
+            } catch {
+                self.audioPlayer.stop()
+                eventHandler(.failure("Assistant audio could not play"))
+            }
+        }
         do {
             try microphone.start { [transport] data in
                 let level = VoiceLevelMeter.normalizedLevel(forPCM16: data)
@@ -297,6 +387,7 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
     public func cancel() async {
         microphone.stop()
         active = false
+        audioPlayer.stop()
         await transport.cancel()
     }
 }

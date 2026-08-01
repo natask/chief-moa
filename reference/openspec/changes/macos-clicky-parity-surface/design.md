@@ -11,6 +11,11 @@ panel says to use it instead of silently advertising a broken shortcut.
 App launch and the first summon show the same compact panel and begin one
 latched voice capture. A second summon commits that capture; it never hides an
 active microphone session. Escape explicitly cancels capture before hiding.
+The summon and microphone control are toggles rather than hold-to-talk controls.
+The panel uses a persistent colored boundary plus a short visual pulse and
+trackpad haptics to confirm state changes. It does not add start, stop, pause,
+cancel, copy, or finish sounds; routine audio is reserved for the assistant's
+reply so repeated turns do not become noisy.
 During capture, a short rolling waveform is computed locally from the PCM16
 frames already destined for the gateway. Only bounded normalized levels enter
 SwiftUI state; no second audio buffer or telemetry path is created.
@@ -58,6 +63,12 @@ Voice capture is separately user-invoked by app launch, the registered shortcut,
 or the menu-bar Speak action. It sends only PCM and the bounded voice-session
 envelope to the configured gateway; it does not inherit screen-context
 authority.
+
+Assistant voice sessions request `assistant_voice` delivery. Bounded assistant
+text events update the inert reply presentation. An announced mono/stereo PCM16
+format initializes the native audio engine; following binary frames are queued
+in order and drained when the gateway sends `assistant_audio_done`. Unknown or
+oversized audio formats fail visibly and never become executable content.
 
 ## Release boundary
 

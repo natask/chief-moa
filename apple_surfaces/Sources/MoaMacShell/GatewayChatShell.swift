@@ -156,6 +156,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var browserDevices: [BrowserDevice] = []
     @Published public private(set) var isDelegatingBrowser = false
     @Published public private(set) var browserHandoffPhase: BrowserHandoffPhase = .idle
+    @Published public private(set) var interactionPulse: UInt64 = 0
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
@@ -384,6 +385,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     /// One explicit summon starts a latched capture. The next summon commits
     /// that same turn, even when the microphone or socket is still starting.
     public func handleSummon() async {
+        interactionPulse &+= 1
         if voiceState.isActive {
             await finishVoice()
         } else {
@@ -396,6 +398,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         voiceGeneration &+= 1
         let generation = voiceGeneration
         voiceReleaseRequested = false
+        reply = ""
         voiceState.apply(.begin)
         do {
             guard isConfigured else { throw MoaMacError.missingToken }
@@ -413,6 +416,11 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
                 }
             ) { [weak self] event in
                 guard let self, self.voiceGeneration == generation else { return }
+                switch event {
+                case let .assistantText(text): self.reply = text
+                case let .assistantTextDelta(delta): self.reply += delta
+                default: break
+                }
                 self.voiceState.apply(.server(event))
             }
             guard voiceGeneration == generation else {
@@ -451,6 +459,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     }
 
     public func cancelVoice() async {
+        interactionPulse &+= 1
         voiceGeneration &+= 1
         voiceReleaseRequested = false
         await voiceController.cancel()

@@ -111,8 +111,8 @@ the underlying stored audio or record.
 - **THEN** the gateway rejects the request and the block is not affected
 
 ### Requirement: Each surface offers one-tap review-and-delete of the capture that just ended
-After capture stops, the next interaction with the recording-active companion
-element SHALL surface the literal transcript (if any) of the capture block
+The next interaction with the recording-active companion element SHALL, after
+capture stops, surface the literal transcript (if any) of the capture block
 that just ended and a Delete action bound to the route above, scoped to that
 one most-recent block.
 

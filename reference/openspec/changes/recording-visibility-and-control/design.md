@@ -56,18 +56,14 @@ No wake-word or screen-on trigger exists anywhere in `android_app`.
   injected shows no indicator at all for capture that is, in fact, still
   running.
 
-### 1.3 macOS — not a separate app in this checkout
+### 1.3 macOS — superseded by the native companion
 
-The macOS global summon is a Karabiner-Elements config
-(`browser_extension/scripts/macos-summon/ag-double-command.json:1-47`,
-double-tap Left Command → `Cmd+Shift+9` + raise Chrome), which resolves to the
-Chrome command `open-agee-global` (`background.js:4706-4714`,
-`summonOverlay(tab, "open")` at `:4685-4686`). **The summon only opens/raises
-the overlay panel. It does not start microphone capture by itself** — the user
-still has to perform one of the gestures in §1.2. `ARCHITECTURE.md:43-47`
-confirms this is a browser-owned capture-only flow, gated by an explicit
-dictation action. There is no dedicated macOS recording indicator; whatever
-indicator exists is the browser overlay's.
+This original finding described the former browser bridge. The active native
+contract is now owned by `macos-clicky-parity-surface`: double-tap Left Command
+opens `Ag.app`, toggles its one assistant capture, and never raises Chrome or
+attaches page context. The native panel owns its persistent listening boundary,
+visual pulse, and haptic feedback. Browser dictation remains a separate explicit
+browser surface.
 
 ### 1.4 Existing visible indicators (before this change)
 
@@ -168,9 +164,8 @@ one:
   structurally cannot rule out on the in-page indicator alone: a tab where the
   overlay was never injected, was scrolled past, or the browser window itself
   is not focused. No such call exists today (§1.4) — this is new.
-- No macOS-specific indicator is added, per the "not a separate app in this
-  checkout" finding (§1.3) — the browser indicator (in-page + toolbar) is what
-  the macOS-summoned flow inherits, unchanged from how it works today.
+- The later native Mac companion owns its own boundary/pulse/haptic indicator;
+  this browser visibility change remains scoped to browser dictation.
 
 ## 4. Immediate stop
 
@@ -240,5 +235,5 @@ absorbing that change's full scope:
   deserves its own explicit proposal, not a side effect of a UI change.
 - Any change to local Android `TextToSpeech` — none is proposed; hosted TTS
   only remains the rule.
-- macOS-native indicator work — there is no native macOS app in this
-  checkout to add one to (§1.3).
+- Additional macOS indicator work beyond the native companion boundary and
+  haptics; that surface is specified by `macos-clicky-parity-surface` (§1.3).

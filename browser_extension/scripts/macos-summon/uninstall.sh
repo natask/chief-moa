@@ -7,7 +7,8 @@ set -euo pipefail
 KARABINER_DIR="${KARABINER_CONFIG_DIR:-$HOME/.config/karabiner}"
 KARABINER_JSON="$KARABINER_DIR/karabiner.json"
 ASSETS_DIR="$KARABINER_DIR/assets/complex_modifications"
-DESC_MATCH="open the AG overlay"
+DESC_MATCH="native Ag companion"
+LEGACY_MATCH="open the AG overlay"
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required"; exit 1; }
 
@@ -23,11 +24,14 @@ if [ -f "$KARABINER_JSON" ]; then
   echo "backed up config: $BACKUP"
 
   TMP="$(mktemp)"
-  jq --arg match "$DESC_MATCH" '
+  jq --arg match "$DESC_MATCH" --arg legacy "$LEGACY_MATCH" '
     .profiles |= map(
       .complex_modifications.rules = (
         (.complex_modifications.rules // [])
-        | map(select(((.description // "") | contains($match)) | not))
+        | map(select(
+            (((.description // "") | contains($match))
+              or ((.description // "") | contains($legacy))) | not
+          ))
       )
     )
   ' "$KARABINER_JSON" > "$TMP"
@@ -38,4 +42,3 @@ if [ -f "$KARABINER_JSON" ]; then
 fi
 
 echo "done. Karabiner-Elements reloads the config automatically."
-echo "The AG Command+Shift+9 global shortcut stays in Chrome; remove it at chrome://extensions/shortcuts if you want."

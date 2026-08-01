@@ -2,8 +2,8 @@
 
 ## Status
 
-Partially implemented. Ask/Note/Coach delivery state and the browser/macOS
-literal-dictation path exist. The current candidate also adds worker-authoritative
+Partially implemented. Ask/Note/Coach delivery state and browser literal
+dictation exist. The current candidate also adds worker-authoritative
 cross-tab dictation state and an additive capture-block projection for completed
 browser dictation turns. These candidate changes are not a production promotion,
 and they do not complete the Android notebook, audio-first capture lifecycle, or
@@ -37,10 +37,10 @@ review without making any of those features prerequisites for reliable capture.
 1. Never lose spoken content.
 2. Produce editable, copyable transcript blocks quickly.
 3. Make repeated press/hold segments cheap and independent.
-4. Make the same mixed-language literal dictation globally invocable on macOS
-   through the browser surface and immediately copyable for paste. One extension
-   worker owns the active dictation session; tabs are interchangeable views of
-   that state rather than independent recorders.
+4. Keep mixed-language literal dictation explicitly available through the
+   browser surface and immediately copyable for paste. One extension worker owns
+   the active dictation session; tabs are interchangeable views of that state.
+   The OS-wide double-Command gesture now belongs to the native Mac assistant.
 5. Let the same speech insert into any focused Android text field through a real
    keyboard.
 6. Apply user-selected writing skills without overwriting the literal transcript.

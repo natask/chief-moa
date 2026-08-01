@@ -117,17 +117,18 @@ capture SHALL NOT silently mutate the user's durable global language profile.
 ### Requirement: Browser desktop dictation skips assistant work
 The browser surface SHALL support an explicitly invoked dictation session that
 uses the configured speech-recognition languages, stores the canonical literal
-transcript, and performs no reasoning, TTS, or agent dispatch. On macOS the
-global summon SHALL start or finish this session and make a successful final
-transcript available on the clipboard.
+transcript, and performs no reasoning, TTS, or agent dispatch. A browser-owned
+shortcut MAY start or finish this session and make a successful final transcript
+available on the clipboard. The OS-wide native assistant summon SHALL NOT be
+claimed by this browser dictation lifecycle.
 
 The extension worker SHALL own the one active browser dictation lifecycle.
 Browser tabs SHALL be views of that shared state, not independent session
 authorities. A global finish invocation from a different tab SHALL commit the
 active dictation rather than creating a second recorder.
 
-#### Scenario: Global macOS dictation produces paste-ready text
-- **WHEN** the user invokes global dictation, speaks English, Amharic, or both,
+#### Scenario: Browser dictation produces paste-ready text
+- **WHEN** the user invokes browser dictation, speaks English, Amharic, or both,
   and invokes it again to finish
 - **THEN** the gateway returns the literal transcript without a model reply
 - **AND** the browser copies that transcript to the clipboard
@@ -154,8 +155,9 @@ active dictation rather than creating a second recorder.
 - **AND** it does not claim microphone or session ownership solely by loading
 
 ### Requirement: Completed browser dictation becomes a literal capture
-After storing a completed transcription-only browser voice turn, the gateway
-SHALL asynchronously project it into one deterministic queryable capture block.
+The gateway SHALL asynchronously project each stored, completed
+transcription-only browser voice turn into one deterministic queryable capture
+block.
 The block SHALL preserve the bounded literal transcript, transcript completeness,
 source surface, language/provider provenance, and retained audio reference when
 available. The projection SHALL NOT delay the terminal dictation event.

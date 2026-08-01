@@ -522,8 +522,8 @@ The macOS-only `Ag` product adds the native proactive surface:
 ```text
 explicit app launch, menu-bar Speak, or Control-Space
   -> one app-owned compact command panel (no AX read or pixel capture)
-  -> first invocation starts one latched literal WS voice capture
-  -> second invocation commits that capture and keeps feedback visible
+  -> first invocation starts one latched assistant WS voice capture
+  -> second invocation commits it; reply text and hosted PCM play in place
   -> typed Send remains a bounded authenticated POST /v1/chat
 ```
 
@@ -534,8 +534,10 @@ Credential persistence APIs are prohibited in Apple runnable sources and
 configuration. The panel contains no packaged destination or provider
 credentials, rejects redirects, uses an ephemeral URL session, and never
 attaches screen context implicitly. Provider selection and credentials remain
-gateway-owned. This is the first daily companion slice; ticketed live
-assistant audio replies, shared session-event presentation, pointer overlays,
+gateway-owned. Listening is visible through a persistent boundary and a short
+summon pulse, with trackpad haptics where supported. The native shell adds no
+start, pause, cancel, copy, or finish cue sounds; the assistant reply itself is
+the only routine audio. Shared session-event presentation, pointer overlays,
 and approved native actions remain staged work.
 
 The privacy-scoped proactive flow remains separate:
@@ -577,8 +579,9 @@ production signing/notarization artifact.
 
 `Ag` has one singleton compact invocation panel. Explicit app launch, the
 registered global shortcut, or the menu-bar Speak action shows that panel and
-starts one latched literal voice capture. Repeating the summon commits the same
-capture; it never hides an active microphone session. Explicit dismissal
+starts one latched assistant voice capture. Repeating the summon commits the
+same capture; it never hides an active microphone session. The panel renders
+assistant text events and plays bounded gateway PCM audio. Explicit dismissal
 cancels before hiding. The Privacy & Screen Context settings scene is reachable
 only through its explicit menu action and grants no authority to the invocation
 panel. The browser extension remains a separate browser-owned dictation surface;
@@ -696,7 +699,10 @@ status projection are follow-up work. Contract:
 `reference/openspec/changes/voice-first-orb-gestures/proposal.md`.
 
 The overlay surface is the companion between two ribbons: what the user said
-reads in one line above the mark, what Ag replied in one line below it. The
+reads in one fixed streaming line above the mark, what Ag replied in one fixed
+streaming line below it. A deliberate ribbon click opens exactly three visible
+lines; overflow scrolls inside that fixed expanded viewport. Text arrival never
+resizes either state. The
 companion's centre line is the seam — the user box's left edge sits on it and
 the reply box's right edge sits on it, so the pair pivots on the companion and
 which side a line hangs tells you who is speaking. The reply is revealed at
