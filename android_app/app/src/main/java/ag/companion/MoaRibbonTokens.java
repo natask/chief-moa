@@ -50,10 +50,10 @@ final class MoaRibbonTokens {
     static final float FONT_SCALE_CLAMP = 1.3f;
     /** Compact fixed viewport: stable while streaming, never a screen-wide banner. */
     static final int RIBBON_MAX_W_DP = 280;
-    /** Bounded ceiling for a tap-expanded ribbon. It reads; it is not a panel. */
-    static final int EXPANDED_MAX_H_DP = 240;
-    /** A collapsed bubble wraps up to this many lines, then shows the tail. */
-    static final int COLLAPSED_MAX_LINES = 5;
+    /** Streaming always stays inside one fixed line. */
+    static final int COLLAPSED_MAX_LINES = 1;
+    /** A deliberate tap opens exactly this many visible, scrollable lines. */
+    static final int EXPANDED_MAX_LINES = 3;
     static final int EXPANDED_PAD_Y_DP = 9;
     static final int RIBBON_PAD_X_DP = 12;
     static final int GAP_DP = 6;

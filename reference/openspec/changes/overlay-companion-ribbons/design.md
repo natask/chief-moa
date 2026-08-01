@@ -110,10 +110,9 @@ across two gestures, tap does all of it: the ribbon expands to the full turn,
 solidifies, and shows copy. A second tap collapses.
 
 That means the unit's height changes on tap. The no-reflow invariant survives
-intact because it is about STREAMING: a delta may never resize anything. A
-deliberate tap may, and the growth is bounded at `EXPANDED_MAX_H_DP` (168dp) with
-the same tail rule as the collapsed line, so the overlay still cannot become a
-panel.
+intact because a delta may never resize anything. A deliberate tap opens exactly
+three visible lines. Longer text scrolls inside that viewport, so the overlay
+cannot become a panel.
 
 ### 8. Copy variants exist in the UI before they exist in the data
 

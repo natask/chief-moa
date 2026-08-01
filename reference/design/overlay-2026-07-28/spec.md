@@ -66,8 +66,8 @@ The browser ribbon is one `white-space: pre` line in a fixed 28px box, slid by
 ragged black band the width of the viewport — image 1.
 
 Android already abandoned this. `MoaRibbonView` is "a compact translucent chat
-bubble": it wraps to `COLLAPSED_MAX_LINES = 5`, pins to the tail, expands on tap
-to a bounded `EXPANDED_MAX_H_DP = 240` scroll, radius 14dp, width 280dp, 14sp
+bubble": it stays at `COLLAPSED_MAX_LINES = 1`, pins to the tail, and expands on
+tap to `EXPANDED_MAX_LINES = 3` with vertical scrolling, radius 14dp, width 280dp, 14sp
 (`MoaRibbonView.java:20-40`, `MoaRibbonTokens.java:47-77`). And
 `MoaRibbonPresence` records the reversal explicitly: "Later visual direction made
 the live transcript a deliberate bubble. Ambient therefore paints one compact
@@ -224,8 +224,8 @@ Adopt `MoaRibbonView` wholesale. The browser stops being a one-line ticker.
 | Token | Browser v2 | Android today | Note |
 |---|---|---|---|
 | width | `clamp(260px, 40vw, 380px)` | `RIBBON_MAX_W_DP = 280` | browser gets more room; both bounded |
-| collapsed max lines | `5` | `COLLAPSED_MAX_LINES = 5` | identical |
-| expanded max height | `240px`, scrollable | `EXPANDED_MAX_H_DP = 240` | identical |
+| collapsed lines | `1` | `COLLAPSED_MAX_LINES = 1` | fixed while streaming |
+| expanded lines | `3`, scrollable | `EXPANDED_MAX_LINES = 3` | opens only on click |
 | radius | `14px` | `RADIUS_RIBBON_DP = 14` | identical |
 | padding | `8px 12px` | `RIBBON_PAD_X_DP = 12`, `EXPANDED_PAD_Y_DP = 9` | |
 | text | `14px / 20px / 450` | `TEXT_SP = 14` | up from 13px |
@@ -239,10 +239,11 @@ The user's words: "it should look like a proper bubble and be streaming."
 - Text **wraps**. Delete the `white-space: pre` + `translateX` sliding window
   (`ribbons.css:207-210`) and `WINDOW_CHARS = 140`. They were the anti-reflow
   device for a fixed-height box; a bounded-height bubble does that job better.
-- The bubble grows in height only, only up to 5 lines, then **pins to the tail**:
-  new text appears at the bottom, old text scrolls off the top under a 12px fade.
-  Width never changes mid-stream. Position never changes mid-stream — the bubble
-  grows away from the companion, so the companion never moves.
+- The bubble stays one line while streaming and **pins to the tail**: new text
+  appears at the bottom and old text leaves above a 12px fade. Width, height,
+  and position never change mid-stream.
+- A deliberate click opens exactly three visible lines. Longer current-turn text
+  scrolls vertically inside that viewport.
 - One `requestAnimationFrame`-coalesced write per frame. Deltas append to a text
   node; no `innerHTML`, no re-layout of the whole run.
 - A caret (`2 × 16px`, `--agee-ribbon-accent`, 1060ms blink) sits at the tail of

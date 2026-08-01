@@ -314,9 +314,10 @@ of resizing the card for each partial or completed turn.
 - **AND** does not create transcript-history entries for them
 
 #### Scenario: Bubble text remains bounded and readable
-- **WHEN** current-turn text exceeds five wrapped lines
-- **THEN** the collapsed bubble shows at most the newest five lines
-- **AND** tapping expands a bounded reading viewport that scrolls vertically
+- **WHEN** current-turn text exceeds one wrapped line
+- **THEN** streaming remains inside one fixed line showing the newest tail
+- **AND** tapping opens exactly three visible lines
+- **AND** longer text scrolls vertically inside that fixed expanded viewport
 
 #### Scenario: User transcript actions stay explicit
 - **WHEN** the user bubble contains transcript text

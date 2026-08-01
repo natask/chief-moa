@@ -65,7 +65,7 @@ public final class MoaOverlayVisualCaptureTest {
         measure(ribbon, width, ribbon.desiredHeightPx());
 
         assertTrue(ribbon.desiredHeightPx() > ribbon.ribbonHeightPx());
-        assertTrue(ribbon.desiredHeightPx() <= dp(context, MoaRibbonTokens.EXPANDED_MAX_H_DP));
+        assertEquals(3, MoaRibbonTokens.EXPANDED_MAX_LINES);
         assertTrue(!ribbon.hitsHistory(width - dp(context, 60), ribbon.ribbonHeightPx() / 2f));
         assertTrue(ribbon.hitsRail(width - dp(context, 8), ribbon.ribbonHeightPx() / 2f));
     }

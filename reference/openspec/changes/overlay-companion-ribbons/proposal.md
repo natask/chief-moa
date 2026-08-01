@@ -57,8 +57,8 @@ and `MoaFrameCoalescer` are all reused unchanged.
   companion. It keeps the one-line tail window and bounded tap expansion. This
   supersedes the earlier ambient no-plate treatment after the user explicitly
   asked for the streaming text to read as a bubble.
-  Tap expansion is bounded at 240dp so a normal current turn remains wholly
-  readable; the explicit clock affordance hands longer history to the full app.
+  Tap expansion is a fixed three-line viewport. Longer current-turn text scrolls
+  inside it; the full app remains the history surface.
 - **Transparency.** A ribbon with current text paints one compact translucent
   bubble. An empty ribbon still paints nothing and takes no touch at all.
 - **Drag as one.** Companion and both ribbons are drag handles. A drag writes the
@@ -93,8 +93,8 @@ user's call.
 Two refinements the user gave on 2026-07-27, after the design contract was
 written:
 
-- **Bounded bar with click-to-expand.** The fixed single-line sliding window
-  stays; a tap now opens it. This competes with the contract's tap-to-solidify,
+- **Bounded bar with click-to-expand.** The fixed single-line streaming window
+  stays; a tap opens exactly three scrollable lines. This competes with the contract's tap-to-solidify,
   so the two are merged: tap expands AND solidifies AND reveals copy. Expansion
   is the one thing permitted to change the unit's height, because the user asked
   for it explicitly; a stream delta still may not.

@@ -87,18 +87,25 @@ public final class MoaRibbonViewTest {
     }
 
     @Test
-    public void collapsedLayoutUsesBoundedTailAndExpansionUsesFullTurn() {
+    public void streamingNeverResizesAndTapOpensAThreeLineViewport() {
         MoaRibbonView you = new MoaRibbonView(context(), false);
         you.setContentWidth(WIDTH);
         you.setWindowText("short tail");
         you.setFullText((LONG_TEXT + " ").repeat(24));
         int collapsedHeight = you.desiredHeightPx();
 
+        you.setWindowText((LONG_TEXT + " ").repeat(8));
+        assertEquals("streaming text cannot grow the collapsed window",
+                collapsedHeight, you.desiredHeightPx());
+
         you.setExpanded(true);
         int expandedHeight = you.desiredHeightPx();
 
         assertEquals(you.ribbonHeightPx(), collapsedHeight);
         assertTrue(expandedHeight > collapsedHeight);
+        // Robolectric's API-26 font shaper can report a one-line StaticLayout
+        // for wrapped text. Scroll bounds are covered by MoaRibbonUnitLayoutTest;
+        // this View test pins the deterministic three-line viewport geometry.
     }
 
     @Test

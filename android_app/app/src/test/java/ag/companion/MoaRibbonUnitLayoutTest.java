@@ -187,15 +187,6 @@ public final class MoaRibbonUnitLayoutTest {
     }
 
     @Test
-    public void expansionIsBoundedAtBothEnds() {
-        // Never shorter than the collapsed ribbon...
-        assertEquals(RIBBON_H, MoaRibbonUnitLayout.expandedHeight(10, RIBBON_H, 500));
-        // ...never taller than the ceiling, however long the turn was.
-        assertEquals(500, MoaRibbonUnitLayout.expandedHeight(9999, RIBBON_H, 500));
-        assertEquals(300, MoaRibbonUnitLayout.expandedHeight(300, RIBBON_H, 500));
-    }
-
-    @Test
     public void anExpandedRibbonStillCannotLeaveTheScreen() {
         int expanded = RIBBON_H * 6;
         MoaRibbonUnitLayout.Placement placement = MoaRibbonUnitLayout.place(
@@ -215,25 +206,9 @@ public final class MoaRibbonUnitLayoutTest {
     }
 
     @Test
-    public void collapsedBubbleGrowsToFiveLinesThenPinsToTheTail() {
-        int lineHeight = 50;
-        int padY = 20;
-        int min = RIBBON_H;
-        int fiveLines = 5 * lineHeight + padY * 2;
-
-        // Sparse content never shrinks below the resting ribbon height.
-        assertEquals(min, MoaRibbonUnitLayout.collapsedHeight(
-                lineHeight, min, lineHeight, padY));
-        // Three lines get exactly three lines of height.
-        assertEquals(3 * lineHeight + padY * 2, MoaRibbonUnitLayout.collapsedHeight(
-                3 * lineHeight + padY * 2, min, lineHeight, padY));
-        // Five lines is the cap...
-        assertEquals(fiveLines, MoaRibbonUnitLayout.collapsedHeight(
-                fiveLines, min, lineHeight, padY));
-        // ...and a fifty-line turn still gets only five.
-        assertEquals(fiveLines, MoaRibbonUnitLayout.collapsedHeight(
-                50 * lineHeight + padY * 2, min, lineHeight, padY));
-        assertEquals(5, MoaRibbonTokens.COLLAPSED_MAX_LINES);
+    public void collapsedAndExpandedLineCountsAreFixed() {
+        assertEquals(1, MoaRibbonTokens.COLLAPSED_MAX_LINES);
+        assertEquals(3, MoaRibbonTokens.EXPANDED_MAX_LINES);
     }
 
     @Test

@@ -52,6 +52,8 @@
       `MoaFrameCoalescer` as orb and ribbon drag. Eight queued moves are pinned
       by test to one requested frame, zero early orb submissions, and one latest
       anchor submission on the frame.
+- [x] Lock Android and browser streaming bubbles to one fixed line; only a user
+      tap opens an exactly three-line vertically scrollable viewport.
 
 ## Open
 

@@ -204,6 +204,7 @@ signal completed without a client acknowledgement.
       vertically scrollable, and expose one persistent user Copy action plus a
       separate History action without a hidden double-tap duplicate. Verify the
       actions through Android 8 accessibility as well as touch.
+      The five-line geometry is superseded by 13.12.
 - [x] 13.9 Supersede the compact Copy/History rails with the History-first
       product contract. Lay out only the bounded visible tail while collapsed,
       retain the complete turn for expansion and full-app History, and expose no
@@ -215,6 +216,9 @@ signal completed without a client acknowledgement.
 - [ ] 13.11 Wire the existing durable voice-draft capability into Android pause
       and resume controls. Pause must stop microphone capture without sending,
       discarding, or terminating the draft; resume must append to the same draft.
+- [x] 13.12 Keep current-turn streaming inside one fixed line and open exactly
+      three scrollable lines only after the user taps the bubble; mirror the
+      contract in the browser compact surface.
 
 Release evidence: commit `b99379b0` built candidate
 `ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256

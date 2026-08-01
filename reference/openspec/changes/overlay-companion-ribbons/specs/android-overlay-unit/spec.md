@@ -64,20 +64,21 @@ and dragging paint a plate, and both require a finger on the unit.
 - **THEN** ambient uses the engaged plate at 0.86 instead of the halo, and this
   is the only sanctioned occluding ambient
 
-### Requirement: A tap expands the bounded ribbon to reveal the whole turn
-A ribbon SHALL open on tap to show the full text of the current turn, bounded in
-height, with its copy affordance reachable in that state. A second tap closes it.
+### Requirement: A tap opens a fixed three-line scrolling viewport
+A ribbon SHALL remain one fixed line while streaming. On tap it SHALL show
+exactly three visible lines and allow vertical scrolling through the retained
+current turn. Its copy affordance remains reachable. A second tap closes it.
 Expansion is the only thing that may change the unit's height.
 
 #### Scenario: Reading past the sliding window
 - **WHEN** the user taps a ribbon whose text has scrolled past its viewport
-- **THEN** the ribbon expands in place, wraps the full retained text, and shows
-  the copy affordance
+- **THEN** the ribbon opens a three-line viewport in place, wraps the full
+  retained text, permits vertical scrolling, and shows the copy affordance
 
 #### Scenario: The expansion is bounded
 - **WHEN** the turn is far longer than the expanded ceiling
-- **THEN** the ribbon stops growing at that ceiling and shows the tail, and the
-  unit does not become a panel
+- **THEN** the ribbon stays exactly three lines tall, shows the tail by default,
+  and lets the user scroll without becoming a panel
 
 #### Scenario: Streaming may still not resize anything
 - **WHEN** a delta arrives while the ribbon is collapsed

@@ -21,9 +21,9 @@ import android.view.accessibility.AccessibilityNodeInfo;
  *
  * This is the whole anti-occlusion fix. The old voice card was a filled,
  * bordered, scrolling rectangle that grew with the conversation and covered the
- * screen. A bubble has a BOUNDED viewport: collapsed it wraps the turn up to
- * {@link MoaRibbonTokens#COLLAPSED_MAX_LINES} lines and then pins to the tail;
- * a tap expands it to a taller, still-bounded, vertically scrollable read.
+ * screen. A bubble has a BOUNDED viewport: collapsed it is one fixed streaming
+ * line pinned to the tail; a tap opens exactly three visible lines and lets the
+ * user scroll vertically through the retained turn.
  * Nothing here may become a chat panel.
  *
  * The user bubble keeps one visible Copy action. Copy finishes a live capture
@@ -88,7 +88,6 @@ final class MoaRibbonView extends View {
     private final int hitInflatePx;
     private final int caretWidthPx;
     private final int caretHeightPx;
-    private final int expandedMaxHeightPx;
     private final int padYPx;
     private final int copyRailWidthPx;
 
@@ -107,17 +106,20 @@ final class MoaRibbonView extends View {
         hitInflatePx = dp(MoaRibbonTokens.HIT_INFLATE_DP);
         caretWidthPx = Math.max(1, dp(MoaRibbonTokens.CARET_W_DP));
         caretHeightPx = dp(MoaRibbonTokens.CARET_H_DP);
-        expandedMaxHeightPx = dp(MoaRibbonTokens.EXPANDED_MAX_H_DP);
-        padYPx = dp(MoaRibbonTokens.EXPANDED_PAD_Y_DP);
         copyRailWidthPx = dp(MoaRibbonTokens.COPY_RAIL_W_DP);
 
         textPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         textPaint.setTextSize(MoaRibbonTokens.TEXT_SP
                 * MoaRibbonTokens.textScale(fontScale)
-                * context.getResources().getDisplayMetrics().scaledDensity);
+                * density);
         textPaint.setLetterSpacing(0.005f);
+        // Derive vertical padding from the actual clamped glyph metrics. This
+        // keeps large text inside the declared viewport instead of clipping it
+        // above or below the bubble.
+        int textLineHeightPx = Math.round(textPaint.descent() - textPaint.ascent());
+        padYPx = Math.max(dp(2), (ribbonHeightPx - textLineHeightPx) / 2);
         actionPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        actionPaint.setTextSize(10f * context.getResources().getDisplayMetrics().scaledDensity);
+        actionPaint.setTextSize(10f * MoaRibbonTokens.textScale(fontScale) * density);
         actionPaint.setTextAlign(Paint.Align.CENTER);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(hairlinePx);
@@ -252,10 +254,8 @@ final class MoaRibbonView extends View {
     }
 
     /**
-     * Click-to-expand. Collapsed is a bounded few-line window on the newest
-     * text; expanding is how the user reads the rest without the overlay ever
-     * becoming a chat. Height changes here and on stream growth up to the
-     * collapsed line cap — never past either bound.
+     * Click-to-expand. Collapsed is one fixed line on the newest text; expanding
+     * opens a fixed three-line viewport. Text growth never changes either size.
      */
     void setExpanded(boolean value) {
         if (expanded == value) {
@@ -273,19 +273,21 @@ final class MoaRibbonView extends View {
         return expanded;
     }
 
-    /** The window height this bubble wants right now. Bounded in both states. */
+    /** The window height this bubble wants right now. Fixed in both states. */
     int desiredHeightPx() {
-        StaticLayout layout = textLayout();
-        int content = (layout == null ? 0 : layout.getHeight()) + padYPx * 2;
-        if (expanded) {
-            return MoaRibbonUnitLayout.expandedHeight(content, ribbonHeightPx, expandedMaxHeightPx);
-        }
-        return MoaRibbonUnitLayout.collapsedHeight(
-                content, ribbonHeightPx, lineHeightPx(), padYPx);
+        return expanded ? expandedHeightPx() : ribbonHeightPx;
     }
 
     private int lineHeightPx() {
-        return Math.round(textPaint.descent() - textPaint.ascent());
+        // Some headless renderers report zero font metrics. The visual contract
+        // is still three text-size lines, so keep a deterministic lower bound.
+        return Math.max(dp(MoaRibbonTokens.TEXT_SP),
+                Math.round(textPaint.descent() - textPaint.ascent()));
+    }
+
+    private int expandedHeightPx() {
+        return Math.max(ribbonHeightPx,
+                MoaRibbonTokens.EXPANDED_MAX_LINES * lineHeightPx() + padYPx * 2);
     }
 
     private StaticLayout textLayout() {
@@ -435,11 +437,7 @@ final class MoaRibbonView extends View {
 
     /** The state's height ceiling, used before the first real layout pass. */
     private int desiredHeightBoundPx() {
-        if (expanded) {
-            return expandedMaxHeightPx;
-        }
-        return Math.max(ribbonHeightPx,
-                MoaRibbonTokens.COLLAPSED_MAX_LINES * lineHeightPx() + padYPx * 2);
+        return expanded ? expandedHeightPx() : ribbonHeightPx;
     }
 
     // --- Hit testing ------------------------------------------------------

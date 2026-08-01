@@ -287,7 +287,7 @@ final class MoaOverlayUnitController {
         presence.setHasText(!buffer.isEmpty());
     }
 
-    /** Bubbles wrap up to five lines now, so newlines survive; blank runs collapse. */
+    /** Bubbles wrap inside fixed viewports, so newlines survive; blank runs collapse. */
     private static String flatten(String text) {
         String value = text == null ? "" : text.trim();
         if (value.isEmpty()) {

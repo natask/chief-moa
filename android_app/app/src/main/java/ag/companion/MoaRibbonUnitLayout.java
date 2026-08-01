@@ -157,25 +157,6 @@ final class MoaRibbonUnitLayout {
     }
 
     /**
-     * How tall an expanded ribbon may become: enough to read the turn, bounded so
-     * the unit can never become a full-screen panel. Growth is only ever the
-     * result of a deliberate tap.
-     */
-    static int expandedHeight(int contentHeight, int collapsedHeight, int maxHeight) {
-        return clamp(contentHeight, collapsedHeight, Math.max(collapsedHeight, maxHeight));
-    }
-
-    /**
-     * A collapsed bubble wraps its turn up to {@link MoaRibbonTokens#COLLAPSED_MAX_LINES}
-     * lines and then stops growing; a longer turn shows its tail until expanded.
-     */
-    static int collapsedHeight(int contentHeight, int minHeight, int lineHeight, int padY) {
-        int maxHeight = Math.max(minHeight,
-                MoaRibbonTokens.COLLAPSED_MAX_LINES * lineHeight + padY * 2);
-        return clamp(contentHeight, minHeight, maxHeight);
-    }
-
-    /**
      * Vertical scroll offset inside an expanded bubble, in pixels from the top of
      * the content. Never past the tail, never before the head.
      */
