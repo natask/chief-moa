@@ -20,6 +20,12 @@ default. The recommended first slice excludes them unless the user explicitly
 requests transcription, because record mode currently promises storage without
 provider processing.
 
+The first accepted evidence source is the project-linked Entire corpus. It is a
+development-history source, not the canonical end-user conversation store. Its
+coverage is bounded to sessions captured in this repository and its linked
+worktrees. The production gateway export remains necessary before the product
+can claim account-wide or cross-device completeness.
+
 ## Considered Shapes
 
 ### A. On-demand bounded review (recommended)
@@ -59,6 +65,20 @@ bounded history query
   -> current-user alignment
   -> approved OpenSpec tasks / queued worker proposals
 ```
+
+Before that gateway workflow is wired, the repository provides a read-only
+local inventory command:
+
+```sh
+node scripts/intent-history/audit-entire-history.mjs \
+  --kind direct-user --format json
+```
+
+The command parses materialized Claude/Codex Entire schemas, recovers missing
+full transcripts from `refs/heads/entire/*`, labels known wrappers, removes
+exact content duplicates, hashes evidence, applies deterministic topic tags,
+and emits no raw excerpt unless `--include-excerpts` is explicit. It is triage,
+not semantic alignment, and it cannot accept a candidate or launch work.
 
 The evidence manifest is created before model analysis so completeness can be
 checked independently. The resolver may summarize evidence but cannot rewrite
@@ -117,7 +137,16 @@ Each candidate includes:
 - audit state: `new | already_satisfied | partially_satisfied | superseded |
   contradicted | unclear | not_actionable`;
 - implementation evidence refs and missing acceptance evidence;
+- applicability scope: `universal_product_invariant |
+  cross_surface_default | surface_specific | experiment | concern_or_question`;
+- explicit Surface exceptions and their rationale;
 - proposed architecture/ticket refs only when applicable.
+
+Applicability is independently aligned from candidate meaning. A user can agree
+that a statement was correctly recovered while correcting which Surfaces it
+governs. Cross-surface defaults are inherited unless a named platform exception
+is recorded. Experiments remain prototypes and cannot silently become stable
+product rules.
 
 ### Alignment decision
 
@@ -186,6 +215,9 @@ for each rollout slice.
 - Prove assistant messages never become candidates without user evidence.
 - Prove incomplete/untranscribed/corrupt items are counted in completeness.
 - Prove contradictory and superseding statements retain both source refs.
+- Prove feedback from one Surface remains surface-specific until applicability
+  is aligned, and prove an accepted cross-surface default carries explicit
+  platform exceptions.
 - Prove a promise or queued run is not marked implemented; a committed,
   verified, deployed result can be.
 - Prove review retries and ticket materialization are idempotent.

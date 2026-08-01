@@ -5,6 +5,11 @@ with the user.
 
 ## 0. Capture Audit And Alignment
 
+- [x] 0.0 Add a read-only project-linked Entire inventory that merges local
+  metadata with missing full transcripts recoverable from Entire refs, labels
+  wrappers, removes exact duplicates, emits content hashes/topic tags, and
+  hides excerpts by default. Record the bounded 2026-08-01 capture audit and
+  initial intent register without claiming account-wide completeness.
 - [ ] 0.1 With user-authorized gateway credentials, run a read-only production
   audit reporting counts, time coverage, source coverage, missing transcripts,
   incomplete turns, and pagination/truncation risk without copying raw content
@@ -14,7 +19,10 @@ with the user.
 - [ ] 0.3 Decide whether raw record-mode audio notes are excluded by default or
   offered through explicit derived transcription.
 - [ ] 0.4 Align on the on-demand review architecture and candidate decision
-  vocabulary.
+      vocabulary.
+- [ ] 0.5 Align candidate applicability independently from candidate meaning:
+      universal invariant, cross-surface default, surface-specific rule,
+      experiment, or concern/question, plus named exceptions.
 
 Acceptance: the user can see what was and was not captured, and unresolved
 choices are recorded before source changes begin.

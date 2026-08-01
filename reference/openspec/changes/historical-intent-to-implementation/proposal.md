@@ -2,8 +2,10 @@
 
 ## Status
 
-Proposed for product and architecture alignment. This change does not authorize
-implementation or the execution of work inferred from historical messages.
+Accepted for read-only evidence inventory, review, and current-user alignment.
+The user's 2026-08-01 request authorizes building that review system. It does
+not authorize implementation or execution of any specific work inferred from
+historical messages until the user aligns that candidate.
 
 ## Why
 
@@ -40,10 +42,17 @@ without current user review.
 
 - Add a queryable, cursor-based history export over typed chat, voice turns,
   brokered user intents, and optionally transcribed audio notes.
+- Add a local read-only adapter for project-linked Entire sessions and
+  checkpoint refs. This development-history source is separate from the user's
+  gateway conversation history and does not prove account-wide completeness.
 - Preserve source, time, session/thread, speaker, completion, and artifact
   provenance for every imported item.
 - Resolve the window into atomic intent candidates without smoothing away the
   user's language, contradictions, or uncertainty.
+- Classify each candidate's applicability as a universal invariant,
+  cross-surface default, surface-specific rule, experiment, or concern/question,
+  with explicit platform exceptions. Feedback from one Surface never becomes a
+  universal rule merely because it was repeated in implementation documents.
 - Compare approved candidates with OpenSpec, durable project state, commits,
   run evidence, verification artifacts, and deployment records.
 - Produce a durable review artifact and, only after alignment, bounded OpenSpec
@@ -83,11 +92,17 @@ Repository inspection on 2026-07-14 establishes that:
 
 - A scan can deterministically cover the last N items or an inclusive time
   range without silently truncating at 200 records.
+- A local project audit can merge materialized Entire metadata with recoverable
+  checkpoint-ref transcripts, exclude known agent/system wrappers, remove exact
+  duplicates, and report coverage without persisting raw excerpts.
 - Every intent candidate links back to immutable source evidence and identifies
   whether it came from user text, a voice transcript, or an explicitly generated
   audio-note transcript.
 - The review distinguishes `new`, `already_satisfied`, `partially_satisfied`,
   `superseded`, `contradicted`, `unclear`, and `not_actionable`.
+- The review distinguishes product-wide invariants, cross-surface defaults,
+  surface-specific behavior, experiments, and concerns/questions before it
+  creates implementation tickets.
 - Claims of implementation require repo/run/verification evidence, not semantic
   similarity alone.
 - Only user-approved candidates produce implementation tickets, and normal
