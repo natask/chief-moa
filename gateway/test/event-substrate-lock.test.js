@@ -144,6 +144,22 @@ test("candidate cleanup and post-fsync rename faults do not strand the canonical
   }
 });
 
+test("a candidate retired before linking is retried without leaking ENOENT", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-candidate-disappear-"));
+  try {
+    const result = await runChild(
+      dataDir,
+      input("candidate-disappear", 0),
+      "candidate-disappear-before-link-once"
+    );
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.equal(result.json?.result?.stream_version, 1);
+    assert.deepEqual(lockArtifacts(dataDir), []);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("owner crashes before append and after fsync recover without losing idempotency", async () => {
   const beforeDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-owner-crash-"));
   const afterDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-event-release-crash-"));

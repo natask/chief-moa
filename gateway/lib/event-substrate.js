@@ -824,7 +824,11 @@ async function acquireJsonAppendLock(lockPath, options) {
       fs.linkSync(candidatePath, lockPath);
       linked = true;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
+      // Detached-artifact reconciliation in another process can retire an
+      // aged candidate between our durable write and hard-link attempt. Treat
+      // that disappearance like ordinary contention and create a fresh
+      // candidate instead of leaking a filesystem ENOENT to the caller.
+      if (error?.code !== "EEXIST" && error?.code !== "ENOENT") throw error;
     }
 
     if (linked) {

@@ -24,7 +24,6 @@ function withActivityTimeout(start, timeoutMs, label) {
       if (settled) return;
       clear();
       timer = setTimeout(fail, duration);
-      timer.unref?.();
     };
     touch();
     Promise.resolve()

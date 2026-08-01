@@ -61,6 +61,20 @@ if (mode === "crash-after-claim") {
   };
 }
 
+if (mode === "candidate-disappear-before-link-once") {
+  const originalLinkSync = fs.linkSync;
+  let injected = false;
+  fs.linkSync = function patchedLinkSync(source, destination) {
+    if (!injected
+      && String(source || "").includes(".append.lock.candidate-")
+      && String(destination || "").endsWith("product-events.jsonl.append.lock")) {
+      injected = true;
+      fs.unlinkSync(source);
+    }
+    return originalLinkSync.apply(this, arguments);
+  };
+}
+
 const originalRandomUUID = crypto.randomUUID;
 if (mode === "exact-live-instance-lock") {
   let first = true;
