@@ -131,6 +131,36 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void activeThreadAndBranchScopedHistoryUseSharedThreadAuthority() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject active = client.activeThread("shared session/one", "android");
+        JSONObject history = client.sessionMessages("shared session/one", "fork-child", 20);
+
+        assertEquals("fork-child", active.getJSONObject("active").getString("branch_id"));
+        assertEquals("fork-child", history.getString("branch_id"));
+        assertEquals("/v1/threads/active?session_id=shared+session%2Fone&surface=android", requests.get(0).target);
+        assertEquals("/v1/sessions/shared%20session%2Fone/messages?limit=20&branch_id=fork-child", requests.get(1).target);
+        assertEquals("Bearer secret-token", requests.get(0).authorization);
+    }
+
+    @Test
+    public void switchThreadPostsForkParentAndParsesChild() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject response = client.switchThread(new JSONObject()
+                .put("session_id", "shared-session")
+                .put("action", "fork")
+                .put("parent_branch_id", "default")
+                .put("surface", "android"));
+
+        assertEquals("fork-child", MoaGatewayClient.branchIdFromSwitch(response));
+        assertEquals("POST", requests.get(0).method);
+        assertEquals("/v1/threads/switch", requests.get(0).path);
+        assertTrue(requests.get(0).body.contains("\"parent_branch_id\":\"default\""));
+    }
+
+    @Test
     public void agentRunDetailSanitizesRunId() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl, "");
 
@@ -253,9 +283,16 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"version_code\":42,\"version_name\":\"0.1.42\"}");
         } else if ("/v1/context/latest".equals(request.path)) {
             return new TestResponse(200, "{\"store\":{\"type\":\"json-files\"},\"recent_runs\":[{\"id\":\"run_789\"}],\"recent_turns\":[],\"sessions\":[]}");
+        } else if ("/v1/threads/active".equals(request.path)) {
+            return new TestResponse(200, "{\"session_id\":\"shared session/one\",\"active\":{\"branch_id\":\"fork-child\",\"kind\":\"fork\",\"label\":\"Fork\"}}");
+        } else if ("/v1/threads/switch".equals(request.path)) {
+            return new TestResponse(200, "{\"session_id\":\"shared-session\",\"thread\":{\"branch_id\":\"fork-child\",\"kind\":\"fork\"}}");
         } else if (request.path.startsWith("/v1/sessions/") && request.path.endsWith("/messages")) {
             if (request.path.contains("legacy%20session")) {
                 return new TestResponse(404, "{\"error\":\"not found\"}");
+            }
+            if (request.target.contains("branch_id=fork-child")) {
+                return new TestResponse(200, "{\"session_id\":\"shared session/one\",\"branch_id\":\"fork-child\",\"messages\":[]}");
             }
             return new TestResponse(200, "{\"session_id\":\"shared session/one\",\"messages\":[{\"message_id\":\"msg_user_1\",\"speaker\":\"user\",\"text\":\"hello\"}]}");
         } else if ("/v1/history/messages".equals(request.path)) {

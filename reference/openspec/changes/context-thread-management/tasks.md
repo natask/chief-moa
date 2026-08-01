@@ -53,5 +53,6 @@
 
 - [x] 6.1 `cd gateway && npm run check` green.
 - [ ] 6.2 Deployment is blocked until the user explicitly approves promotion.
-- [ ] 6.3 Client UI (thread switcher, incognito receipt) is a later Android /
-      browser change; this slice is gateway + docs only.
+- [ ] 6.3 Android History now exposes the active branch and one explicit fork
+      action. Full thread switching, labels, incognito receipt UI, and browser
+      parity remain later client work.

@@ -55,6 +55,17 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject activeThread(String sessionId, String surface) throws Exception {
+        String id = safe(sessionId);
+        if (id.isEmpty()) {
+            throw new IllegalArgumentException("session id is required");
+        }
+        String responseText = getText(apiEndpoint(
+                "/v1/threads/active?session_id=" + urlEncode(id)
+                        + "&surface=" + urlEncode(safe(surface))), 15000);
+        return new JSONObject(responseText);
+    }
+
     // A turn whose response context block says persisted:false was answered but
     // never stored (incognito). Clients surface a "(not saved)" cue for it.
     static boolean turnNotPersisted(JSONObject response) {
@@ -141,15 +152,22 @@ final class MoaGatewayClient {
      * the same retained evidence through the bounded history search route.
      */
     JSONObject sessionMessages(String sessionId, int limit) throws Exception {
+        return sessionMessages(sessionId, "", limit);
+    }
+
+    JSONObject sessionMessages(String sessionId, String branchId, int limit) throws Exception {
         String id = safe(sessionId);
         if (id.isEmpty()) {
             throw new IllegalArgumentException("session id is required");
         }
         int safeLimit = Math.max(1, Math.min(limit, 100));
         String encodedId = pathEncode(id);
+        String branchQuery = safe(branchId).isEmpty()
+                ? ""
+                : "&branch_id=" + urlEncode(safe(branchId));
         try {
             String responseText = getText(apiEndpoint(
-                    "/v1/sessions/" + encodedId + "/messages?limit=" + safeLimit), 15000);
+                    "/v1/sessions/" + encodedId + "/messages?limit=" + safeLimit + branchQuery), 15000);
             return new JSONObject(responseText);
         } catch (GatewayHttpException error) {
             if (!error.routeMayBeMissing()) {
@@ -158,7 +176,8 @@ final class MoaGatewayClient {
         }
 
         String responseText = getText(apiEndpoint(
-                "/v1/history/messages?session_id=" + urlEncode(id) + "&limit=" + safeLimit), 15000);
+                "/v1/history/messages?session_id=" + urlEncode(id) + "&limit=" + safeLimit
+                        + branchQuery), 15000);
         return new JSONObject(responseText);
     }
 

@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
     private Button developerSectionButton;
     private TextView sessionHistoryStatus;
     private LinearLayout sessionHistoryColumn;
+    private MoaThreadControls threadControls;
     private TextView runsStatus;
     private TextView receiptsStatus;
     private TextView settingsStatus;
@@ -355,6 +356,8 @@ public final class MainActivity extends Activity {
         TextView description = label("What you said and what AG replied.", MoaColors.MUTED, 14, false);
         description.setPadding(0, 0, 0, dp(6));
         card.addView(description);
+        threadControls = new MoaThreadControls(this, mainHandler, this::refreshControlCenter);
+        card.addView(threadControls.view());
         sessionHistoryStatus = label("Loading...", MoaColors.MUTED, 12, true);
         sessionHistoryStatus.setPadding(0, dp(8), 0, dp(8));
         card.addView(sessionHistoryStatus);
@@ -1078,6 +1081,7 @@ public final class MainActivity extends Activity {
             sessionHistoryStatus.setText("Loading shared history...");
             sessionHistoryStatus.setTextColor(MoaColors.GOLD);
         }
+        if (threadControls != null) threadControls.setLoading();
         if (companionStatus != null) {
             companionStatus.setText("Checking...");
             companionStatus.setTextColor(MoaColors.GOLD);
@@ -1090,6 +1094,7 @@ public final class MainActivity extends Activity {
             String runsLabel = "Unavailable";
             MoaSessionHistory fetchedHistory = null;
             String historyError = "";
+            MoaThreadControls.Snapshot threadSnapshot;
             String fetchedProfileJson = "";
             String fetchedCompanionJson = "";
             int sessionsColor = MoaColors.GOLD;
@@ -1106,8 +1111,11 @@ public final class MainActivity extends Activity {
                 // Older gateways may not expose the shared-session route. The
                 // device's stable conversation id remains a valid fallback.
             }
+            threadSnapshot = MoaThreadControls.resolve(client, sharedSessionId);
             try {
-                JSONObject historyPayload = client.sessionMessages(sharedSessionId, MoaSessionHistory.MAX_MESSAGES);
+                if (!threadSnapshot.available()) throw new IllegalStateException("active thread unavailable");
+                JSONObject historyPayload = client.sessionMessages(
+                        sharedSessionId, threadSnapshot.branchId, MoaSessionHistory.MAX_MESSAGES);
                 fetchedHistory = MoaSessionHistory.from(historyPayload, sharedSessionId);
                 if (!fetchedHistory.sessionId.isEmpty()) {
                     sharedSessionId = fetchedHistory.sessionId;
@@ -1156,6 +1164,7 @@ public final class MainActivity extends Activity {
             final String nextRuns = runsLabel;
             final MoaSessionHistory nextHistory = fetchedHistory;
             final String nextHistoryError = historyError;
+            final MoaThreadControls.Snapshot nextThread = threadSnapshot;
             final String nextProfileJson = fetchedProfileJson;
             final String nextCompanionJson = fetchedCompanionJson;
             final int nextSessionsColor = sessionsColor;
@@ -1182,6 +1191,7 @@ public final class MainActivity extends Activity {
                     runsStatus.setText(nextRuns);
                     runsStatus.setTextColor(nextRunsColor);
                 }
+                if (threadControls != null) threadControls.apply(nextThread);
                 renderSessionHistory(nextHistory, nextHistoryError);
                 if (settingsStatus != null) {
                     settingsStatus.setText(settingsSummaryText());
@@ -1215,6 +1225,7 @@ public final class MainActivity extends Activity {
             companionStatus.setText(MoaPrefs.companionStatus(this));
             companionStatus.setTextColor(MoaColors.GOLD);
         }
+        if (threadControls != null) threadControls.setGatewayRequired();
         renderSessionHistory(null, "Connect the gateway to load shared history.");
     }
 

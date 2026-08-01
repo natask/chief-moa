@@ -24,6 +24,11 @@ gateway owns durable sessions, model routing, account data, agent runs, and
 stored artifacts. Each Surface owns its UI, local context, permissions, local
 actions, and receipts.
 
+Conversation continuity should come from gateway-owned durable threads,
+bounded recent turns, rolling summaries, standing facts, and query-relevant
+recall. Provider KV caches may improve speed or cost, but they are not product
+memory and do not need a user-facing cache-management system.
+
 The agent should answer questions, create things, automate work, and finish
 bounded tasks. It should retain the user's context across pages and devices.
 The user should always be able to see, steer, stop, or resume active work.
@@ -229,7 +234,7 @@ Do not delete uncertain user knowledge.
 | Generated page programs | `partial` | A tested scoped userscript runtime can execute and persist exact source and hashes. Agent delivery and production runtime wiring remain open. |
 | Delegated browser work | `partial` | Command routing and bounded background actions exist. The full workspace, completion evidence, and scope-change behavior remain open. |
 | Purchase-grade browser approval | `missing` | Buy and pay language currently maps to generic click and type actions. A final checkout or payment checkpoint is required before purchase automation is safe. |
-| Shared conversation history | `done` | The gateway projection and Android/browser history views are implemented and verified for their stated slice. Session switching and editing remain follow-on work. |
+| Shared conversation history | `done` | The gateway projection and Android/browser history views are implemented and verified for their stated slice. Android now resolves and displays the active thread and can fork it inside the shared session; selecting earlier threads and editing remain follow-on work. |
 | Hosted sign-in and user isolation | `missing` | Production uses one shared gateway token. Owner-only Better Auth and RLS scaffolding exist, but general accounts, device sign-in, user-scoped voice tickets, and end-to-end isolation are not deployed. |
 | Per-user GCS storage | `missing` | Production uses one shared bucket namespace. Object keys and metadata do not yet enforce a user or tenant boundary. |
 | Media retention controls | `partial` | Incognito cleanup and some video deletion exist. Audio, screenshot, and telemetry controls, export, deletion, and user-facing retention policy remain open. |
@@ -270,6 +275,13 @@ Do not delete uncertain user knowledge.
   isolated candidates.
 
 ## Change log
+
+### 2026-07-31
+
+- Kept durable gateway recall as product memory rather than treating provider
+  KV-cache management as a user-facing requirement.
+- Added the first explicit Android thread control: History can fork the active
+  conversation inside the shared session.
 
 ### 2026-07-30
 

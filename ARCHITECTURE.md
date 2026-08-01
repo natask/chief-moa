@@ -740,6 +740,11 @@ Setup, release controls, gateway configuration, raw run/session/receipt state,
 metrics, sizing, and gesture help live behind an explicit Setup & developer
 section. Opening History does not start, stop, expand, or collapse the overlay.
 Finalized history turns remain selectable and expose an exact Copy action.
+History resolves the gateway-owned active thread before loading messages and
+filters the projection to that branch. `Branch from here` forks that exact
+branch inside the shared session, adopts only the gateway-returned child
+identity, and refreshes against the child. A failed active-thread read or fork
+does not mint a local substitute. Full thread selection remains follow-on work.
 
 A Live turn that is interrupted, canceled, or dropped mid-stream is still stored
 as a canonical conversation turn (marked incomplete) with whatever transcript

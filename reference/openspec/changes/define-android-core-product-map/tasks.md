@@ -391,3 +391,18 @@ starts a normal assistant voice turn.
 Observable acceptance check: a deterministic reasoning operation that remains
 active across multiple timeout windows completes, while an operation that emits
 no activity for one full deadline fails with an explicit inactivity timeout.
+
+## 23. Visible Thread Branching
+
+- [x] 23.1 Resolve the gateway-owned active thread before loading Android
+      History and filter the retained message projection to that branch.
+- [x] 23.2 Add one explicit `Branch from here` action that forks the active
+      branch inside the shared session and makes the returned child active.
+- [x] 23.3 Keep branching fail-closed: a missing active-thread capability or
+      failed fork leaves the current branch unchanged and reports the failure.
+- [ ] 23.4 Complete physical-phone QA for branch creation, empty child history,
+      first child turn, and returning to an earlier thread.
+
+Observable acceptance check: Android History names the active thread. Pressing
+`Branch from here` creates a `fork-` child through `/v1/threads/switch`, then
+refreshes History against that exact branch without creating another session.

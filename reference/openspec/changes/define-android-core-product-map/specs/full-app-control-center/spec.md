@@ -79,6 +79,22 @@ The full Android app SHALL expose the current mobile session and recent voice tu
 - **WHEN** the user opens the sessions area
 - **THEN** the app shows the current session ID, branch, recent turns, and whether each turn became chat, control, agent, or multi-agent work
 
+### Requirement: Explicit Thread Branching
+The full Android app SHALL name the gateway-owned active thread and SHALL let
+the user fork it inside the shared session. History SHALL read the selected
+branch rather than flattening unrelated branches into one view.
+
+#### Scenario: User branches the current conversation
+- **WHEN** the user presses `Branch from here` in Android History
+- **THEN** Android asks the gateway to fork the exact active branch
+- **AND** the returned child becomes the active branch in the same session
+- **AND** History refreshes against that child branch
+
+#### Scenario: Thread authority is unavailable
+- **WHEN** the active-thread read or fork request fails
+- **THEN** Android keeps the current branch unchanged
+- **AND** it reports that branching is unavailable instead of inventing a local branch
+
 ### Requirement: Run Inspection
 The full Android app SHALL expose active and historical home-machine agent runs.
 
