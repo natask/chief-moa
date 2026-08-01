@@ -1,3 +1,4 @@
+- Added an Android History control that forks the active thread inside the shared session and keeps the overlay on the returned child — agent: Codex/GPT-5 — 339e577d
 - Added a build-only temporary gateway bearer fallback for OTA APKs while preserving saved per-user token overrides — agent: codex/gpt-5 team — 57894ca1
 - Kept user ribbons near-black and readable in both themes, and recorded first partial, final transcript, assistant text, audio receipt, and playout latency from the real streaming callbacks — agent: codex/gpt-5 — 368a89c7 / 81e562cd
 - Made canonical History the Android full-app home, moved operational controls behind Setup & developer, preserved exact turn copy, and stopped normal app open from mutating the overlay — agent: Codex/GPT-5 — 7e0d3fb6
