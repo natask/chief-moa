@@ -366,6 +366,9 @@ async function main() {
     const browserInfo = await fetch(`http://127.0.0.1:${devToolsPort}/json/version`).then((resp) => resp.json());
     browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
     const { targetId } = await browserCdp.send("Target.createTarget", { url: "about:blank" });
+    // User-visible observation captures only the active tab. Make the fixture
+    // model that contract instead of relying on headless target ordering.
+    await browserCdp.send("Target.activateTarget", { targetId });
     const pageTarget = await waitForTarget(devToolsPort, (target) => target.type === "page" && target.id === targetId);
 
     pageCdp = new Cdp(pageTarget.webSocketDebuggerUrl);
@@ -403,7 +406,6 @@ async function main() {
       })()
     `);
     if (!tabId) throw new Error("real content script did not answer ping");
-
     await evaluate(workerCdp, `
       chrome.storage.local.set({
         ageeGatewayUrl: ${JSON.stringify(baseUrl)},
@@ -459,7 +461,7 @@ async function main() {
     }
     for (const call of evidenceCalls) {
       if (call.body?.screenshot?.encoding !== "base64_jpeg" || !call.body.screenshot.data) {
-        throw new Error("browser evidence did not include bounded JPEG visual context");
+        throw new Error(`browser evidence did not include bounded JPEG visual context: ${JSON.stringify(call.body?.screenshot)}`);
       }
     }
 
