@@ -4,6 +4,11 @@ This directory is the Windows-owned Aggie surface lane. The first slice is a
 portable Rust core so its trust rules can be tested without pretending that a
 macOS host produced a WinUI application.
 
+This lane is MIT-licensed and intentionally open to community-owned shells. A
+contributor may replace the visual “blob” or use another Windows UI framework,
+provided it keeps the behavior and authority boundaries in
+[the companion surface contract](docs/companion-surface-spec.md).
+
 The core:
 
 - consumes bounded Aggie `action.proposed` envelopes;

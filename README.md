@@ -7,6 +7,10 @@ routes Ag turns, model calls, memory, and agent runs.
 Ag treats model output as a proposal. The owning Surface checks the
 proposal before any platform-local action runs.
 
+The repository is open source under the [MIT License](LICENSE). Platform
+maintainers can implement their own native companion shell while preserving the
+shared trust and interaction contract.
+
 ## Start here
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): system boundary and runtime flows.
@@ -33,6 +37,8 @@ proposal before any platform-local action runs.
 - `apple_surfaces`: shared compatibility authority library plus the native
   menu-bar voice/typed companion, privacy-scoped observation/suggestion surface,
   and ad-hoc-signed QA bundle tooling.
+- `windows_app`: portable Windows authority core, community WinUI scaffold, and
+  the native companion implementation contract.
 
 ## Common commands
 
