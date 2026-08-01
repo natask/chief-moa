@@ -3032,7 +3032,11 @@ public final class OverlayService extends Service {
                 String transcript = streamingTranscriptAccumulator.replaceSnapshot(text);
                 currentStreamingTranscript = safe(transcript);
                 liveConversation.updateUserPartial(turnId, currentStreamingTranscript);
-                updateVoiceUserTranscript(currentStreamingTranscript, currentStreamingTurnCommitRequested);
+                // A commit request stops capture; it does not promote a provider
+                // hypothesis into an authoritative final transcript. Deferred
+                // Copy must wait for onTranscriptFinal or it can copy a truncated
+                // message when one last partial arrives after the microphone stops.
+                updateVoiceUserTranscript(currentStreamingTranscript, false);
                 setVoiceRuntimeState(currentStreamingTurnCommitRequested ? VoiceRuntimeState.THINKING : VoiceRuntimeState.LISTENING);
                 if (currentStreamingTurnCommitRequested && shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);

@@ -63,6 +63,7 @@ final class MoaRibbonTokens {
     static final int FADE_W_DP = 16;
     static final int RAIL_GLYPH_DP = 20;
     static final int RAIL_HIT_W_DP = 32;
+    static final int COPY_RAIL_W_DP = 48;
     static final int HISTORY_RAIL_W_DP = 64;
     static final int MENU_W_DP = 176;
     static final int MENU_ROW_H_DP = 36;

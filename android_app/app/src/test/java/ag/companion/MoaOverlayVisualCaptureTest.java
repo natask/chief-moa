@@ -55,7 +55,7 @@ public final class MoaOverlayVisualCaptureTest {
     }
 
     @Test
-    public void expandedGeometryKeepsControlsOutOfTheBoundedBubble() {
+    public void expandedGeometryKeepsOneCopyActionInsideTheBoundedBubble() {
         Application context = RuntimeEnvironment.getApplication();
         MoaRibbonView ribbon = new MoaRibbonView(context, false);
         int width = dp(context, MoaRibbonTokens.RIBBON_MAX_W_DP);
@@ -67,12 +67,12 @@ public final class MoaOverlayVisualCaptureTest {
         assertTrue(ribbon.desiredHeightPx() > ribbon.ribbonHeightPx());
         assertTrue(ribbon.desiredHeightPx() <= dp(context, MoaRibbonTokens.EXPANDED_MAX_H_DP));
         assertTrue(!ribbon.hitsHistory(width - dp(context, 60), ribbon.ribbonHeightPx() / 2f));
-        assertTrue(!ribbon.hitsRail(width - dp(context, 8), ribbon.ribbonHeightPx() / 2f));
+        assertTrue(ribbon.hitsRail(width - dp(context, 8), ribbon.ribbonHeightPx() / 2f));
     }
 
     @Test
     @Config(sdk = 26)
-    public void api26KeepsCopyAndHistoryInTheFullApp() {
+    public void api26ExposesCopyButKeepsHistoryInTheFullApp() {
         Application context = RuntimeEnvironment.getApplication();
         MoaRibbonView ribbon = new MoaRibbonView(context, false);
         AtomicInteger taps = new AtomicInteger();
@@ -87,10 +87,11 @@ public final class MoaOverlayVisualCaptureTest {
         int copyAction = actionId(info, "Copy");
         int historyAction = actionId(info, "History");
 
-        assertEquals(0, copyAction);
+        assertTrue(copyAction != 0);
         assertEquals(0, historyAction);
+        assertTrue(ribbon.performAccessibilityAction(copyAction, null));
         assertTrue(ribbon.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null));
-        assertEquals(0, copies.get());
+        assertEquals(1, copies.get());
         assertEquals(0, histories.get());
         assertEquals(1, taps.get());
         info.recycle();

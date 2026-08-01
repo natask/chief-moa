@@ -26,8 +26,9 @@ import android.view.accessibility.AccessibilityNodeInfo;
  * a tap expands it to a taller, still-bounded, vertically scrollable read.
  * Nothing here may become a chat panel.
  *
- * Copy and History stay in the retained full-app History surface. The compact
- * bubble spends no width, touch targets, or accessibility actions on them.
+ * The user bubble keeps one visible Copy action. Copy finishes a live capture
+ * through the host before copying the authoritative final transcript. History
+ * remains in the full app so the compact surface does not become a toolbar.
  * The you-bubble's plate is deliberately near-black in BOTH system themes
  * ({@link MoaRibbonTokens#plateColor}), so its text always uses the paired
  * light ink ({@link MoaRibbonTokens#inkColor}) — never the theme's plain
@@ -49,6 +50,7 @@ final class MoaRibbonView extends View {
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint actionPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF scratch = new RectF();
 
     private MoaRibbonTokens.Palette palette = MoaRibbonTokens.DARK;
@@ -75,6 +77,7 @@ final class MoaRibbonView extends View {
     private ValueAnimator caretAnimator;
     private ValueAnimator dotAnimator;
     private Runnable accessibilityTap;
+    private Runnable accessibilityCopy;
 
     private final int ribbonHeightPx;
     private final int padXPx;
@@ -87,6 +90,7 @@ final class MoaRibbonView extends View {
     private final int caretHeightPx;
     private final int expandedMaxHeightPx;
     private final int padYPx;
+    private final int copyRailWidthPx;
 
     MoaRibbonView(Context context, boolean reply) {
         super(context);
@@ -105,12 +109,16 @@ final class MoaRibbonView extends View {
         caretHeightPx = dp(MoaRibbonTokens.CARET_H_DP);
         expandedMaxHeightPx = dp(MoaRibbonTokens.EXPANDED_MAX_H_DP);
         padYPx = dp(MoaRibbonTokens.EXPANDED_PAD_Y_DP);
+        copyRailWidthPx = dp(MoaRibbonTokens.COPY_RAIL_W_DP);
 
         textPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         textPaint.setTextSize(MoaRibbonTokens.TEXT_SP
                 * MoaRibbonTokens.textScale(fontScale)
                 * context.getResources().getDisplayMetrics().scaledDensity);
         textPaint.setLetterSpacing(0.005f);
+        actionPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        actionPaint.setTextSize(10f * context.getResources().getDisplayMetrics().scaledDensity);
+        actionPaint.setTextAlign(Paint.Align.CENTER);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(hairlinePx);
 
@@ -125,6 +133,7 @@ final class MoaRibbonView extends View {
 
     void setAccessibilityActions(Runnable tap, Runnable copy, Runnable history) {
         accessibilityTap = tap;
+        accessibilityCopy = reply ? null : copy;
         sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
     }
 
@@ -449,9 +458,12 @@ final class MoaRibbonView extends View {
         return x >= gutterPx - hitInflatePx && x <= getWidth() && y >= 0 && y <= getHeight();
     }
 
-    /** Kept for the touch listener contract; compact Copy is intentionally absent. */
     boolean hitsRail(float x, float y) {
-        return false;
+        return copyVisible()
+                && x >= copyRailLeft()
+                && x <= getWidth()
+                && y >= 0
+                && y <= getHeight();
     }
 
     /** Kept for the touch listener contract; History is a full-app surface. */
@@ -465,7 +477,8 @@ final class MoaRibbonView extends View {
 
     private float viewportRight() {
         int width = getWidth() > 0 ? getWidth() : contentWidthPx;
-        return Math.max(viewportLeft(), width - padXPx);
+        int actionInset = reply ? 0 : copyRailWidthPx;
+        return Math.max(viewportLeft(), width - padXPx - actionInset);
     }
 
     /**
@@ -522,6 +535,29 @@ final class MoaRibbonView extends View {
             canvas.drawRoundRect(scratch, radiusPx, radiusPx, fillPaint);
         }
         drawText(canvas);
+        drawCopyAction(canvas);
+    }
+
+    private void drawCopyAction(Canvas canvas) {
+        if (!copyVisible()) {
+            return;
+        }
+        float left = copyRailLeft();
+        strokePaint.setColor(withAlpha(palette.hairline, Math.max(plateFraction, 0.55f)));
+        canvas.drawLine(left, padYPx, left, getHeight() - padYPx, strokePaint);
+        actionPaint.setColor(palette.accent);
+        Paint.FontMetrics metrics = actionPaint.getFontMetrics();
+        float baseline = getHeight() / 2f - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText("COPY", left + copyRailWidthPx / 2f, baseline, actionPaint);
+    }
+
+    private boolean copyVisible() {
+        return !reply && !fullText.isEmpty();
+    }
+
+    private float copyRailLeft() {
+        int width = getWidth() > 0 ? getWidth() : contentWidthPx;
+        return Math.max(0, width - copyRailWidthPx);
     }
 
     // One paint path for both states: the wrapped turn inside a bounded
@@ -594,6 +630,10 @@ final class MoaRibbonView extends View {
         info.setClickable(true);
         info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
                 AccessibilityNodeInfo.ACTION_CLICK, expanded ? "Collapse" : "Expand"));
+        if (copyVisible()) {
+            info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                    AccessibilityNodeInfo.ACTION_COPY, "Copy"));
+        }
     }
 
     @Override
@@ -602,13 +642,20 @@ final class MoaRibbonView extends View {
             accessibilityTap.run();
             return true;
         }
+        if (action == AccessibilityNodeInfo.ACTION_COPY
+                && copyVisible()
+                && accessibilityCopy != null) {
+            accessibilityCopy.run();
+            return true;
+        }
         return super.performAccessibilityAction(action, arguments);
     }
 
     private String accessibilityLabel() {
         String speaker = reply ? "Ag reply" : "You said";
         String body = line.isEmpty() ? "nothing yet" : line;
-        return speaker + ": " + body + ". Tap to expand.";
+        return speaker + ": " + body + ". Tap to expand."
+                + (copyVisible() ? " Copy available." : "");
     }
 
     private int withAlpha(int color, float fraction) {
@@ -629,5 +676,6 @@ final class MoaRibbonView extends View {
         caretAnimator = null;
         dotAnimator = null;
         accessibilityTap = null;
+        accessibilityCopy = null;
     }
 }

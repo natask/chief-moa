@@ -208,6 +208,13 @@ signal completed without a client acknowledgement.
       product contract. Lay out only the bounded visible tail while collapsed,
       retain the complete turn for expansion and full-app History, and expose no
       compact touch or Android 8 accessibility action for Copy or History.
+- [x] 13.10 Restore one visible Copy action to the live user bubble after direct
+      product feedback showed that History-only copy is too difficult to reach.
+      Copy during capture commits, waits for the authoritative final transcript,
+      and copies the complete message; History remains in the full app.
+- [ ] 13.11 Wire the existing durable voice-draft capability into Android pause
+      and resume controls. Pause must stop microphone capture without sending,
+      discarding, or terminating the draft; resume must append to the same draft.
 
 Release evidence: commit `b99379b0` built candidate
 `ai.moa.assistant-1784945955` (`0.1.1784945955`, 4,265,050 bytes, SHA-256

@@ -18,8 +18,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * View-level tests for the dark-user-plate + compact-control contract.
- * Collapsed streaming work stays bounded to the visible tail, while Copy and
- * History remain in the full app rather than consuming overlay space.
+ * Collapsed streaming work stays bounded to the visible tail, with one user
+ * Copy action and no compact History action.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 26)
@@ -57,16 +57,19 @@ public final class MoaRibbonViewTest {
     }
 
     @Test
-    public void compactBubbleExposesNoCopyOrHistoryRail() {
+    public void userBubbleExposesOneCopyRailAndNoHistoryRail() {
         MoaRibbonView you = laidOut(false, LONG_TEXT);
         float mid = you.ribbonHeightPx() / 2f;
 
-        assertFalse(you.hitsRail(WIDTH - 1, mid));
+        assertTrue(you.hitsRail(WIDTH - 1, mid));
         assertFalse(you.hitsHistory(WIDTH - 1, mid));
         you.setPresenceState(MoaRibbonPresence.State.ENGAGED);
         you.setExpanded(true);
-        assertFalse(you.hitsRail(WIDTH - 1, mid));
+        assertTrue(you.hitsRail(WIDTH - 1, mid));
         assertFalse(you.hitsHistory(WIDTH - 1, mid));
+
+        MoaRibbonView reply = laidOut(true, LONG_TEXT);
+        assertFalse(reply.hitsRail(WIDTH - 1, mid));
     }
 
     @Test
@@ -122,7 +125,7 @@ public final class MoaRibbonViewTest {
     // --- Accessibility ------------------------------------------------------
 
     @Test
-    public void compactBubbleAdvertisesNoCopyOrHistoryActions() {
+    public void userBubbleAdvertisesAndRunsCopyButNotHistory() {
         MoaRibbonView you = laidOut(false, LONG_TEXT);
         AtomicInteger copies = new AtomicInteger();
         AtomicInteger histories = new AtomicInteger();
@@ -133,12 +136,13 @@ public final class MoaRibbonViewTest {
         int copyAction = actionId(info, "Copy");
         int historyAction = actionId(info, "History");
 
-        assertEquals(0, copyAction);
+        assertTrue(copyAction != 0);
         assertEquals(0, historyAction);
-        assertEquals(0, copies.get());
+        assertTrue(you.performAccessibilityAction(copyAction, null));
+        assertEquals(1, copies.get());
         assertEquals(0, histories.get());
         String label = String.valueOf(info.getContentDescription());
-        assertFalse(label.contains("Copy"));
+        assertTrue(label.contains("Copy"));
         assertFalse(label.contains("History"));
         info.recycle();
     }

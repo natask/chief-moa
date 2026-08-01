@@ -100,8 +100,14 @@ The Android app SHALL show current speech text while the user is speaking.
 
 The collapsed overlay SHALL lay out only its bounded visible transcript tail,
 while retaining the complete current turn for expansion and full-app History.
-Copy and History actions SHALL remain in retained History instead of consuming
-space or accessibility actions in the compact overlay.
+The live user bubble SHALL keep one visible Copy action. History remains in the
+full app instead of consuming another compact action.
+
+#### Scenario: User copies while capture is active
+- **WHEN** the user presses Copy while the current transcript is still changing
+- **THEN** Android finishes the capture without discarding it
+- **AND** waits for the authoritative final transcript
+- **AND** copies that complete transcript rather than the visible partial text
 
 #### Scenario: Partial recognition received
 - **WHEN** Android speech recognition emits partial text
