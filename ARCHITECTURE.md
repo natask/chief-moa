@@ -1826,9 +1826,17 @@ The gateway publishes update artifacts, but it does not install them on the
 phone. The Android app remains the local authority and the platform package
 installer is the final approval step.
 
+Stable Android delivery has one canonical release head at
+`/v1/android/updates`. The temporary `/apps/ag.companion` route shipped during
+the package rename is a compatibility alias to the same store, not another
+channel. Package id, version, digest, and signer checks enforce compatibility.
+Future experimental heads are explicit user-selected channels (`beta` or
+`development`) that use the same protocol and always permit returning to
+`stable`; changing channels never changes the updater endpoint contract.
+
 Until per-user device registration replaces the shared gateway token, the
 current-manifest and current-APK GETs are the only unauthenticated OTA routes,
-including their configured app-channel equivalents. Version-pinned release
+including compatibility aliases. Version-pinned release
 downloads and rollback mutations remain authenticated. This narrow bootstrap
 lets an already-installed tokenless app acquire the signed build that contains
 the later authentication flow without making the rest of the gateway public.

@@ -264,16 +264,12 @@ const ANDROID_OTA_STORE = androidOta.resolveStoreDir({
   legacy: ANDROID_OTA_LEGACY_DIR,
 });
 const ANDROID_OTA_DIR = ANDROID_OTA_STORE.dir;
-// ai.moa.assistant (the original app) keeps publishing straight to
-// ANDROID_OTA_DIR, unchanged. ag.companion (the renamed app, a clean parallel
-// install rather than an OTA update of the old one -- see
-// reference/openspec/changes/rename-product-to-ag-and-build-guided-onboarding)
-// gets its own release chain under a "channels/<app_id>" subtree so the two
-// application ids never share one `current` pointer or `latest.json`.
-// android_app/deploy/ota/sync-vps.sh computes the exact same path from the
-// build's own applicationId before it ever touches the store.
+// Stable Android delivery has one canonical store and endpoint. The app-scoped
+// ag.companion route remains a compatibility alias for builds that shipped
+// during the package rename; it must never gain an independent `current` head.
+// Package-id and signer validation protect Android compatibility.
 const ANDROID_OTA_CHANNELS = {
-  "ag.companion": path.join(ANDROID_OTA_DIR, "channels", "ag.companion"),
+  "ag.companion": ANDROID_OTA_DIR,
 };
 const MODEL_PROVIDER = String(process.env.MODEL_PROVIDER || "openai-compatible").toLowerCase();
 const MODEL_BASE_URL = stripTrailingSlash(process.env.MODEL_BASE_URL || "https://api.openai.com/v1");

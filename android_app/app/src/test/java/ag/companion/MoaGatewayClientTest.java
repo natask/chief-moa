@@ -161,7 +161,7 @@ public final class MoaGatewayClientTest {
 
         assertEquals(42, manifest.getInt("version_code"));
         assertEquals("0.1.42", manifest.getString("version_name"));
-        assertEquals("/v1/android/updates/apps/ag.companion/latest", requests.get(0).path);
+        assertEquals("/v1/android/updates/latest", requests.get(0).path);
         assertEquals("Bearer secret-token", requests.get(0).authorization);
     }
 
@@ -249,7 +249,7 @@ public final class MoaGatewayClientTest {
             return new TestResponse(202, "{\"run\":{\"id\":\"run_456\",\"status\":\"queued\"}}");
         } else if ("/v1/agent/runs".equals(request.path)) {
             return new TestResponse(202, "{\"run\":{\"id\":\"run_123\",\"status\":\"queued\"},\"text\":\"Started run run_123.\"}");
-        } else if ("/v1/android/updates/apps/ag.companion/latest".equals(request.path)) {
+        } else if ("/v1/android/updates/latest".equals(request.path)) {
             return new TestResponse(200, "{\"version_code\":42,\"version_name\":\"0.1.42\"}");
         } else if ("/v1/context/latest".equals(request.path)) {
             return new TestResponse(200, "{\"store\":{\"type\":\"json-files\"},\"recent_runs\":[{\"id\":\"run_789\"}],\"recent_turns\":[],\"sessions\":[]}");

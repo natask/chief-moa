@@ -192,6 +192,11 @@ these facts; it does not infer them from the OS name.
 ### Android adapter
 
 - Extend the existing gateway APK path rather than create a second updater.
+- Use `/v1/android/updates` as the single stable endpoint and release head.
+  App-scoped routes from the package-rename migration are compatibility aliases
+  to that same head, never independent stores. Optional `beta` or `development`
+  heads are explicit user-selected channels using the same protocol, package id,
+  and signer rules; returning to `stable` is always available.
 - Verify common signatures, manifest digest/size, APK package id/version, and
   signing-certificate continuity before package-installer handoff.
 - Android/package installer retains final authority. Background checking or

@@ -44,6 +44,13 @@
 
 ## 3. Android Adapter — Primary Validation Lane
 
+- [x] 3.0 Restore one canonical stable Android update endpoint. Publish both
+      recognized historical package ids to the same stable store, make the
+      app-scoped rename route a compatibility alias, and keep package/signer
+      compatibility in manifest/APK validation rather than URL topology.
+      Acceptance: old and new clients resolve the same stable version and a
+      publish advances only one `current` head.
+
 - [ ] 3.1 Map the existing Android OTA metadata/artifact into the shared
       envelope without breaking the current authenticated endpoints.
       Acceptance: an old client retains its existing update behavior while a

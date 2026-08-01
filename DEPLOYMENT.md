@@ -36,8 +36,8 @@ public current-APK route. This is an explicitly temporary, high-risk
 single-user compromise.
 
 The only unauthenticated gateway reads in this exception are the current
-Android OTA manifest and latest APK, including their configured app-channel
-equivalents:
+Android OTA manifest and latest APK. The app-scoped paths are compatibility
+aliases to the same stable release head:
 
 ```text
 GET /v1/android/updates/latest
@@ -52,6 +52,11 @@ tokenless app can therefore fetch the current manifest and token-bearing APK
 without gaining anonymous access to chat, history, voice, actions, or gateway
 administration. Android signer, digest, package-installer, and user-approval
 checks still apply.
+
+Publish stable Android releases once to the canonical store. Do not derive a
+release store from `applicationId`. Optional experimental channels are explicit
+user choices over compatible artifacts; they must preserve the same update
+protocol and an unconditional path back to `stable`.
 
 The replacement is account sign-in plus revocable, scoped per-user/device
 credentials. Remove the bundled fallback once normal chat, history, voice, and

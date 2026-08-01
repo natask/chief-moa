@@ -24,13 +24,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LOCAL_OTA_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/gateway/data/android-ota}"
 DEPLOY_TARGETS_FILE="${MOA_DEPLOY_TARGETS_FILE:-$ROOT_DIR/scripts/deploy-targets.json}"
 HOST="${MOA_VPS_SSH:-}"
-# Host-side path of the gateway container's /data named volume. This is the
-# store's base directory: the ai.moa.assistant (legacy/default) channel lives
-# directly at this path, unchanged. Any other app id gets its own isolated
-# subtree under "$REMOTE_OTA_BASE_DIR/channels/<app_id>/" so two application
-# ids never share one `current` pointer or `latest.json` -- see the channel
-# routing block below, after the local release facts (including the app id
-# actually being published) have been read and validated.
+# Host-side path of the canonical stable Android release store. Recognized
+# historical package ids publish one `current` pointer here. Optional future
+# experimental channels are explicit user-selected heads, not directories
+# derived from application id.
 # The store is moving onto its own volume (chief-moa_moa-ota-data) so the
 # publisher and the gateway stop sharing one directory tree: publishing into
 # the gateway's data volume is what crash-looped production on 2026-07-29 and
@@ -255,21 +252,13 @@ if [[ ! "$RELEASE_ID" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] \
   exit 1
 fi
 
-# Each known application id gets its own release channel so two apps never
-# share one `current` pointer or `latest.json`. ai.moa.assistant is the
-# original/default channel and keeps publishing straight to the store's base
-# directory -- byte-for-byte the same location this script has always used --
-# so that channel, and the phone running it today, are never touched by this
-# routing. Any other application id is confined to its own named subtree.
-# This is an explicit allowlist, not a passthrough of an arbitrary string into
-# a filesystem path: a build with an unrecognized application id fails closed
-# here rather than silently creating a new channel directory.
+# Stable Android delivery has one canonical store. Both recognized historical
+# package ids publish to that store; manifest package identity and APK signer
+# continuity decide install compatibility. Experimental channels, when added,
+# are explicit user-selected release heads—not package-id-derived directories.
 case "$APP_ID" in
-  ai.moa.assistant)
+  ai.moa.assistant|ag.companion)
     REMOTE_OTA_DIR="$REMOTE_OTA_BASE_DIR"
-    ;;
-  ag.companion)
-    REMOTE_OTA_DIR="$REMOTE_OTA_BASE_DIR/channels/ag.companion"
     ;;
   *)
     echo "Local OTA build has an application id ($APP_ID) with no configured release channel." >&2
@@ -831,14 +820,6 @@ fi
 # canonical artifacts and immutable release readable by the unprivileged
 # gateway container. Private staging, snapshots, and publisher locks stay 0700.
 chmod 755 "$root" "$root/releases" "$target"
-case "$root" in
-  */channels/ag.companion)
-    # `mkdir -p "$root"` runs under the publisher's 077 umask. Without fixing
-    # this routing parent, the gateway uid cannot traverse from the dedicated
-    # OTA volume into the otherwise-readable app channel.
-    chmod 755 "${root%/ag.companion}"
-    ;;
-esac
 chmod 644 "$target/moa-assistant.apk" "$target/release.json" \
   "$root/moa-assistant.apk" "$root/latest.json"
 
@@ -856,11 +837,6 @@ chmod 644 "$target/moa-assistant.apk" "$target/release.json" \
 # to chown is a real error.
 if [ "$owner_uid" -ne 0 ] && [ "$(id -u)" = "0" ]; then
   chown -R "$owner_uid:$owner_gid" "$root" || exit 1
-  case "$root" in
-    */channels/ag.companion)
-      chown "$owner_uid:$owner_gid" "${root%/ag.companion}" || exit 1
-      ;;
-  esac
 fi
 
 printf '%s %s %s %s %s %s\n' \
@@ -954,14 +930,7 @@ const headers = { authorization: `Bearer ${token}` };
 
 async function main() {
   const requestOptions = () => ({ headers, signal: AbortSignal.timeout(10000) });
-  // ai.moa.assistant is the original/default channel and stays on the
-  // unscoped route, byte-for-byte the same endpoint this verifier has always
-  // called. Any other application id is verified through its own app-scoped
-  // route so a device running one app can never be confirmed against, or
-  // served, another app's manifest/APK.
-  const updatesBase = appId === "ai.moa.assistant"
-    ? `${base}/v1/android/updates`
-    : `${base}/v1/android/updates/apps/${encodeURIComponent(appId)}`;
+  const updatesBase = `${base}/v1/android/updates`;
   const manifestResponse = await fetch(`${updatesBase}/latest`, requestOptions());
   if (!manifestResponse.ok) process.exit(1);
   const manifest = await manifestResponse.json();

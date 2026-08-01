@@ -865,42 +865,27 @@ if run_sync "$local_dir" "$remote_dir" "$case_dir/output"; then exit 1; fi
 grep -Fq 'Local OTA store validation returned unsafe release facts.' "$case_dir/output"
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
-# ag.companion (the renamed app's own clean install; see the
-# rename-product-to-ag OpenSpec change) publishes into
-# "$remote_dir/channels/ag.companion" -- a completely separate release chain,
-# lock, and snapshot history from the ai.moa.assistant store living directly
-# at "$remote_dir". Publishing the new channel must never move, snapshot, or
-# even touch the existing channel's `current` pointer or legacy artifacts.
-case_dir="$TMP_DIR/two-channels"
+# Both recognized package ids publish to the one canonical stable store. The
+# manifest package id and APK signer enforce compatibility; a package rename
+# must not create another latest pointer that strands an old updater.
+case_dir="$TMP_DIR/one-stable-channel"
 local_dir="$case_dir/local"
 remote_dir="$case_dir/remote"
 mkdir -p "$local_dir" "$remote_dir"
 publish_release "$remote_dir" 400 '2026-07-01T00:00:00Z' legacy-400 ai.moa.assistant
-legacy_digest_before="$("$FAKE_BIN/sha256sum" "$remote_dir/moa-assistant.apk" | awk '{print $1}')"
-legacy_current_before="$(readlink "$remote_dir/current")"
 publish_release "$local_dir" 401 '2026-07-06T00:00:00Z' companion-401 ag.companion
 run_sync "$local_dir" "$remote_dir" "$case_dir/output"
-[ "$(readlink "$remote_dir/current")" = "$legacy_current_before" ]
-[ "$("$FAKE_BIN/sha256sum" "$remote_dir/moa-assistant.apk" | awk '{print $1}')" = "$legacy_digest_before" ]
+[ "$(readlink "$remote_dir/current")" = releases/ag.companion-401 ]
+[ -f "$remote_dir/releases/ag.companion-401/moa-assistant.apk" ]
 [ ! -e "$remote_dir/.publish-lock" ]
-[ "$(readlink "$remote_dir/channels/ag.companion/current")" = releases/ag.companion-401 ]
-[ -f "$remote_dir/channels/ag.companion/releases/ag.companion-401/moa-assistant.apk" ]
-channel_mode="$(stat -c %a "$remote_dir/channels" 2>/dev/null \
-  || stat -f %Lp "$remote_dir/channels")"
-[ "$channel_mode" = 755 ]
-[ ! -e "$remote_dir/channels/ag.companion/.publish-lock" ]
+[ ! -e "$remote_dir/channels/ag.companion" ]
 assert_no_target_leak "$case_dir/output" "$remote_dir"
 
-# Publishing again to the legacy channel afterward must likewise leave the
-# ag.companion channel's `current` untouched -- independence holds in both
-# directions, not just on the ag.companion channel's first publish.
-companion_current_before="$(readlink "$remote_dir/channels/ag.companion/current")"
-companion_digest_before="$("$FAKE_BIN/sha256sum" "$remote_dir/channels/ag.companion/moa-assistant.apk" | awk '{print $1}')"
+# A later recognized-package publish advances that same stable head.
 publish_release "$local_dir" 402 '2026-07-07T00:00:00Z' legacy-402 ai.moa.assistant
 run_sync "$local_dir" "$remote_dir" "$case_dir/legacy-output"
 [ "$(readlink "$remote_dir/current")" = releases/ai.moa.assistant-402 ]
-[ "$(readlink "$remote_dir/channels/ag.companion/current")" = "$companion_current_before" ]
-[ "$("$FAKE_BIN/sha256sum" "$remote_dir/channels/ag.companion/moa-assistant.apk" | awk '{print $1}')" = "$companion_digest_before" ]
+[ -f "$remote_dir/releases/ag.companion-401/moa-assistant.apk" ]
 assert_no_target_leak "$case_dir/legacy-output" "$remote_dir"
 
 grep -Fq "docker exec -i \"\$gateway_container\" node -" "$SYNC_SCRIPT" || {

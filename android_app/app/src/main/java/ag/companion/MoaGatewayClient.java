@@ -177,13 +177,11 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
-    // ag.companion is a clean parallel install, not an OTA update path for the
-    // previous ai.moa.assistant app (see the rename-product-to-ag change), so
-    // it resolves updates through its own app-scoped release channel rather
-    // than the legacy unscoped route. That keeps this app from ever being
-    // offered, or offering, a manifest built for a different application id.
-    private String androidUpdatesBase() throws Exception {
-        return "/v1/android/updates/apps/" + urlEncode(BuildConfig.APPLICATION_ID);
+    // Stable Android updates have one canonical endpoint. Package id and signer
+    // compatibility are validated from the manifest and APK; they are not
+    // encoded by creating another release store during an app rename.
+    private String androidUpdatesBase() {
+        return "/v1/android/updates";
     }
 
     JSONObject latestAndroidUpdate() throws Exception {
