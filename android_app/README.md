@@ -10,9 +10,9 @@ ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew assembleDebug
 
 ## Install
 
-```sh
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+Open `https://api.agee.app/v1/android/updates/latest.apk` on the phone and
+approve Android's package installer. Updates use the same in-app OTA flow and
+continuity signer.
 
 ## Run
 
@@ -67,15 +67,14 @@ npm start
 
 ## Deploy
 
-Repo-level Android deploy keeps publishing the OTA artifact and also installs
-the same APK directly over ADB when an authorized device is connected:
+Repo-level Android deploy publishes and publicly verifies the OTA artifact:
 
 ```sh
 bash ../scripts/deploy.sh android
 ```
 
-If no ADB device is connected or authorized, deploy logs that direct install was
-skipped and leaves the OTA artifact available through the gateway.
+It never inspects connected devices or installs the APK. The phone discovers
+the release through the OTA manifest and Android owns installer approval.
 
 ## Action Runtime
 

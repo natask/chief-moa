@@ -11,19 +11,9 @@ can speak replies with Android `TextToSpeech`.
 
 ## Deploy To A Phone
 
-```sh
-cd android_app
-./gradlew assembleDebug
-adb devices
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-If `adb devices` does not show the phone:
-
-- Enable Developer options on the phone.
-- Enable USB debugging.
-- Accept the USB debugging prompt on the phone.
-- Re-run `adb devices`.
+Open `https://api.agee.app/v1/android/updates/latest.apk` on the phone and
+approve Android's package installer. An installed app checks the corresponding
+OTA manifest and verifies the APK digest and signer before installer handoff.
 
 ## First Run
 
@@ -70,10 +60,9 @@ intentionally pointing the app at this Mac's local gateway over ZeroTier.
 bash scripts/deploy.sh android
 ```
 
-This builds the timestamp-versioned OTA APK, syncs it to the gateway, and then
-installs `gateway/data/android-ota/moa-assistant.apk` over ADB when an
-authorized phone is connected. If no authorized device is present, direct
-install is skipped without failing deploy.
+This builds the timestamp-versioned OTA APK, syncs it to the gateway, and
+publicly verifies the exact manifest and APK. It does not inspect or install to
+connected devices.
 
 ## Main Files
 

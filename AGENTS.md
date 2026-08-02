@@ -107,9 +107,9 @@ The main machine (10.147.17.10) has been decommissioned. The production
 gateway is the DigitalOcean droplet behind https://api.agee.app. Fix work
 happens in an isolated branch or worktree, never against the running service.
 
-Android currently uses direct distribution. The first install uses a debug APK
-over USB and ADB. Later OTA APKs must use the same debug certificate from this
-development Mac. The GitHub-runner signing path is a migration target. A green
+Android currently uses OTA-only direct distribution through the gateway and
+Android package installer. OTA APKs must use the same debug certificate from
+this development Mac. The GitHub-runner signing path is a migration target. A green
 credential-free Android CI artifact is not an OTA publication. Read
 `DEPLOYMENT.md` before Android release work.
 

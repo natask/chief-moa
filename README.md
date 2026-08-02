@@ -125,8 +125,8 @@ VPS Android OTA publish:
 bash scripts/deploy.sh android
 ```
 
-Android uses direct distribution today. The first install uses USB and ADB.
-Later OTA builds must use the same local debug certificate. Read
+Android uses OTA-only direct distribution through the gateway and Android
+package installer. Every build must use the same continuity certificate. Read
 [DEPLOYMENT.md](DEPLOYMENT.md) before release work. GitHub Actions currently
 builds a verification artifact. It does not publish an installable update unless
 the workflow uses the continuity key and completes the VPS publication gate.

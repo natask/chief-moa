@@ -111,22 +111,6 @@ NODE
 REMOTE_STABLE_SHA
 }
 
-adb_path() {
-  if command -v adb >/dev/null 2>&1; then
-    command -v adb
-    return 0
-  fi
-  if [ -n "${ANDROID_HOME:-}" ] && [ -x "$ANDROID_HOME/platform-tools/adb" ]; then
-    printf '%s\n' "$ANDROID_HOME/platform-tools/adb"
-    return 0
-  fi
-  if [ -x "$HOME/Library/Android/sdk/platform-tools/adb" ]; then
-    printf '%s\n' "$HOME/Library/Android/sdk/platform-tools/adb"
-    return 0
-  fi
-  return 1
-}
-
 gateway_drifted() {
   # Authoritative drift check: ask rsync (the same tool sync-when-online uses)
   # what it WOULD transfer, by content checksum (-c), without changing anything
@@ -172,7 +156,6 @@ deploy_gateway() {
 deploy_android() {
   local vps_target="${MOA_VPS_SSH:-}"
   local candidate_head
-  local install_status=0
   if [ -z "$vps_target" ]; then
     if ! vps_target="$(production_vps_target)"; then
       log "android: canonical production VPS target is invalid or unavailable"
@@ -204,103 +187,11 @@ deploy_android() {
     return 1
   fi
   log "android: publication receipt verified"
-  if direct_install_android; then
-    :
-  else
-    install_status=$?
-    if [ "$install_status" -eq 75 ]; then
-      log "android: optional install was not attempted; verified publication remains successful"
-    else
-      log "android: optional install failed; verified publication remains successful"
-    fi
-  fi
+  log "android: publication complete; installation remains Android/user-owned through OTA"
   if curl -fsS "$GATEWAY_URL/health" >/dev/null 2>&1; then
     log "android: gateway health smoke passed at $GATEWAY_URL"
   else
     log "android: gateway health smoke skipped or failed at $GATEWAY_URL"
-  fi
-}
-
-direct_install_android() {
-  local adb
-  local apk="$ROOT_DIR/gateway/data/android-ota/moa-assistant.apk"
-  local devices
-  local serial
-  local failures=0
-
-  if [ ! -f "$apk" ]; then
-    apk="$ROOT_DIR/android_app/app/build/outputs/apk/debug/app-debug.apk"
-  fi
-  if [ ! -f "$apk" ]; then
-    log "android: install receipt status=not_attempted reason=apk_missing"
-    return 75
-  fi
-  if ! adb="$(adb_path)"; then
-    log "android: install receipt status=not_attempted reason=adb_unavailable"
-    return 75
-  fi
-
-  "$adb" start-server >/dev/null 2>&1 || true
-  devices="$("$adb" devices | awk 'NR > 1 && $2 == "device" { print $1 }')"
-  if [ -z "$devices" ]; then
-    log "android: install receipt status=not_attempted reason=no_authorized_device"
-    return 75
-  fi
-
-  local installed=0
-  while IFS= read -r serial; do
-    [ -z "$serial" ] && continue
-    log "android: direct installing $(basename "$apk") to $serial"
-    if "$adb" -s "$serial" install -r -d "$apk" >/dev/null; then
-      log "android: installed on $serial $(installed_android_version "$adb" "$serial")"
-      installed=$((installed + 1))
-    else
-      log "android: direct install failed on $serial"
-      failures=$((failures + 1))
-    fi
-  done <<EOF
-$devices
-EOF
-
-  if [ "$failures" -eq 0 ]; then
-    log "android: install receipt status=installed devices=$installed"
-    return 0
-  fi
-  log "android: install receipt status=failed installed=$installed failed=$failures"
-  return 1
-}
-
-installed_android_version() {
-  local adb="$1"
-  local serial="$2"
-  local version
-  version="$("$adb" -s "$serial" shell dumpsys package ai.moa.assistant 2>/dev/null | awk '
-    /versionCode=/ {
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^versionCode=/) {
-          split($i, value, "=")
-          version_code = value[2]
-        }
-      }
-    }
-    /versionName=/ {
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^versionName=/) {
-          split($i, value, "=")
-          version_name = value[2]
-        }
-      }
-    }
-    END {
-      if (version_code || version_name) {
-        printf "(versionCode=%s versionName=%s)", version_code, version_name
-      }
-    }
-  ' | tr -d '\r')"
-  if [ -n "$version" ]; then
-    printf '%s\n' "$version"
-  else
-    printf '%s\n' "(version unavailable)"
   fi
 }
 

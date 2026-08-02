@@ -82,6 +82,10 @@ Build and publish the current Android OTA through:
 bash scripts/deploy.sh android
 ```
 
+This command publishes and verifies the OTA artifact only. It never starts
+ADB, inspects connected devices, or installs an APK. Installation is a separate
+Android/user-owned state proven by an install receipt from the phone.
+
 The wrapper fails closed before building. Android release inputs must be clean,
 `origin/master` must resolve locally and be an ancestor of the captured full
 HEAD, and the VPS stable manifest's `git_sha` must resolve uniquely and be an

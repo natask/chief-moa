@@ -84,16 +84,20 @@
 - [x] 9.3 Add full-app update check, APK checksum verification, and package-installer handoff.
 - [x] 9.4 Add commit-triggered GitHub Actions build and main-machine OTA deploy workflow.
 - [x] 9.5 Verify with Android debug build, gateway syntax check, OpenSpec validation, and a main-machine OTA smoke test. Verified 2026-06-20: `assembleDebug` BUILD SUCCESSFUL (app-debug.apk produced); `npm run check` ok with all profile/voice checks passing; `openspec validate define-android-core-product-map --strict` valid; OTA endpoint `/v1/android/updates/latest` serves version 0.1.1781720954 (git_sha 9719b68). Note: the served OTA build is from 2026-06-17; publishing a fresh OTA from current HEAD is a separate deploy step.
-- [ ] 9.6 Enforce OTA-only Android installation and updates. Remove or disable
+- [x] 9.6 Enforce OTA-only Android installation and updates. Remove or disable
       direct ADB install from the deployment path.
+      Verified 2026-08-02: the wrapper contract uses a failing sentinel ADB
+      binary and proves successful publication never invokes it; the 30-case
+      transactional VPS suite, Android lint/build/unit gate, source-size policy,
+      and strict OpenSpec validation pass.
 - [x] 9.7 Record deploy version metadata and monotonic target deploy sequences
       for gateway, Android OTA, and browser extension deploys; require changed
       browser-extension deploys to advance the manifest version after the first
       recorded extension deploy.
 - [x] 9.8 Record the active Android distribution contract in the agent deployment
-      context. The first install uses a debug APK over USB. OTA builds keep the
-      same local debug certificate until a tested GitHub Actions key migration
-      replaces this path.
+      context. First install and later updates use the gateway OTA artifact plus
+      Android package installer. Builds keep the same local debug certificate
+      until a tested GitHub Actions key migration replaces this path.
 - [x] 9.9 Make direct stable OTA publication fail closed on stale source: bind
       artifact metadata to the captured full commit SHA, require clean HEAD to
       contain both local `origin/master` and the uniquely resolvable deployed
