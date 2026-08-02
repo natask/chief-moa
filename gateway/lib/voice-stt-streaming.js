@@ -130,6 +130,7 @@ function createStreamingSttSession(options) {
     // get a new namespace so identical words spoken later remain legitimate.
     finalSegmentIds: new Set(),
     finalSegments: [],
+    lastFinalAudioByteOffset: 0,
     totalAudioBytes: 0,
   };
 
@@ -172,16 +173,18 @@ function createStreamingSttSession(options) {
         }
         if (segmentId) state.finalSegmentIds.add(segmentId);
         const priorCommittedText = state.committedText;
-        state.committedText = joinTranscript(priorCommittedText, transcript);
-        const segmentTranscript = priorCommittedText && transcript.startsWith(`${priorCommittedText} `)
-          ? transcript.slice(priorCommittedText.length).trim()
-          : transcript;
+        const cumulative = priorCommittedText && transcript.startsWith(`${priorCommittedText} `);
+        state.committedText = cumulative ? transcript : joinTranscript(priorCommittedText, transcript);
+        const segmentTranscript = cumulative ? transcript.slice(priorCommittedText.length).trim() : transcript;
         state.interim = "";
-        const relativeEndBytes = resultEndOffsetBytes(result?.resultEndOffset, options?.bytesPerSecond);
-        const absoluteEndBytes = relativeEndBytes == null
-          ? null
-          : Math.min(state.totalAudioBytes, streamContext.baseAudioByteOffset + relativeEndBytes);
+        const relativeEndBytes = resultEndOffsetBytes(
+          result?.resultEndOffset, options?.bytesPerSecond, options?.frameBytes);
+        const candidateEndBytes = relativeEndBytes == null ? null : streamContext.baseAudioByteOffset + relativeEndBytes;
+        const absoluteEndBytes = candidateEndBytes != null && candidateEndBytes <= state.totalAudioBytes
+          && candidateEndBytes > state.lastFinalAudioByteOffset
+          ? candidateEndBytes : null;
         if (absoluteEndBytes != null) {
+          state.lastFinalAudioByteOffset = absoluteEndBytes;
           state.finalSegments.push({
             transcript: segmentTranscript,
             endAudioByteOffset: absoluteEndBytes,
@@ -490,7 +493,7 @@ function normalizedBytesPerSecond(value) {
   return Number.isFinite(bytes) && bytes > 0 ? bytes : 32000;
 }
 
-function resultEndOffsetBytes(value, bytesPerSecond) {
+function resultEndOffsetBytes(value, bytesPerSecond, frameBytesValue) {
   const match = /^(\d+):(\d+)$/.exec(String(value || "").trim());
   if (!match) return null;
   const seconds = Number(match[1]);
@@ -499,8 +502,10 @@ function resultEndOffsetBytes(value, bytesPerSecond) {
     return null;
   }
   const exact = (seconds + nanos / 1e9) * normalizedBytesPerSecond(bytesPerSecond);
-  return Math.max(0, Math.floor(exact / 2) * 2);
+  const frameBytes = normalizedFrameBytes(frameBytesValue);
+  return Math.max(0, Math.floor(exact / frameBytes) * frameBytes);
 }
+function normalizedFrameBytes(value) { const bytes = Number(value); return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 2; }
 
 module.exports = {
   createStreamingSttSession,

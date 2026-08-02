@@ -3,10 +3,10 @@
 function createVoiceTranscriptReconcileBridge(connection, runtime, webSocketOpen) {
   return {
     configure(turn, input) {
-      if (!runtime || input.incognito || typeof input.provider?.transcribePcmWindowed !== "function") return;
+      if (!runtime || !input.enabled || input.incognito || typeof input.provider?.transcribePcmWindowed !== "function") return;
       turn.transcriptReconciler = runtime.createTurn({
         sessionId: turn.sessionId, branchId: turn.branchId, turnId: turn.turnId,
-        provider: input.provider, languageCodes: input.languageCodes,
+        ownerId: input.ownerId, provider: input.provider, languageCodes: input.languageCodes, format: input.format,
         emitPrefix: (revision) => this.emitPrefix(turn, revision),
       });
     },
@@ -14,22 +14,25 @@ function createVoiceTranscriptReconcileBridge(connection, runtime, webSocketOpen
     seal(turn, segment) { turn?.transcriptReconciler?.seal(segment); },
     finish(turn) { turn?.transcriptReconciler?.finish({ pcmPath: turn.pcmPath }); },
     abandon(turn) { turn?.transcriptReconciler?.abandon(); },
-    capability(turn) { return { supported: Boolean(turn?.transcriptReconciler), version: 1 }; },
+    capability(turn) { return { supported: Boolean(turn?.transcriptReconciler), version: 1,
+      owner_id: turn?.deviceId || "legacy_owner" }; },
     sequence(turn) { turn.transcriptSequence = (turn.transcriptSequence || 0) + 1; return turn.transcriptSequence; },
     async emitPrefix(turn, revision) {
       if (!turn || !revision?.finalizedText || connection.ws.readyState !== webSocketOpen) return;
       const snapshot = turn.sttStream?.snapshot?.();
       const unsealedText = transcriptTailAfter(snapshot, revision.sealedThroughAudioByte);
       const finalizedText = String(revision.finalizedText || "").trim();
+      const sequence = this.sequence(turn);
       await connection.sendEvent({
         type: "transcript_prefix_revision", session_id: turn.sessionId, branch_id: turn.branchId,
         turn_id: turn.turnId, message_id: `turn:${turn.sessionId}:${turn.branchId}:${turn.turnId}:user`,
-        speaker: "user", transcript_sequence: this.sequence(turn), revision: revision.revision,
+        owner_id: revision.ownerId, speaker: "user", transcript_sequence: sequence, revision: revision.revision,
         finalized_text: finalizedText, unsealed_text: unsealedText,
         text: [finalizedText, unsealedText].filter(Boolean).join(" "),
         sealed_through_audio_byte: revision.sealedThroughAudioByte, audio_format: turn.format,
         source: "automatic_reconcile", updated_at: new Date().toISOString(),
       });
+      return sequence;
     },
   };
 }
@@ -47,7 +50,8 @@ function transcriptTailAfter(snapshot, sealedThroughAudioByte) {
 function publishTranscriptRevision(connections, payload) {
   for (const connection of connections || []) {
     const identity = connection.sessionIdentity;
-    if (!identity || identity.sessionId !== payload?.session_id || identity.branchId !== payload?.branch_id) continue;
+    if (!identity || identity.sessionId !== payload?.session_id || identity.branchId !== payload?.branch_id
+        || identity.turnId !== payload?.turn_id || identity.ownerId !== payload?.owner_id) continue;
     void connection.sendEvent(payload).catch(() => {});
   }
 }

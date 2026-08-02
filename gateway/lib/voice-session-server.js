@@ -428,9 +428,11 @@ class VoiceSessionConnection {
       this.sendError(`failed to write audio: ${cleanError(error)}`);
     });
     this.turn = turn;
-    this.sessionIdentity = { sessionId, branchId, turnId };
-    this.transcriptReconcile.configure(turn, { provider: this.voiceProvider,
+    this.sessionIdentity = { ownerId: deviceId || "legacy_owner", sessionId, branchId, turnId };
+    const reconcileRequest = event.transcript_reconciliation || event.transcriptReconciliation || {};
+    this.transcriptReconcile.configure(turn, { provider: this.voiceProvider, ownerId: deviceId || "legacy_owner", format,
       languageCodes: providerStatus.prompt_language_codes || providerStatus.language_codes || ["en-US"],
+      enabled: reconcileRequest.enabled === true && Number(reconcileRequest.version) === 1 && reconcileRequest.privacy_scope === "retained" && nextTurnIdentity.contextAction === "continue",
       incognito: isIncognitoBranch(branchId) || nextTurnIdentity.contextAction === "incognito" });
     startVoicePrewarm(this.voiceProvider, turn);
     if (typeof this.voiceProvider.createLiveTurnSession === "function") {
@@ -1242,7 +1244,7 @@ class VoiceSessionConnection {
         persona: turn.persona || null,
         started_at: turn.startedAt,
         completed_at: nowIso(),
-        transcript: transcript || (turn.audioBytes > 0 ? "Voice captured." : ""),
+        transcript: transcript || (turn.audioBytes > 0 ? "Voice captured." : ""), transcript_sequence: turn.transcriptSequence || 0,
         transcript_source: transcript ? "stt" : (turn.audioBytes > 0 ? "synthetic" : ""),
         assistant_text: assistantText,
         provider: turn.providerStatus?.provider || this.voiceProvider.status().provider,
@@ -1303,6 +1305,7 @@ class VoiceSessionConnection {
         started_at: turn.startedAt,
         completed_at: nowIso(),
         transcript: completed.transcript,
+        transcript_sequence: turn.transcriptSequence || 0,
         transcript_source: completed.transcriptSource || providerResult?.transcript_source || "",
         transcript_provider: providerResult?.transcript_provider || "",
         native_input_transcript: providerResult?.native_input_transcript || "",

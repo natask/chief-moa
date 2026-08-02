@@ -12,7 +12,7 @@ function createGatewayHealthHandlers(deps) {
     harnessWorkdir, defaultHarness, harnessStatus, allowAgentWithoutToken,
     workerPullAgentRuns, workerPull, browserAgentLoop, accountConnections,
     accountHealthIntervalMs, brain, brainRecallLimit, nativeWebSearchEnabled,
-    exaApiKey, releaseControlStatus,
+    exaApiKey, releaseControlStatus, transcriptReconcileStatus,
   } = deps;
 
   async function healthPayload() {
@@ -51,6 +51,7 @@ function createGatewayHealthHandlers(deps) {
         endpoint: voiceSessionServer.endpoint,
         ticket_endpoint: "/v1/voice/session-ticket",
         provider: voiceProvider,
+        transcript_reconciliation: typeof transcriptReconcileStatus === "function" ? transcriptReconcileStatus() : undefined,
         profile_diagnostics: voiceProfileDiagnostics(profileStatus, voiceProvider),
         activity: voiceSessionServer.activityStatus(),
         input_format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },

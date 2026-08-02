@@ -119,7 +119,10 @@ offers no such guarantee.
 ### Requirement: Privacy and unavailable dependencies fail soft
 
 Reconciliation SHALL run only for audio whose retention policy permits the
-additional provider pass. Before each read and paid call, the gateway SHALL
+additional provider pass. A client SHALL opt in with version 1,
+`privacy_scope: retained`, and the ordinary `continue` context action; new,
+forked, incognito, unknown-retention, and legacy sessions SHALL NOT enqueue it.
+Before each read and paid call, the gateway SHALL
 verify owner, audio availability, generation/digest, and current privacy
 eligibility. Missing, deleted, expired, mismatched, or forbidden audio and an
 unavailable provider SHALL leave the turn and revision 0 usable without
@@ -137,7 +140,9 @@ recreating audio or failing the interactive voice path.
 
 The gateway SHALL enforce configured limits for pending spans, eligible audio
 duration or bytes per turn, global and per-owner worker concurrency, claim
-leases, and retry count. Backpressure SHALL skip or defer reconciliation rather
+attempts, and retry count. Adjacent natural finals SHALL accumulate until at
+least 20 seconds of eligible audio is available, except for the exact final
+tail. Backpressure SHALL skip or defer reconciliation rather
 than consume resources needed by live capture, commit, reasoning, or TTS.
 
 #### Scenario: queue is full

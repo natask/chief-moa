@@ -683,14 +683,18 @@ duplicate, cross-authority, out-of-order, or missing-tail events cannot rewrite
 assistant text or the current capture. Accessibility may announce the
 correction without moving focus.
 
-Turn commit seals the exact remaining PCM tail and schedules it without
+Eligible Android and browser clients opt in only on an explicit retained-audio
+`continue` turn using the versioned reconciliation envelope. New, forked,
+incognito, unknown-retention, and legacy starts do not enqueue this second STT
+pass. Turn commit seals the exact remaining PCM tail and schedules it without
 waiting. Final transcript delivery, reasoning, tools, actions, and TTS continue
 from the streaming result and never wait for rolling correction. That execution
 transcript is preserved as immutable revision 0. Only a complete, nonempty
 corrected full-turn transcript may append and activate a later revision; doing
 so updates history but never reruns the response. Durable per-span claims,
-attempts, leases, audio digests, and results allow restart recovery without
-resubmitting completed paid work. Missing/expired/deleted audio, a privacy
+stable request identities, audio digests, and results allow restart recovery
+without resubmitting completed paid work. An ambiguous paid attempt is terminal
+and is not retried automatically. Missing/expired/deleted audio, a privacy
 policy that disallows the second provider pass, invalid offsets, unavailable
 credentials/provider, or exhausted capacity fails soft and leaves revision 0
 usable.
@@ -701,8 +705,9 @@ audio is recognized once by streaming STT and once again by batch STT, roughly
 doubling STT audio-processing volume for those turns while leaving reasoning
 and TTS spend unchanged. Natural spans may increase request count, and durable
 metadata plus audio reads add storage traffic. Deployments therefore expose an
-independent enqueue switch and content-free backlog, retry, duration, and cost
-metrics. The complete contract is
+independent enqueue switch and content-free backlog, attempt, and audio-byte
+counters through gateway health. Natural finals accumulate to a 20-second
+minimum batch except for the exact terminal tail. The complete contract is
 `reference/openspec/changes/rolling-transcript-reconciliation`.
 
 Browser voice capture prefers a native 16 kHz Web Audio graph. When Chrome uses

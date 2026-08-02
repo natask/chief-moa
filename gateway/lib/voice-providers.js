@@ -1883,7 +1883,8 @@ class CascadedVoiceProvider {
           }));
         },
         onPartial: hooks?.onTranscriptPartial,
-        onFinalSegment: hooks?.onTranscriptFinalSegment, bytesPerSecond: sampleRate * channels * 2,
+        onFinalSegment: hooks?.onTranscriptFinalSegment,
+        bytesPerSecond: sampleRate * channels * 2, frameBytes: channels * 2,
         rotateAfterMs: this.streamingSttRotateAfterMs,
         logger: (event, details) => {
           try {

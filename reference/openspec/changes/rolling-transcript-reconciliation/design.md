@@ -38,9 +38,10 @@ Text itself is not an audio boundary and must never be used to cut PCM.
 
 ### Decision: Streaming-final offsets seal exact PCM spans
 
-For PCM16 mono audio, the gateway converts each accepted
+For PCM16 audio, the gateway converts each accepted
 `resultEndOffset` to the source sample index using the turn-pinned sample rate,
-then to a frame-aligned byte offset. With `previous_end` initially zero, a new
+channel count, and frame width, then to a frame-aligned byte offset. With
+`previous_end` initially zero, a new
 strictly increasing offset seals `[previous_end, result_end)`. The span records
 turn identity, ordinal, byte start/end, sample rate, audio-object generation or
 digest, and the streaming boundary identity.
@@ -122,23 +123,24 @@ may become current later.
 ### Decision: Claims make paid work restart-safe
 
 Each span has a durable state machine such as `queued -> claimed -> completed`
-or `retryable/terminal`. A claim records a unique attempt, lease expiry, and the
-audio generation/digest. A worker durably stores the provider result and marks
-the exact attempt completed atomically before publishing it. Recovery requeues
-only unclaimed work and expired claims without a completed result; it never
-reissues a completed span.
+or `terminal`. A claim records a unique attempt and the audio digest. A worker
+durably stores the provider result and marks the exact attempt completed before
+publishing it. Recovery requeues only unclaimed work; it never reissues a
+completed span.
 
-Provider timeouts create bounded retryable outcomes. Because a network failure
+Provider timeouts create terminal ambiguous outcomes in version 1. Because a network failure
 can occur after a provider accepted a request but before a result was durably
 recorded, exact external once-only billing cannot be guaranteed without a
 provider idempotency key. The gateway therefore uses one stable per-span
-request identity where supported, records ambiguous outcomes, and caps retries
+request identity where supported, records ambiguous outcomes, and performs no automatic retry
 instead of claiming impossible exactly-once delivery.
 
 ### Decision: Privacy and availability fail soft
 
-Eligibility is evaluated before enqueue and again before audio read. No work is
-created when raw-audio retention is disabled. Deletion, expiry, owner mismatch,
+Eligibility requires the versioned `retained` client envelope on an explicit
+`continue` turn and is checked again from durable authority before audio read.
+No work is created for new, forked, incognito, unknown-retention, or legacy
+sessions. Deletion, expiry, owner mismatch,
 digest mismatch, or a later privacy-policy change makes outstanding work
 terminal without reading or recreating audio. Missing credentials, unavailable
 Chirp service, invalid offsets, or provider failure leaves revision 0 readable
@@ -148,15 +150,17 @@ do not copy transcript or raw audio into general logs.
 ### Decision: Backpressure bounds both cost and resource use
 
 The queue has deployment-configured maximum pending spans, maximum eligible
-audio duration/bytes per turn, global and per-owner concurrency, retry count,
-and claim lease. Workers stream or bounded-read only one span at a time. When
+audio duration/bytes per turn, global and per-owner concurrency, and a zero
+automatic-retry policy for ambiguous paid claims. Natural finals accumulate to
+a 20-second minimum batch, except for the exact terminal tail. Workers stream
+or bounded-read only one span at a time. When
 the queue is full, new work is skipped or deferred with a content-free reason;
 live STT, commit, reasoning, and TTS remain unaffected. Oldest eligible work may
 be drained first, but active voice processing always has resource priority.
 
 Operators can disable new enqueue independently of draining already-authorized
-work. Metrics report counts, bytes/duration, latency, retries, skipped reasons,
-and estimated provider cost without transcript content.
+work. Gateway health reports content-free backlog, paid-attempt, processed-byte,
+completion, failure, integrity-rejection, and deferral counters.
 
 ## Costs and trade-offs
 

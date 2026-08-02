@@ -20,10 +20,12 @@ test("publishes an authoritative corrected prefix plus current unsealed tail", a
       interim: "still speaking",
     }) },
   };
-  await bridge.emitPrefix(turn, { revision: 2, finalizedText: "correct prefix", sealedThroughAudioByte: 320 });
+  const sequence = await bridge.emitPrefix(turn, { revision: 2, ownerId: "device", finalizedText: "correct prefix",
+    sealedThroughAudioByte: 320 });
+  assert.equal(sequence, 5);
   assert.deepEqual(events[0], {
     type: "transcript_prefix_revision", session_id: "s", branch_id: "b", turn_id: "t",
-    message_id: "turn:s:b:t:user", speaker: "user", transcript_sequence: 5, revision: 2,
+    message_id: "turn:s:b:t:user", owner_id: "device", speaker: "user", transcript_sequence: 5, revision: 2,
     finalized_text: "correct prefix", unsealed_text: "new tail still speaking",
     text: "correct prefix new tail still speaking", sealed_through_audio_byte: 320,
     audio_format: turn.format, source: "automatic_reconcile", updated_at: events[0].updated_at,
@@ -33,10 +35,12 @@ test("publishes an authoritative corrected prefix plus current unsealed tail", a
 test("final revision broadcast stays on the exact session and branch", async () => {
   const delivered = [];
   const connections = [
-    { sessionIdentity: { sessionId: "s", branchId: "b" }, sendEvent: async () => delivered.push("exact") },
-    { sessionIdentity: { sessionId: "s", branchId: "other" }, sendEvent: async () => delivered.push("wrong") },
+    { sessionIdentity: { ownerId: "owner", sessionId: "s", branchId: "b", turnId: "t" }, sendEvent: async () => delivered.push("exact") },
+    { sessionIdentity: { ownerId: "other", sessionId: "s", branchId: "b", turnId: "t" }, sendEvent: async () => delivered.push("wrong-owner") },
+    { sessionIdentity: { ownerId: "owner", sessionId: "s", branchId: "b", turnId: "other" }, sendEvent: async () => delivered.push("wrong-turn") },
+    { sessionIdentity: { ownerId: "owner", sessionId: "s", branchId: "other", turnId: "t" }, sendEvent: async () => delivered.push("wrong") },
   ];
-  publishTranscriptRevision(connections, { session_id: "s", branch_id: "b" });
+  publishTranscriptRevision(connections, { owner_id: "owner", session_id: "s", branch_id: "b", turn_id: "t" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(delivered, ["exact"]);
 });

@@ -440,6 +440,7 @@ blobStore.startJanitor();
 const {
   voiceTurnAudioRefs,
   voiceTurnAudioKey,
+  voiceTurnAudioPath,
   deleteVoiceTurnPcm,
   sendVoiceAudio,
   voiceStorageFileProblem,
@@ -895,8 +896,13 @@ if (REMINDER_SWEEP_INTERVAL_MS > 0) {
 
 const transcriptReconcileRuntime = createRollingTranscriptReconcileRuntime({
   dataDir: DATA_DIR,
+  enqueueEnabled: process.env.VOICE_TRANSCRIPT_RECONCILE_ENABLED !== "0",
   providerForJob: internalTtsProvider,
-  canonicalReadyForJob: ({ sessionId, turnId }) => Boolean(readVoiceTurnRecord(sessionId, turnId)?.response),
+  authorizeJob: voiceReconcileJobAuthorized,
+  canonicalReadyForJob: (identity) => Boolean(exactVoiceReconcileRecord(identity)?.response),
+  currentRevisionForJob: (identity) => currentTranscriptRevision(exactVoiceReconcileRecord(identity)),
+  currentSequenceForJob: (identity) => Number(exactVoiceReconcileRecord(identity)
+    ?.references?.voice_session?.transcript_sequence || 0),
   onFinalRevision: applyAutomaticTranscriptRevision,
 });
 const voiceSessionServer = createVoiceSessionServer({
@@ -936,6 +942,7 @@ const { routeHealth } = createGatewayHealthHandlers({
   vertexCredentialHint, dataDir: DATA_DIR, voiceTurnsDir: VOICE_TURNS_DIR,
   audioNotes, videoNotes, blobStore, voiceSessionServer, agentProfileRuntimeStatus,
   voiceProfileDiagnostics, livekitStatus, androidOtaHealth, eventStatus,
+  transcriptReconcileStatus: transcriptReconcileRuntime.status,
   deviceClientsFile: DEVICE_CLIENTS_FILE, toolRequestsDir: TOOL_REQUESTS_DIR,
   listDeviceClients, listToolRequests, voiceExecuteToolEnabled,
   cascadedExecuteCapabilities, agentRunsDir: AGENT_RUNS_DIR,
@@ -1913,7 +1920,8 @@ async function writeCompletedVoiceTurnRecord(record) {
   }
   writeVoiceTurnRecord(record);
   transcriptReconcileRuntime.notifyCanonicalCommitted({
-    sessionId: record.session_id, branchId: record.branch_id || "default", turnId: record.id,
+    ownerId: record.device_id || "legacy_owner", sessionId: record.session_id,
+    branchId: record.branch_id || "default", turnId: record.id,
   });
   await recordVoiceTurnCompletedProductEvent(record);
   scheduleCaptureBlockProjection(record);
@@ -8292,6 +8300,35 @@ function normalizeRetranscribeLanguageCodes(value) {
   return Array.from(new Set(codes)).slice(0, 2);
 }
 
+function currentTranscriptRevision(record) {
+  const revisions = Array.isArray(record?.transcript_revisions) ? record.transcript_revisions : [];
+  return revisions.reduce((max, value) => Math.max(max, Number(value?.revision) || 0), 0);
+}
+
+function exactVoiceReconcileRecord(identity) {
+  const record = readVoiceTurnRecord(identity.sessionId, identity.turnId);
+  if (!record || String(record.branch_id || "default") !== identity.branchId
+      || String(record.device_id || "legacy_owner") !== identity.ownerId) return null;
+  return record;
+}
+
+function voiceReconcileJobAuthorized(identity, context = {}) {
+  const rawRecord = readVoiceTurnRecord(identity.sessionId, identity.turnId);
+  if (!rawRecord) return context.canonicalReady !== true;
+  const record = exactVoiceReconcileRecord(identity);
+  if (!record) return false;
+  if (isIncognitoBranch(record.branch_id) || record.references?.voice_session?.incomplete === true) return false;
+  const expectedBytes = Number(record.references?.voice_session?.audio?.bytes || 0);
+  try {
+    const stat = fs.lstatSync(voiceTurnAudioPath(identity.sessionId, identity.turnId, "user"));
+    const generation = context.sourceGeneration;
+    const generationMatches = !generation || (String(stat.dev) === generation.dev && String(stat.ino) === generation.ino
+      && stat.size === generation.size && stat.mtimeMs === generation.mtime_ms);
+    return expectedBytes > 0 && stat.isFile() && !stat.isSymbolicLink()
+      && stat.size === expectedBytes && generationMatches;
+  } catch { return false; }
+}
+
 async function applyAutomaticTranscriptRevision(input) {
   const sessionId = sanitizeOptionalId(input.sessionId, "default");
   const turnId = sanitizeOptionalId(input.turnId, "");
@@ -8299,9 +8336,12 @@ async function applyAutomaticTranscriptRevision(input) {
   if (!record || isIncognitoBranch(record.branch_id) || record.references?.voice_session?.incomplete === true) {
     return false;
   }
+  if (String(record.branch_id || "default") !== input.branchId
+      || String(record.device_id || "legacy_owner") !== input.ownerId) return false;
   if (record.transcript_revisions?.some((value) => value.reconciliation_id === input.reconciliationId)) {
     return true;
   }
+  if (currentTranscriptRevision(record) !== Number(input.expectedCurrentRevision || 0)) return true;
   if (String(record.transcript || "").trim() === String(input.transcript || "").trim()) {
     return true;
   }
@@ -8315,6 +8355,7 @@ async function applyAutomaticTranscriptRevision(input) {
   if (!appended) return false;
   const voiceSession = record.references?.voice_session;
   if (voiceSession && typeof voiceSession === "object") {
+    voiceSession.transcript_sequence = Number(input.transcriptSequence || voiceSession.transcript_sequence || 0);
     const providerEvents = Array.isArray(voiceSession.provider_events) ? voiceSession.provider_events : [];
     providerEvents.push({
       type: "transcript_auto_reconciled",
@@ -8332,6 +8373,8 @@ async function applyAutomaticTranscriptRevision(input) {
     turn_id: turnId,
     message_id: `turn:${sessionId}:${record.branch_id || "default"}:${turnId}:user`,
     speaker: "user",
+    owner_id: input.ownerId,
+    transcript_sequence: Number(input.transcriptSequence || 0),
     revision: appended.revision,
     text: String(input.transcript || ""),
     transcript_source: "stt-auto-reconcile",
@@ -9856,7 +9899,8 @@ async function recordStreamingVoiceTurn(turn) {
   const branchId = stashedContext?.thread?.branch_id
     || (incognito && !isIncognitoBranch(callerBranchId) ? newBranchId("incognito") : callerBranchId);
   if (incognito) {
-    transcriptReconcileRuntime.deleteTurn({ sessionId, branchId, turnId });
+    transcriptReconcileRuntime.deleteTurn({ ownerId: turn.device_id || "legacy_owner", sessionId,
+      branchId: callerBranchId, turnId });
     await deleteVoiceTurnPcm(sessionId, turnId);
   }
 
@@ -9956,6 +10000,7 @@ async function recordStreamingVoiceTurn(turn) {
         ? turn.playback_progress
         : null,
       transcript_language_rejected: turn.transcript_language_rejected === true,
+      transcript_sequence: Number(turn.transcript_sequence || 0),
       audio: turn.audio || null,
       assistant_audio: transcriptionOnly ? null : (turn.assistant_audio || null),
       context: turn.context && typeof turn.context === "object" && !Array.isArray(turn.context)
