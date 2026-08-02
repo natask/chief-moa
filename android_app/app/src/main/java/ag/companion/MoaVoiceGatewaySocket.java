@@ -297,6 +297,7 @@ final class MoaVoiceGatewaySocket {
     static JSONObject applyTranscriptReconciliation(JSONObject body, boolean enabled)
             throws JSONException {
         if (enabled) {
+            body.put("context_action", "continue");
             body.put("transcript_reconciliation", new JSONObject()
                     .put("enabled", true)
                     .put("version", 1)

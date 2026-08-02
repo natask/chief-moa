@@ -3079,7 +3079,7 @@ public final class OverlayService extends Service {
             refreshContextControls();
         }
         if (!choice.requiresBranchSwitch()) {
-            openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, activeBranchId, false);
+            openStreamingVoiceSession(autoCommitOnSilence, continuousLoop, activeBranchId, false, true);
             return;
         }
         resolveThreadBranchThenOpenStreamingVoice(autoCommitOnSilence, continuousLoop, choice.action);
@@ -3141,7 +3141,7 @@ public final class OverlayService extends Service {
                 if (!incognito) {
                     updateActiveBranchId(resolvedBranch);
                 }
-                openStreamingVoiceSession(autoCommit, continuous, resolvedBranch, incognito);
+                openStreamingVoiceSession(autoCommit, continuous, resolvedBranch, incognito, false);
             });
         }, "moa-thread-switch").start();
     }
@@ -3152,7 +3152,7 @@ public final class OverlayService extends Service {
         streamingCommitPendingOpen = false;
     }
 
-    private void openStreamingVoiceSession(boolean autoCommitOnSilence, boolean continuousLoop, String branchId, boolean incognito) {
+    private void openStreamingVoiceSession(boolean autoCommitOnSilence, boolean continuousLoop, String branchId, boolean incognito, boolean reconciliationEligible) {
         loadSettings();
         Log.i(TAG, "openStreamingVoiceSession autoCommit=" + autoCommitOnSilence
                 + " continuousLoop=" + continuousLoop
@@ -3611,7 +3611,7 @@ public final class OverlayService extends Service {
                 && draftCapability.isFreshFor(gatewayUrl, System.currentTimeMillis());
         streamingVoiceController.setVoiceDraftEnabled(exactDraftMode);
         streamingVoiceController.setTranscriptionOnly(transcriptionOnly);
-        streamingVoiceController.setTranscriptReconciliationEnabled(!incognito);
+        streamingVoiceController.setTranscriptReconciliationEnabled(reconciliationEligible);
         if (!pendingReplacementTurnId.isEmpty()) {
             streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());
             pendingReplacementTurnId = "";

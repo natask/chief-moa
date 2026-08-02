@@ -14,6 +14,7 @@ public final class MoaTranscriptReconciliationOptInTest {
                 new JSONObject().put("type", "session_start"), true);
         JSONObject optIn = start.getJSONObject("transcript_reconciliation");
 
+        assertEquals("continue", start.getString("context_action"));
         assertTrue(optIn.getBoolean("enabled"));
         assertEquals(1, optIn.getInt("version"));
         assertEquals("retained", optIn.getString("privacy_scope"));
@@ -25,6 +26,7 @@ public final class MoaTranscriptReconciliationOptInTest {
                 new JSONObject().put("type", "session_start"), false);
 
         assertFalse(start.has("transcript_reconciliation"));
+        assertFalse(start.has("context_action"));
     }
 
     @Test
@@ -36,6 +38,8 @@ public final class MoaTranscriptReconciliationOptInTest {
 
         assertEquals("retained", retained.getJSONObject("transcript_reconciliation")
                 .getString("privacy_scope"));
+        assertEquals("continue", retained.getString("context_action"));
         assertFalse(privateTurn.has("transcript_reconciliation"));
+        assertFalse(privateTurn.has("context_action"));
     }
 }
