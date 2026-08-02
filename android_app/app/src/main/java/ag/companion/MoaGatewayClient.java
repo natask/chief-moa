@@ -285,6 +285,12 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject reminder(String reminderId) throws Exception {
+        String id = safe(reminderId).replaceAll("[^a-zA-Z0-9_-]", "");
+        if (id.isEmpty()) throw new IllegalArgumentException("reminder id is required");
+        return new JSONObject(getText(apiEndpoint("/v1/reminders/" + id), 15000));
+    }
+
     JSONObject createMediaBookmark(JSONObject body) throws Exception {
         return new JSONObject(postJson(apiEndpoint("/v1/media/bookmarks"), body.toString(), 15000));
     }

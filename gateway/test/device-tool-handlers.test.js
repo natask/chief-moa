@@ -117,6 +117,41 @@ test("heartbeat and creation convert validation failures to bounded responses", 
   assert.deepEqual(response, { status: 400, payload: { error: "bad request" } });
 });
 
+test("heartbeat and exact terminal receipt notify optional delivery hooks", async () => {
+  const heartbeats = [];
+  const receipts = [];
+  const state = harness({
+    onDeviceHeartbeat: async (device) => heartbeats.push(device.id),
+    onTerminalReceipt: async (toolRequest, receipt) => receipts.push([toolRequest.id, receipt.id]),
+  });
+  let response = {};
+  await state.handlers.handleDeviceClientHeartbeat(request("POST", { device_id: "phone" }), response);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(heartbeats, ["phone"]);
+
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", receiptBody()), response, "req-1");
+  assert.deepEqual(receipts, [["req-1", "receipt-1"]]);
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", receiptBody()), response, "req-1");
+  assert.deepEqual(receipts, [["req-1", "receipt-1"], ["req-1", "receipt-1"]]);
+});
+
+test("delivery hook failures do not erase canonical heartbeat or receipt results", async () => {
+  const state = harness({
+    onDeviceHeartbeat: async () => { throw new Error("projection offline"); },
+    onTerminalReceipt: async () => { throw new Error("projection offline"); },
+  });
+  let response = {};
+  await state.handlers.handleDeviceClientHeartbeat(request("POST", { device_id: "phone" }), response);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(response.status, 200);
+  response = {};
+  await state.handlers.handleToolRequestReceipt(request("POST", receiptBody()), response, "req-1");
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.receipt.id, "receipt-1");
+});
+
 test("claim validates identity, optional heartbeat, availability, and aliases", async () => {
   let state = harness();
   let response = {};

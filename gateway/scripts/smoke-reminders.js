@@ -62,6 +62,15 @@ async function main() {
     assert.equal(due.json.reminder.status, "due");
     assert.equal(due.json.reminder.delivery.status, "not_configured");
     assert.ok(due.json.reminder.became_due_at);
+    const delivered = await deliverOnAndroid(baseUrl, dueAfterRestart.id);
+    assert.equal(delivered.delivery.status, "displayed");
+    await stopGateway(server);
+    server = null;
+    server = await startGateway({ port, dataDir });
+    const afterDeliveryRestart = await getJson(`${baseUrl}/v1/reminders/${dueAfterRestart.id}`);
+    assert.equal(afterDeliveryRestart.json.reminder.delivery.status, "displayed");
+    const requests = await getJson(`${baseUrl}/v1/tool/requests?target_device_id=android_reminder_smoke&limit=100`);
+    assert.equal(requests.json.requests.filter((item) => item.tool === "notification.reminder").length, 1);
 
     const canceled = await postJson(`${baseUrl}/v1/reminders/${scheduled.id}/cancel`, {});
     assert.equal(canceled.status, 200, JSON.stringify(canceled.json));
@@ -81,7 +90,8 @@ async function main() {
         "create is durable and idempotent",
         "idempotency key reuse with changed intent fails closed",
         "due state materializes after a gateway restart",
-        "delivery remains explicitly not configured",
+        "delivery stays not configured until one Android capability advertises",
+        "Android claim and exact receipt project displayed across restart without duplicate work",
         "cancel is durable and idempotent",
         "named external timer apps are rejected as a separate local action",
       ],
@@ -90,6 +100,41 @@ async function main() {
     if (server) await stopGateway(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+async function deliverOnAndroid(baseUrl, reminderId) {
+  const deviceId = "android_reminder_smoke";
+  await postJson(`${baseUrl}/v1/device-clients/heartbeat`, {
+    device_id: deviceId,
+    surface_type: "android",
+    local_tool_manifest: [{ tool: "notification.reminder", risk: "local_output", approval: "android_notification_permission" }],
+  });
+  let claim;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const response = await postJson(`${baseUrl}/v1/tool/requests/claim`, {
+      device_id: deviceId,
+      surface_type: "android",
+      local_tool_manifest: [{ tool: "notification.reminder", risk: "local_output", approval: "android_notification_permission" }],
+    });
+    if (response.status === 200 && response.json.request?.tool === "notification.reminder") {
+      claim = response.json.request;
+      break;
+    }
+    await delay(25);
+  }
+  assert.ok(claim, "due reminder must become claimable by the opted-in Android client");
+  assert.equal(claim.input.reminder_id, reminderId);
+  const receipt = await postJson(`${baseUrl}/v1/tool/requests/${claim.id}/receipts`, {
+    device_id: deviceId,
+    claim_id: claim.claim_id,
+    receipt_id: `receipt_${claim.id}`,
+    ok: true,
+    summary: "Displayed due Ag reminder.",
+    local_receipt: { tool: "notification.reminder", success: true, outcome: "notification_active" },
+  });
+  assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
+  const projected = await getJson(`${baseUrl}/v1/reminders/${reminderId}`);
+  return projected.json.reminder;
 }
 
 async function assertAuthRequired(baseUrl) {

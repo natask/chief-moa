@@ -2088,9 +2088,17 @@ public final class OverlayService extends Service {
     }
 
     private JSONArray androidLocalToolManifest() throws JSONException {
-        return actionBroker.localToolManifest().put(new JSONObject()
+        JSONArray manifest = actionBroker.localToolManifest().put(new JSONObject()
                 .put("tool", "audio.speak").put("risk", "local_output")
                 .put("approval", "implicit_user_command"));
+        if (MoaReminderNotifier.capabilityAvailable(this)) {
+            manifest.put(new JSONObject()
+                    .put("tool", "notification.reminder")
+                    .put("risk", "local_output")
+                    .put("approval", "android_notification_permission")
+                    .put("description", "Display one due, gateway-owned Ag reminder."));
+        }
+        return manifest;
     }
     private void executeClaimedToolRequest(JSONObject request) {
         String requestId = safe(request.optString("id", ""));
@@ -2110,6 +2118,9 @@ public final class OverlayService extends Service {
         MoaToolRequestExecution execution;
         if ("audio.speak".equals(tool)) {
             execution = executeAudioSpeakRequest(input);
+        } else if ("notification.reminder".equals(tool)) {
+            executeReminderNotificationRequest(requestId, input);
+            return;
         } else {
             MoaActionBroker.ToolExecutionResult result = actionBroker.executeToolRequest(
                     requestId, tool, input, completed -> mainHandler.post(() -> handleAsyncToolResult(requestId, tool, input, completed)));
@@ -2121,6 +2132,48 @@ public final class OverlayService extends Service {
             execution = new MoaToolRequestExecution(result.success, result.reply, result.receipt);
         }
         finishClaimedToolRequest(requestId, execution);
+    }
+
+    private void executeReminderNotificationRequest(String requestId, JSONObject input) {
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        final String deviceId = androidDeviceId();
+        final String reminderId = safe(input.optString("reminder_id", ""));
+        new Thread(() -> {
+            MoaToolRequestExecution execution;
+            try {
+                JSONObject payload = new MoaGatewayClient(url, token).reminder(reminderId);
+                MoaReminderNotificationPolicy.Decision decision =
+                        MoaReminderNotificationPolicy.evaluate(
+                                requestId, deviceId, input, payload.optJSONObject("reminder"));
+                if (!decision.allowed) {
+                    execution = reminderNotificationExecution(
+                            reminderId, false, decision.reason, 0);
+                } else {
+                    MoaReminderNotifier.Result shown = MoaReminderNotifier.post(this, decision);
+                    execution = reminderNotificationExecution(
+                            reminderId, shown.displayed, shown.status, shown.notificationId);
+                }
+            } catch (Exception error) {
+                execution = reminderNotificationExecution(
+                        reminderId, false, "reminder_revalidation_failed", 0);
+            }
+            MoaToolRequestExecution completed = execution;
+            mainHandler.post(() -> finishClaimedToolRequest(requestId, completed));
+        }, "moa-reminder-notification").start();
+    }
+
+    private MoaToolRequestExecution reminderNotificationExecution(String reminderId,
+            boolean displayed, String outcome, int notificationId) {
+        String summary = displayed
+                ? "Displayed due Ag reminder."
+                : "Reminder notification was not displayed: " + safe(outcome) + ".";
+        String target = safe(reminderId);
+        if (notificationId > 0) target += ":" + notificationId;
+        JSONObject receipt = MoaActionReceiptStore.record(
+                this, "notification.reminder", "local_output",
+                "android_notification_permission", target, displayed, summary, safe(outcome));
+        return new MoaToolRequestExecution(displayed, summary, receipt);
     }
     private void handleAsyncToolResult(String requestId, String tool, JSONObject input,
             MoaActionBroker.ToolExecutionResult result) {

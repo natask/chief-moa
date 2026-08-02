@@ -19,6 +19,10 @@ function createDeviceToolHandlers(deps) {
     sanitizeId, toolRequestExists, readToolRequest, randomId, truncate,
     sanitizeToolJson, updateToolRequest,
   } = deps;
+  const onDeviceHeartbeat = typeof deps.onDeviceHeartbeat === "function"
+    ? deps.onDeviceHeartbeat : null;
+  const onTerminalReceipt = typeof deps.onTerminalReceipt === "function"
+    ? deps.onTerminalReceipt : null;
   const now = typeof deps.now === "function" ? deps.now : () => new Date().toISOString();
 
   async function routeDeviceTools(request, response, url) {
@@ -57,6 +61,7 @@ function createDeviceToolHandlers(deps) {
         pending_request_count: claimableToolRequestsForDevice(device).length,
         requests_endpoint: "/v1/tool/requests/claim",
       });
+      if (onDeviceHeartbeat) Promise.resolve(onDeviceHeartbeat(device)).catch(ignoreDeliveryHookFailure);
     } catch (error) { sendJson(response, 400, { error: cleanError(error) }); }
   }
 
@@ -144,6 +149,9 @@ function createDeviceToolHandlers(deps) {
     const existing = receipts.find((item) => item && item.id === receiptId);
     if (TERMINAL_TOOL_REQUEST_STATUSES.has(current.status)) {
       if (existing && existing.binding_digest === bindingDigest) {
+        if (onTerminalReceipt) {
+          await Promise.resolve(onTerminalReceipt(current, existing)).catch(ignoreDeliveryHookFailure);
+        }
         sendJson(response, 200, {
           request: summarizeToolRequest(current), receipt: existing, idempotent_replay: true,
         });
@@ -182,6 +190,9 @@ function createDeviceToolHandlers(deps) {
       receipts: receipts.concat([receipt]), error: receipt.error,
     });
     await recordToolRequestProductEvent(next, "receipt", receipt);
+    if (onTerminalReceipt) {
+      await Promise.resolve(onTerminalReceipt(next, receipt)).catch(ignoreDeliveryHookFailure);
+    }
     sendJson(response, 200, { request: summarizeToolRequest(next), receipt, idempotent_replay: false });
   }
 
@@ -193,6 +204,11 @@ function isToolRequestStateClaimable(requestRecord, nowMs) {
   if (requestRecord?.status !== "claimed") return false;
   const expires = Date.parse(requestRecord.lease_expires_at || "");
   return Number.isFinite(expires) && expires <= nowMs;
+}
+
+function ignoreDeliveryHookFailure() {
+  // The canonical tool receipt is already durable. Reminder projection can be
+  // repaired by the exact idempotent receipt replay without rejecting it.
 }
 
 function requiredAliasedId(body, aliases, label) {

@@ -5,6 +5,8 @@ const crypto = require("node:crypto");
 const REMINDER_CREATED = "reminder.created";
 const REMINDER_DUE = "reminder.due";
 const REMINDER_CANCELED = "reminder.canceled";
+const REMINDER_DELIVERY_QUEUED = "reminder.delivery_queued";
+const REMINDER_DELIVERY_RECEIPTED = "reminder.delivery_receipted";
 const PAGE_SIZE = 500;
 const MAX_EVENT_SCAN = 10_000;
 const MAX_LIST_LIMIT = 100;
@@ -139,6 +141,91 @@ function createReminderStore({ events, now = () => Date.now() } = {}) {
     return { marked_due: markedDue };
   }
 
+  async function listDueForDelivery() {
+    const createdEvents = await listEventsByType(REMINDER_CREATED);
+    const due = [];
+    for (const event of createdEvents) {
+      if (!event.payload?.id) continue;
+      const reminder = await readReminder(event.payload.id);
+      if (reminder?.status === "due" && reminder.delivery?.status === "not_configured") {
+        due.push(reminder);
+      }
+    }
+    return due.sort((a, b) => String(a.due_at).localeCompare(String(b.due_at))
+      || String(a.id).localeCompare(String(b.id)));
+  }
+
+  async function queueDelivery(userIdInput, reminderIdInput, target = {}, enqueue) {
+    const userId = requiredText(userIdInput, "user_id", 160);
+    const reminderId = normalizeReminderId(reminderIdInput);
+    if (typeof enqueue !== "function") throw new ReminderError("delivery enqueue callback is required");
+    return events.withStreamLock(reminderStreamId(reminderId), async () => {
+      const current = await readReminder(reminderId);
+      if (!current || current.user_id !== userId || current.status !== "due") return current;
+      if (current.delivery?.status !== "not_configured") return current;
+      const targetDeviceId = requiredText(target.device_id || target.deviceId, "device_id", 160);
+      const surfaceType = requiredText(target.surface_type || target.surfaceType, "surface_type", 80);
+      const queued = await enqueue({ reminder: current, target_device_id: targetDeviceId, surface_type: surfaceType });
+      const toolRequestId = requiredText(queued?.tool_request_id || queued?.toolRequestId, "tool_request_id", 160);
+      const timestamp = new Date(now()).toISOString();
+      await events.appendEvent({
+        event_type: REMINDER_DELIVERY_QUEUED,
+        event_schema_version: 1,
+        stream_id: reminderStreamId(reminderId),
+        occurred_at: timestamp,
+        actor: { kind: "gateway", id: "reminder-delivery" },
+        authority: { boundary: "gateway-reminder", execution: "device-proposal", delivery: "queued" },
+        idempotency_key: `reminder:delivery:${reminderId}:${targetDeviceId}:queued`,
+        correlation_id: toolRequestId,
+        payload: {
+          reminder_id: reminderId,
+          user_id: userId,
+          tool: "notification.reminder",
+          tool_request_id: toolRequestId,
+          target_device_id: targetDeviceId,
+          target_surface_type: surfaceType,
+          queued_at: timestamp,
+        },
+      });
+      return readReminder(reminderId);
+    });
+  }
+
+  async function recordDeliveryReceipt(input = {}) {
+    const reminderId = normalizeReminderId(input.reminder_id || input.reminderId);
+    const toolRequestId = requiredText(input.tool_request_id || input.toolRequestId, "tool_request_id", 160);
+    const deviceId = requiredText(input.device_id || input.deviceId, "device_id", 160);
+    const ok = input.ok === true;
+    return events.withStreamLock(reminderStreamId(reminderId), async () => {
+      const current = await readReminder(reminderId);
+      if (!current || current.delivery?.tool_request_id !== toolRequestId
+          || current.delivery?.target_device_id !== deviceId) return null;
+      if (["displayed", "failed"].includes(current.delivery.status)) return current;
+      if (current.delivery.status !== "queued") return null;
+      const timestamp = new Date(now()).toISOString();
+      await events.appendEvent({
+        event_type: REMINDER_DELIVERY_RECEIPTED,
+        event_schema_version: 1,
+        stream_id: reminderStreamId(reminderId),
+        occurred_at: timestamp,
+        actor: { kind: "device", id: deviceId },
+        authority: { boundary: "android-notification", execution: "local", delivery: ok ? "displayed" : "failed" },
+        idempotency_key: `reminder:delivery:${reminderId}:${toolRequestId}:receipt`,
+        correlation_id: toolRequestId,
+        payload: {
+          reminder_id: reminderId,
+          user_id: current.user_id,
+          tool_request_id: toolRequestId,
+          target_device_id: deviceId,
+          status: ok ? "displayed" : "failed",
+          summary: optionalText(input.summary, 2000),
+          receipted_at: timestamp,
+        },
+      });
+      return readReminder(reminderId);
+    });
+  }
+
   async function markDue(userId, reminderId) {
     return events.withStreamLock(reminderStreamId(reminderId), async () => {
       const current = await readReminder(reminderId);
@@ -182,6 +269,24 @@ function createReminderStore({ events, now = () => Date.now() } = {}) {
         reminder.status = "canceled";
         reminder.canceled_at = event.payload?.canceled_at || event.occurred_at;
         reminder.updated_at = event.occurred_at;
+      } else if (event.event_type === REMINDER_DELIVERY_QUEUED) {
+        reminder.delivery = {
+          status: "queued",
+          tool: event.payload?.tool || "notification.reminder",
+          tool_request_id: event.payload?.tool_request_id || "",
+          target_device_id: event.payload?.target_device_id || "",
+          target_surface_type: event.payload?.target_surface_type || "",
+          queued_at: event.payload?.queued_at || event.occurred_at,
+        };
+        reminder.updated_at = event.occurred_at;
+      } else if (event.event_type === REMINDER_DELIVERY_RECEIPTED) {
+        reminder.delivery = {
+          ...reminder.delivery,
+          status: event.payload?.status === "displayed" ? "displayed" : "failed",
+          summary: event.payload?.summary || "",
+          receipted_at: event.payload?.receipted_at || event.occurred_at,
+        };
+        reminder.updated_at = event.occurred_at;
       }
     }
     return reminder;
@@ -197,7 +302,10 @@ function createReminderStore({ events, now = () => Date.now() } = {}) {
     return output;
   }
 
-  return Object.freeze({ create, get, list, cancel, sweepDue });
+  return Object.freeze({
+    create, get, list, cancel, sweepDue, listDueForDelivery, queueDelivery,
+    recordDeliveryReceipt,
+  });
 }
 
 function assertInternalReminder(input) {
@@ -296,6 +404,8 @@ module.exports = {
   REMINDER_CANCELED,
   REMINDER_CREATED,
   REMINDER_DUE,
+  REMINDER_DELIVERY_QUEUED,
+  REMINDER_DELIVERY_RECEIPTED,
   ReminderError,
   createReminderStore,
   assertInternalReminder,

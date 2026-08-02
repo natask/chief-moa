@@ -2032,15 +2032,20 @@ absolute `due_at`; relative delays are converted once at intake. The gateway's
 periodic sweep and every reminder read can append the idempotent
 `reminder.due` transition, so a process restart loses no deadline.
 
-The implemented slice does not deliver notifications. Every reminder projects
-`delivery.status=not_configured`, even after it becomes due. No Android,
-browser, or desktop Surface currently advertises a generic reminder
-notification tool. Cross-surface delivery requires a later
-`notification.reminder` tool contract whose target client advertises, claims,
-validates, displays, and receipts the notification; queueing alone will not
-count as delivery. Requests that name an external Clock/timer/reminder app are
-rejected by the internal reminder API and remain separate device-local action
-proposals. Contract: `reference/openspec/changes/gateway-owned-reminders`.
+Android can advertise the bounded `notification.reminder` tool while current OS
+permission plus app/channel policy permit notification display. When exactly
+one compatible Android client is online, the gateway creates one deterministic,
+target-bound tool request and projects delivery as `queued`. Android claims it,
+re-reads canonical reminder state, rejects canceled/stale/retargeted/mutated
+content, posts through `NotificationManager`, and returns through its durable
+receipt outbox. Only that bound terminal receipt projects `displayed` or
+`failed`; queue creation never counts as delivery. A stopped/offline Android,
+multiple eligible phones, or absent notification authority leaves the due
+reminder at `not_configured`. Browser and desktop reminder delivery remain
+unimplemented. Requests that name an external Clock/timer/reminder app remain
+separate device-local action proposals. Contracts:
+`reference/openspec/changes/gateway-owned-reminders` and
+`reference/openspec/changes/deliver-android-reminders`.
 
 ### Cross-Device Tool Hub
 

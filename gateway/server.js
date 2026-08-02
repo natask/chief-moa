@@ -102,6 +102,7 @@ const {
 const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
 const { createReminderStore } = require("./lib/reminders");
 const { createReminderHandlers } = require("./lib/reminder-handlers");
+const { createReminderDeliveryCoordinator } = require("./lib/reminder-delivery");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { createBetterAuthRuntime } = require("./lib/better-auth-runtime");
 const { buildIdentity } = require("./lib/build-identity");
@@ -669,6 +670,12 @@ const eventSubstrate = createEventSubstrateStore({
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
 const reminders = createReminderStore({ events: eventSubstrate });
+const reminderDelivery = createReminderDeliveryCoordinator({
+  reminders,
+  deviceClientsForTool,
+  createToolRequest,
+  recordToolRequestProductEvent,
+});
 const { routeReminders } = createReminderHandlers({
   authorized,
   sendJson,
@@ -694,6 +701,9 @@ const { routeDeviceTools } = createDeviceToolHandlers({
   normalizeDeviceId, readDeviceClientsMap, claimNextToolRequest, sanitizeId,
   toolRequestExists: (id) => fs.existsSync(toolRequestPath(id)), readToolRequest,
   randomId, truncate, sanitizeToolJson, updateToolRequest,
+  onDeviceHeartbeat: () => reminderDelivery.deliverDue(),
+  onTerminalReceipt: (toolRequest, receipt) =>
+    reminderDelivery.recordToolReceipt(toolRequest, receipt),
 });
 const workerPull = createWorkerPullStore({
   dataDir: DATA_DIR,
@@ -869,14 +879,13 @@ if (ACCOUNT_HEALTH_INTERVAL_MS > 0) {
 }
 
 // Reminder deadlines live in the event substrate, not in these process timers.
-// This sweep only materializes scheduled -> due after startup or while serving;
-// it deliberately does not claim notification delivery until a client surface
-// advertises and receipts a bounded reminder notification tool.
+// This sweep materializes scheduled -> due and queues a proposal only when one
+// opted-in Android client advertises the bounded reminder notification tool.
 const REMINDER_SWEEP_INTERVAL_MS = Number(process.env.REMINDER_SWEEP_INTERVAL_MS ?? 30_000);
 if (REMINDER_SWEEP_INTERVAL_MS > 0) {
   const reminderSweepTimer = setInterval(() => {
-    reminders.sweepDue().catch((error) => {
-      console.error(`reminder due sweep failed: ${cleanError(error)}`);
+    reminderDelivery.deliverDue().catch((error) => {
+      console.error(`reminder delivery sweep failed: ${cleanError(error)}`);
     });
   }, REMINDER_SWEEP_INTERVAL_MS);
   reminderSweepTimer.unref();
@@ -12158,9 +12167,13 @@ function createToolRequest(body) {
     ? listDeviceClients().find((device) => device.device_id === targetDeviceId)
     : null;
   const input = bindLocalObservationInput(tool, body.input || body.arguments || {}, targetDevice);
+  const idempotencyKey = String(body.idempotency_key || body.idempotencyKey || "").trim().slice(0, 240);
+  const requestId = idempotencyKey
+    ? `treq_${crypto.createHash("sha256").update(`tool-request\0${idempotencyKey}`).digest("hex").slice(0, 24)}`
+    : randomId("treq");
 
   const requestRecord = {
-    id: randomId("treq"),
+    id: requestId,
     status: "pending",
     tool,
     input,
@@ -12182,9 +12195,26 @@ function createToolRequest(body) {
     created_at: now,
     updated_at: now,
     finished_at: "",
+    idempotency_key: idempotencyKey,
   };
+  if (idempotencyKey && fs.existsSync(toolRequestPath(requestId))) {
+    const existing = readToolRequest(requestId);
+    if (!sameToolRequestCreation(existing, requestRecord)) {
+      throw new Error("idempotency_key is already bound to a different tool request");
+    }
+    return existing;
+  }
   writeToolRequest(requestRecord);
   return requestRecord;
+}
+
+function sameToolRequestCreation(actual, expected) {
+  return actual?.tool === expected.tool
+    && actual.target_device_id === expected.target_device_id
+    && actual.target_surface_type === expected.target_surface_type
+    && actual.source === expected.source
+    && actual.source_surface_type === expected.source_surface_type
+    && JSON.stringify(actual.input || {}) === JSON.stringify(expected.input || {});
 }
 
 function bindLocalObservationInput(tool, rawInput, targetDevice) {

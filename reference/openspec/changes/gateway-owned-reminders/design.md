@@ -12,14 +12,15 @@ spoken/typed request
   -> reminder.created product event
   -> restart-safe deadline in the event payload
   -> gateway sweep/read appends reminder.due once
-  -> delivery remains not_configured
+  -> delivery remains not_configured unless a separately scoped Surface adapter
+     advertises, claims, displays, and receipts notification.reminder
 ```
 
-A future delivery slice may turn a due event into one or more bounded
-`notification.reminder` tool requests. Each target Surface must advertise that
-tool, claim it, enforce its local notification policy, and receipt display or
-rejection. The gateway may then project per-target delivery state. It must not
-infer delivery from queue creation.
+The `deliver-android-reminders` slice can turn a due event into one bounded
+`notification.reminder` tool request when exactly one Android target advertises
+it. That Surface claims it, enforces local notification policy, and receipts
+display or rejection. Other Surfaces need their own later adapter. The gateway
+never infers delivery from queue creation.
 
 ## Event Contract
 
