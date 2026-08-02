@@ -600,8 +600,6 @@ class CascadedVoiceProvider {
     this.projectId = chirpProjectId(env);
     this.location = String(env.CHIRP_LOCATION || env.GCP_LOCATION || env.GOOGLE_CLOUD_LOCATION || "us").trim() || "us";
     this.model = String(env.CHIRP_MODEL || env.VOICE_STT_MODEL || DEFAULT_CHIRP_MODEL).trim() || DEFAULT_CHIRP_MODEL;
-    // Backward-compatible env fallback for the language names placed in the
-    // Chirp custom prompt. Recognition itself always stays language-agnostic.
     this.envPromptLanguageCodes = languageCodes(env.CHIRP_PROMPT_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODES || env.CHIRP_LANGUAGE_CODE || env.GEMINI_LIVE_LANGUAGE_CODE || env.MODEL_LANGUAGE || "en-US");
     this.timeoutMs = Math.max(5000, numberFrom(env.CHIRP_TIMEOUT_MS || env.VOICE_PROVIDER_TIMEOUT_MS, 30000));
     this.cloudTtsTimeoutMs = Math.max(1, numberFrom(env.CLOUD_TTS_TIMEOUT_MS, 20000));
@@ -638,6 +636,7 @@ class CascadedVoiceProvider {
       ? createReasonerStage({
         id: "gateway",
         capabilities: { streaming_reasoning: true, tools: true },
+        prewarm: typeof this.reasoner.prewarm === "function" ? (input) => this.reasoner.prewarm(input) : undefined,
         run: (input) => this.reasoner(input),
       })
       : null;
@@ -649,6 +648,7 @@ class CascadedVoiceProvider {
           expressive_tags: this.ttsProviderId === "gemini-tts",
           language_pinning: this.ttsProviderId === "gemini-tts",
         },
+        prewarm: () => this.accessToken(),
         synthesize: ({ text, language, stylePrompt, signal, voice, speakingRate, tone }) => this.synthesizeSpeech(text, language, stylePrompt, signal, voice, { speakingRate, tone }),
       })
       : null;

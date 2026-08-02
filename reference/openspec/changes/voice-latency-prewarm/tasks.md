@@ -30,21 +30,21 @@
 
 ## 2. Connection Prewarm
 
-- [ ] 2.1 Add a `prewarm()` capability to the reasoner and TTS stage
+- [x] 2.1 Add a `prewarm()` capability to the reasoner and TTS stage
   interfaces in `gateway/lib/voice-stages.js` (optional, defaults to a
   no-op so providers that don't support it are unaffected).
-- [ ] 2.2 Implement `prewarm()` for the gateway's configured reasoning
+- [x] 2.2 Implement `prewarm()` for the gateway's configured reasoning
   provider and for the cloud-tts/gemini-tts provider in
   `gateway/lib/voice-providers.js`: a connection/session/token-refresh
   call that issues no inference request and carries no transcript
   content.
-- [ ] 2.3 Call `prewarm()` from `handleSessionStart`
+- [x] 2.3 Call `prewarm()` from `handleSessionStart`
   (`gateway/lib/voice-session-server.js`), fire-and-forget, alongside the
   existing `contextPromptForTurn` prefetch. It must not block
   `session_ready` and must not throw into the session-start path (log and
   continue on failure, exactly like the existing `contextBuildFailed`
   pattern).
-- [ ] 2.4 Add a deterministic smoke asserting `prewarm()` is called once
+- [x] 2.4 Add a deterministic smoke asserting `prewarm()` is called once
   per turn at `session_start`, not at `commit_turn`, using a fake provider
   double.
 
@@ -67,7 +67,7 @@
 
 ## 4. Docs
 
-- [ ] 4.1 Add a short note to `ARCHITECTURE.md`'s voice section
+- [x] 4.1 Add a short note to `ARCHITECTURE.md`'s voice section
   distinguishing this change (post-commit critical-path prewarm plus
   measurement) from the shipped streaming-cascaded-voice work (which
   already overlaps STT/TTS with capture and generation) and from the

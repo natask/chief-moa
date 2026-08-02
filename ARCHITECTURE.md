@@ -1139,6 +1139,18 @@ after commit, and issues one HTTPS synthesis request for each TTS phrase. Those
 phrase requests overlap with continued model generation, but they are not a
 provider audio-delta stream.
 
+Connection prewarm is a third, narrower latency mechanism. At admitted
+`session_start`, cascaded voice fire-and-forgets only stages that advertise an
+honest content-free prewarm: the configured reasoning transport opens a
+non-inference provider endpoint (or refreshes Vertex auth), and Cloud/Gemini TTS
+refreshes its existing Google token source. This work carries no transcript or
+audio, never delays `session_ready`, and failures are diagnostic only. It does
+not move reasoning or synthesis before `commit_turn`, and it makes no measured
+latency claim. The separate `voice-latency-prewarm` clause-boundary measurement
+remains unfinished evidence work. Streaming cascaded voice overlaps committed
+generation with TTS, while the interruption ledger replaces an in-flight turn
+when a new utterance starts; neither is same-utterance speculative reasoning.
+
 Clients that negotiate `voice_drafts_v1` use a separate, bounded gateway draft
 store before a canonical voice turn exists. PCM remains in that store through
 pause, resume, and park, including process restart. Those controls and discard

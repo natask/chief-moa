@@ -8905,6 +8905,22 @@ function runAndroidCascadedVoiceReasoning(input) {
   return runCascadedVoiceReasoning(input);
 }
 
+runAndroidCascadedVoiceReasoning.prewarm = async ({ profile } = {}) => {
+  const provider = resolveReasoningProvider(profile);
+  if (!providerConfiguredFor(provider)) return;
+  if (provider === "vertex") {
+    await vertexAccessToken();
+    return;
+  }
+  const { response, text: responseText } = await fetchBoundedResponseText(`${MODEL_BASE_URL}/models`, {
+    method: "GET",
+    headers: modelHeaders(),
+  }, { timeoutMs: Math.min(MODEL_FETCH_TIMEOUT_MS, 5000), maxBytes: 512_000, label: "reasoner prewarm" });
+  if (!response.ok) {
+    throw new Error(`reasoner prewarm HTTP ${response.status}: ${truncate(responseText, 200)}`);
+  }
+};
+
 // A deliberately narrow model call for opt-in live phrase finding. It receives
 // only the current normalized transcript snapshot and offers no tools or native
 // search. It does not enter the durable turn, profile, broker, or agent-run

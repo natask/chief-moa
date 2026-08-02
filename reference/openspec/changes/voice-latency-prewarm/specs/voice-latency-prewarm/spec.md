@@ -47,8 +47,8 @@ or TTS input.
 
 ### Requirement: Clause-boundary timing is measured without changing turn behavior
 
-When clause-boundary measurement is enabled
-(`VOICE_LATENCY_MEASURE=1`), the gateway SHALL log, per turn, the count of
+The gateway SHALL, when clause-boundary measurement is enabled
+(`VOICE_LATENCY_MEASURE=1`), log, per turn, the count of
 `isFinal` streaming-STT clause boundaries reached before `commit_turn` and
 the elapsed time from the first such boundary to `commit_turn`, as an
 additive provider-event entry. This logging SHALL NOT alter STT, reasoner,

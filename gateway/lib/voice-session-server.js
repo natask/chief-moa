@@ -26,6 +26,7 @@ const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = requir
 const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
 const { VoiceDraftSessionBridge, createVoiceDraftSessionRuntime, disabledVoiceDraftSessionRuntime }
   = require("./voice-draft-session");
+const { startVoicePrewarm } = require("./voice-prewarm");
 const { bindBrowserVoiceInvocationContext } = require("./browser-invocation-context");
 const { completeNoSpeech, completeTranscriptFinalization, handleTranscriptFinalize }
   = require("./voice-transcript-finalize");
@@ -415,6 +416,7 @@ class VoiceSessionConnection {
       this.sendError(`failed to write audio: ${cleanError(error)}`);
     });
     this.turn = turn;
+    startVoicePrewarm(this.voiceProvider, turn);
     if (typeof this.voiceProvider.createLiveTurnSession === "function") {
       turn.providerEvents = this.createProviderEvents(turn);
       try {

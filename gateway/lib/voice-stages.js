@@ -24,8 +24,8 @@
 
 const STAGE_CAPABILITY_DEFAULTS = Object.freeze({
   stt: Object.freeze({ partial_transcripts: false, language_hints: false }),
-  reasoner: Object.freeze({ streaming_reasoning: false, tools: false }),
-  tts: Object.freeze({ streaming_tts: false, expressive_tags: false, language_pinning: false }),
+  reasoner: Object.freeze({ streaming_reasoning: false, tools: false, connection_prewarm: false }),
+  tts: Object.freeze({ streaming_tts: false, expressive_tags: false, language_pinning: false, connection_prewarm: false }),
 });
 
 function stageCapabilities(kind, overrides) {
@@ -56,7 +56,11 @@ function createReasonerStage(options) {
   return Object.freeze({
     kind: "reasoner",
     id: String(options.id || "reasoner"),
-    capabilities: stageCapabilities("reasoner", options.capabilities),
+    capabilities: stageCapabilities("reasoner", {
+      ...options.capabilities,
+      connection_prewarm: typeof options.prewarm === "function",
+    }),
+    prewarm: typeof options.prewarm === "function" ? options.prewarm : async () => {},
     run: options.run,
   });
 }
@@ -68,7 +72,11 @@ function createTtsStage(options) {
   return Object.freeze({
     kind: "tts",
     id: String(options.id || "tts"),
-    capabilities: stageCapabilities("tts", options.capabilities),
+    capabilities: stageCapabilities("tts", {
+      ...options.capabilities,
+      connection_prewarm: typeof options.prewarm === "function",
+    }),
+    prewarm: typeof options.prewarm === "function" ? options.prewarm : async () => {},
     synthesize: options.synthesize,
   });
 }
