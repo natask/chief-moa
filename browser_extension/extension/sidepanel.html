@@ -43,12 +43,27 @@
         border: 1px solid var(--border);
         border-radius: 8px;
         display: flex;
+        gap: 7px;
         font-size: 12px;
         font-weight: 700;
         height: 26px;
         justify-content: center;
         letter-spacing: 0.04em;
-        width: 34px;
+        max-width: 150px;
+        min-width: 34px;
+        overflow: hidden;
+        padding: 2px 7px 2px 3px;
+      }
+      header .mark img {
+        flex: 0 0 auto;
+        height: 22px;
+        object-fit: contain;
+        width: 22px;
+      }
+      header .mark span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       header .status {
         color: var(--muted);
@@ -581,7 +596,10 @@
   </head>
   <body>
     <header>
-      <div class="mark">Ag</div>
+      <div class="mark" id="companionIdentity" aria-label="Ag companion">
+        <img id="companionIdentityImage" src="moa-mark.png" alt="" />
+        <span id="companionIdentityName">Ag</span>
+      </div>
       <div class="status" id="status">Ready.</div>
       <div class="spacer"></div>
       <button id="floatBtn" type="button" title="Pop Ag out into an always-on-top floating window">Float</button>

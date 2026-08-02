@@ -678,7 +678,10 @@
     cancelLauncherDoubleClickHold({ cancelStartedVoice: e.type === "pointercancel" });
     clearVoiceFirstHoldTimer();
     if (wasHoldToTalk) {
-      finishLauncherPushToTalk();
+      if (e.type === "pointercancel") {
+        holdToTalkActive = false; holdToTalkPointerId = null; launcherSecondTapAction = null; voiceFirstHoldStartedTurn = false;
+        stopLiveVoiceTurn("cancel");
+      } else finishLauncherPushToTalk();
       resetVoiceFirstTapChain();
       return;
     }

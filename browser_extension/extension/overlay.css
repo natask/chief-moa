@@ -136,10 +136,11 @@
   filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5));
   animation: agee-mascot-idle 6s ease-in-out infinite;
 }
-/* The idle mark rests faint. Live state, hover, and keyboard focus restore it
-   so the drag target never looks dead. */
+/* Unit state owns the idle opacity. Keeping the image itself opaque avoids
+   multiplying two fades into an effectively invisible mascot on either a
+   light or dark page. The hit box and painted footprint stay unchanged. */
 #agee-root:not(.agee-voicing):not(.agee-recording) #agee-launcher .agee-bird {
-  opacity: 0.34;
+  opacity: 1;
 }
 #agee-root:not(.agee-voicing):not(.agee-recording) #agee-launcher:hover .agee-bird,
 #agee-root:not(.agee-voicing):not(.agee-recording) #agee-launcher:focus-visible .agee-bird {

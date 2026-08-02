@@ -1767,9 +1767,10 @@ if (
   !/\.agee-ribbon\.agee-ribbon-live \{[^}]*background: var\(--agee-ribbon-plate\);/.test(ribbonsCssSource) ||
   !/\.agee-ribbon-copy \{[^}]*pointer-events: auto;/.test(ribbonsCssSource) ||
   /#agee-root\[data-agee-unit="engaged"\] \.agee-ribbon-live \.agee-ribbon-copy/.test(ribbonsCssSource) ||
-  !/#agee-root\[data-agee-unit="dormant"\] #agee-launcher \{ opacity: 0\.34; \}/.test(ribbonsCssSource)
+  !/#agee-root\[data-agee-unit="dormant"\] #agee-launcher \{ opacity: 0\.46; \}/.test(ribbonsCssSource) ||
+  !/\.agee-ribbon\.agee-ribbon-live \{[\s\S]*?pointer-events: none;/.test(ribbonsCssSource)
 ) {
-  throw new Error("the plate and copy rail must be permanent; only size may change on click");
+  throw new Error("the plate and copy rail must stay visible while blank plate space passes through");
 }
 
 // The unit moves as one: dragging a ribbon moves the companion anchor and the

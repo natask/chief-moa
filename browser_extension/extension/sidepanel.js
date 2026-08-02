@@ -27,8 +27,12 @@ const talkBtn = document.getElementById("talk");
 const form = document.getElementById("form");
 const textInput = document.getElementById("text");
 const sendBtn = document.getElementById("sendBtn");
+const companionIdentityEl = document.getElementById("companionIdentity");
+const companionIdentityImageEl = document.getElementById("companionIdentityImage");
+const companionIdentityNameEl = document.getElementById("companionIdentityName");
 
 const TURN_WATCHDOG_MS = 90000;
+const ACTIVE_COMPANION_CACHE_KEY = "ageeActiveCompanionPetCache";
 
 let port = null;
 let nextReqId = 1;
@@ -42,6 +46,48 @@ let audioCtx = null;
 let playbackTime = 0;
 let playbackRate = 1;
 const playbackSources = new Set();
+
+function compactIdentityText(value, max = 80) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function safeCompanionImage(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 350 * 1024) return "";
+  if (/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "chrome-extension:" && url.hostname === chrome.runtime.id) return url.href;
+  } catch {}
+  return "";
+}
+
+function renderCompanionIdentity(payload) {
+  const record = payload?.active_companion || payload?.activeCompanion || payload;
+  const pet = record?.pet && typeof record.pet === "object" ? record.pet : {};
+  const sprite = pet.sprite && typeof pet.sprite === "object" ? pet.sprite : {};
+  const name = compactIdentityText(record?.companion_name || record?.name || pet.name) || "Ag";
+  const image = safeCompanionImage(sprite.image_data_url || sprite.asset_url || pet.asset_url);
+  companionIdentityNameEl.textContent = name;
+  companionIdentityImageEl.src = image || chrome.runtime.getURL("moa-mark.png");
+  companionIdentityEl.setAttribute("aria-label", name === "Ag" ? "Ag companion" : `Ag, ${name} companion`);
+}
+
+async function hydrateCompanionIdentity() {
+  const stored = await chrome.storage.local.get({ [ACTIVE_COMPANION_CACHE_KEY]: null });
+  renderCompanionIdentity(stored[ACTIVE_COMPANION_CACHE_KEY]);
+  chrome.runtime.sendMessage({ cmd: "activeCompanionPet" })
+    .then((result) => {
+      if (result?.ok) renderCompanionIdentity(result.active_companion);
+    })
+    .catch(() => {});
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[ACTIVE_COMPANION_CACHE_KEY]) {
+    renderCompanionIdentity(changes[ACTIVE_COMPANION_CACHE_KEY].newValue);
+  }
+});
 
 // ---- Release cockpit -------------------------------------------------------
 
@@ -682,9 +728,7 @@ function renderHistoryMessage(message) {
   body.textContent = message.text;
   item.append(speaker, body);
   let selectedTranscript = message.text;
-  if (message.speaker === "user") {
-    item.appendChild(historyCopyButton(message, () => selectedTranscript));
-  }
+  item.appendChild(historyCopyButton(message, () => selectedTranscript));
   renderTranscriptRevisions(item, message, (revision) => {
     selectedTranscript = revision.transcript;
     body.textContent = revision.transcript;
@@ -1129,10 +1173,12 @@ async function startTurn(kind, options) {
 // ---- Voice: hold to talk ----------------------------------------------------
 
 let holdActive = false;
+let holdCancelled = false;
 
 async function beginHold() {
   if (holdActive || (turn && !turn.done)) return;
   holdActive = true;
+  holdCancelled = false;
   talkBtn.dataset.state = "listening";
   talkBtn.textContent = "Listening — release to send";
   setStatus("Starting voice…", "listening");
@@ -1145,12 +1191,14 @@ async function beginHold() {
   }
   updateCard(state, { pendingLabel: "listening…" });
   // The user let go before the session finished starting: commit immediately.
-  if (!holdActive) commitHold();
+  if (holdCancelled) cancelHold();
+  else if (!holdActive) commitHold();
 }
 
 function commitHold() {
   const wasActive = holdActive;
   holdActive = false;
+  if (holdCancelled) return;
   const state = turn;
   if (!state || state.done || state.kind !== "voice") return;
   if (!state.voiceSessionId) return; // beginHold will commit once started
@@ -1168,13 +1216,29 @@ function commitHold() {
   }).catch((error) => failTurn(state, String(error?.message || error)));
 }
 
+function cancelHold() {
+  holdActive = false;
+  holdCancelled = true;
+  const state = turn;
+  if (!state || state.done || state.kind !== "voice" || !state.voiceSessionId || state.cancelRequested) return;
+  state.cancelRequested = true;
+  talkBtn.dataset.state = "idle";
+  talkBtn.textContent = "Hold to talk";
+  setStatus("Capture cancelled.");
+  request({
+    cmd: "voiceSessionControl",
+    voiceSessionId: state.voiceSessionId,
+    message: { type: "cancel_turn", turn_id: state.turnId },
+  }).catch(() => null).finally(() => finishTurn(state));
+}
+
 talkBtn.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   talkBtn.setPointerCapture?.(e.pointerId);
   beginHold();
 });
 talkBtn.addEventListener("pointerup", () => commitHold());
-talkBtn.addEventListener("pointercancel", () => commitHold());
+talkBtn.addEventListener("pointercancel", () => cancelHold());
 
 // Bound per-document so hold-to-talk keeps working after the UI moves into a
 // floating picture-in-picture window (key events go to that window's document).
@@ -1278,6 +1342,7 @@ form.addEventListener("submit", async (e) => {
 });
 
 ensurePort();
+hydrateCompanionIdentity().catch(() => renderCompanionIdentity(null));
 historyRetryBtn.addEventListener("click", () => refreshHistory({ reason: "manual retry" }));
 refreshHistory({ reason: "initial" });
 refreshReleaseCockpit();

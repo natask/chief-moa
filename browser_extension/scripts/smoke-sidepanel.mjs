@@ -363,7 +363,9 @@ async function assertHydratedHistory(pageCdp, label, { retranscriptionAdvertised
       || history.text[3] !== "I preserved that Android direction in the shared session.") {
     throw new Error(`${label}: seeded history text was truncated or reordered: ${JSON.stringify(history)}`);
   }
-  if (JSON.stringify(history.copyLabels) !== JSON.stringify(["Copy transcript", "", "Copy transcript", ""])) {
+  if (JSON.stringify(history.copyLabels) !== JSON.stringify([
+    "Copy transcript", "Copy Ag response", "Copy transcript", "Copy Ag response",
+  ])) {
     throw new Error(`${label}: retained messages did not expose accessible copy actions: ${JSON.stringify(history)}`);
   }
   if (JSON.stringify(history.latestVoiceTurns) !== JSON.stringify(["turn_android"])) {
@@ -377,6 +379,20 @@ async function assertHydratedHistory(pageCdp, label, { retranscriptionAdvertised
     throw new Error(`${label}: reconciled history stayed stale/error: ${JSON.stringify(history)}`);
   }
   return history;
+}
+
+async function assertCompanionIdentity(pageCdp, label) {
+  const identity = await waitForEval(pageCdp, `(() => {
+    const root = document.getElementById("companionIdentity");
+    const image = document.getElementById("companionIdentityImage");
+    const name = document.getElementById("companionIdentityName");
+    return root && image?.complete && name?.textContent
+      ? { name: name.textContent, label: root.getAttribute("aria-label"), src: image.src }
+      : null;
+  })()`);
+  if (identity.name !== "Scout" || identity.label !== "Ag, Scout companion" || !identity.src) {
+    throw new Error(`${label}: active companion identity was not visible: ${JSON.stringify(identity)}`);
+  }
 }
 
 async function main() {
@@ -419,7 +435,15 @@ async function main() {
       ageeGatewayUrl: ${JSON.stringify(gateway.baseUrl)},
       ageeGatewayToken: ${JSON.stringify(GATEWAY_TOKEN)},
       ageeGatewayUserSet: true,
-      ageeSessionId: ${JSON.stringify(SESSION_ID)}
+      ageeSessionId: ${JSON.stringify(SESSION_ID)},
+      ageeActiveCompanionPetCache: {
+        active_companion: {
+          companion_id: "scout",
+          companion_name: "Scout",
+          pet: { palette: "amber", motion: "walk", sprite: { type: "css-shigmi" } }
+        },
+        reason: "smoke"
+      }
     }).then(() => true)`);
 
     const panelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
@@ -427,6 +451,7 @@ async function main() {
     browserCdp = new Cdp(browserInfo.webSocketDebuggerUrl);
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "initial open");
+    await assertCompanionIdentity(pageCdp, "initial open");
 
     const copied = await evaluate(pageCdp, `(() => {
       Object.defineProperty(navigator, "clipboard", {
@@ -444,6 +469,25 @@ async function main() {
         || copied?.feedback !== "Copied"
         || !/copied$/i.test(copied?.label || "")) {
       throw new Error(`one-click history copy did not preserve exact text or expose feedback: ${JSON.stringify(copied)}`);
+    }
+    const copiedAssistant = await evaluate(pageCdp, `(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (value) => { globalThis.__sidepanelCopiedAssistant = value; } },
+      });
+      document.querySelector(
+        '#history .history-message[data-message-id="msg_browser_assistant"] .history-copy'
+      )?.click();
+      return new Promise((resolveCopy) => setTimeout(() => resolveCopy({
+        value: globalThis.__sidepanelCopiedAssistant,
+        label: document.querySelector(
+          '#history .history-message[data-message-id="msg_browser_assistant"] .history-copy'
+        )?.getAttribute("aria-label"),
+      }), 20));
+    })()`);
+    if (copiedAssistant?.value !== "This response is durable."
+        || !/Ag response copied$/i.test(copiedAssistant?.label || "")) {
+      throw new Error(`assistant history copy was not exact: ${JSON.stringify(copiedAssistant)}`);
     }
 
     const finalTranscript = await evaluate(pageCdp, `(() => {
@@ -541,6 +585,7 @@ async function main() {
     await browserCdp.send("Target.closeTarget", { targetId: pageTargetId });
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "panel reopen", { retranscriptionAdvertised: false });
+    await assertCompanionIdentity(pageCdp, "panel reopen");
     if (gateway.legacyReads() < 1) throw new Error("panel reopen did not exercise the legacy /turns fallback");
 
     // Stop the isolated service-worker target while leaving the panel document
@@ -645,7 +690,7 @@ async function main() {
     console.log(
       `sidepanel smoke passed (REAL extension, headless Chrome for Testing): panel page booted at ${panelUrl}, ` +
         "canonical mixed-surface history hydrated as newest-first outer turn cards with nested user/assistant content on first open, panel reopen, and extension/background restart; " +
-        "newest turns rendered first with speaker order intact, exact copy feedback worked, final voice transcript reconciled from storage; " +
+        "the active companion identity survived fallback/reopen; newest turns rendered first with speaker order intact, exact user and assistant copy feedback worked, final voice transcript reconciled from storage; " +
         "the retained-audio proxy failed safely, then re-transcribed twice into chronological revisions 0/1/2 with latest selected and older versions copyable; " +
         "agee-panel port round-tripped, conversational roles had no selector, Delegate confirmation cancelled safely, " +
         "open-agee-panel and chrome.sidePanel.open remained available.",

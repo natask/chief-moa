@@ -488,6 +488,11 @@ async function main() {
             }
             const launcherRect = launcher.getBoundingClientRect();
             const birdRect = bird.getBoundingClientRect();
+            const priorUnit = root.dataset.ageeUnit;
+            root.dataset.ageeUnit = "dormant";
+            const dormantLauncherOpacity = getComputedStyle(launcher).opacity;
+            const dormantBirdOpacity = getComputedStyle(bird).opacity;
+            root.dataset.ageeUnit = priorUnit;
             // The panel is the approval/notes surface now; a companion click no
             // longer opens it. Show it just long enough to measure that it is
             // still compact when something does open it.
@@ -513,6 +518,8 @@ async function main() {
               launcherFontSize: getComputedStyle(launcher).fontSize,
               birdWidth: Math.round(birdRect.width),
               birdHeight: Math.round(birdRect.height),
+              dormantLauncherOpacity,
+              dormantBirdOpacity,
               panelWidth: Math.round(panelRect.width),
               panelHeight: Math.round(panelRect.height),
               viewportWidth: window.innerWidth,
@@ -583,6 +590,12 @@ async function main() {
       overlayMetrics.birdHeight !== 44
     ) {
       throw new Error(`desktop mascot is not compact: ${JSON.stringify(overlayMetrics)}`);
+    }
+    if (
+      Number(overlayMetrics.dormantLauncherOpacity) < 0.45 ||
+      Number(overlayMetrics.dormantBirdOpacity) !== 1
+    ) {
+      throw new Error(`dormant mascot is illegible: ${JSON.stringify(overlayMetrics)}`);
     }
     // A companion click puts the caret in the you-line immediately. No panel.
     if (!overlayMetrics.composing || !overlayMetrics.youLive || !overlayMetrics.caretInYouLine) {
@@ -1138,6 +1151,10 @@ async function main() {
                 copyOpacity: getComputedStyle(ribbon.querySelector(".agee-ribbon-copy")).opacity,
               };
             };
+            const youRect = you.getBoundingClientRect();
+            const blankX = Math.round(youRect.left + 2);
+            const blankY = Math.round(youRect.top + youRect.height / 2);
+            const blankHit = document.elementFromPoint(blankX, blankY);
             return {
               ok: true,
               unitState: root.dataset.ageeUnit || "",
@@ -1156,6 +1173,7 @@ async function main() {
               // Only the glyph run is hittable while ambient, so an empty
               // ribbon lets a click through to the page underneath.
               glyphHittable: getComputedStyle(you.querySelector(".agee-ribbon-text")).pointerEvents,
+              blankPlatePassesThrough: !blankHit || !root.contains(blankHit),
               // The floating copy/mute pill is deleted, not repainted. It was
               // the last element beside the companion painting from its own
               // hard-coded dark plate, so on a light page it stayed dark while
@@ -1252,7 +1270,8 @@ async function main() {
     if (ribbonBefore.you.height !== 36) {
       throw new Error(`streaming resized the collapsed bubble: ${JSON.stringify(ribbonBefore.you)}`);
     }
-    // Ambient paints nothing and intercepts nothing.
+    // The permanent plate paints its state, but only its content and controls
+    // own hits. Blank padding remains part of the underlying page.
     if (
       ribbonBefore.unitState !== "ambient" ||
       // The plate and the copy rail are permanent: the box looks the same
@@ -1260,7 +1279,10 @@ async function main() {
       ribbonBefore.you.background === "rgba(0, 0, 0, 0)" ||
       ribbonBefore.reply.background === "rgba(0, 0, 0, 0)" ||
       ribbonBefore.you.boxShadow === "none" ||
+      ribbonBefore.you.pointerEvents !== "none" ||
+      ribbonBefore.reply.pointerEvents !== "none" ||
       ribbonBefore.glyphHittable !== "auto" ||
+      ribbonBefore.blankPlatePassesThrough !== true ||
       Number(ribbonBefore.launcherOpacity) !== 0.92 ||
       Number(ribbonBefore.you.copyOpacity) < 0.5 ||
       // The companion never moves and neither box changes sides: the reply
