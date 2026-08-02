@@ -15,7 +15,7 @@
 - [ ] 2.1 Route launcher, Assistant intents, voice commands, quick tile, and
   app-owned shortcuts through one invocation coordinator; acceptance: each
   entry creates exactly one typed invocation and reuses one overlay owner.
-- [ ] 2.2 Add launcher shortcuts for the supported subset of Settings,
+- [x] 2.2 Add launcher shortcuts for the supported subset of Settings,
   Dictation, Assistant, and Hands-free; acceptance: Settings starts no capture
   and each voice shortcut reaches its named behavior once.
 - [ ] 2.3 Add full-app trigger mapping, presentation selection, platform-
@@ -24,29 +24,29 @@
 
 ## 3. Gateway Draft Prerequisite
 
-- [ ] 3.1 Audit the existing voice-draft store, smokes, Android/browser protocol
+- [x] 3.1 Audit the existing voice-draft store, smokes, Android/browser protocol
   domains, WebSocket routing, capability advertisement, task ledger, and
   deployed state; then complete only the missing `voice-capture-draft-controls`
   integration. Acceptance: Pause/Resume/Discard before Send produces no
   provider, model, tool, broker, memory, or canonical turn record, and exact
   source plus deployment evidence identifies `voice_drafts_v1` as active or
   blocked.
-- [ ] 3.2 Prove old Android against the additive gateway and new Android against
+- [x] 3.2 Prove old Android against the additive gateway and new Android against
   a gateway without `voice_drafts_v1`; acceptance: old behavior remains usable
   and new pause controls disable honestly.
 
 ## 4. Companion Controls And Copy
 
-- [ ] 4.1 Add one phase-derived Pause/Resume control and one Cancel control
+- [x] 4.1 Add one phase-derived Pause/Resume control and one Cancel control
   beside the mascot while keeping Send/turn handoff on the mascot; acceptance:
   capture, paused, thinking, and speaking fixtures expose only the controls
   permitted by the decision table and never render a second Send.
-- [ ] 4.2 Wire draft Pause/Resume and discard with revision/authority checks;
+- [x] 4.2 Wire draft Pause/Resume and discard with revision/authority checks;
   acceptance: resume appends to the same draft and cancel submits no commit.
 - [ ] 4.3 Wire assistant playback pause/resume, conversational cancel, and
   mascot steering without affecting detached agent runs; acceptance: late old-
   generation frames cannot play or extend the current message after handoff.
-- [ ] 4.4 Put exactly one Copy action inside every populated Android user and
+- [x] 4.4 Put exactly one Copy action inside every populated Android user and
   assistant message and remove duplicates; acceptance: each action copies its
   exact finalized message without a network or history mutation.
 
@@ -105,7 +105,7 @@
 - [x] 8.1 Run `node scripts/source-size-policy.js` and Android
   `lintDebug assembleDebug testDebugUnitTest`; acceptance: every command passes
   from the exact committed candidate.
-- [ ] 8.2 Run focused gateway and browser gates for any prerequisite or routed
+- [x] 8.2 Run focused gateway and browser gates for any prerequisite or routed
   follow-up actually included in the candidate; acceptance: `gateway npm run
   check` and/or browser `npm run verify && npm run smoke` pass as applicable.
 - [ ] 8.3 Commit each independent unit in its isolated branch/worktree, run
@@ -140,3 +140,22 @@
   assembleDebug testDebugUnitTest` pass for this candidate.
 - OpenSpec: `openspec validate
   configure-android-invocation-and-minimal-voice-surface --strict` passes.
+- Task 2.2: typed launcher shortcuts cover Settings, Dictation, Assistant, and
+  Hands-free, while the system Assistant entry retains its safe default.
+- Tasks 3.1 and 3.2: gateway `voice_drafts_v1` is additive and capability
+  negotiated. Android and browser hide draft controls on legacy gateways; the
+  exact integrated gateway gate proves Pause/Resume/Discard remain
+  pre-execution and SEND alone creates the canonical turn. Production remains
+  explicitly blocked from promotion while `/health` reports `drain_safe=false`.
+- Tasks 4.1 and 4.2: the mascot remains the sole Send/handoff control. Separate
+  bounded Pause/Resume and Cancel windows appear only after exact draft
+  authority, and focused wire/presentation tests cover stale revisions and
+  phase-derived visibility. Assistant playback behavior remains open as task
+  4.3.
+- Task 4.4: Android History renders one exact local Copy action beside each
+  populated user and assistant message; focused tests reject the removed
+  combined-turn copy placement.
+- Task 8.2: the integrated candidate passes full gateway `npm run check` and
+  browser `npm run verify && npm run smoke`; the browser smoke loads the real
+  extension in headless Chrome. Reloading the user's already-loaded extension
+  remains separate task 7.2/deployment evidence.
