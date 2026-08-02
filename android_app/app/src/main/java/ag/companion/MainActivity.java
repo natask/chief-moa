@@ -4,8 +4,6 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -1284,17 +1282,6 @@ public final class MainActivity extends Activity {
             unavailable.setPadding(0, dp(8), 0, 0);
             container.addView(unavailable);
         }
-        String copyText = MoaHistoryCopyText.compose(turn.userText, turn.assistantText);
-        if (!copyText.isEmpty()) {
-            Button copy = secondaryButton("Copy turn");
-            copy.setContentDescription("Copy this history turn");
-            copy.setOnClickListener(view -> {
-                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                clipboard.setPrimaryClip(ClipData.newPlainText("AG history turn", copyText));
-                copy.setText("Copied");
-            });
-            container.addView(copy);
-        }
         return container;
     }
 
@@ -1302,9 +1289,14 @@ public final class MainActivity extends Activity {
         LinearLayout block = new LinearLayout(this);
         block.setOrientation(LinearLayout.VERTICAL);
         block.setPadding(0, dp(10), 0, 0);
+        LinearLayout heading = new LinearLayout(this);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
         TextView speakerLabel = label(speaker, speakerColor, 10, true);
         speakerLabel.setLetterSpacing(0.08f);
-        block.addView(speakerLabel);
+        heading.addView(speakerLabel, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        heading.addView(MoaHistoryMessageCopyButton.create(this, speaker, content));
+        block.addView(heading);
         TextView body = label(content, MoaColors.PAPER, 14, false);
         body.setLineSpacing(dp(3), 1f);
         body.setPadding(0, dp(3), 0, 0);
