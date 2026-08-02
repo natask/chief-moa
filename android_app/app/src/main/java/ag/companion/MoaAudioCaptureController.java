@@ -172,6 +172,7 @@ final class MoaAudioCaptureController {
             int read = record.read(buffer, 0, buffer.length);
             if (read > 0) {
                 byte[] chunk = Arrays.copyOf(buffer, read);
+                MoaMicrophoneLevel.pcm(chunk);
                 Callback target;
                 List<byte[]> drained = null;
                 synchronized (lock) {
@@ -258,6 +259,7 @@ final class MoaAudioCaptureController {
             }
 
             audioRecord.startRecording();
+            MoaMicrophoneLevel.hardwareState(true);
             return true;
         } catch (SecurityException error) {
             releaseAudioRecord();
@@ -289,6 +291,7 @@ final class MoaAudioCaptureController {
         } catch (RuntimeException ignored) {
         }
         audioRecord = null;
+        MoaMicrophoneLevel.hardwareState(false);
     }
 
     private void reportError(String message, Throwable error) {

@@ -52,17 +52,17 @@
 
 ## 5. Minimal Ring
 
-- [ ] 5.1 Add four bounded edge-window layout and touch-region domains with
+- [x] 5.1 Add four bounded edge-window layout and touch-region domains with
   unit coverage; acceptance: center and nonrendered coordinates have no Ag
   window while every rendered edge stays on-screen across insets and rotation.
-- [ ] 5.2 Render idle, mic-open, paused, thinking, speaking, and error states
+- [x] 5.2 Render idle, mic-open, paused, thinking, speaking, and error states
   from hardware capture plus normalized phase; acceptance: microphone level
   changes bounded visual intensity without resizing or exposing content.
 - [ ] 5.3 Capture deterministic light, dark, reduced-motion, and high-contrast
   states and run two independent Claude design critiques, recording actual model
   IDs; acceptance: the selected tokens have explicit dispositions for every
   critique and do not claim an unavailable model.
-- [ ] 5.4 Wire Companion/Minimal switching without changing the owned turn;
+- [x] 5.4 Wire Companion/Minimal switching without changing the owned turn;
   acceptance: switching during capture preserves one microphone, socket, turn,
   branch, and control state.
 
@@ -95,7 +95,7 @@
 
 ## 8. Verification, Integration, And Delivery
 
-- [ ] 8.1 Run `node scripts/source-size-policy.js` and Android
+- [x] 8.1 Run `node scripts/source-size-policy.js` and Android
   `lintDebug assembleDebug testDebugUnitTest`; acceptance: every command passes
   from the exact committed candidate.
 - [ ] 8.2 Run focused gateway and browser gates for any prerequisite or routed
@@ -113,3 +113,23 @@
   rollback, no-interruption, lineage, and compatibility gates pass; acceptance:
   report built, packaged, published, installed, and smoked separately and record
   the blocker for every state not reached.
+
+## Implementation Evidence
+
+- Tasks 5.1, 5.2, and 5.4: the Android setting persists a migration-safe
+  Companion/Minimal enum. Minimal uses four `FLAG_NOT_TOUCHABLE` windows whose
+  pure inset/rotation geometry leaves center and corner gaps unattached. The
+  visual state derives from microphone hardware ownership, bounded smoothed
+  PCM16 RMS, and local voice phase; reduced-motion and high-contrast settings
+  select deterministic variants. Presentation replacement does not recreate or
+  mutate the microphone, socket, session, branch, turn, or delivery policy.
+- Accessibility fallback: one separate 44dp `Ag` button and the ongoing overlay
+  notification have named `Open Ag` actions into the full app. The four Minimal
+  edge windows expose no gesture or touch authority in this slice.
+- Physical-phone proof remains open under tasks 5.3, 6.3, and 8.4; no edge
+  gestures, pause controls, design-harness critique, install, or OTA promotion
+  is claimed by this implementation unit.
+- Task 8.1: `node scripts/source-size-policy.js` and Android `lintDebug
+  assembleDebug testDebugUnitTest` pass for this candidate.
+- OpenSpec: `openspec validate
+  configure-android-invocation-and-minimal-voice-surface --strict` passes.

@@ -44,6 +44,17 @@ Android app
   removal target, undo affordance, and full-app history remain separate surfaces
   because they have distinct focus, placement, and lifecycle contracts.
 
+  A saved presentation preference can replace the companion and ribbons with
+  Minimal presentation without replacing the voice/session owner. Minimal owns
+  exactly four thin, independently attached, non-touchable edge windows. Its
+  center and corner gaps have no Ag window. The edges consume only the local
+  hardware-microphone-open signal, a bounded smoothed PCM level, and normalized
+  voice phase; they never render transcript content or resize with audio. The
+  system animator scale disables motion and high-contrast mode selects opaque
+  tokens. A separate 44dp Ag button is the only Minimal overlay window with
+  touch authority and exposes a named TalkBack action into the full app; the
+  foreground notification carries the same Open Ag fallback.
+
   Direct-distribution Android builds may receive the temporary build-only
   `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`. Gradle places it in
   `BuildConfig.BUNDLED_GATEWAY_TOKEN`; no literal belongs in Git. At runtime a

@@ -51,6 +51,7 @@ public final class OverlayService extends Service {
     static final String ACTION_COLLAPSE_SURFACES = "ag.companion.action.COLLAPSE_SURFACES";
     static final String ACTION_HIDE_OVERLAY = "ag.companion.action.HIDE_OVERLAY";
     static final String ACTION_REFRESH_ORB_SCALE = "ag.companion.REFRESH_ORB_SCALE";
+    static final String ACTION_REFRESH_PRESENTATION = "ag.companion.REFRESH_PRESENTATION";
     static final String EXTRA_START_VOICE = "ag.companion.extra.START_VOICE";
 
     private static final int MAX_HISTORY_MESSAGES = 50;
@@ -82,6 +83,8 @@ public final class OverlayService extends Service {
     private OrbView orbView;
     private WindowManager.LayoutParams orbParams;
     private MoaCompactOverlayRoot compactOverlayRoot;
+    private MoaMinimalRingController minimalRing;
+    private MoaPresentationStyle presentationStyle = MoaPresentationStyle.COMPANION;
     private MoaFrameCoalescer orbDragFrameCoalescer;
     private final MoaOverlayDragMode overlayDragMode = new MoaOverlayDragMode();
     private final MoaWindowLayoutState orbDragLayoutState = new MoaWindowLayoutState();
@@ -182,6 +185,23 @@ public final class OverlayService extends Service {
         super.onCreate();
         running = true;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        minimalRing = new MoaMinimalRingController(
+                this, windowManager, MoaOverlayWindowType.resolve(), this::openFullApp);
+        MoaMicrophoneLevel.observe(new MoaMicrophoneLevel.Listener() {
+            @Override
+            public void onHardwareState(boolean open) {
+                mainHandler.post(() -> {
+                    if (minimalRing != null) minimalRing.setMicrophoneOpen(open);
+                });
+            }
+
+            @Override
+            public void onLevel(float level) {
+                mainHandler.post(() -> {
+                    if (minimalRing != null) minimalRing.setInputLevel(level);
+                });
+            }
+        });
         actionBroker = new MoaActionBroker(this);
         toolReceiptOutbox = new MoaToolReceiptOutbox(this);
         voiceController = new MoaVoiceController(this, new MoaVoiceController.Callback() {
@@ -236,7 +256,7 @@ public final class OverlayService extends Service {
         MoaPrefs.setHistoryJson(this, "");
         promoteToForeground();
         MoaUpdateNotifier.checkAsync(this, gatewayUrl, gatewayToken);
-        showOrb();
+        showPresentation();
         startDeviceClientLoop();
         adoptSharedSessionId();
     }
@@ -279,8 +299,10 @@ public final class OverlayService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (orbView == null) {
-            showOrb();
+        if (!presentationMatchesSelection()) reconcilePresentation();
+        if (ACTION_REFRESH_PRESENTATION.equals(intent != null ? intent.getAction() : null)) {
+            reconcilePresentation();
+            return START_STICKY;
         }
         if (ACTION_REFRESH_ORB_SCALE.equals(intent != null ? intent.getAction() : null)) {
             applyOrbScale();
@@ -323,6 +345,11 @@ public final class OverlayService extends Service {
             orbDragFrameCoalescer = null;
         }
         removeOrb();
+        if (minimalRing != null) {
+            minimalRing.detach();
+            minimalRing = null;
+        }
+        MoaMicrophoneLevel.observe(null);
         agentRunPolling = false;
         cancelStreamingTurnWatchdog();
         if (voiceController != null) {
@@ -345,6 +372,7 @@ public final class OverlayService extends Service {
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         overlayUnit.onConfigurationChanged();
+        if (minimalRing != null) minimalRing.onConfigurationChanged();
     }
 
     @Override
@@ -390,8 +418,8 @@ public final class OverlayService extends Service {
     }
 
     private Notification overlayNotification() {
-        Intent intent = MoaAssistantLaunchCoordinator.assistActivityIntent(
-                this, MoaAssistantLaunchCoordinator.SOURCE_NOTIFICATION);
+        Intent intent = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             flags |= PendingIntent.FLAG_IMMUTABLE;
@@ -399,6 +427,7 @@ public final class OverlayService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
         Intent hideIntent = new Intent(this, OverlayService.class).setAction(ACTION_HIDE_OVERLAY);
         PendingIntent hidePendingIntent = PendingIntent.getService(this, 1, hideIntent, flags);
+        PendingIntent openPendingIntent = PendingIntent.getActivity(this, 2, intent, flags);
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, OVERLAY_CHANNEL_ID);
@@ -414,6 +443,7 @@ public final class OverlayService extends Service {
                 .setOnlyAlertOnce(true)
                 .setDefaults(0);
         builder.addAction(R.drawable.ic_moa_orb, "Hide", hidePendingIntent);
+        builder.addAction(R.drawable.ic_moa_orb, "Open Ag", openPendingIntent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_SERVICE);
             builder.setColor(0xFFF4D35E);
@@ -426,6 +456,7 @@ public final class OverlayService extends Service {
         gatewayToken = safe(MoaPrefs.gatewayToken(this));
         conversationId = MoaPrefs.conversationId(this);
         activeBranchId = MoaPrefs.conversationBranchId(this, conversationId);
+        presentationStyle = MoaPrefs.presentationStyle(this);
         applyCachedVoiceProfile();
     }
 
@@ -512,7 +543,8 @@ public final class OverlayService extends Service {
     }
 
     private void showOrb() {
-        if (!Settings.canDrawOverlays(this) || orbView != null || !OVERLAY_OWNER.claim(this)) {
+        if (presentationStyle != MoaPresentationStyle.COMPANION
+                || !Settings.canDrawOverlays(this) || orbView != null || !OVERLAY_OWNER.claim(this)) {
             return;
         }
         int size = scaledOrbSizePx();
@@ -548,6 +580,46 @@ public final class OverlayService extends Service {
         compactOverlayRoot.commitFrame();
     }
 
+    private boolean presentationMatchesSelection() {
+        boolean minimalShowing = minimalRing != null && minimalRing.isShowing();
+        return presentationStyle == MoaPresentationStyle.MINIMAL
+                ? minimalShowing && orbView == null
+                : orbView != null && !minimalShowing;
+    }
+
+    private void showPresentation() {
+        if (presentationStyle == MoaPresentationStyle.MINIMAL) showMinimalRing();
+        else showOrb();
+    }
+
+    private void reconcilePresentation() {
+        if (presentationStyle == MoaPresentationStyle.MINIMAL) {
+            if (orbView != null) {
+                overlayUnit.detachNow();
+                removeOrb();
+            }
+            showMinimalRing();
+        } else {
+            removeMinimalRing();
+            showOrb();
+            renderVoiceTranscriptRows();
+            updateMicState();
+        }
+    }
+
+    private void showMinimalRing() {
+        if (!Settings.canDrawOverlays(this) || minimalRing == null
+                || minimalRing.isShowing() || !OVERLAY_OWNER.claim(this)) return;
+        minimalRing.show();
+        minimalRing.setRuntimeState(voiceRuntimeState);
+    }
+
+    private void removeMinimalRing() {
+        if (minimalRing == null || !minimalRing.isShowing()) return;
+        minimalRing.detach();
+        OVERLAY_OWNER.release(this);
+    }
+
     private int scaledOrbSizePx() {
         return dp(MoaOrbPresentation.scaledWindowDp(MoaPrefs.orbScalePercent(this)));
     }
@@ -567,6 +639,7 @@ public final class OverlayService extends Service {
     }
 
     private void applyOrbScale() {
+        if (presentationStyle != MoaPresentationStyle.COMPANION) return;
         if (orbView == null || orbParams == null) {
             showOrb();
             return;
@@ -950,6 +1023,7 @@ public final class OverlayService extends Service {
         overlayUnit.detachNow();
         removeOrbRemoveTarget();
         removeOrb();
+        removeMinimalRing();
     }
 
     private void removeOrbRemoveTarget() {
@@ -1125,6 +1199,16 @@ public final class OverlayService extends Service {
         }
     }
 
+    private void openFullApp() {
+        Intent intent = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        try {
+            startActivity(intent);
+        } catch (Exception error) {
+            Log.w(TAG, "full app open failed: " + cleanError(error));
+        }
+    }
+
     private boolean reviewableVoiceDraftActive() {
         return continuousVoiceLoop
                 && !pushToTalkVoiceTurn
@@ -1268,6 +1352,7 @@ public final class OverlayService extends Service {
 
     private void setVoiceRuntimeState(VoiceRuntimeState state) {
         voiceRuntimeState = state == null ? VoiceRuntimeState.READY : state;
+        if (minimalRing != null) minimalRing.setRuntimeState(voiceRuntimeState);
         updateVoiceHeaderState();
         updateOrbVoiceDraftAccessibility();
         // Single choke point for the orb's response state so the lion visibly

@@ -39,6 +39,7 @@ final class MoaPrefs {
     private static final String KEY_ACTIVE_COMPANION_JSON = "active_companion_json";
     private static final String KEY_ACTIVE_COMPANION_STALE = "active_companion_stale";
     private static final String KEY_ORB_SCALE_PERCENT = "orb_scale_percent";
+    private static final String KEY_PRESENTATION_STYLE = "presentation_style";
     // Manual voice orb controls. On by default for new installs; an explicit
     // stored choice still preserves the legacy chat-first gesture contract.
     private static final String KEY_VOICE_FIRST_GESTURES = "voice_first_gestures";
@@ -78,6 +79,16 @@ final class MoaPrefs {
     static void setOrbScalePercent(Context context, int percent) {
         int clamped = Math.max(ORB_SCALE_MIN, Math.min(ORB_SCALE_MAX, percent));
         prefs(context).edit().putInt(KEY_ORB_SCALE_PERCENT, clamped).apply();
+    }
+
+    static MoaPresentationStyle presentationStyle(Context context) {
+        return MoaPresentationStyle.fromPersisted(
+                prefs(context).getString(KEY_PRESENTATION_STYLE, ""));
+    }
+
+    static void setPresentationStyle(Context context, MoaPresentationStyle style) {
+        MoaPresentationStyle value = style == null ? MoaPresentationStyle.COMPANION : style;
+        prefs(context).edit().putString(KEY_PRESENTATION_STYLE, value.name()).apply();
     }
 
     // Manual voice orb controls. On by default. Read live by the

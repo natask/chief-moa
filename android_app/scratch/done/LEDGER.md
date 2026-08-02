@@ -1,4 +1,5 @@
 - Put an exact Copy action beside every retained user and assistant message in Android History, replacing combined turn copy — agent: Codex/GPT-5 — this commit
+- Added a selectable Minimal Android voice presentation with four touch-through audio-reactive edge windows and a bounded full-app fallback — agent: Codex/GPT-5 — this commit
 - Added an Android History control that forks the active thread inside the shared session and keeps the overlay on the returned child — agent: Codex/GPT-5 — 339e577d
 - Kept Android taps available everywhere outside the visible companion and ribbon windows by removing the touch-modal union rectangle — agent: Codex/GPT-5 — this commit
 - Added a build-only temporary gateway bearer fallback for OTA APKs while preserving saved per-user token overrides — agent: codex/gpt-5 team — 57894ca1

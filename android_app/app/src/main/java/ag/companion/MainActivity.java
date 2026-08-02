@@ -256,11 +256,11 @@ public final class MainActivity extends Activity {
         developerSection.addView(diagnosticsCard());
         developerSection.addView(releaseController.createView());
         developerSection.addView(actionCard());
+        developerSection.addView(MoaPresentationSettingsView.create(this));
         developerSection.addView(orbSizeCard());
         developerSection.addView(gesturesCard());
         root.addView(developerSection);
         showFullAppSection(false);
-
         return scrollView;
     }
 
