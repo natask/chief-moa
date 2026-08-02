@@ -640,6 +640,10 @@ final class MoaStreamingVoiceSessionController {
         if (event == null) return;
         String type = safe(event.optString("type", ""));
         if (!("session_ready".equals(type) || "voice_draft_state".equals(type))) return;
+        JSONObject capabilities = event.optJSONObject("capabilities");
+        JSONObject capability = capabilities == null
+                ? null : capabilities.optJSONObject("voice_drafts_v1");
+        if (!MoaVoiceDraftCapability.isExact(capability)) return;
         JSONObject draft = event.optJSONObject("voice_draft");
         if (draft == null) return;
         boolean ready;
@@ -659,11 +663,7 @@ final class MoaStreamingVoiceSessionController {
                     || (!voiceDraftId.isEmpty() && !voiceDraftId.equals(id))
                     || revision < voiceDraftRevision) return;
             if ("session_ready".equals(type)) {
-                JSONObject capabilities = event.optJSONObject("capabilities");
-                JSONObject capability = capabilities == null
-                        ? null : capabilities.optJSONObject("voice_drafts_v1");
-                if (capability == null || !capability.optBoolean("supported", false)
-                        || !"capturing".equals(state)) return;
+                if (!"capturing".equals(state)) return;
             } else if (revision <= voiceDraftRevision) {
                 return;
             }

@@ -8,6 +8,8 @@ import java.util.Locale;
 /** Pure, URL-bound interpretation of the gateway's short-lived draft capability. */
 final class MoaVoiceDraftCapability {
     static final long FRESHNESS_MS = 30_000L;
+    static final String REVISION = "voice_drafts_v1";
+    static final String STATE_MACHINE_REVISION = "voice_draft_state.v1";
 
     private MoaVoiceDraftCapability() {
     }
@@ -15,21 +17,22 @@ final class MoaVoiceDraftCapability {
     static Snapshot fromHealth(String gatewayUrl, JSONObject health, long checkedAtEpochMs) {
         JSONObject voiceStream = health == null ? null : health.optJSONObject("voice_stream");
         JSONObject provider = voiceStream == null ? null : voiceStream.optJSONObject("provider");
-        Object advertised = provider == null ? null : provider.opt("voice_drafts_v1");
-        boolean supported = advertised instanceof Boolean && Boolean.TRUE.equals(advertised);
-        if (advertised instanceof JSONObject) {
-            supported = ((JSONObject) advertised).optBoolean("supported", false);
-        }
-        // Tolerate the short-lived preview shape while deployed clients roll.
-        JSONObject capabilities = health == null ? null : health.optJSONObject("capabilities");
-        Object legacyAdvertised = capabilities == null ? null : capabilities.opt("voice_drafts_v1");
-        supported = supported || (legacyAdvertised instanceof Boolean
-                && Boolean.TRUE.equals(legacyAdvertised));
+        JSONObject advertised = provider == null
+                ? null : provider.optJSONObject("voice_drafts_v1");
+        boolean supported = isExact(advertised);
         return new Snapshot(
                 normalizeGatewayUrl(gatewayUrl),
                 supported,
                 checkedAtEpochMs
         );
+    }
+
+    static boolean isExact(JSONObject advertised) {
+        return advertised != null
+                && advertised.optBoolean("supported", false)
+                && REVISION.equals(advertised.optString("revision", ""))
+                && STATE_MACHINE_REVISION.equals(
+                        advertised.optString("state_machine_revision", ""));
     }
 
     static Snapshot unavailable(String gatewayUrl, long checkedAtEpochMs) {
