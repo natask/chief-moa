@@ -8,6 +8,11 @@ branch, turn, user speaker, and canonical projected message identity. Sequence,
 batch revision, and sealed PCM byte offset must move forward. The browser does
 not infer overlap between corrected and live text.
 
+Ordinary audio sessions explicitly send
+`transcript_reconciliation:{enabled:true,version:1,privacy_scope:"retained"}`.
+Incognito and non-audio/sample sessions omit the opt-in, leaving them
+ineligible for the second provider pass.
+
 `transcript-revision-protocol.js` is shared by the service worker, page
 companion, and side panel. The service worker rejects mismatched events before
 they reach a surface. Each surface independently rejects stale delivery. The
@@ -27,6 +32,7 @@ Deterministic coverage proves:
 - a stale or mutated same-revision History response cannot replace the newer
   corrected Copy source;
 - an older gateway without the capability keeps legacy whole-snapshot display.
+- retained normal sessions opt in while incognito and non-audio sessions do not.
 
 Verification:
 

@@ -2910,6 +2910,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         all_branches_context: false,
         ...(transcriptionOnly === true ? { transcription_only: true } : {}),
         ...(action ? { context_action: action } : {}),
+        ...(AgeeTranscriptRevisionProtocol.reconciliationOptIn({ contextAction: action, retainedAudio: !sampleText }) ? { transcript_reconciliation: AgeeTranscriptRevisionProtocol.reconciliationOptIn({ contextAction: action, retainedAudio: !sampleText }) } : {}),
         client: {
           platform: "browser",
           source: "agee-extension",
@@ -3408,7 +3409,6 @@ function noteVoiceSessionAudio(session, buffer) {
     session.lastSpeechAt = now;
     session.speechMs = (session.speechMs || 0) + durationMs;
   }
-  // Every open capture gets the stuck-microphone backstop, manual or not.
   if (!session.maxCommitTimer) {
     session.maxCommitTimer = setTimeout(() => {
       forceCloseStuckVoiceSession(session.id).catch(() => {});

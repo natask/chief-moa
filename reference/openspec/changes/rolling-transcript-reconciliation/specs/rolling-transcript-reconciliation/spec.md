@@ -104,6 +104,10 @@ revision is newer; it SHALL NOT update assistant text or a current capture.
 
 The browser extension SHALL accept rolling correction events only when
 `transcript_revisions_v1` version 1 was advertised for the exact voice session.
+It SHALL request reconciliation only with exact
+`{enabled:true, version:1, privacy_scope:"retained"}` consent for a normal
+retained-audio session and SHALL omit that consent for incognito or non-audio
+sessions.
 Each accepted prefix revision SHALL bind the current session, branch, turn,
 canonical user `message_id`, strictly increasing transcript sequence, and
 strictly increasing batch revision. The browser SHALL render the event's
@@ -120,6 +124,14 @@ rendered corrected text.
   `finalized_text`, current `unsealed_text`, and their authoritative whole text
 - **THEN** the browser replaces the prior snapshot with that whole text
 - **AND** a later out-of-order prefix event cannot rewind the newer live tail
+
+#### Scenario: private capture cannot enqueue reconciliation
+
+- **GIVEN** the browser starts an incognito voice turn
+- **WHEN** it sends `session_start`
+- **THEN** it omits transcript-reconciliation consent
+- **AND** the gateway cannot treat the session as eligible for a second audio
+  pass
 
 #### Scenario: correction cannot cross message authority
 

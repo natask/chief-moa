@@ -22,6 +22,11 @@
     return value?.supported === true && value?.version === 1 ? { supported: true, version: 1 } : null;
   }
 
+  function reconciliationOptIn({ contextAction = "", retainedAudio = false } = {}) {
+    if (retainedAudio !== true || String(contextAction).trim().toLowerCase() === "incognito") return null;
+    return { enabled: true, version: 1, privacy_scope: "retained" };
+  }
+
   function createState(expected = {}) {
     const bound = authority(expected) || { sessionId: "", branchId: "", turnId: "" };
     return {
@@ -112,6 +117,7 @@
     historyKey,
     markTerminal,
     normalizeCapability,
+    reconciliationOptIn,
     sameAuthority,
   });
 })();

@@ -38,6 +38,8 @@
 - [x] 3.6 Capability-gate browser prefix revisions, bind them to exact
   session/branch/turn/canonical-user-message authority, reject stale sequence
   or batch revisions, and keep canonical History plus Copy monotonic.
+- [x] 3.7 Send explicit retained-audio reconciliation consent only for normal
+  non-incognito browser voice sessions and prove private/non-audio omission.
 
 ## 4. Verification and rollout
 

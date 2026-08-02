@@ -12,6 +12,14 @@ const assert = (condition, label) => { if (!condition) throw new Error(label); }
 const authority = { session_id: "session-1", branch_id: "branch-1", turn_id: "turn-1" };
 const state = protocol.createState(authority);
 
+assert(JSON.stringify(protocol.reconciliationOptIn({ retainedAudio: true })) ===
+  JSON.stringify({ enabled: true, version: 1, privacy_scope: "retained" }),
+"ordinary retained audio explicitly opts in");
+assert(protocol.reconciliationOptIn({ retainedAudio: true, contextAction: "incognito" }) === null,
+  "incognito audio never opts in");
+assert(protocol.reconciliationOptIn({ retainedAudio: false }) === null,
+  "a session without retained audio never opts in");
+
 assert(protocol.acceptReady(state, {
   type: "session_ready", ...authority,
   capabilities: { transcript_revisions_v1: { supported: true, version: 1 } },
