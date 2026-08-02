@@ -170,6 +170,22 @@ Alternative considered: keep modes in environment variables or provider
 session configuration only. Rejected because the user needs to inspect, change,
 demo, and recover behavior by voice across devices.
 
+### Decision: Provider Selection Is A Validated Next-Turn Bundle
+
+The gateway exposes one credential-safe catalog for native-live and cascaded
+choices. Availability means both that the required gateway credentials are
+configured and that production adapters exist for every selected stage. A
+selection request validates the complete provider/model bundle before it
+appends a profile version; rejection cannot partially mutate the active
+profile.
+
+At voice-turn admission, the gateway pins and freezes the effective profile,
+profile version, and voice/STT/reasoning/TTS/model bundle. Later profile writes
+apply only to later admissions. Claude is represented only as a cascaded text
+reasoning stage and remains unavailable until the production Anthropic
+reasoner adapter is wired; no Claude duplex-audio capability is inferred from
+credential presence or an evaluation script.
+
 ### Decision: Voice-First Controls Must Be Demonstrable On Both Surfaces
 
 The phone orb and browser mark/keyboard shortcuts are part of the voice

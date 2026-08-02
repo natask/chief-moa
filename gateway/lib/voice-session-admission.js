@@ -1,5 +1,6 @@
 function createVoiceSessionAdmission(options) {
-  let provider = options.voiceProvider || null;
+  const fixedProvider = options.voiceProvider || null;
+  const providers = new Map();
   const factory = typeof options.voiceProviderFactory === "function"
     ? options.voiceProviderFactory
     : options.defaultVoiceProviderFactory;
@@ -9,15 +10,19 @@ function createVoiceSessionAdmission(options) {
     : (profile) => profile;
   const agentProfile = options.agentProfile || null;
 
-  function getProvider() {
-    provider = provider || factory();
-    return provider;
+  function getProvider(profile) {
+    if (fixedProvider) return fixedProvider;
+    const key = providerKey(profile);
+    if (!providers.has(key)) providers.set(key, factory(profile));
+    return providers.get(key);
   }
 
-  async function admit({ deviceId, sessionId, branchId, turnId, sendEvent, onDenied }) {
+  async function admit({ deviceId, sessionId, branchId, turnId, sendEvent, onDenied, effectiveProfile, profileVersion }) {
     const admission = readMode(deviceId);
     if (admission?.routing?.provider_work_allowed !== false) {
-      return { admission, provider: getProvider() };
+      const profile = deepFreeze({ ...applyMode(effectiveProfile || {}, admission) });
+      return { admission, provider: getProvider(profile), effectiveProfile: profile,
+        profileVersion: profileVersion || "profile_v0001", providerBundle: providerKey(profile) };
     }
     if (typeof onDenied === "function") onDenied();
     const endpoint = admission.routing.capture_endpoint || "/v1/audio-notes";
@@ -49,8 +54,20 @@ function createVoiceSessionAdmission(options) {
         return "profile_v0001";
       }
     },
-    status: () => getProvider().status(),
+    status: () => getProvider(null).status(),
   };
+}
+
+function providerKey(profile) {
+  if (!profile) return "boot-default";
+  return [profile.voice_provider, profile.stt_provider, profile.reasoning_provider,
+    profile.tts_provider, profile.model].map((value) => String(value || "").trim()).join("|");
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
 }
 
 module.exports = { createVoiceSessionAdmission };

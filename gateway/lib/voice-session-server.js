@@ -18,6 +18,7 @@ const {
   normalizePlaybackProgress: normalizeProgressRaw, normalizeProgressStage,
 } = require("./voice-playback-progress");
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
+const { voiceProviderEnvForProfile } = require("./voice-provider-catalog");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
 const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
@@ -51,8 +52,8 @@ function createVoiceSessionServer(options) {
   const sessionAdmission = createVoiceSessionAdmission({
     ...options,
     sanitizeId,
-    defaultVoiceProviderFactory: () => createVoiceProvider({
-      env: options?.env || process.env,
+    defaultVoiceProviderFactory: (profile) => createVoiceProvider({
+      env: voiceProviderEnvForProfile(profile, options?.env || process.env),
       systemPrompt: options?.systemPrompt,
       agentProfile: options?.agentProfile,
       reasoner: typeof options?.reasoner === "function" ? options.reasoner : null,
@@ -337,18 +338,17 @@ class VoiceSessionConnection {
     const playbackPolicy = normalizePlaybackPolicy(event.playback_policy || event.playbackPolicy);
     const allBranchesContext = event.all_branches_context === true || event.allBranchesContext === true;
     const deviceId = nextTurnIdentity.deviceId;
-    const admitted = await this.sessionAdmission.admit({
-      deviceId, sessionId, branchId, turnId, sendEvent: (payload) => this.sendEvent(payload),
-      onDenied: () => { this.earlyAudio = []; this.earlyAudioBytes = 0; },
-    });
+    const profileVersion = this.sessionAdmission.profileVersion(deviceId),
+      effectiveProfile = effectiveProfileForSession(this.sessionAdmission.effectiveProfile(deviceId), event);
+    const admitted = await this.sessionAdmission.admit({ deviceId, sessionId, branchId, turnId,
+      sendEvent: (payload) => this.sendEvent(payload), onDenied: () => { this.earlyAudio = []; this.earlyAudioBytes = 0; },
+      effectiveProfile, profileVersion });
     if (!admitted.provider) {
       return;
     }
     const startedAt = nowIso();
-    const profileVersion = this.sessionAdmission.profileVersion(deviceId);
-    const effectiveProfile = this.sessionAdmission.applyProfile(
-      effectiveProfileForSession(this.sessionAdmission.effectiveProfile(deviceId), event), admitted.admission,
-    );
+    const pinnedProfileVersion = admitted.profileVersion || profileVersion,
+      pinnedEffectiveProfile = admitted.effectiveProfile || this.sessionAdmission.applyProfile(effectiveProfile, admitted.admission);
     const persona = personaForSession(event);
     this.voiceProvider = admitted.provider;
     const providerStatus = this.voiceProvider.status();
@@ -358,10 +358,10 @@ class VoiceSessionConnection {
       conversationId,
       branchId,
       turnId,
-      profileVersion,
-      effectiveProfile,
+      profileVersion: pinnedProfileVersion,
+      effectiveProfile: pinnedEffectiveProfile,
       persona,
-      providerStatus,
+      providerStatus, providerBundle: admitted.providerBundle || "",
       deviceId,
       source: String(event.source || "android-overlay").slice(0, 120),
       format, playbackPolicy,
@@ -471,6 +471,7 @@ class VoiceSessionConnection {
         supported: !turn.liveSession && typeof this.voiceProvider?.transcribeTurn === "function",
       },
       capabilities: { voice_drafts_v1: this.voiceDraft.runtime.capability },
+      provider_bundle: turn.providerBundle,
       ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
@@ -483,7 +484,7 @@ class VoiceSessionConnection {
       session_id: sessionId,
       branch_id: branchId,
       turn_id: turnId,
-      profile_version: profileVersion,
+      profile_version: pinnedProfileVersion,
       device_id: deviceId,
     });
   }
@@ -1587,6 +1588,7 @@ class VoiceSessionConnection {
         reasoning: status.reasoning_provider || status.llm_provider || "",
         tts: status.tts_provider || "",
       },
+      provider_bundle: turn.providerBundle || "",
       ...(payload || {}),
     };
     if (providerEvents && Array.isArray(providerEvents.events)) {
@@ -1884,6 +1886,7 @@ function writeTurnMetadata(turn, patch) {
     profile_version: turn.profileVersion || previous.profile_version || "",
     provider: turn.providerStatus?.provider || previous.provider || "",
     provider_ids: turn.providerStatus?.selected_providers || previous.provider_ids || {},
+    provider_bundle: turn.providerBundle || previous.provider_bundle || "",
     source: turn.source,
     input_format: turn.format,
     playback_policy: turn.playbackPolicy || previous.playback_policy || {},

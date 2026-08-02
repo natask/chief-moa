@@ -4,6 +4,13 @@
 - [x] 1.2 Register existing `loopback` and `gemini-live` providers in the registry without changing the Android WebSocket protocol.
 - [x] 1.3 Extend gateway health/runtime status to report selected provider mode, selected provider IDs, configuration status, and capability flags.
 - [ ] 1.4 Add a provider-swap smoke test proving Android-facing event names remain stable when switching between configured providers.
+- [x] 1.5 Expose an authenticated credential-safe provider/model catalog and
+      atomic selection endpoint for OpenAI Realtime, Grok Voice, Gemini/Vertex,
+      and cascaded reasoners. Reject unavailable bundles without advancing the
+      profile version; represent Claude only as an unavailable text-reasoning
+      stage until its production adapter exists. Covered by
+      `gateway/test/voice-provider-catalog.test.js` and
+      `gateway/test/profile-handlers.test.js`.
 
 ## 2. Versioned Agent Profile
 
@@ -143,10 +150,12 @@
 
 - [ ] 14.1 Add named mode overlays on the versioned agent profile for at least reliable voice, low-latency voice, text-only, demo, safe mode, and voice-first gestures. Each mode records its provider/profile deltas, latency budget, retention policy, and client interaction hints.
 - [ ] 14.2 Make spoken and UI profile/mode changes reversible, visible, and scoped global or device-specific, with the response reporting whether the change applies immediately, next turn, or after reconnect.
-- [ ] 14.2a Enforce segmented next-utterance switching: pin one immutable
+- [x] 14.2a Enforce segmented next-utterance switching: pin one immutable
       effective profile snapshot at turn admission; a mid-turn write cannot
       change that turn's STT/reasoning/TTS/chunks, and the next admitted turn
-      resolves the committed version. Add concurrent-turn and mid-stream tests.
+      resolves the committed version. Covered by
+      `gateway/test/voice-provider-catalog.test.js`; provider-specific paid
+      audio comparison remains part of the separate preview gate.
 - [ ] 14.2b Keep sample/preview voice overrides session-only: prove they do not
       advance durable profile version, cannot leak into concurrent ordinary
       turns, and are cleared at sample termination. A retry gets a new turn id

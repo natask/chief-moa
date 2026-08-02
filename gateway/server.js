@@ -11,6 +11,11 @@ const {
   withRequiredVoiceStyle,
 } = require("./lib/agent-profile");
 const { voiceProviderNames, createVoiceProvider, reportVoiceStreamingFault } = require("./lib/voice-providers");
+const {
+  createVoiceProviderCatalog,
+  resolveProviderSelection,
+  validateProfileProviderPatch,
+} = require("./lib/voice-provider-catalog");
 const { createSpeakStreamSanitizer } = require("./lib/voice-chunker");
 const { withActivityTimeout } = require("./lib/activity-timeout");
 const {
@@ -469,6 +474,7 @@ const { routeMediaBookmarks } = createMediaBookmarkHandlers({
 // behavior change. Requests read agentProfile.effective() per turn.
 const agentProfile = createAgentProfileStore({
   dataDir: DATA_DIR,
+  validateProviderSelection: (current, _candidate, patch) => validateProfileProviderPatch(current, patch, { env: process.env }),
   defaults: {
     system_prompt: SYSTEM_PROMPT,
     assistant_name: "A.G.",
@@ -559,6 +565,8 @@ const { routeProfiles } = createProfileHandlers({
   agentProfilePayload, readProfileHistory, recordProfileHistory,
   rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
   settingsCatalog: profileSettingsCatalog,
+  providerCatalog: ({ profile }) => createVoiceProviderCatalog({ env: process.env, profile }),
+  resolveProviderSelection: (body, { profile }) => resolveProviderSelection(body, { env: process.env, profile }),
 });
 const { routeAgentRunReads } = createAgentRunHandlers({
   authorizedAgent, agentAuthError, sendJson, sanitizeId,
@@ -7531,12 +7539,18 @@ function applyAgentProfilePatch(call, args, patch, sourceLabel = "agent-tool", o
   };
   const before = agentProfile.effective(profileOptions);
   const beforeVersion = agentProfile.currentVersion(profileOptions);
-  agentProfile.patch(patch, {
-    source: sourceLabel,
-    reason: String(args.reason || "profile_update").slice(0, 80),
-    scope: profileOptions.scope,
-    deviceId: profileOptions.deviceId,
-  });
+  try {
+    agentProfile.patch(patch, {
+      source: sourceLabel,
+      reason: String(args.reason || "profile_update").slice(0, 80),
+      scope: profileOptions.scope,
+      deviceId: profileOptions.deviceId,
+    });
+  } catch (error) {
+    if (error?.name !== "ProviderSelectionError") throw error;
+    return { ok: false, error: error.code, message: cleanError(error), ...(error.details || {}),
+      profile_version: beforeVersion, profile: agentProfileRuntimeStatus(profileOptions) };
+  }
   const after = agentProfile.effective(profileOptions);
   const afterVersion = agentProfile.currentVersion(profileOptions);
   const changed = agentProfile.fields().filter((field) => before?.[field] !== after?.[field]);

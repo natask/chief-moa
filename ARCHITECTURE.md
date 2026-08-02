@@ -1160,6 +1160,26 @@ explicit-language STT and controlled TTS. `npm run eval:voice:providers:status`
 reports this capability matrix and credential readiness without making paid
 calls or exposing credential values.
 
+The authenticated `GET /v1/agent/provider-catalog` projection is the
+gateway-owned selection authority for ChatGPT/OpenAI Realtime, Grok Voice,
+Gemini Live, Vertex Live, and cascaded reasoning bundles. It reports
+`configured`, `not_configured`, or `unavailable` separately from capability
+flags and never returns credential values. `PUT /v1/agent/provider-selection`
+validates one complete bundle and optional catalog model before appending a
+profile version. An unknown, unconfigured, or adapter-unavailable choice is a
+conflict and leaves the active profile unchanged. Claude appears only as a
+cascaded text-reasoning candidate; until the production Anthropic reasoner
+adapter exists it remains honestly `unavailable`, even when credential
+readiness is detectable, and it never advertises duplex audio.
+
+Voice admission resolves the committed effective profile and profile version
+once, freezes that snapshot, and constructs or reuses the provider package for
+that exact voice/STT/reasoning/TTS/model bundle. Turn metadata, normalized
+provider events, and `session_ready` carry the pinned bundle identity. A
+concurrent profile update becomes visible to control-plane reads immediately
+but cannot replace any stage or chunk policy of the admitted turn; the next
+turn admission resolves the new committed version.
+
 `openai-realtime` and `xai-voice` are registered native-live implementations of
 the same `createLiveTurnSession` gateway seam used by Vertex. They accept PCM
 before provider setup completes, wait for `session.updated`, stream buffered and

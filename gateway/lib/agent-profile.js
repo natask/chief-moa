@@ -70,6 +70,8 @@ function createAgentProfileStore(options) {
   const deviceOverridesPath = path.join(dataDir, DEVICE_OVERRIDES_FILENAME);
   // The env default is computed once at boot; it is the immutable baseline.
   const defaults = freeze(normalizeProfile(options?.defaults || {}));
+  const validateProviderSelection = typeof options?.validateProviderSelection === "function"
+    ? options.validateProviderSelection : null;
 
   fs.mkdirSync(dataDir, { recursive: true });
 
@@ -110,6 +112,7 @@ function createAgentProfileStore(options) {
     }
     const before = currentVersionRecord();
     const profile = mergeProfile(before.profile, next);
+    validateSelectionChange(before.profile, profile, next, validateProviderSelection);
     if (profilesEqual(before.profile, profile)) {
       return effective();
     }
@@ -292,6 +295,8 @@ function createAgentProfileStore(options) {
     const entry = ensureDeviceEntry(deviceId);
     const beforePatch = currentDevicePatch(deviceId);
     const patch = mergePatch(beforePatch, next);
+    validateSelectionChange(effective({ deviceId }), mergeProfile(currentVersionRecord().profile, patch),
+      next, validateProviderSelection);
     if (patchesEqual(beforePatch, patch)) {
       return effective({ deviceId });
     }
@@ -567,6 +572,12 @@ function mergeProfile(base, patch) {
 
 function mergePatch(base, patch) {
   return { ...pickProfileFields(base), ...pickProfileFields(patch) };
+}
+
+function validateSelectionChange(current, candidate, patch, validator) {
+  if (!validator || !patch || !["model", "voice_provider", "stt_provider", "reasoning_provider", "tts_provider"]
+    .some((field) => Object.prototype.hasOwnProperty.call(patch, field))) return;
+  validator(current, candidate, patch);
 }
 
 // Coerce and keep only known fields with usable values. Unknown keys, empty

@@ -31,6 +31,16 @@ function makeHarness(overrides = {}) {
     rejectedLanguageFields: (patch) => patch.language === "xx" ? ["language"] : [],
     supportedLanguagesSentence: () => "English or Amharic",
     profileApplicationSemantics: () => ({ applies: "next_turn" }),
+    providerCatalog: ({ profile }) => ({ version: "catalog/v1", active: profile.model }),
+    resolveProviderSelection: (body) => {
+      if (body.choice_id === "blocked") {
+        const error = new Error("choice is unavailable");
+        error.name = "ProviderSelectionError"; error.code = "provider_selection_unavailable";
+        error.statusCode = 409; error.details = { choice_id: "blocked", status: "unavailable" };
+        throw error;
+      }
+      return { choice: { id: body.choice_id }, patch: { model: body.model_id || "selected" } };
+    },
     settingsCatalog: {
       list: () => [{ id: "model" }, { id: "language" }],
       get: (id) => id === "model" ? { id: "model" } : null,
@@ -99,6 +109,34 @@ test("put rejects unknown fields atomically instead of silently inventing settin
   assert.equal(metadata.response.status, 200);
 });
 
+test("put reports provider validation failures without recording profile history", async () => {
+  const error = new Error("provider is unavailable");
+  error.name = "ProviderSelectionError"; error.code = "provider_selection_unavailable";
+  error.statusCode = 409; error.details = { choice_id: "cascaded-claude" };
+  const harness = makeHarness({ agentProfile: { patch: () => { throw error; } } });
+  const result = await route(harness, "PUT", "/v1/agent/profile", { model: "claude" });
+  assert.equal(result.response.status, 409);
+  assert.equal(result.response.payload.choice_id, "cascaded-claude");
+  assert.equal(harness.calls.some(([name]) => name === "history"), false);
+});
+
+test("provider catalog and atomic selection expose configured choices and preserve profile on rejection", async () => {
+  const harness = makeHarness();
+  const catalog = await route(harness, "GET", "/v1/agent/provider-catalog");
+  assert.equal(catalog.response.payload.version, "catalog/v1");
+  assert.equal(catalog.response.payload.active, "old");
+  const selected = await route(harness, "PUT", "/v1/agent/provider-selection",
+    { choice_id: "openai-realtime", model_id: "realtime-model" });
+  assert.equal(selected.response.status, 200);
+  assert.equal(selected.response.payload.profile.model, "realtime-model");
+  assert.equal(selected.response.payload.selection.id, "openai-realtime");
+  const beforeCalls = harness.calls.length;
+  const rejected = await route(harness, "PUT", "/v1/agent/provider-selection", { choice_id: "blocked" });
+  assert.equal(rejected.response.status, 409);
+  assert.equal(rejected.response.payload.error, "provider_selection_unavailable");
+  assert.equal(harness.calls.length, beforeCalls);
+});
+
 test("settings catalog routes list, get, search, and recommend canonical settings", async () => {
   const harness = makeHarness();
   const listed = await route(harness, "GET", "/v1/agent/settings");
@@ -141,6 +179,7 @@ test("rollback accepts every version alias and returns bounded missing errors", 
 test("all profile routes authorize and unrelated combinations fall through", async () => {
   const denied = makeHarness({ authorizedAgent: () => false });
   for (const [method, path] of [["GET", "/v1/agent/profile"], ["PUT", "/v1/agent/profile"],
+    ["GET", "/v1/agent/provider-catalog"], ["PUT", "/v1/agent/provider-selection"],
     ["GET", "/v1/agent/profile/history"], ["GET", "/v1/agent/profile/versions"],
     ["GET", "/v1/agent/settings"], ["GET", "/v1/agent/settings/model"],
     ["POST", "/v1/agent/profile/reset"], ["POST", "/v1/agent/profile/rollback"]]) {

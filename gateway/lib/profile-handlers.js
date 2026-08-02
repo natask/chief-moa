@@ -5,7 +5,7 @@ function createProfileHandlers({
   profileOptionsFromUrl, profileOptionsFromBody, requireDeviceScope,
   agentProfilePayload, readProfileHistory, recordProfileHistory,
   rejectedLanguageFields, supportedLanguagesSentence, profileApplicationSemantics,
-  settingsCatalog,
+  settingsCatalog, providerCatalog, resolveProviderSelection,
 }) {
   function authorize(request, response) {
     if (authorizedAgent(request)) return true;
@@ -29,8 +29,13 @@ function createProfileHandlers({
     if (!requireDeviceScope(response, profileOptions)) return;
     const before = agentProfile.effective(profileOptions);
     const beforeVersion = agentProfile.currentVersion(profileOptions);
-    agentProfile.patch(patch, { source: body?.source || "api", reason: "patch",
-      scope: profileOptions.scope, deviceId: profileOptions.deviceId });
+    try {
+      agentProfile.patch(patch, { source: body?.source || "api", reason: "patch",
+        scope: profileOptions.scope, deviceId: profileOptions.deviceId });
+    } catch (error) {
+      if (!sendProviderSelectionError(response, error)) throw error;
+      return;
+    }
     const after = agentProfile.effective(profileOptions);
     const afterVersion = agentProfile.currentVersion(profileOptions);
     recordProfileHistory(before, after, body?.source, { beforeVersion, afterVersion,
@@ -43,6 +48,27 @@ function createProfileHandlers({
         message: `That language is not in the supported set (${supported}), so I kept the previous language.` };
     }
     sendJson(response, 200, agentProfilePayload(extra, profileOptions));
+  }
+
+  async function putProviderSelection(request, response) {
+    const body = await readJsonBody(request);
+    const profileOptions = profileOptionsFromBody(body, "global");
+    if (!requireDeviceScope(response, profileOptions)) return;
+    const before = agentProfile.effective(profileOptions);
+    const beforeVersion = agentProfile.currentVersion(profileOptions);
+    try {
+      const selection = resolveProviderSelection(body, { profile: before });
+      agentProfile.patch(selection.patch, { source: body?.source || "api", reason: "provider_selection",
+        scope: profileOptions.scope, deviceId: profileOptions.deviceId });
+      const after = agentProfile.effective(profileOptions);
+      const afterVersion = agentProfile.currentVersion(profileOptions);
+      recordProfileHistory(before, after, body?.source || "provider_selection", { beforeVersion, afterVersion,
+        scope: profileOptions.scope, deviceId: profileOptions.deviceId });
+      sendJson(response, 200, agentProfilePayload({ selection: selection.choice,
+        application: profileApplicationSemantics() }, profileOptions));
+    } catch (error) {
+      if (!sendProviderSelectionError(response, error)) throw error;
+    }
   }
 
   async function resetProfile(request, response) {
@@ -100,6 +126,12 @@ function createProfileHandlers({
       if (authorize(request, response)) sendJson(response, 200, agentProfilePayload({}, profileOptionsFromUrl(url)));
       return true;
     }
+    if (pathname === "/v1/agent/provider-catalog" && request.method === "GET") {
+      if (!authorize(request, response)) return true;
+      const options = profileOptionsFromUrl(url);
+      sendJson(response, 200, providerCatalog({ profile: agentProfile.effective(options) }));
+      return true;
+    }
     if (pathname === "/v1/agent/profile/history" && request.method === "GET") {
       if (authorize(request, response)) sendJson(response, 200, readProfileHistory({
         limit: Number(url.searchParams.get("limit") || 50),
@@ -117,6 +149,7 @@ function createProfileHandlers({
     }
     const handlers = new Map([
       ["PUT:/v1/agent/profile", putProfile],
+      ["PUT:/v1/agent/provider-selection", putProviderSelection],
       ["POST:/v1/agent/profile/rollback", rollbackProfile],
       ["POST:/v1/agent/profile/reset", resetProfile],
     ]);
@@ -126,7 +159,17 @@ function createProfileHandlers({
     return true;
   }
 
-  return { routeProfiles, putProfile, resetProfile, rollbackProfile };
+  function sendProviderSelectionError(response, error) {
+    if (!error || error.name !== "ProviderSelectionError") return false;
+    sendJson(response, Number(error.statusCode) || 409, {
+      error: error.code || "provider_selection_unavailable",
+      message: cleanError(error),
+      ...(error.details || {}),
+    });
+    return true;
+  }
+
+  return { routeProfiles, putProfile, putProviderSelection, resetProfile, rollbackProfile };
 }
 
 const PROFILE_ENVELOPE_FIELDS = new Set(["profile", "profile_overrides", "scope", "profile_scope", "device_id", "deviceId", "source", "reason"]);
