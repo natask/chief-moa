@@ -179,6 +179,76 @@ final class MoaVoiceGatewaySocket {
         }
     }
 
+    boolean sendVoiceDraftStart(String sessionId, String turnId, String branchId,
+            String source, String deviceId, boolean transcriptionOnly) {
+        return sendJson(buildVoiceDraftStart(sessionId, turnId, branchId, source,
+                deviceId, transcriptionOnly));
+    }
+
+    static JSONObject buildVoiceDraftStart(String sessionId, String turnId, String branchId,
+            String source, String deviceId, boolean transcriptionOnly) {
+        try {
+            JSONObject format = new JSONObject();
+            format.put("encoding", MoaAudioCaptureController.ENCODING);
+            format.put("sample_rate", MoaAudioCaptureController.SAMPLE_RATE_HZ);
+            format.put("channels", MoaAudioCaptureController.CHANNEL_COUNT);
+            JSONObject draft = new JSONObject();
+            draft.put("version", "voice_drafts_v1");
+            draft.put("operation", "create");
+            draft.put("idempotency_key", "android-create-" + turnId);
+            JSONObject body = new JSONObject();
+            body.put("type", "session_start");
+            body.put("session_id", sessionId);
+            body.put("conversation_id", sessionId);
+            body.put("branch_id", safe(branchId).isEmpty() ? "default" : safe(branchId));
+            body.put("turn_id", turnId);
+            body.put("format", format);
+            body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
+            if (!safe(deviceId).isEmpty()) body.put("device_id", safe(deviceId));
+            applyTranscriptionMode(body, transcriptionOnly);
+            body.put("voice_draft", draft);
+            return body;
+        } catch (JSONException error) {
+            throw new IllegalStateException("Could not build voice draft session_start event.", error);
+        }
+    }
+
+    boolean sendVoiceDraftControl(String sessionId, String branchId, String turnId,
+            String draftId, long revision, String action, String idempotencyKey) {
+        return sendVoiceDraftAuthorityEvent("voice_draft_control", sessionId, branchId,
+                turnId, draftId, revision, action, idempotencyKey);
+    }
+
+    boolean sendVoiceDraftCommit(String sessionId, String branchId, String turnId,
+            String draftId, long revision, String idempotencyKey) {
+        return sendVoiceDraftAuthorityEvent("commit_turn", sessionId, branchId,
+                turnId, draftId, revision, "", idempotencyKey);
+    }
+
+    private boolean sendVoiceDraftAuthorityEvent(String type, String sessionId, String branchId,
+            String turnId, String draftId, long revision, String action, String idempotencyKey) {
+        return sendJson(buildVoiceDraftAuthorityEvent(type, sessionId, branchId, turnId,
+                draftId, revision, action, idempotencyKey));
+    }
+
+    static JSONObject buildVoiceDraftAuthorityEvent(String type, String sessionId, String branchId,
+            String turnId, String draftId, long revision, String action, String idempotencyKey) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("type", type);
+            body.put("session_id", sessionId);
+            body.put("branch_id", branchId);
+            body.put("turn_id", turnId);
+            body.put("draft_id", draftId);
+            body.put("expected_revision", revision);
+            body.put("idempotency_key", idempotencyKey);
+            if (!safe(action).isEmpty()) body.put("action", action);
+            return body;
+        } catch (JSONException error) {
+            throw new IllegalStateException("Could not build " + type + " event.", error);
+        }
+    }
+
     static JSONObject applyTranscriptionMode(JSONObject body, boolean transcriptionOnly)
             throws JSONException {
         if (transcriptionOnly) {

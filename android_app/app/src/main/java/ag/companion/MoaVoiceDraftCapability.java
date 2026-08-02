@@ -13,11 +13,21 @@ final class MoaVoiceDraftCapability {
     }
 
     static Snapshot fromHealth(String gatewayUrl, JSONObject health, long checkedAtEpochMs) {
+        JSONObject voiceStream = health == null ? null : health.optJSONObject("voice_stream");
+        JSONObject provider = voiceStream == null ? null : voiceStream.optJSONObject("provider");
+        Object advertised = provider == null ? null : provider.opt("voice_drafts_v1");
+        boolean supported = advertised instanceof Boolean && Boolean.TRUE.equals(advertised);
+        if (advertised instanceof JSONObject) {
+            supported = ((JSONObject) advertised).optBoolean("supported", false);
+        }
+        // Tolerate the short-lived preview shape while deployed clients roll.
         JSONObject capabilities = health == null ? null : health.optJSONObject("capabilities");
-        Object advertised = capabilities == null ? null : capabilities.opt("voice_drafts_v1");
+        Object legacyAdvertised = capabilities == null ? null : capabilities.opt("voice_drafts_v1");
+        supported = supported || (legacyAdvertised instanceof Boolean
+                && Boolean.TRUE.equals(legacyAdvertised));
         return new Snapshot(
                 normalizeGatewayUrl(gatewayUrl),
-                advertised instanceof Boolean && Boolean.TRUE.equals(advertised),
+                supported,
                 checkedAtEpochMs
         );
     }

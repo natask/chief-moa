@@ -81,6 +81,9 @@ final class MoaStreamingVoiceSessionController {
 
         void onSessionClosed();
 
+        default void onVoiceDraftStateChanged(boolean ready, boolean paused) {
+        }
+
         void onError(String message, Throwable error);
     }
 
@@ -98,6 +101,8 @@ final class MoaStreamingVoiceSessionController {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoCommitCheck = this::maybeAutoCommitTurn;
     private final Runnable pendingCommitTimeout = this::failPendingCommitTurn;
+    private final Runnable draftReadyTimeout = () -> failDraftWait(false);
+    private final Runnable draftControlTimeout = () -> failDraftWait(true);
     private final Object lock = new Object();
 
     private MoaAudioCaptureController captureController;
@@ -140,6 +145,13 @@ final class MoaStreamingVoiceSessionController {
     private boolean pendingLifecycleAudioReceived;
     private String pendingDeviceAudioDoneTurnId = "";
     private boolean playbackFrameScheduled;
+    private boolean voiceDraftEnabled;
+    private boolean voiceDraftPaused;
+    private boolean voiceDraftControlPending;
+    private boolean suppressDraftCaptureStopped;
+    private boolean draftCommitAfterControl;
+    private String voiceDraftId = "";
+    private long voiceDraftRevision;
 
     private final Choreographer.FrameCallback playbackFrameCallback = this::onPlaybackFrame;
 
@@ -211,6 +223,25 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
+    void setVoiceDraftEnabled(boolean enabled) {
+        synchronized (lock) {
+            if (!active) voiceDraftEnabled = enabled;
+        }
+    }
+
+    boolean isVoiceDraftReady() {
+        synchronized (lock) {
+            return voiceDraftEnabled && !voiceDraftId.isEmpty()
+                    && !voiceDraftControlPending && !committed && !commitRequested;
+        }
+    }
+
+    boolean isVoiceDraftPaused() {
+        synchronized (lock) {
+            return voiceDraftEnabled && voiceDraftPaused;
+        }
+    }
+
     String sessionId() {
         synchronized (lock) {
             return sessionId;
@@ -251,6 +282,12 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
+            voiceDraftPaused = false;
+            voiceDraftControlPending = false;
+            suppressDraftCaptureStopped = false;
+            draftCommitAfterControl = false;
+            voiceDraftId = "";
+            voiceDraftRevision = 0L;
             assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
@@ -291,6 +328,58 @@ final class MoaStreamingVoiceSessionController {
         startCaptureIfNeeded();
     }
 
+    void toggleVoiceDraftPause() {
+        MoaAudioCaptureController capture;
+        MoaVoiceGatewaySocket socket;
+        String action;
+        String id;
+        long revision;
+        synchronized (lock) {
+            if (!active || !voiceDraftEnabled || voiceDraftId.isEmpty()
+                    || voiceDraftControlPending || committed || commitRequested) return;
+            action = voiceDraftPaused ? "resume" : "pause";
+            voiceDraftControlPending = true;
+            capture = captureController;
+            socket = gatewaySocket;
+            id = voiceDraftId;
+            revision = voiceDraftRevision;
+            suppressDraftCaptureStopped = !voiceDraftPaused;
+        }
+        if ("pause".equals(action) && capture != null) capture.stop();
+        if (socket == null || !socket.sendVoiceDraftControl(sessionId(), branchId, turnId(), id,
+                revision, action, "android-" + action + "-" + turnId() + "-" + revision)) {
+            synchronized (lock) { voiceDraftControlPending = false; }
+            reportError("Could not " + action + " voice draft.", null);
+        } else {
+            mainHandler.postDelayed(draftControlTimeout, DRAFT_CONTROL_ACK_TIMEOUT_MS);
+        }
+    }
+
+    void discardVoiceDraft() {
+        MoaAudioCaptureController capture;
+        MoaVoiceGatewaySocket socket;
+        String id;
+        long revision;
+        synchronized (lock) {
+            if (!active || !voiceDraftEnabled || voiceDraftId.isEmpty()
+                    || voiceDraftControlPending || committed || commitRequested) return;
+            voiceDraftControlPending = true;
+            suppressDraftCaptureStopped = true;
+            capture = captureController;
+            socket = gatewaySocket;
+            id = voiceDraftId;
+            revision = voiceDraftRevision;
+        }
+        if (capture != null) capture.stop();
+        if (socket == null || !socket.sendVoiceDraftControl(sessionId(), branchId, turnId(), id,
+                revision, "discard", "android-discard-" + turnId() + "-" + revision)) {
+            synchronized (lock) { voiceDraftControlPending = false; }
+            reportError("Could not discard voice draft.", null);
+        } else {
+            mainHandler.postDelayed(draftControlTimeout, DRAFT_CONTROL_ACK_TIMEOUT_MS);
+        }
+    }
+
     private void schedulePlaybackFrame() {
         if (playbackFrameScheduled) return;
         playbackFrameScheduled = true;
@@ -311,6 +400,10 @@ final class MoaStreamingVoiceSessionController {
         boolean hasAudio;
         synchronized (lock) {
             if (!active || committed || commitRequested) {
+                return;
+            }
+            if (voiceDraftEnabled && voiceDraftControlPending) {
+                draftCommitAfterControl = true;
                 return;
             }
             // Mark the commit requested but do NOT flip `committed` yet. Chunks
@@ -516,11 +609,87 @@ final class MoaStreamingVoiceSessionController {
             currentTurnId = turnId;
         }
 
-        if (socket == null || !socket.sendSessionStart(currentSessionId, currentTurnId, branchId,
-                null, transcriptionOnly ? "android-launcher-dictation" : "android-overlay",
-                deviceId, transcriptionOnly)) {
+        boolean draft;
+        synchronized (lock) { draft = voiceDraftEnabled; }
+        boolean sent = draft
+                ? socket != null && socket.sendVoiceDraftStart(currentSessionId, currentTurnId, branchId,
+                        transcriptionOnly ? "android-launcher-dictation" : "android-overlay",
+                        deviceId, transcriptionOnly)
+                : socket != null && socket.sendSessionStart(currentSessionId, currentTurnId, branchId,
+                        null, transcriptionOnly ? "android-launcher-dictation" : "android-overlay",
+                        deviceId, transcriptionOnly);
+        if (!sent) {
             reportError("Could not send session_start to voice gateway.", null);
             return;
+        }
+        if (draft) mainHandler.postDelayed(draftReadyTimeout, DRAFT_READY_TIMEOUT_MS);
+    }
+
+    private void failDraftWait(boolean control) {
+        boolean failed;
+        synchronized (lock) {
+            failed = active && voiceDraftEnabled
+                    && (control ? voiceDraftControlPending : voiceDraftId.isEmpty());
+        }
+        if (failed) reportError(control
+                ? "Voice draft control was not acknowledged."
+                : "Voice draft authority was not acknowledged.", null);
+    }
+
+    private void handleVoiceDraftEvent(JSONObject event) {
+        if (event == null) return;
+        String type = safe(event.optString("type", ""));
+        if (!("session_ready".equals(type) || "voice_draft_state".equals(type))) return;
+        JSONObject draft = event.optJSONObject("voice_draft");
+        if (draft == null) return;
+        boolean ready;
+        boolean paused;
+        boolean discarded;
+        boolean notifyControls;
+        boolean commitAfterControl;
+        synchronized (lock) {
+            if (!voiceDraftEnabled
+                    || !sessionId.equals(event.optString("session_id", ""))
+                    || !branchId.equals(event.optString("branch_id", ""))
+                    || !turnId.equals(event.optString("turn_id", ""))) return;
+            String id = safe(draft.optString("draft_id", ""));
+            long revision = draft.optLong("revision", -1L);
+            String state = safe(draft.optString("state", ""));
+            if (!MoaVoiceDraftPointer.isAuthorityToken(id) || revision <= 0L
+                    || (!voiceDraftId.isEmpty() && !voiceDraftId.equals(id))
+                    || revision < voiceDraftRevision) return;
+            if ("session_ready".equals(type)) {
+                JSONObject capabilities = event.optJSONObject("capabilities");
+                JSONObject capability = capabilities == null
+                        ? null : capabilities.optJSONObject("voice_drafts_v1");
+                if (capability == null || !capability.optBoolean("supported", false)
+                        || !"capturing".equals(state)) return;
+            } else if (revision <= voiceDraftRevision) {
+                return;
+            }
+            voiceDraftId = id;
+            voiceDraftRevision = revision;
+            voiceDraftControlPending = false;
+            commitAfterControl = draftCommitAfterControl;
+            draftCommitAfterControl = false;
+            voiceDraftPaused = "paused".equals(state);
+            ready = "capturing".equals(state) || voiceDraftPaused;
+            paused = voiceDraftPaused;
+            discarded = "discarded".equals(state);
+            notifyControls = ready || discarded;
+            if (discarded) active = false;
+        }
+        mainHandler.removeCallbacks(draftReadyTimeout);
+        mainHandler.removeCallbacks(draftControlTimeout);
+        if (ready && !paused && !commitAfterControl && "voice_draft_state".equals(type)) {
+            startCaptureIfNeeded();
+        }
+        if (notifyControls) post(() -> callback.onVoiceDraftStateChanged(ready, paused));
+        if (commitAfterControl && ready) post(MoaStreamingVoiceSessionController.this::commitTurn);
+        if (discarded) {
+            MoaVoiceGatewaySocket socket;
+            synchronized (lock) { socket = gatewaySocket; }
+            if (socket != null) socket.close();
         }
     }
 
@@ -595,7 +764,15 @@ final class MoaStreamingVoiceSessionController {
             handleTurnDone(currentTurnId, "no_speech", false, false, "", new JSONObject());
             return;
         }
-        if (!socket.sendCommitTurn(currentTurnId)) {
+        boolean sent;
+        synchronized (lock) {
+            sent = voiceDraftEnabled
+                    ? socket.sendVoiceDraftCommit(sessionId, branchId, currentTurnId,
+                            voiceDraftId, voiceDraftRevision,
+                            "android-send-" + currentTurnId + "-" + voiceDraftRevision)
+                    : socket.sendCommitTurn(currentTurnId);
+        }
+        if (!sent) {
             reportError("Could not send commit_turn to voice gateway.", null);
         }
     }
@@ -900,6 +1077,12 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onCaptureStopped() {
             Log.i(TAG, "recordingStopped");
+            synchronized (lock) {
+                if (suppressDraftCaptureStopped) {
+                    suppressDraftCaptureStopped = false;
+                    return;
+                }
+            }
             post(() -> callback.onRecordingStopped());
         }
 
@@ -990,6 +1173,8 @@ final class MoaStreamingVoiceSessionController {
             }
             mainHandler.removeCallbacks(autoCommitCheck);
             mainHandler.removeCallbacks(pendingCommitTimeout);
+            mainHandler.removeCallbacks(draftReadyTimeout);
+            mainHandler.removeCallbacks(draftControlTimeout);
             if (wasActive) {
                 post(() -> callback.onSessionClosed());
             }
@@ -1029,6 +1214,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onJsonEvent(JSONObject event) {
+            handleVoiceDraftEvent(event);
         }
 
         @Override
@@ -1038,6 +1224,10 @@ final class MoaStreamingVoiceSessionController {
             boolean shouldFinishCommit;
             boolean hasAudio;
             synchronized (lock) {
+                if (voiceDraftEnabled && voiceDraftId.isEmpty()) {
+                    reportError("Gateway did not acknowledge exact voice draft authority.", null);
+                    return;
+                }
                 socket = gatewaySocket;
                 currentTurnId = turnId;
                 shouldFinishCommit = active && committed && pendingCommitAfterSessionReady;

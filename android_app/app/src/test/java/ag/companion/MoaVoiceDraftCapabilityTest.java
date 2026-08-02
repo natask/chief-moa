@@ -8,6 +8,15 @@ import static org.junit.Assert.assertTrue;
 
 public final class MoaVoiceDraftCapabilityTest {
     @Test
+    public void readsDeployedVoiceStreamCapabilityShape() throws Exception {
+        JSONObject health = new JSONObject("{\"voice_stream\":{\"provider\":{"
+                + "\"voice_drafts_v1\":{\"supported\":true}}}}");
+
+        assertTrue(MoaVoiceDraftCapability.fromHealth(
+                "https://api.agee.app", health, 100L).supported);
+    }
+
+    @Test
     public void requiresExplicitNestedBooleanCapability() throws Exception {
         long now = 10_000L;
         assertTrue(MoaVoiceDraftCapability.fromHealth(

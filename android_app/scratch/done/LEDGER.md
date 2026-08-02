@@ -1,3 +1,4 @@
+- Added capability-gated Android voice-draft Pause/Resume and Discard controls around the mascot, with exact-authority Send and legacy fallback — agent: Codex/GPT-5 — this commit
 - Put an exact Copy action beside every retained user and assistant message in Android History, replacing combined turn copy — agent: Codex/GPT-5 — this commit
 - Added a selectable Minimal Android voice presentation with four touch-through audio-reactive edge windows and a bounded full-app fallback — agent: Codex/GPT-5 — this commit
 - Added an Android History control that forks the active thread inside the shared session and keeps the overlay on the returned child — agent: Codex/GPT-5 — 339e577d

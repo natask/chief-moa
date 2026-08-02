@@ -14,6 +14,7 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Rect;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -90,6 +91,8 @@ public final class OverlayService extends Service {
     private final MoaWindowLayoutState orbDragLayoutState = new MoaWindowLayoutState();
     private View orbRemoveTarget;
     private View orbRemovalUndoChip;
+    private TextView voiceDraftPauseControl;
+    private TextView voiceDraftCancelControl;
     private final MoaOrbRemovalUndo orbRemovalUndo = new MoaOrbRemovalUndo();
     private Runnable pendingOrbRemovalCommit;
     private int orbDragStartX;
@@ -141,6 +144,8 @@ public final class OverlayService extends Service {
     private String gatewayUrl = "";
     private String gatewayToken = "";
     private String conversationId = "";
+    private volatile MoaVoiceDraftCapability.Snapshot voiceDraftCapability;
+    private final Runnable refreshVoiceDraftCapabilityTask = this::refreshVoiceDraftCapability;
     private String activeBranchId = "default";
     private boolean currentStreamingTurnRouted;
     private boolean currentStreamingTurnCommitRequested;
@@ -252,6 +257,7 @@ public final class OverlayService extends Service {
             }
         });
         loadSettings();
+        refreshVoiceDraftCapability();
         refreshVoiceProfile();
         MoaPrefs.setHistoryJson(this, "");
         promoteToForeground();
@@ -330,6 +336,7 @@ public final class OverlayService extends Service {
         if (!pendingToolRequest.isEmpty()) finishClaimedToolRequest(pendingToolRequest,
                 new MoaToolRequestExecution(false, "Overlay stopped before the local action completed.", null));
         running = false;
+        mainHandler.removeCallbacks(refreshVoiceDraftCapabilityTask);
         MoaAccessibilityService.cancelActiveYoutubeOperation();
         if (toolConfirmationDialog != null) toolConfirmationDialog.dismiss();
         toolConfirmationDialog = null;
@@ -576,6 +583,8 @@ public final class OverlayService extends Service {
         updateOrbVoiceDraftAccessibility();
         orbView.setAlpha(MoaOrbPresentation.IDLE_ALPHA);
         compactOverlayRoot.put(orbView, orbScreenBounds(), true);
+        ensureVoiceDraftControls();
+        updateVoiceDraftControls();
         compactOverlayRoot.attach();
         compactOverlayRoot.commitFrame();
     }
@@ -635,7 +644,93 @@ public final class OverlayService extends Service {
     private void syncOrbSlot() {
         if (compactOverlayRoot != null && orbView != null) {
             compactOverlayRoot.put(orbView, orbScreenBounds(), true);
+            syncVoiceDraftControlSlots();
         }
+    }
+
+    private void ensureVoiceDraftControls() {
+        if (voiceDraftPauseControl != null || compactOverlayRoot == null) return;
+        voiceDraftPauseControl = voiceDraftControl("Pause", view -> toggleVoiceDraftPause());
+        voiceDraftCancelControl = voiceDraftControl("Cancel", view -> discardVoiceDraft());
+        syncVoiceDraftControlSlots();
+    }
+
+    private TextView voiceDraftControl(String label, View.OnClickListener listener) {
+        TextView control = new TextView(this);
+        control.setText(label);
+        control.setTextColor(MoaColors.PAPER);
+        control.setTextSize(12f);
+        control.setGravity(Gravity.CENTER);
+        control.setContentDescription(label + " voice draft");
+        control.setOnClickListener(listener);
+        control.setPadding(dp(8), 0, dp(8), 0);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(MoaColors.RAISED);
+        background.setStroke(dp(1), MoaColors.RAISED_BORDER);
+        background.setCornerRadius(dp(18));
+        control.setBackground(background);
+        control.setVisibility(View.GONE);
+        return control;
+    }
+
+    private void syncVoiceDraftControlSlots() {
+        if (compactOverlayRoot == null || orbParams == null
+                || voiceDraftPauseControl == null || voiceDraftCancelControl == null) return;
+        int width = dp(72);
+        int height = dp(36);
+        int gap = dp(6);
+        int centerX = orbParams.x + Math.max(1, orbParams.width) / 2;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int left = Math.max(0, Math.min(centerX - width / 2, screenWidth - width));
+        compactOverlayRoot.put(voiceDraftPauseControl,
+                new Rect(left, Math.max(0, orbParams.y - height - gap), left + width,
+                        Math.max(0, orbParams.y - height - gap) + height), true);
+        compactOverlayRoot.put(voiceDraftCancelControl,
+                new Rect(left, orbParams.y + Math.max(1, orbParams.height) + gap, left + width,
+                        orbParams.y + Math.max(1, orbParams.height) + gap + height), true);
+    }
+
+    private void updateVoiceDraftControls() {
+        if (voiceDraftPauseControl == null || voiceDraftCancelControl == null) return;
+        boolean ready = streamingVoiceController != null && streamingVoiceController.isVoiceDraftReady();
+        boolean capability = ready || (voiceDraftCapability != null
+                && voiceDraftCapability.isFreshFor(gatewayUrl, System.currentTimeMillis()));
+        boolean paused = streamingVoiceController != null && streamingVoiceController.isVoiceDraftPaused();
+        MoaVoiceDraftControlPresentation state =
+                MoaVoiceDraftControlPresentation.from(capability, ready, paused);
+        voiceDraftPauseControl.setText(state.pauseLabel);
+        voiceDraftPauseControl.setContentDescription(state.pauseLabel + " voice draft");
+        voiceDraftPauseControl.setVisibility(state.visible ? View.VISIBLE : View.GONE);
+        voiceDraftCancelControl.setVisibility(state.visible ? View.VISIBLE : View.GONE);
+        if (compactOverlayRoot != null) compactOverlayRoot.commitFrame();
+    }
+
+    private void toggleVoiceDraftPause() {
+        if (streamingVoiceController != null && streamingVoiceController.isVoiceDraftReady()) {
+            streamingVoiceController.toggleVoiceDraftPause();
+        }
+    }
+
+    private void refreshVoiceDraftCapability() {
+        final String url = gatewayUrl;
+        final String token = gatewayToken;
+        if (safe(url).isEmpty()) return;
+        new Thread(() -> {
+            MoaVoiceDraftCapability.Snapshot snapshot;
+            long checkedAt = System.currentTimeMillis();
+            try {
+                snapshot = MoaVoiceDraftCapability.fromHealth(
+                        url, new MoaGatewayClient(url, token).health(), checkedAt);
+            } catch (Exception error) {
+                snapshot = MoaVoiceDraftCapability.unavailable(url, checkedAt);
+            }
+            voiceDraftCapability = snapshot;
+            mainHandler.post(() -> {
+                updateVoiceDraftControls();
+                mainHandler.removeCallbacks(refreshVoiceDraftCapabilityTask);
+                mainHandler.postDelayed(refreshVoiceDraftCapabilityTask, 20_000L);
+            });
+        }, "moa-voice-draft-capability").start();
     }
 
     private void applyOrbScale() {
@@ -1218,6 +1313,13 @@ public final class OverlayService extends Service {
     }
 
     private void discardVoiceDraft() {
+        if (streamingVoiceController != null && streamingVoiceController.isVoiceDraftReady()) {
+            streamingVoiceController.discardVoiceDraft();
+            voiceInvocationLatched = false;
+            setContinuousVoiceLoop(false);
+            updateVoiceDraftControls();
+            return;
+        }
         copyUserTranscriptWhenFinal = false;
         voiceInvocationLatched = false;
         launcherDictationLatched = false;
@@ -1479,6 +1581,7 @@ public final class OverlayService extends Service {
                 active,
                 active ? this::sendVoiceDraft : null,
                 active ? this::discardVoiceDraft : null);
+        updateVoiceDraftControls();
     }
 
     // A turn "heard speech" when it left a real transcript behind. This reuses the
@@ -3096,6 +3199,17 @@ public final class OverlayService extends Service {
                 updateMicState();
             }
             @Override
+            public void onVoiceDraftStateChanged(boolean ready, boolean paused) {
+                if (!isCurrentStreamingGeneration(generation)) return;
+                updateVoiceDraftControls();
+                updateOrbVoiceDraftAccessibility();
+                if (!ready) {
+                    setContinuousVoiceLoop(false);
+                    setVoiceRuntimeState(VoiceRuntimeState.READY);
+                    updateMicState();
+                }
+            }
+            @Override
             public void onRecordingStarted() {
                 if (!isCurrentStreamingGeneration(generation)) {
                     return;
@@ -3457,6 +3571,11 @@ public final class OverlayService extends Service {
                 showStreamingVoiceFailure(notice, generation);
             }
         }, this);
+        MoaVoiceDraftCapability.Snapshot draftCapability = voiceDraftCapability;
+        boolean exactDraftMode = continuousLoop && !autoCommitOnSilence && !incognito
+                && draftCapability != null
+                && draftCapability.isFreshFor(gatewayUrl, System.currentTimeMillis());
+        streamingVoiceController.setVoiceDraftEnabled(exactDraftMode);
         streamingVoiceController.setTranscriptionOnly(transcriptionOnly);
         if (!pendingReplacementTurnId.isEmpty()) {
             streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());

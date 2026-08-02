@@ -43,6 +43,10 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject health() throws Exception {
+        return new JSONObject(getText(apiEndpoint("/health"), 5000));
+    }
+
     // Set the active thread for the shared session, or mint a new/fork/incognito
     // branch. Streaming voice must call this before opening the WS session so the
     // socket branch is fixed to the resolved thread; the reply carries the

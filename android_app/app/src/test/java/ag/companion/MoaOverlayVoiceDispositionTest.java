@@ -6,19 +6,17 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertNotNull;
 
 public final class MoaOverlayVoiceDispositionTest {
     @Test
-    public void overlayHasNoSeparateVoiceDraftDispositionWindows() {
+    public void overlayKeepsSendOnMascotAndOwnsOnlyBoundedPauseAndCancelControls() throws Exception {
         for (Field field : OverlayService.class.getDeclaredFields()) {
-            assertFalse(field.getName().contains("voiceCancelControl"));
             assertFalse(field.getName().contains("voiceSendControl"));
         }
-        for (Method method : OverlayService.class.getDeclaredMethods()) {
-            assertFalse(method.getName().contains("VoiceDraftControl"));
-        }
-        assertNull(getClass().getClassLoader().getResource(
-                "ag/companion/MoaVoiceDraftControls.class"));
+        assertNotNull(OverlayService.class.getDeclaredField("voiceDraftPauseControl"));
+        assertNotNull(OverlayService.class.getDeclaredField("voiceDraftCancelControl"));
+        Method slotSync = OverlayService.class.getDeclaredMethod("syncVoiceDraftControlSlots");
+        assertNotNull(slotSync);
     }
 }
