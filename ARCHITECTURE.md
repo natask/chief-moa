@@ -1979,6 +1979,26 @@ suppresses a stale gateway record until the remote delete is acknowledged, so a
 restart or network failure cannot silently resurrect the bookmark. Capacity
 exhaustion fails closed rather than evicting older unacknowledged work.
 
+### Gateway-Owned Reminders
+
+Internal reminders are gateway-owned durable product state, distinct from an
+explicit request to use a named phone timer or reminder app. Authenticated
+`/v1/reminders` routes and the cascaded voice tool catalog create, query, and
+cancel reminders in the existing event substrate. Creation persists one
+absolute `due_at`; relative delays are converted once at intake. The gateway's
+periodic sweep and every reminder read can append the idempotent
+`reminder.due` transition, so a process restart loses no deadline.
+
+The implemented slice does not deliver notifications. Every reminder projects
+`delivery.status=not_configured`, even after it becomes due. No Android,
+browser, or desktop Surface currently advertises a generic reminder
+notification tool. Cross-surface delivery requires a later
+`notification.reminder` tool contract whose target client advertises, claims,
+validates, displays, and receipts the notification; queueing alone will not
+count as delivery. Requests that name an external Clock/timer/reminder app are
+rejected by the internal reminder API and remain separate device-local action
+proposals. Contract: `reference/openspec/changes/gateway-owned-reminders`.
+
 ### Cross-Device Tool Hub
 
 ```text

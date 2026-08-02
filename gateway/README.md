@@ -141,6 +141,10 @@ GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
 - `POST /v1/agent/runs` accepts `{ "harness": "gemini", "prompt": "...", "wait": true }` and stores/executes a home-machine run.
 - `GET /v1/agent/runs` lists saved runs.
 - `GET /v1/agent/runs/:id` returns one saved run plus JSONL events.
+- `POST /v1/reminders`, `GET /v1/reminders`, `GET /v1/reminders/:id`, and
+  `POST /v1/reminders/:id/cancel` manage gateway-owned durable reminder
+  deadlines. Due state survives restart; cross-surface notification delivery is
+  not configured and is never implied by these routes.
 
 Saved data lives in `DATA_DIR`, defaulting to `gateway/data/` when launched
 from the gateway directory.

@@ -119,6 +119,7 @@
     "eval:voice:reasoner": "node scripts/eval-anthropic-voice-reasoner.mjs",
     "eval:voice:corpus": "node scripts/build-voice-replay-corpus.js",
     "smoke:event-substrate": "node scripts/smoke-event-substrate.js",
+    "smoke:reminders": "node scripts/smoke-reminders.js",
     "smoke:work-graph": "node scripts/smoke-work-graph.js",
     "smoke:supervisor": "node scripts/smoke-supervisor.js",
     "smoke:project-state": "node scripts/smoke-project-state.js",

@@ -95,6 +95,8 @@ const {
   isCompletedTranscriptionOnly,
 } = require("./lib/capture-blocks");
 const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
+const { createReminderStore } = require("./lib/reminders");
+const { createReminderHandlers } = require("./lib/reminder-handlers");
 const { resolveRemoteMode } = require("./lib/remote-mode");
 const { createBetterAuthRuntime } = require("./lib/better-auth-runtime");
 const { buildIdentity } = require("./lib/build-identity");
@@ -658,6 +660,14 @@ const eventSubstrate = createEventSubstrateStore({
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
+const reminders = createReminderStore({ events: eventSubstrate });
+const { routeReminders } = createReminderHandlers({
+  authorized,
+  sendJson,
+  readJsonBody,
+  store: reminders,
+  userId: accountUserId,
+});
 const captureBlocks = createCaptureBlockStore({ events: eventSubstrate });
 const { routeCaptureBlocks } = createCaptureBlockHandlers({
   authorized,
@@ -850,6 +860,20 @@ if (ACCOUNT_HEALTH_INTERVAL_MS > 0) {
   accountHealthTimer.unref();
 }
 
+// Reminder deadlines live in the event substrate, not in these process timers.
+// This sweep only materializes scheduled -> due after startup or while serving;
+// it deliberately does not claim notification delivery until a client surface
+// advertises and receipts a bounded reminder notification tool.
+const REMINDER_SWEEP_INTERVAL_MS = Number(process.env.REMINDER_SWEEP_INTERVAL_MS ?? 30_000);
+if (REMINDER_SWEEP_INTERVAL_MS > 0) {
+  const reminderSweepTimer = setInterval(() => {
+    reminders.sweepDue().catch((error) => {
+      console.error(`reminder due sweep failed: ${cleanError(error)}`);
+    });
+  }, REMINDER_SWEEP_INTERVAL_MS);
+  reminderSweepTimer.unref();
+}
+
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
   systemPrompt: SYSTEM_PROMPT,
@@ -1038,6 +1062,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeCaptureBlocks(request, response, url)) {
+      return;
+    }
+
+    if (await routeReminders(request, response, url)) {
       return;
     }
 
@@ -9028,6 +9056,7 @@ async function runCascadedVoiceReasoningInner(input) {
   };
   const toolDefs = cascadedVoiceProfileTools(toolCallInput)
     .concat(cascadedAgentRunTools(toolCallInput))
+    .concat(cascadedReminderTools(toolCallInput))
     .concat([companionMotionTool()])
     .concat(surfaceClassicTools(toolCallInput, surfaceSkillDeps()));
   if (!nativeWebSearchEnabled(resolveReasoningProvider(profile))) {
@@ -9326,6 +9355,18 @@ function cascadedExecuteCapabilities(call) {
       description: "Cancel a queued or running agent run. Args: { run_id?: string } (defaults to this session's most recent active run).",
       run: (args) => liveToolCancelAgentRun(call, args || {}),
     },
+    reminder_create: {
+      description: "Create an internal durable reminder. Args: { message: string, due_at?: ISO timestamp with timezone, delay_seconds?: number, idempotency_key?: string }. Supply exactly one time field. Delivery is not configured; never claim the user was notified. A named timer/alarm app is a separate device-local action.",
+      run: (args) => createReminderFromTool(call, args || {}),
+    },
+    reminders_list: {
+      description: "List internal durable reminders. Args: { status?: \"scheduled\"|\"due\"|\"canceled\", limit?: number }.",
+      run: (args) => listRemindersFromTool(args || {}),
+    },
+    reminder_cancel: {
+      description: "Cancel an internal durable reminder. Args: { reminder_id: string }.",
+      run: (args) => cancelReminderFromTool(args || {}),
+    },
   };
 }
 
@@ -9486,6 +9527,86 @@ function cascadedAgentRunTools(call) {
       handler: (args) => liveToolCancelAgentRun(call, args || {}),
     },
   ];
+}
+
+function cascadedReminderTools(call) {
+  return [
+    {
+      name: "create_reminder",
+      description: "Create an internal gateway-owned reminder when the user asks to be reminded. Use delay_seconds for a relative time or due_at for an absolute ISO 8601 timestamp with timezone. The deadline is durable, but notification delivery is not configured yet. A request to use a named timer/alarm app is a separate device-local action.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "What the user wants to remember." },
+          due_at: { type: "string", description: "Absolute ISO 8601 timestamp with explicit timezone." },
+          delay_seconds: { type: "number", description: "Seconds from now. Use instead of due_at." },
+          idempotency_key: { type: "string", description: "Optional stable key for retry-safe creation." },
+        },
+        required: ["message"],
+      },
+      handler: (args) => createReminderFromTool(call, args || {}),
+    },
+    {
+      name: "list_reminders",
+      description: "List the user's internal gateway reminders and their scheduled, due, or canceled state. This reports durable state and does not imply a device notification was delivered.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string", description: "Optional: scheduled, due, or canceled." },
+          limit: { type: "number", description: "Maximum reminders to return, up to 100." },
+        },
+      },
+      handler: (args) => listRemindersFromTool(args || {}),
+    },
+    {
+      name: "cancel_reminder",
+      description: "Cancel one internal gateway reminder by reminder_id. This does not control a named external timer/alarm app.",
+      parameters: {
+        type: "object",
+        properties: { reminder_id: { type: "string", description: "The rem_... id returned by create_reminder or list_reminders." } },
+        required: ["reminder_id"],
+      },
+      handler: (args) => cancelReminderFromTool(args || {}),
+    },
+  ];
+}
+
+async function createReminderFromTool(call, args) {
+  try {
+    const reminder = await reminders.create({
+      ...args,
+      user_id: accountUserId(),
+      source: {
+        surface: call?.source || "voice-cascaded",
+        session_id: call?.session_id || call?.conversation_id || "",
+        branch_id: call?.branch_id || "default",
+        turn_id: call?.turn_id || "",
+      },
+    });
+    return { ok: true, type: "reminder_created", reminder };
+  } catch (error) {
+    return { ok: false, type: "reminder_rejected", error: cleanError(error) };
+  }
+}
+
+async function listRemindersFromTool(args) {
+  try {
+    const result = await reminders.list(accountUserId(), args);
+    return { ok: true, type: "reminder_list", reminders: result.items, has_more: result.has_more };
+  } catch (error) {
+    return { ok: false, type: "reminder_list_failed", error: cleanError(error) };
+  }
+}
+
+async function cancelReminderFromTool(args) {
+  try {
+    const reminder = await reminders.cancel(accountUserId(), args.reminder_id || args.reminderId);
+    return reminder
+      ? { ok: true, type: "reminder_canceled", reminder }
+      : { ok: false, type: "reminder_not_found", error: "reminder not found" };
+  } catch (error) {
+    return { ok: false, type: "reminder_cancel_failed", error: cleanError(error) };
+  }
 }
 
 function cascadedVoiceProfileTools(call) {
