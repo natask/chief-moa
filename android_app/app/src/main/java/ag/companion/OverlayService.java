@@ -2138,42 +2138,11 @@ public final class OverlayService extends Service {
         final String url = gatewayUrl;
         final String token = gatewayToken;
         final String deviceId = androidDeviceId();
-        final String reminderId = safe(input.optString("reminder_id", ""));
         new Thread(() -> {
-            MoaToolRequestExecution execution;
-            try {
-                JSONObject payload = new MoaGatewayClient(url, token).reminder(reminderId);
-                MoaReminderNotificationPolicy.Decision decision =
-                        MoaReminderNotificationPolicy.evaluate(
-                                requestId, deviceId, input, payload.optJSONObject("reminder"));
-                if (!decision.allowed) {
-                    execution = reminderNotificationExecution(
-                            reminderId, false, decision.reason, 0);
-                } else {
-                    MoaReminderNotifier.Result shown = MoaReminderNotifier.post(this, decision);
-                    execution = reminderNotificationExecution(
-                            reminderId, shown.displayed, shown.status, shown.notificationId);
-                }
-            } catch (Exception error) {
-                execution = reminderNotificationExecution(
-                        reminderId, false, "reminder_revalidation_failed", 0);
-            }
-            MoaToolRequestExecution completed = execution;
+            MoaToolRequestExecution completed = MoaReminderNotifier.execute(
+                    this, url, token, deviceId, requestId, input);
             mainHandler.post(() -> finishClaimedToolRequest(requestId, completed));
         }, "moa-reminder-notification").start();
-    }
-
-    private MoaToolRequestExecution reminderNotificationExecution(String reminderId,
-            boolean displayed, String outcome, int notificationId) {
-        String summary = displayed
-                ? "Displayed due Ag reminder."
-                : "Reminder notification was not displayed: " + safe(outcome) + ".";
-        String target = safe(reminderId);
-        if (notificationId > 0) target += ":" + notificationId;
-        JSONObject receipt = MoaActionReceiptStore.record(
-                this, "notification.reminder", "local_output",
-                "android_notification_permission", target, displayed, summary, safe(outcome));
-        return new MoaToolRequestExecution(displayed, summary, receipt);
     }
     private void handleAsyncToolResult(String requestId, String tool, JSONObject input,
             MoaActionBroker.ToolExecutionResult result) {

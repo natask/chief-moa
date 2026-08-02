@@ -10,6 +10,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
+import org.json.JSONObject;
+
 /** Android-owned reminder notification capability and display receipt. */
 final class MoaReminderNotifier {
     private static final String CHANNEL_ID = "ag_reminders";
@@ -76,6 +78,35 @@ final class MoaReminderNotifier {
         } catch (SecurityException denied) {
             return Result.failed("notification_permission_denied");
         }
+    }
+
+    static MoaToolRequestExecution execute(Context context, String gatewayUrl, String gatewayToken,
+            String deviceId, String requestId, JSONObject input) {
+        String reminderId = clean(input == null ? "" : input.optString("reminder_id", ""));
+        try {
+            JSONObject payload = new MoaGatewayClient(gatewayUrl, gatewayToken).reminder(reminderId);
+            MoaReminderNotificationPolicy.Decision decision = MoaReminderNotificationPolicy.evaluate(
+                    requestId, deviceId, input, payload.optJSONObject("reminder"));
+            if (!decision.allowed) return execution(context, reminderId, Result.failed(decision.reason));
+            return execution(context, reminderId, post(context, decision));
+        } catch (Exception error) {
+            return execution(context, reminderId, Result.failed("reminder_revalidation_failed"));
+        }
+    }
+
+    private static MoaToolRequestExecution execution(Context context, String reminderId, Result result) {
+        String summary = result.displayed ? "Displayed due Ag reminder."
+                : "Reminder notification was not displayed: " + clean(result.status) + ".";
+        String target = clean(reminderId);
+        if (result.notificationId > 0) target += ":" + result.notificationId;
+        JSONObject receipt = MoaActionReceiptStore.record(context, "notification.reminder",
+                "local_output", "android_notification_permission", target, result.displayed,
+                summary, clean(result.status));
+        return new MoaToolRequestExecution(result.displayed, summary, receipt);
+    }
+
+    private static String clean(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static int stableNotificationId(String reminderId) {
