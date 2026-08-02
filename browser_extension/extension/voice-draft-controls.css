@@ -1,0 +1,41 @@
+#agee-draft-controls {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  pointer-events: none;
+  position: fixed;
+  z-index: 2147483646;
+}
+
+#agee-draft-controls[hidden] { display: none; }
+
+#agee-draft-controls button {
+  appearance: none;
+  background: rgba(18, 19, 23, 0.91);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.24);
+  color: #fff;
+  cursor: pointer;
+  font: 600 11px/1 system-ui, sans-serif;
+  min-height: 30px;
+  padding: 0 10px;
+  pointer-events: auto;
+}
+
+#agee-draft-controls button:focus-visible {
+  outline: 2px solid #86a9ff;
+  outline-offset: 2px;
+}
+
+#agee-draft-controls button:disabled { cursor: wait; opacity: 0.55; }
+
+#agee-root.agee-draft-paused #agee-launcher { filter: saturate(0.72); }
+
+@media (prefers-color-scheme: light) {
+  #agee-draft-controls button {
+    background: rgba(250, 249, 246, 0.95);
+    border-color: rgba(17, 19, 24, 0.2);
+    color: #17191d;
+  }
+}

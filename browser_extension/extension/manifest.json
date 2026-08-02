@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ag",
-  "version": "0.1.135",
+  "version": "0.1.136",
   "description": "Ag is your personal AI companion in the browser. Cmd+, to type, Cmd+. to talk.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -61,6 +61,8 @@
         "companion-level.js",
         "companion-rim.js",
         "capture-copy-disposition.js",
+        "voice-draft-protocol.js",
+        "voice-draft-controls.js",
         "compose-heartbeat.js",
         "assistant-audio-replay.js",
         "overlay-event-trace.js",
@@ -68,7 +70,8 @@
       ],
       "css": [
         "overlay.css",
-        "ribbons.css"
+        "ribbons.css",
+        "voice-draft-controls.css"
       ],
       "run_at": "document_idle"
     },

@@ -54,7 +54,7 @@
     lastExternalVoiceCommandAt = 0,
     // The AG mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
-    audioCtx = null;
+    audioCtx = null, voiceDraftControls = null;
   let tipEl = null,
     tipTimer = null,
     tipTarget = null,
@@ -341,6 +341,9 @@
       <div id="agee-tip" role="tooltip" aria-hidden="true"></div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
+    voiceDraftControls = AgeeVoiceDraftControls.create({ root, launcher, request: safeRuntimeSendMessage,
+      onSend: () => commitLiveVoiceTurn(), onState: syncLiveVoiceDraftState,
+      onProtocolError: (message) => liveVoice && finishLiveVoiceError(liveVoice, message) });
     panel = root.querySelector("#agee-panel");
     voiceButton = root.querySelector("#agee-voice");
     recordButton = root.querySelector("#agee-record");
@@ -360,14 +363,6 @@
     loadAvatarBehaviorRuntime();
     loadUiSpec();
     loadActiveCompanionPet();
-    // Launcher gestures intentionally match the Android orb:
-    //   single click            -> chat menu
-    //   first press + movement  -> drag the mark
-    //   double-click and hold   -> manual push-to-talk
-    // With the voice-first flag on (ageeVoiceFirstGesturesEnabled) the map
-    // becomes: single click -> current-thread voice toggle, still hold ->
-    // push-to-talk, double-click -> fresh-thread voice toggle, triple-click ->
-    // text chat.
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -574,6 +569,7 @@
     launcher.style.top = `${nextY}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
+    voiceDraftControls?.position();
     ribbons?.position(); // the ribbons are anchored to the mark: they move with it
     if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
@@ -705,10 +701,10 @@
       cancelGestureVoiceWarmup();
       return;
     }
-    // A tap that routes to voice must not raise the composer: a spoken turn
-    // reads in the ribbons, and the panel would cover the page while Ag talks.
-    // The typing affordance is the tap that resolves to chat (scheduleLauncherTap
-    // below, or the triple-tap in voice-first mode).
+    if (voiceDraftControls?.active()) {
+      commitLiveVoiceTurn();
+      return;
+    }
     if (voiceFirstGestures) {
       handleVoiceFirstTap(e, chainCount);
       return;
@@ -2533,54 +2529,34 @@
     if (!preserveAssistantPlayback) {
       stopSpeaking();
     }
-    // A spoken turn no longer opens the composer. Voice feedback lives in the
-    // two ribbons, which paint no surface and cannot cover the page; the panel
-    // is now a typed-input surface only. This is the cap the user asked for on
-    // 2026-07-16 and again on 2026-07-23 — overlay text and messages must stop
-    // covering the persistent line.
     if (options.openText === true) openTextSurface({ fresh: false });
     conversationActive = true;
     if (options.conversation === false) conversationActive = false;
     const cueId = newCueId();
-    // Open the turn's bookkeeping immediately so the ribbons have somewhere to
-    // hang before STT or the gateway emits its first event.
     createCue(cueId, "Starting microphone…", { statusText: "starting…" });
     setVoiceState(true);
     setAgentState("listening");
     setTranscript("");
 
-    // Fix the thread for this streaming voice turn. The WS branch is set at
-    // session start, so background switches to the resolved branch before minting
-    // the ticket. Incognito is persistent (re-armed each turn); the new-thread
-    // arm is one-shot and consumed here.
     const context = consumeContextControls();
+    const draftMode = options.dictation !== true && voiceDraftControls?.supported() === true;
 
     const state = {
       cueId,
       turnId: options.turnId || `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      voiceSessionId: null,
-      sessionReady: false,
-      committed: false,
-      playbackTime: 0,
-      playbackRate: 1,
+      voiceSessionId: null, sessionReady: false, committed: false,
+      playbackTime: 0, playbackRate: 1,
       playbackSources: new Set(),
-      framesReceived: 0,
-      framesPlayed: 0,
-      pendingAssistantAudioSegments: [],
-      playedAssistantAudioSegments: [],
-      playbackProgressSent: false,
-      assistantText: "",
-      // Accumulated deltas: a preview. assistant_text replaces it and is the record.
-      assistantStreamText: "",
-      transcript: "",
-      gatewayRouted: false,
+      framesReceived: 0, framesPlayed: 0,
+      pendingAssistantAudioSegments: [], playedAssistantAudioSegments: [], playbackProgressSent: false,
+      assistantText: "", assistantStreamText: "", transcript: "", gatewayRouted: false,
       incognito: context.action === "incognito",
       contextControls: context,
-      assistantSpeechOverlap: preserveAssistantPlayback,
-      assistantSpeechSuppressed: false,
+      assistantSpeechOverlap: preserveAssistantPlayback, assistantSpeechSuppressed: false,
       steeringBoundaryText: "",
       dictation: options.dictation === true,
       dictationLeaseId: options.dictationLeaseId || null,
+      draftMode,
     };
     trackLiveVoiceState(state);
     liveVoice = state;
@@ -2601,6 +2577,7 @@
         warmCaptureId: options.warmCaptureId || null,
         transcriptionOnly: state.dictation,
         dictationLeaseId: state.dictationLeaseId,
+        draftMode,
       });
       if (extensionContextInvalidated) {
         stopLiveVoiceState(state, "context invalidated");
@@ -2612,6 +2589,13 @@
         throw new Error(session?.error || "gateway did not open a voice session");
       }
       if (session.capture_ready === false) throw new Error("microphone capture did not become ready");
+      state.draftMode = session.draft_mode === true;
+      voiceDraftControls?.bind({ draftMode: state.draftMode, voiceSessionId: session.voiceSessionId,
+        sessionId: session.session_id, branchId: session.branch_id, turnId: state.turnId });
+      if (!isLiveVoiceStateActive(state)) {
+        safeRuntimeSendMessage({ cmd: state.draftMode ? "voiceSessionDraftDiscard" : "voiceSessionClose", voiceSessionId: session.voiceSessionId, reason: "voice start cancelled before attachment" }).catch(() => {});
+        return;
+      }
       attachLiveVoiceSession(state, session.voiceSessionId);
       ensureVoiceCueCard(state, "Listening…", "listening…");
       if (state.commitWhenReady) commitLiveVoiceTurn(state);
@@ -2622,9 +2606,6 @@
 
   function handleLiveVoiceMessage(state, payload) {
     if (state?.steeredAtGeneration && state.steeredAtGeneration <= steeringGeneration) return;
-    // Any inbound voice-session event (audio chunk or JSON event) proves the turn
-    // is still alive, so push the post-commit watchdog out. No-op until the turn
-    // is committed (armed) and after it has ended (timer cleared on untrack).
     resetVoiceWatchdog(state);
     if (payload?.audio) {
       playLiveAssistantPcm(state, base64ToBuffer(payload.audio));
@@ -2654,9 +2635,19 @@
     if (!isLiveVoiceStateActive(state) || state.gatewayRouted) return;
     const isCurrentTurn = liveVoice === state;
 
+    const draftEvent = voiceDraftControls?.accept(msg);
+    if (draftEvent?.handled && !draftEvent.accepted) return;
+    if (msg.type === "voice_draft_state") {
+      if (msg.voice_draft?.state === "discarded") finishLiveVoiceDraftDiscard(state);
+      else if (msg.voice_draft?.state === "capturing") setVoiceState(true);
+      else if (msg.voice_draft?.state === "paused") setVoiceState(false);
+      return;
+    }
+
     if (msg.type === "session_ready") {
       state.sessionReady = true; state.transcriptFinalizeSupported = msg.transcript_finalize?.supported === true;
       updateCue(state.cueId, "", "running");
+      if (state.commitWhenDraftReady) commitLiveVoiceTurn(state);
       return;
     }
     if (msg.type === "profile_applied") {
@@ -2861,17 +2852,13 @@
     source.onended = () => {
       state.playbackSources.delete(source);
       assistantPlaybackSources.delete(source);
-      // onended fires for both natural completion and an explicit stop(). The
-      // cancel paths capture framesPlayed BEFORE stopping, so this only ever
-      // records segments that finished on their own.
       if (!counted) {
         counted = true;
         state.framesPlayed = (state.framesPlayed || 0) + 1;
       }
     };
     const startAt = Math.max(audioCtx.currentTime + 0.02, state.playbackTime || 0);
-    // The segment ledger records the LIVE pass (it feeds the stored interruption
-    // cutoff), so a replay must not rewrite it.
+    // Replay must not rewrite the live interruption ledger.
     if (!replay) recordAssistantPlaybackSegment(state, source, audioBuffer, startAt, rate);
     source.start(startAt);
     state.playbackTime = startAt + audioBuffer.duration / rate;
@@ -2891,13 +2878,13 @@
 
   async function commitLiveVoiceTurn(state = liveVoice, finalizeTranscriptOnly = state?.finalizeTranscriptOnly === true) {
     if (!AgeeSteeringUi.isCurrentLiveVoiceState(state, liveVoice, isLiveVoiceStateActive)) return;
+    const draftMessage = state.draftMode ? voiceDraftControls?.commitMessage() : null;
+    if (state.draftMode && !draftMessage) { state.commitWhenDraftReady = true; return; }
     voiceFirstCaptureOrigin = null;
     state.committed = true; state.finalizeTranscriptOnly = finalizeTranscriptOnly;
     stopLiveCapture(state);
     setVoiceState(false);
     setAgentState("thinking");
-    // The turn is now waiting on the gateway. Arm the inactivity watchdog; any
-    // inbound voice-session event for this turn resets it (see handleLiveVoiceMessage).
     armVoiceWatchdog(state);
     setTranscript(state.transcript || "");
     ensureVoiceCueCard(state, state.transcript || "Voice", "sending…");
@@ -2906,7 +2893,7 @@
       safeRuntimeSendMessage({
         cmd: "voiceSessionControl",
         voiceSessionId: state.voiceSessionId,
-        message: { type: finalizeTranscriptOnly ? "finalize_transcript" : "commit_turn", turn_id: state.turnId },
+        message: draftMessage || { type: finalizeTranscriptOnly ? "finalize_transcript" : "commit_turn", turn_id: state.turnId },
       }).then((res) => {
         if (!res && extensionContextInvalidated) return;
         if (!res?.ok) finishLiveVoiceError(state, res?.error || "Live voice connection was not open.");
@@ -2923,7 +2910,6 @@
     state.gatewayRouted = true;
     state.committed = true;
     stopLiveCapture(state);
-    // Capture fully-played segments before stopLivePlayback stop()s the sources.
     const playedSegments = state.framesPlayed || 0;
     sendFinalPlaybackProgress(state);
     stopLivePlayback(state);
@@ -3035,7 +3021,10 @@
     const playedSegments = state.framesPlayed || 0;
     sendFinalPlaybackProgress(state);
     stopLivePlayback(state);
-    if (mode === "cancel") {
+    if (mode === "cancel" && state.draftMode) {
+      if (state.voiceSessionId) safeRuntimeSendMessage({ cmd: "voiceSessionDraftDiscard", voiceSessionId: state.voiceSessionId }).catch(() => {});
+      else state.discardWhenReady = true;
+    } else if (mode === "cancel") {
       sendLiveVoiceControl(state, liveCancelTurnMessage(state, playedSegments,
         state.committed ? replacement : null)).finally(() => closeLiveVoiceSession(state, mode));
     } else {
@@ -3046,6 +3035,17 @@
       removeCueCard(state.cueId);
     }
     untrackLiveVoiceState(state);
+    if (state.draftMode) voiceDraftControls?.reset();
+  }
+
+  function syncLiveVoiceDraftState(state) { setAgentState(state === "capturing" ? "listening" : "idle"); }
+
+  function finishLiveVoiceDraftDiscard(state = liveVoice) {
+    if (!state?.draftMode) return;
+    closeLiveVoiceSession(state, "voice draft discarded");
+    untrackLiveVoiceState(state);
+    voiceDraftControls?.reset();
+    setVoiceState(false); setAgentState("idle");
   }
 
   function handleAgentRevoked(msg = {}) {

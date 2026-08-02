@@ -1,0 +1,144 @@
+(() => {
+  function create({ root, launcher, request, onSend, onDiscarded, onState, onProtocolError }) {
+    const protocol = globalThis.AgeeVoiceDraftProtocol;
+    const toolbar = document.createElement("div");
+    toolbar.id = "agee-draft-controls";
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "Voice capture controls");
+    toolbar.hidden = true;
+    toolbar.innerHTML = `
+      <button id="agee-draft-cancel" type="button" aria-label="Cancel and discard voice capture">Cancel</button>
+      <button id="agee-draft-pause" type="button" aria-label="Pause voice capture">Pause</button>`;
+    launcher.after(toolbar);
+    const cancel = toolbar.querySelector("#agee-draft-cancel");
+    const pause = toolbar.querySelector("#agee-draft-pause");
+    let capability = null;
+    let generation = 0;
+    let binding = null;
+    let pointer = null;
+    let pendingAction = "";
+
+    function supported() {
+      return protocol.capabilityFresh(capability);
+    }
+
+    function active() {
+      return Boolean(binding && pointer && !["sent", "discarded"].includes(pointer.state));
+    }
+
+    async function refreshCapability() {
+      const requestGeneration = ++generation;
+      const response = await request({ cmd: "voiceDraftCapability" }).catch(() => null);
+      const accepted = protocol.acceptedCapabilityResponse(requestGeneration, generation, response);
+      capability = accepted?.supported ? accepted : null;
+      if (!supported() && !binding) render();
+      return supported();
+    }
+
+    function position() {
+      if (toolbar.hidden) return;
+      const mark = launcher.getBoundingClientRect();
+      const controls = toolbar.getBoundingClientRect();
+      const gap = 8;
+      let left = mark.right + gap;
+      if (left + controls.width > innerWidth - 8) left = mark.left - controls.width - gap;
+      toolbar.style.left = `${Math.max(8, Math.round(left))}px`;
+      toolbar.style.top = `${Math.max(8, Math.min(innerHeight - controls.height - 8, Math.round(mark.top + (mark.height - controls.height) / 2)))}px`;
+    }
+
+    function render() {
+      const active = Boolean(binding?.draftMode && pointer && !["sent", "discarded"].includes(pointer.state));
+      toolbar.hidden = !active;
+      root.classList.toggle("agee-draft-active", active);
+      root.classList.toggle("agee-draft-paused", active && pointer?.state === "paused");
+      cancel.disabled = Boolean(pendingAction);
+      pause.disabled = Boolean(pendingAction);
+      const paused = pointer?.state === "paused";
+      pause.textContent = paused ? "Resume" : "Pause";
+      pause.setAttribute("aria-label", paused ? "Resume voice capture" : "Pause voice capture");
+      launcher.setAttribute("aria-label", active ? "Send voice to Ag" : "Ag");
+      if (active) launcher.setAttribute("data-agee-tip", "Send voice");
+      else launcher.removeAttribute("data-agee-tip");
+      position();
+    }
+
+    function bind(value) {
+      binding = value?.draftMode === true ? {
+        draftMode: true,
+        voiceSessionId: protocol.authorityToken(value.voiceSessionId),
+        operation: value.operation === "resume" ? "resume" : "create",
+        sessionId: protocol.authorityToken(value.sessionId),
+        branchId: protocol.authorityToken(value.branchId),
+        turnId: protocol.authorityToken(value.turnId),
+      } : null;
+      pointer = null;
+      pendingAction = "";
+      render();
+    }
+
+    function accept(message) {
+      if (!binding) return { handled: false };
+      let next = null;
+      if (message?.type === "session_ready") {
+        next = protocol.validateReady(message, { ...binding, pointer, operation: binding.operation });
+      } else if (message?.type === "voice_draft_state") {
+        next = protocol.validateState(message, { pointer, action: pendingAction || message?.voice_draft?.action });
+      } else return { handled: false };
+      if (!next) {
+        onProtocolError?.("Gateway returned stale or mismatched voice-draft authority.");
+        return { handled: true, accepted: false };
+      }
+      pointer = next;
+      pendingAction = next.state === "send_ready" ? "send" : "";
+      render();
+      onState?.(next.state);
+      if (next.state === "discarded") onDiscarded?.();
+      return { handled: true, accepted: true, pointer: { ...next } };
+    }
+
+    async function control(action) {
+      if (!binding || !pointer || pendingAction) return false;
+      const message = protocol.controlRequest(action, pointer);
+      if (!message) return false;
+      pendingAction = action;
+      render();
+      const response = await request({ cmd: "voiceSessionControl", voiceSessionId: binding.voiceSessionId, message }).catch(() => null);
+      if (response?.ok) return true;
+      pendingAction = "";
+      render();
+      onProtocolError?.(response?.error || "Voice draft control failed.");
+      return false;
+    }
+
+    function commitMessage() {
+      if (!pointer || pendingAction || !["capturing", "paused", "parked"].includes(pointer.state)) return null;
+      pendingAction = "send";
+      render();
+      return protocol.commitRequest(pointer);
+    }
+
+    function reset() {
+      binding = null;
+      pointer = null;
+      pendingAction = "";
+      render();
+    }
+
+    cancel.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); control("discard"); });
+    pause.addEventListener("click", (event) => {
+      event.preventDefault(); event.stopPropagation();
+      control(pointer?.state === "paused" ? "resume" : "pause");
+    });
+    launcher.addEventListener("keydown", (event) => {
+      if (!pointer || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      onSend?.();
+    });
+    addEventListener("resize", position);
+    refreshCapability();
+
+    return Object.freeze({ accept, active, bind, commitMessage, position, refreshCapability, reset, supported });
+  }
+
+  globalThis.AgeeVoiceDraftControls = Object.freeze({ create });
+})();

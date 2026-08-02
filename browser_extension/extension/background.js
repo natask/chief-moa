@@ -12,6 +12,7 @@ import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { pcm16VoiceActivity } from "./browser-voice-activity.js";
+import "./voice-draft-protocol.js";
 import { captureActiveTabJpeg, captureBoundTabJpeg } from "./browser-visual-capture-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { devReloadDecision } from "./dev-reload-gate.js";
@@ -125,17 +126,8 @@ const BROWSER_AGENT_PROGRESS_TEXT = {
 const BROWSER_TURN_STATUS_TIMEOUT_MS = 30000;
 const BROWSER_TURN_STATUS_POLL_MS = 400;
 const VOICE_AUTO_COMMIT_ENABLED = true;
-// Technical phrases and spelled acronyms contain meaningful short pauses. A
-// modest hangover avoids splitting them while remaining responsive.
-const VOICE_AUTO_COMMIT_SILENCE_MS = 950;
-const VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
-// NOT a product limit on how long the user may speak. Speech is streamed to the
-// gateway frame-by-frame, so an utterance can run indefinitely. This is only a
-// safety backstop for a microphone nobody closed — 30 minutes, far past any real
-// turn. It applies to manual captures too, which by contract never end on
-// silence: without it a forgotten open mic would stream forever. Normal turns
-// end on the user's own stop, or on the VAD auto-commit in hands-free mode.
-const VOICE_STUCK_VAD_BACKSTOP_MS = 1_800_000;
+const VOICE_AUTO_COMMIT_SILENCE_MS = 950, VOICE_AUTO_COMMIT_MIN_SPEECH_MS = 220;
+const VOICE_STUCK_VAD_BACKSTOP_MS = 1_800_000, VOICE_DRAFT_CAPABILITY_TTL_MS = 30_000;
 const SELF_EXTENSION_RUNTIME_CACHE_KEY = "ageeSelfExtensionRuntime";
 const SELF_EXTENSION_RUNTIME_ALARM = "agee-self-extension-runtime-refresh";
 const UI_SPEC_CACHE_KEY = "ageeUiSpec";
@@ -154,6 +146,7 @@ let creatingOffscreenVoiceDocument = null;
 // refuse while this is non-zero, or a delayed voice start would steal the
 // single offscreen capture slot from an in-flight audio note.
 let voiceStartPending = 0;
+let voiceDraftCapabilityCache = null;
 
 async function getConfig() {
   return getEffectiveGatewayConfig();
@@ -277,6 +270,17 @@ async function readGatewayResponseTextBounded(response, maxBytes) {
 
 async function gatewayHealth(cfg, signal) {
   return callGateway(cfg, "/health", { method: "GET", signal });
+}
+
+async function voiceDraftCapabilityStatus() {
+  const cfg = await getConfig();
+  const now = Date.now();
+  if (voiceDraftCapabilityCache?.gateway_url === cfg.gatewayUrl && voiceDraftCapabilityCache.expires_at_ms > now) return voiceDraftCapabilityCache;
+  let supported = false;
+  try { supported = Boolean(AgeeVoiceDraftProtocol.capabilityFromHealth(await gatewayHealth(cfg))); } catch {}
+  voiceDraftCapabilityCache = { supported, stale: false, gateway_url: cfg.gatewayUrl,
+    expires_at_ms: now + VOICE_DRAFT_CAPABILITY_TTL_MS };
+  return voiceDraftCapabilityCache;
 }
 
 const SELF_EXTENSION_RUNTIME_FALLBACK = Object.freeze({
@@ -2677,17 +2681,10 @@ function revokeOtherTabVoiceSessions(tabId, reason) {
   return tabIds;
 }
 
-// Voice-start mode switch. When the flag-gated "LiveKit voice (experimental)"
-// setting is ON, try the LiveKit transport first; on ANY failure show a visible
-// notice and fall back to the default WS path. When OFF (the default), this is a
-// straight passthrough to the WS path, so verify/smoke stay on the WS pipeline.
 async function startVoiceSessionWithMode(tabId, opts = {}) {
-  // livekit-voice.js delivers straight to a tab's content script; panel
-  // sessions must stay on the proxy path, whose events route through send().
-  // Gesture-warmed PCM can only be adopted by the standard offscreen/WebSocket
-  // path. Keep that turn on the path that can preserve its pre-roll; immediate
-  // non-warmed starts may continue using the experimental LiveKit transport.
-  if (!opts.transcriptionOnly && !opts.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
+  const draftMode = opts.draftMode === true && (await voiceDraftCapabilityStatus()).supported === true;
+  opts = { ...opts, draftMode };
+  if (!draftMode && !opts.transcriptionOnly && !opts.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled()) {
     try {
       const cfg = await getConfig();
       const sessionId = await getStableSessionId();
@@ -2711,17 +2708,13 @@ async function startVoiceSessionWithMode(tabId, opts = {}) {
   return startVoiceSessionProxy(tabId, opts);
 }
 
-async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, onSessionCreated } = {}) {
-  // Hold the capture mutex across the async setup window. recordSessionStart
-  // refuses while voiceStartPending > 0; by the time the mutex releases the
-  // session is registered in voiceSessions (or this start has failed), so the
-  // record path can never race the single offscreen capture slot.
+async function startVoiceSessionProxy(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, draftMode, onSessionCreated } = {}) {
   if (activeRecordSession()) {
     throw new Error("An audio note recording is in progress. Stop recording before starting voice.");
   }
   voiceStartPending += 1;
   try {
-    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, onSessionCreated });
+    return await startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, draftMode, onSessionCreated });
   } finally {
     voiceStartPending = Math.max(0, voiceStartPending - 1);
   }
@@ -2747,7 +2740,7 @@ async function activeThreadBranch(cfg) {
   const data = await callGateway(cfg, path, { method: "GET" });
   return String(data?.active?.branch_id || data?.branch_id || "default").trim() || "default";
 }
-async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, onSessionCreated } = {}) {
+async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOverlap, capture, autoCommit, contextAction, threadLabel, profileOverride, sampleText, warmCaptureId, transcriptionOnly, dictationLeaseId, draftMode, onSessionCreated } = {}) {
   const id = voiceSessionId();
   const captureMode = capture || "content-script";
   const session = {
@@ -2755,6 +2748,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     tabId,
     cueId: cueId || null,
     transcriptionOnly: transcriptionOnly === true,
+    draftMode: draftMode === true, voiceDraft: null,
+    pendingDraftAction: "", pendingDraftDiscard: false,
     dictationLeaseId: dictationLeaseId || null,
     ownerTransitionSequence: 0,
     ws: null,
@@ -2770,7 +2765,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     queuedAudio: [],
     queuedAudioBytes: 0,
     queuedAudioDroppedBytes: 0,
-    autoCommitEnabled: autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
+    autoCommitEnabled: draftMode !== true && autoCommit !== false && VOICE_AUTO_COMMIT_ENABLED,
     audioStartedAt: 0,
     lastSpeechAt: 0,
     speechMs: 0,
@@ -2849,6 +2844,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     if (!ticket?.ws_url) {
       throw abortSetup(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
     }
+    session.sessionId = ticket.session_id;
+    session.branchId = branchForSession;
   } catch (error) {
     if (voiceSessions.get(id) === session) {
       closeVoiceSession(id, "voice session setup failed");
@@ -2898,6 +2895,12 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         });
         return;
       }
+      const voiceDraft = session.draftMode ? AgeeVoiceDraftProtocol.startDescriptor({ sessionId: ticket.session_id,
+        branchId: branchForSession, turnId, operation: "create" }) : null;
+      if (session.draftMode && !voiceDraft) {
+        failBeforeOpen("voice draft start authority was invalid", { voiceSocket: false });
+        return;
+      }
       const started = sendVoiceSessionJson(session, {
         type: "session_start",
         source: "agee-extension",
@@ -2924,6 +2927,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
           sample_rate: 16000,
           channels: 1,
         },
+        ...(voiceDraft ? { voice_draft: voiceDraft } : {}),
       });
       if (!started) {
         failBeforeOpen("session_start could not be sent");
@@ -2934,7 +2938,9 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
       resolve({
         voiceSessionId: id,
         session_id: ticket.session_id,
+        branch_id: branchForSession,
         conversation_id: ticket.conversation_id || ticket.session_id,
+        draft_mode: session.draftMode,
         capture_ready: session.capture !== "extension-offscreen" || session.captureStarted === true,
         capture: session.captureDiagnostics || undefined,
       });
@@ -3141,11 +3147,23 @@ async function forwardVoiceSessionEvent(session, event) {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
   if (parsed?.type === "session_ready") {
+    if (session.draftMode) {
+      const pointer = AgeeVoiceDraftProtocol.validateReady(parsed, { operation: "create",
+        sessionId: session.sessionId, branchId: session.branchId, turnId: session.turnId });
+      if (!pointer) {
+        handleOffscreenVoiceError(session.id, new Error("Gateway returned mismatched voice-draft start authority."));
+        return;
+      }
+      session.voiceDraft = pointer;
+    }
     session.gatewayReady = true;
     if (session.sampleText) {
       sendVoiceSessionJson(session, { type: "text_turn", text: session.sampleText, turn_id: session.turnId });
     }
-    flushQueuedVoiceSessionMedia(session);
+    if (session.pendingDraftDiscard) {
+      clearQueuedVoiceSessionMedia(session);
+      void sendVoiceDraftDiscard(session).catch((error) => handleOffscreenVoiceError(session.id, error));
+    } else flushQueuedVoiceSessionMedia(session);
     session.transcriptFinalizeSupported = parsed.transcript_finalize?.supported === true;
     if (session.capture === "extension-offscreen" && !session.captureStarted && !session.captureStartRequested) {
       session.captureStartRequested = true;
@@ -3155,6 +3173,19 @@ async function forwardVoiceSessionEvent(session, event) {
         })
         .catch((error) => handleOffscreenVoiceError(session.id, error));
     }
+  }
+  if (parsed?.type === "voice_draft_state" && session.draftMode) {
+    const pointer = AgeeVoiceDraftProtocol.validateState(parsed, { pointer: session.voiceDraft,
+      action: session.pendingDraftAction || parsed.voice_draft?.action });
+    if (!pointer) {
+      handleOffscreenVoiceError(session.id, new Error("Gateway returned stale or mismatched voice-draft authority."));
+      return;
+    }
+    session.voiceDraft = pointer;
+    session.pendingDraftAction = pointer.state === "send_ready" ? "send" : "";
+    if (session.capture === "extension-offscreen" && pointer.state === "capturing" && parsed.voice_draft.action === "resume") try {
+      await startOffscreenVoiceCapture(session.id); session.captureStarted = true;
+    } catch (error) { handleOffscreenVoiceError(session.id, error); return; }
   }
   if (parsed?.type === "turn_done" || parsed?.type === "error" || String(parsed?.status || "").toLowerCase() === "error") {
     const failed = parsed?.type === "error" || String(parsed?.status || "").toLowerCase() === "error";
@@ -3247,6 +3278,7 @@ async function forwardVoiceSessionEvent(session, event) {
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });
+  if (session.draftMode && parsed?.voice_draft?.state === "discarded") closeVoiceSession(session.id, "voice draft discarded");
 }
 
 // Mic amplitude for the companion rim (overlay spec 2026-07-28 section 3.1).
@@ -3283,6 +3315,17 @@ async function sendVoiceSessionControl(id, message) {
   if (!session || session.closed || voiceSessions.get(session.id) !== session) {
     return { ok: false, error: "voice session is not open" };
   }
+  if (session.draftMode) {
+    if (!AgeeVoiceDraftProtocol.validateClientRequest(message, session.voiceDraft)) {
+      return { ok: false, error: "voice draft control did not match exact current authority" };
+    }
+    const action = message.type === "commit_turn" ? "send" : message.action;
+    if (session.pendingDraftAction && session.pendingDraftAction !== action) return {
+      ok: false, error: "another voice draft control is awaiting acknowledgement" };
+    if (action !== "resume") { await stopOffscreenVoiceCapture(id); session.captureStarted = false; }
+    if (action === "discard") clearQueuedVoiceSessionMedia(session);
+    session.pendingDraftAction = action;
+  }
   const finalizingTranscript = message?.type === "finalize_transcript";
   if (finalizingTranscript && session.transcriptFinalizeSupported !== true) {
     return { ok: false, error: "gateway does not support capture-only transcript finalization" };
@@ -3313,6 +3356,16 @@ async function sendVoiceSessionControl(id, message) {
   if (session.gatewayReady && session.queuedAudio?.length) flushQueuedVoiceSessionAudio(session);
   if (!sendVoiceSessionJson(session, message || {})) return { ok: false, error: "voice session is not open" };
   return { ok: true };
+}
+
+async function sendVoiceDraftDiscard(session) {
+  if (!session?.draftMode || session.closed) return { ok: false, error: "voice draft session is not open" };
+  await stopOffscreenVoiceCapture(session.id);
+  session.captureStarted = false;
+  clearQueuedVoiceSessionMedia(session);
+  if (!session.voiceDraft) { session.pendingDraftDiscard = true; return { ok: true, queued: true }; }
+  session.pendingDraftDiscard = false;
+  return sendVoiceSessionControl(session.id, AgeeVoiceDraftProtocol.controlRequest("discard", session.voiceDraft));
 }
 
 function closeVoiceSession(id, reason = "closed", { revoked = false } = {}) {
@@ -3385,6 +3438,10 @@ async function forceCloseStuckVoiceSession(id) {
   const session = voiceSessions.get(id);
   if (!session || session.committed || !voiceSessionSocketOpen(session)) return;
   session.maxCommitTimer = null;
+  if (session.draftMode) {
+    closeVoiceSession(id, "voice draft capture backstop parked");
+    return;
+  }
   if (!session.lastSpeechAt || (session.speechMs || 0) < VOICE_AUTO_COMMIT_MIN_SPEECH_MS) {
     closeVoiceSession(id, "voice capture backstop: no speech");
     return;
@@ -4596,6 +4653,10 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "voiceDraftCapability") {
+    voiceDraftCapabilityStatus().then(sendResponse).catch(() => sendResponse({ supported: false }));
+    return true;
+  }
   if (msg.cmd === "voiceCaptureWarm" && sender.tab) {
     const warmCaptureId = msg.warmCaptureId;
     const pending = warmOffscreenVoiceCapture(warmCaptureId);
@@ -4725,6 +4786,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         warmCaptureId: msg.warmCaptureId || null,
         transcriptionOnly,
         dictationLeaseId: msg.dictationLeaseId || null,
+        draftMode: msg.draftMode === true,
       });
     })()
       .then((session) => {
@@ -4760,6 +4822,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.cmd === "voiceSessionControl") {
     sendVoiceSessionControl(msg.voiceSessionId, msg.message)
       .then((response) => sendResponse(response))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+  if (msg.cmd === "voiceSessionDraftDiscard") {
+    sendVoiceDraftDiscard(voiceSessions.get(msg.voiceSessionId))
+      .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }

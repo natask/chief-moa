@@ -1,265 +1,30 @@
 (() => {
-  const CONTEXT_ACTIONS = new Set(["continue", "new", "fork", "incognito"]);
-  const CONTROL_ACTIONS = new Set(["pause", "park", "discard"]);
-  const CONTROL_STATES = Object.freeze({ pause: "paused", park: "parked", discard: "discarded" });
-  const TERMINAL_STATES = new Set(["sent", "discarded"]);
-  const AUTHORITY_TOKEN_PATTERN = /^[A-Za-z0-9._:-]+$/;
-  const MAX_AUTHORITY_TOKEN_LENGTH = 120;
+  const VERSION = "voice_drafts_v1";
+  const STATE_REVISION = "voice_draft_state.v1";
+  const TOKEN = /^[A-Za-z0-9._:-]{1,120}$/;
+  const CONTROL_STATES = Object.freeze({ pause: "paused", resume: "capturing", park: "parked", discard: "discarded" });
 
-  function positiveRevision(value) {
-    return Number.isSafeInteger(value) && value > 0 ? value : 0;
-  }
+  const authorityToken = (value) => typeof value === "string" && TOKEN.test(value) ? value : "";
+  const positiveRevision = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
 
-  function authorityToken(value) {
-    return (
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length <= MAX_AUTHORITY_TOKEN_LENGTH &&
-      AUTHORITY_TOKEN_PATTERN.test(value)
-    ) ? value : "";
-  }
-
-  function exactAliasedValue(value, names, validator) {
-    let canonical;
-    let found = false;
-    for (const name of names) {
-      if (!Object.prototype.hasOwnProperty.call(value, name)) continue;
-      const candidate = validator(value[name]);
-      if (!candidate) return null;
-      if (found && candidate !== canonical) return null;
-      canonical = candidate;
-      found = true;
-    }
-    return found ? canonical : null;
-  }
-
-  function normalizeStoredPointer(value) {
+  function normalizeCapability(value) {
     if (!value || typeof value !== "object") return null;
-    const draftId = exactAliasedValue(value, ["draftId", "id", "draft_id", "voice_draft_id"], authorityToken);
-    const revision = exactAliasedValue(value, ["revision", "draft_revision", "voice_draft_revision"], positiveRevision);
-    const sessionId = exactAliasedValue(value, ["sessionId", "session_id"], authorityToken);
-    const branchId = exactAliasedValue(value, ["branchId", "branch_id"], authorityToken);
-    if (!draftId || !revision || !sessionId || !branchId) return null;
-    return { draftId, revision, sessionId, branchId };
+    if (value.supported !== true || value.revision !== VERSION || value.state_machine_revision !== STATE_REVISION) return null;
+    return { supported: true, revision: VERSION, stateMachineRevision: STATE_REVISION };
   }
 
-  function normalizeCanonicalDraft(value) {
-    if (!value || typeof value !== "object") return null;
-    const draftId = authorityToken(value.id);
-    const revision = positiveRevision(value.revision);
-    const sessionId = authorityToken(value.session_id);
-    const branchId = authorityToken(value.branch_id);
-    const state = typeof value.state === "string" ? value.state : "";
-    if (!draftId || !revision || !sessionId || !branchId || !state) return null;
-    return { draftId, revision, sessionId, branchId, state };
+  function capabilityFromHealth(health) {
+    return normalizeCapability(health?.voice_stream?.provider?.voice_drafts_v1);
   }
 
-  function normalizeContextAction(value) {
-    const action = value === undefined || value === null || value === "" ? "continue" : value;
-    return CONTEXT_ACTIONS.has(action) ? action : "";
-  }
-
-  function exactTopLevelAuthority(message, expected) {
-    const sessionId = authorityToken(message?.session_id);
-    const branchId = authorityToken(message?.branch_id);
-    const turnId = authorityToken(message?.turn_id);
-    const expectedSessionId = authorityToken(expected?.sessionId);
-    const expectedBranchId = authorityToken(expected?.branchId);
-    const expectedTurnId = authorityToken(expected?.turnId);
-    if (!sessionId || !expectedSessionId || sessionId !== expectedSessionId) {
-      return { ok: false, error: "Gateway returned mismatched top-level voice-draft session authority." };
-    }
-    if (!branchId || !expectedBranchId || branchId !== expectedBranchId) {
-      return { ok: false, error: "Gateway returned mismatched top-level voice-draft branch authority." };
-    }
-    if (!turnId || !expectedTurnId || turnId !== expectedTurnId) {
-      return { ok: false, error: "Gateway returned mismatched top-level voice-draft turn authority." };
-    }
-    return { ok: true, sessionId, branchId, turnId };
-  }
-
-  function validateReady(message, expected = {}) {
-    if (!message || typeof message !== "object" || message.type !== "voice_draft_ready") {
-      return { ok: false, error: "Gateway did not send the canonical voice_draft_ready event." };
-    }
-    const action = typeof message.action === "string" ? message.action : "";
-    if (!['create', 'resume'].includes(action) || action !== expected.action) {
-      return { ok: false, error: "Gateway returned the wrong voice-draft ready action." };
-    }
-    const top = exactTopLevelAuthority(message, expected);
-    if (!top.ok) return top;
-    const pointer = normalizeCanonicalDraft(message.draft);
-    if (!pointer) {
-      return { ok: false, error: "Gateway did not bind canonical voice-draft ID, integer revision, state, session, and branch authority." };
-    }
-    if (pointer.state !== "capturing") {
-      return { ok: false, error: "Gateway did not return a capturing voice draft." };
-    }
-    if (pointer.sessionId !== top.sessionId || pointer.branchId !== top.branchId) {
-      return { ok: false, error: "Gateway returned inconsistent nested voice-draft authority." };
-    }
-    const expectedDraftSupplied = expected.draftId !== "" && expected.draftId !== undefined && expected.draftId !== null;
-    const expectedDraftId = expectedDraftSupplied ? authorityToken(expected.draftId) : "";
-    if (expectedDraftSupplied && !expectedDraftId) {
-      return { ok: false, error: "Local voice-draft authority is malformed." };
-    }
-    const requestedRevision = positiveRevision(expected.requestedRevision);
-    if (action === "resume") {
-      if (!expectedDraftId || pointer.draftId !== expectedDraftId) {
-        return { ok: false, error: "Gateway returned a different voice draft while resuming." };
-      }
-      if (!requestedRevision || pointer.revision <= requestedRevision) {
-        return { ok: false, error: "Gateway did not advance the resumed voice-draft revision." };
-      }
-    } else if (expectedDraftId || requestedRevision || ![0, undefined, null].includes(expected.requestedRevision)) {
-      return { ok: false, error: "A create-ready event cannot replace requested draft authority." };
-    }
-    return { ok: true, action, pointer, ...top };
-  }
-
-  function validateControlAck(message, expected = {}) {
-    if (!message || typeof message !== "object" || message.type !== "voice_draft_control_ack") return null;
-    const action = typeof message.action === "string" ? message.action : "";
-    const expectedAction = typeof expected.action === "string" ? expected.action : "";
-    const expectedDraftId = authorityToken(expected.draftId);
-    const expectedState = typeof expected.state === "string" ? expected.state : "";
-    const baseRevision = positiveRevision(expected.baseRevision);
-    if (
-      !CONTROL_ACTIONS.has(action) ||
-      action !== expectedAction ||
-      expectedState !== CONTROL_STATES[action] ||
-      !expectedDraftId ||
-      !baseRevision
-    ) return null;
-    const top = exactTopLevelAuthority(message, expected);
-    if (!top.ok) return null;
-    const pointer = normalizeCanonicalDraft(message.draft);
-    if (!pointer) return null;
-    if (
-      pointer.draftId !== expectedDraftId ||
-      pointer.sessionId !== top.sessionId ||
-      pointer.branchId !== top.branchId ||
-      pointer.revision <= baseRevision ||
-      pointer.state !== expectedState
-    ) return null;
-    return pointer;
-  }
-
-  function validateTerminalReceipt(message, expected = {}) {
-    if (!message || typeof message !== "object" || message.type !== "turn_done") return null;
-    const expectedDraftId = authorityToken(expected.draftId);
-    const baseRevision = positiveRevision(expected.baseRevision);
-    if (!expectedDraftId || !baseRevision) return null;
-    const top = exactTopLevelAuthority(message, expected);
-    if (!top.ok) return null;
-    const pointer = normalizeCanonicalDraft(message.draft);
-    if (!pointer || !TERMINAL_STATES.has(pointer.state)) return null;
-    if (
-      pointer.draftId !== expectedDraftId ||
-      pointer.sessionId !== top.sessionId ||
-      pointer.branchId !== top.branchId ||
-      pointer.revision <= baseRevision
-    ) return null;
-    return pointer;
-  }
-
-  function capabilityFresh(capability, now = Date.now()) {
-    const expiresAtMs = capability?.expiresAtMs;
-    return (
-      capability?.supported === true &&
-      capability?.stale !== true &&
-      Number.isSafeInteger(expiresAtMs) &&
-      expiresAtMs > now
-    );
-  }
-
-  function validateResumePointer(input = {}) {
-    const identifiersAbsent = [input.draftId, input.sessionId, input.branchId]
-      .every((value) => value === undefined || value === null || value === "");
-    const revisionAbsent = input.revision === undefined || input.revision === null || input.revision === 0;
-    if (identifiersAbsent && revisionAbsent) return { ok: true, pointer: null };
-    const pointer = normalizeStoredPointer({
-      draftId: input.draftId,
-      revision: input.revision,
-      sessionId: input.sessionId,
-      branchId: input.branchId,
-    });
-    return pointer
-      ? { ok: true, pointer }
-      : { ok: false, pointer: null, error: "Voice-draft resume authority is malformed or incomplete." };
-  }
-
-  function validateStartAuthority(response, expected = {}) {
-    if (!response || typeof response !== "object") return null;
-    const sessionId = authorityToken(response.session_id);
-    const branchId = authorityToken(response.branch_id);
-    const turnId = authorityToken(response.turn_id);
-    const expectedSessionId = authorityToken(expected.sessionId);
-    const expectedBranchId = authorityToken(expected.branchId);
-    const expectedTurnId = authorityToken(expected.turnId);
-    if (
-      !sessionId || !branchId || !turnId ||
-      !expectedSessionId || !expectedBranchId || !expectedTurnId ||
-      sessionId !== expectedSessionId ||
-      branchId !== expectedBranchId ||
-      turnId !== expectedTurnId
-    ) return null;
-    return { sessionId, branchId, turnId };
-  }
-
-  function commitControlRequest(input = {}) {
-    const turnId = authorityToken(input.turnId);
-    if (!turnId) return null;
-    const voiceSessionId = input.voiceSessionId == null || input.voiceSessionId === ""
-      ? null
-      : authorityToken(input.voiceSessionId);
-    if (input.voiceSessionId != null && input.voiceSessionId !== "" && !voiceSessionId) return null;
-    return {
-      cmd: "voiceSessionControl",
-      voiceSessionId,
-      turnId,
-      message: { type: "commit_turn", turn_id: turnId },
-    };
-  }
-
-  function lateStartDisposition(input = {}) {
-    if (input.active === true) return null;
-    const voiceSessionId = authorityToken(input.voiceSessionId);
-    const turnId = authorityToken(input.turnId);
-    if (!voiceSessionId || !turnId) return null;
-    if (input.draftMode === true) {
-      return {
-        primary: {
-          cmd: "voiceSessionControl",
-          voiceSessionId,
-          turnId,
-          message: { type: "discard_turn", turn_id: turnId },
-        },
-        fallback: {
-          cmd: "voiceSessionClose",
-          voiceSessionId,
-          reason: "voice start was cancelled before attachment",
-        },
-      };
-    }
-    return {
-      primary: {
-        cmd: "voiceSessionClose",
-        voiceSessionId,
-        reason: "voice start was cancelled before attachment",
-      },
-      fallback: null,
-    };
+  function capabilityFresh(value, now = Date.now()) {
+    return value?.supported === true && value.stale !== true && Number.isSafeInteger(value.expiresAtMs) && value.expiresAtMs > now;
   }
 
   function acceptedCapabilityResponse(requestGeneration, currentGeneration, response) {
-    if (!Number.isSafeInteger(requestGeneration) || requestGeneration !== currentGeneration) return null;
-    if (!response || typeof response !== "object") return null;
-    const gatewayUrl = typeof response.gateway_url === "string"
-      && response.gateway_url.length > 0
-      && response.gateway_url === response.gateway_url.trim()
-      ? response.gateway_url
-      : "";
+    if (!Number.isSafeInteger(requestGeneration) || requestGeneration !== currentGeneration || !response || typeof response !== "object") return null;
+    const gatewayUrl = typeof response.gateway_url === "string" && response.gateway_url === response.gateway_url.trim()
+      ? response.gateway_url : "";
     return {
       supported: response.supported === true && Boolean(gatewayUrl),
       stale: response.stale === true,
@@ -268,20 +33,143 @@
     };
   }
 
+  function authority(value = {}) {
+    const sessionId = authorityToken(value.sessionId ?? value.session_id);
+    const branchId = authorityToken(value.branchId ?? value.branch_id);
+    const turnId = authorityToken(value.turnId ?? value.turn_id);
+    return sessionId && branchId && turnId ? { sessionId, branchId, turnId } : null;
+  }
+
+  function normalizeStoredPointer(value) {
+    if (!value || typeof value !== "object") return null;
+    const draftId = authorityToken(value.draftId ?? value.draft_id);
+    const revision = positiveRevision(value.revision ?? value.draft_revision);
+    const bound = authority(value);
+    return draftId && revision && bound ? { draftId, revision, ...bound, state: String(value.state || "") } : null;
+  }
+
+  function pointerFromEvent(message) {
+    const bound = authority(message);
+    const draft = message?.voice_draft;
+    const draftId = authorityToken(draft?.draft_id);
+    const revision = positiveRevision(draft?.revision);
+    const state = typeof draft?.state === "string" ? draft.state : "";
+    const action = typeof draft?.action === "string" ? draft.action : "";
+    return bound && draftId && revision && state && action
+      ? { draftId, revision, state, action, ...bound }
+      : null;
+  }
+
+  function sameAuthority(left, right, { includeDraft = true } = {}) {
+    const a = authority(left);
+    const b = authority(right);
+    if (!a || !b || a.sessionId !== b.sessionId || a.branchId !== b.branchId || a.turnId !== b.turnId) return false;
+    return !includeDraft || authorityToken(left?.draftId ?? left?.draft_id) === authorityToken(right?.draftId ?? right?.draft_id);
+  }
+
+  function validateReady(message, expected = {}) {
+    if (message?.type !== "session_ready" || !normalizeCapability(message?.capabilities?.voice_drafts_v1)) return null;
+    const pointer = pointerFromEvent(message);
+    const expectedAuthority = authority(expected);
+    if (!pointer || !expectedAuthority || !sameAuthority(pointer, expectedAuthority, { includeDraft: false })) return null;
+    if (pointer.action !== "session_start" || pointer.state !== "capturing") return null;
+    const operation = expected.operation === "resume" ? "resume" : "create";
+    if (operation === "resume") {
+      const prior = normalizeStoredPointer(expected.pointer);
+      if (!prior || !sameAuthority(pointer, prior) || pointer.draftId !== prior.draftId || pointer.revision <= prior.revision) return null;
+    } else if (expected.pointer) return null;
+    return pointer;
+  }
+
+  function validateState(message, expected = {}) {
+    if (message?.type !== "voice_draft_state" || !normalizeCapability(message?.capabilities?.voice_drafts_v1)) return null;
+    const prior = normalizeStoredPointer(expected.pointer);
+    const pointer = pointerFromEvent(message);
+    if (!prior || !pointer || !sameAuthority(pointer, prior) || pointer.draftId !== prior.draftId || pointer.revision <= prior.revision) return null;
+    const pending = String(expected.action || "");
+    if (pending === "send") {
+      if (pointer.action !== "send" || !["send_ready", "sent"].includes(pointer.state)) return null;
+    } else if (CONTROL_STATES[pending] !== pointer.state || pointer.action !== pending) return null;
+    return pointer;
+  }
+
+  function idempotencyKey(action, pointer) {
+    return `browser:${pointer.turnId}:${action}:${pointer.revision}`;
+  }
+
+  function startDescriptor(input = {}) {
+    const bound = authority(input);
+    if (!bound) return null;
+    const operation = input.operation === "resume" ? "resume" : "create";
+    const pointer = input.pointer ? normalizeStoredPointer(input.pointer) : null;
+    if ((operation === "resume") !== Boolean(pointer)) return null;
+    if (pointer && !sameAuthority(pointer, bound, { includeDraft: false })) return null;
+    return {
+      version: VERSION,
+      operation,
+      idempotency_key: operation === "resume" ? idempotencyKey("resume-start", pointer) : `browser:${bound.turnId}:create:1`,
+      surface: "browser",
+      ...(pointer ? { draft_id: pointer.draftId, expected_revision: pointer.revision } : {}),
+    };
+  }
+
+  function controlRequest(action, pointerValue) {
+    const pointer = normalizeStoredPointer(pointerValue);
+    if (!pointer || !Object.hasOwn(CONTROL_STATES, action)) return null;
+    return {
+      type: "voice_draft_control",
+      session_id: pointer.sessionId,
+      branch_id: pointer.branchId,
+      turn_id: pointer.turnId,
+      draft_id: pointer.draftId,
+      expected_revision: pointer.revision,
+      action,
+      idempotency_key: idempotencyKey(action, pointer),
+    };
+  }
+
+  function commitRequest(pointerValue) {
+    const pointer = normalizeStoredPointer(pointerValue);
+    if (!pointer) return null;
+    return {
+      type: "commit_turn",
+      session_id: pointer.sessionId,
+      branch_id: pointer.branchId,
+      turn_id: pointer.turnId,
+      draft_id: pointer.draftId,
+      expected_revision: pointer.revision,
+      idempotency_key: idempotencyKey("send", pointer),
+    };
+  }
+
+  function validateClientRequest(message, pointerValue) {
+    const pointer = normalizeStoredPointer(pointerValue);
+    if (!pointer || !message || typeof message !== "object") return false;
+    const expected = message.type === "commit_turn"
+      ? commitRequest(pointer)
+      : controlRequest(message.action, pointer);
+    if (!expected) return false;
+    return Object.keys(expected).every((key) => message[key] === expected[key]);
+  }
+
   globalThis.AgeeVoiceDraftProtocol = Object.freeze({
-    authorityToken,
+    VERSION,
+    STATE_REVISION,
     acceptedCapabilityResponse,
+    authority,
+    authorityToken,
     capabilityFresh,
-    commitControlRequest,
-    lateStartDisposition,
-    normalizeCanonicalDraft,
-    normalizeContextAction,
+    capabilityFromHealth,
+    commitRequest,
+    controlRequest,
+    normalizeCapability,
     normalizeStoredPointer,
+    pointerFromEvent,
     positiveRevision,
-    validateResumePointer,
-    validateStartAuthority,
-    validateControlAck,
+    sameAuthority,
+    startDescriptor,
+    validateClientRequest,
     validateReady,
-    validateTerminalReceipt,
+    validateState,
   });
 })();

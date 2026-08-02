@@ -415,10 +415,22 @@ if (
 
 if (
   !/voiceSessions\.set\(id, session\);[\s\S]{0,1100}await startOffscreenVoiceCapture\(id, warmCaptureId \|\| null\)[\s\S]{0,260}captureStarted = true/.test(backgroundSource) ||
-  !/parsed\?\.type === "session_ready"[\s\S]{0,520}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource) ||
+  !/parsed\?\.type === "session_ready"[\s\S]{0,1400}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource) ||
   !/message\?\.type === "commit_turn"[\s\S]{0,1200}sendOrQueueVoiceSessionCommit/.test(backgroundSource)
 ) {
   throw new Error("extension-owned voice capture must become ready before gateway setup, flush queued audio on session_ready, and send commit after the flush");
+}
+
+if (
+  !manifest.content_scripts?.[0]?.js?.includes("voice-draft-protocol.js") ||
+  !manifest.content_scripts?.[0]?.js?.includes("voice-draft-controls.js") ||
+  !manifest.content_scripts?.[0]?.css?.includes("voice-draft-controls.css") ||
+  !/voiceDraftCapability/.test(backgroundSource) ||
+  !/voice_draft: voiceDraft/.test(backgroundSource) ||
+  !/validateClientRequest/.test(backgroundSource) ||
+  !/voiceSessionDraftDiscard/.test(contentSource)
+) {
+  throw new Error("browser voice drafts must be capability-gated, authority-checked, and discardable before SEND");
 }
 
 if (
@@ -620,7 +632,7 @@ if (
   !/function flushQueuedVoiceSessionAudio/.test(backgroundSource) ||
   !/function sendOrQueueVoiceSessionCommit/.test(backgroundSource) ||
   !/!voiceSessionSocketOpen\(session\) \|\| !session\.gatewayReady/.test(backgroundSource) ||
-  !/parsed\?\.type === "session_ready"[\s\S]{0,180}session\.gatewayReady = true;[\s\S]{0,180}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource)
+  !/parsed\?\.type === "session_ready"[\s\S]{0,900}session\.gatewayReady = true;[\s\S]{0,900}flushQueuedVoiceSessionMedia\(session\)/.test(backgroundSource)
 ) {
   throw new Error("browser voice must buffer early offscreen PCM and flush it after session_ready before commit");
 }
@@ -1107,7 +1119,7 @@ if (
 if (
   !/isLivekitVoiceEnabled\(\)/.test(backgroundSource) ||
   !/startLivekitVoiceSession\(/.test(backgroundSource) ||
-  !/if \(!opts\.transcriptionOnly && !opts\.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
+  !/if \(!draftMode && !opts\.transcriptionOnly && !opts\.warmCaptureId && tabId !== PANEL_TAB_ID && await isLivekitVoiceEnabled\(\)\)/.test(backgroundSource) ||
   !/return startVoiceSessionProxy\(tabId, opts\);/.test(backgroundSource)
 ) {
   throw new Error("background.js must gate LiveKit voice behind the flag, keep dictation on WS, and fall back to startVoiceSessionProxy");

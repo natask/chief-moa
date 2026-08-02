@@ -276,7 +276,7 @@ function assertVoicePlaybackStopContract() {
   }
   if (
     !/createCue\(cueId, "Starting microphone…", \{ statusText: "starting…" \}\)/.test(source) ||
-    !/capture_ready === false[\s\S]{0,220}ensureVoiceCueCard\(state, "Listening…", "listening…"\)/.test(source)
+    !/capture_ready === false[\s\S]{0,900}ensureVoiceCueCard\(state, "Listening…", "listening…"\)/.test(source)
   ) {
     throw new Error("live voice turns must open their turn immediately and invite speech only after microphone readiness");
   }
@@ -285,7 +285,7 @@ function assertVoicePlaybackStopContract() {
   if (/openTextSurface\([\s\S]{0,120}if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
     throw new Error("a mascot tap that routes to voice must not open the composer");
   }
-  if (!/if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
+  if (!/voiceDraftControls\?\.active\(\)[\s\S]{0,180}if \(voiceFirstGestures\) \{\s*handleVoiceFirstTap/.test(source)) {
     throw new Error("mascot taps must still route through the voice-first gesture machine");
   }
   if (/\.agee-cue|#agee-log/.test(overlayCss)) {

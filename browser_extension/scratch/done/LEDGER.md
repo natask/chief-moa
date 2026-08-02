@@ -1,3 +1,4 @@
+- Added capability-gated browser voice drafts with mascot Send, adjacent Cancel and Pause/Resume, exact revision authority, discard-on-cancel, and legacy gateway fallback — agent: codex/gpt-5 — entire checkpoint browser-voice-controls-20260802
 - Made the browser mascot legible without growing it, exposed active companion identity and exact assistant copy in the side panel, cancelled interrupted voice holds, and returned blank ribbon padding to the page — agent: codex/gpt-5 — entire checkpoint browser-controls-20260802
 - Added newest-first transcript cards, exact final-copy, retained-audio re-transcription, and selectable revision stacks in the side panel — agent: codex/gpt-5 team + claude-fable-5 — 5d21f6f1
 - Handled blocked content-page Web Audio resume promises so restricted pages such as OAuth sign-in do not leak an extension runtime error — agent: codex/gpt-5 — 12b0464c

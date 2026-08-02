@@ -7,6 +7,9 @@ const overlay = readFileSync(new URL("../extension/overlay.css", import.meta.url
 const ribbons = readFileSync(new URL("../extension/ribbons.css", import.meta.url), "utf8");
 const sidepanel = readFileSync(new URL("../extension/sidepanel.js", import.meta.url), "utf8");
 const sidepanelHtml = readFileSync(new URL("../extension/sidepanel.html", import.meta.url), "utf8");
+const draftControls = readFileSync(new URL("../extension/voice-draft-controls.js", import.meta.url), "utf8");
+const draftCss = readFileSync(new URL("../extension/voice-draft-controls.css", import.meta.url), "utf8");
+const background = readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
 
 test("the companion has no circular state ring", () => {
   assert.doesNotMatch(content, /class="agee-ring"/);
@@ -53,6 +56,27 @@ test("pointer cancellation never follows the release-to-send path", () => {
   assert.doesNotMatch(sidepanel, /pointercancel", \(\) => commitHold\(\)/);
   assert.match(sidepanel, /pointercancel", \(\) => cancelHold\(\)/);
   assert.match(sidepanel, /function cancelHold\(\)[\s\S]*?type: "cancel_turn"/);
+});
+
+test("capability-gated capture exposes only Cancel and Pause or Resume beside mascot Send", () => {
+  assert.match(draftControls, /id="agee-draft-cancel"[^>]*>Cancel<\/button>/);
+  assert.match(draftControls, /id="agee-draft-pause"[^>]*>Pause<\/button>/);
+  assert.doesNotMatch(draftControls, /id="agee-draft-send"/);
+  assert.match(draftControls, /launcher\.setAttribute\("aria-label", active \? "Send voice to Ag" : "Ag"\)/);
+  assert.match(draftControls, /\["Enter", " "\]\.includes\(event\.key\)/);
+  assert.match(draftControls, /cmd: "voiceDraftCapability"/);
+  assert.match(draftControls, /toolbar\.hidden = !active/);
+  assert.match(draftCss, /#agee-draft-controls\s*\{[\s\S]*?pointer-events:\s*none;/);
+  assert.match(draftCss, /#agee-draft-controls button\s*\{[\s\S]*?pointer-events:\s*auto;/);
+});
+
+test("draft capture stays pre-execution until an exact authority-bound SEND", () => {
+  assert.match(background, /voice_draft: voiceDraft/);
+  assert.match(background, /validateClientRequest\(message, session\.voiceDraft\)/);
+  assert.match(background, /action !== "resume"[^}]*stopOffscreenVoiceCapture/s);
+  assert.match(background, /action === "discard"\) clearQueuedVoiceSessionMedia/);
+  assert.match(background, /message\?\.type === "commit_turn"[\s\S]*?collectBrowserInvocationContext/);
+  assert.match(background, /session\.draftMode\) \{\s*closeVoiceSession\(id, "voice draft capture backstop parked"\)/);
 });
 
 test("the fallback workspace shows the active companion identity", () => {

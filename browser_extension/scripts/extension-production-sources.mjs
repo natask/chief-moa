@@ -64,6 +64,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/user-scripts-runtime.js",
   "extension/video-capture-finalization.js",
   "extension/voice-capture-gesture.js",
+  "extension/voice-draft-controls.js",
   "extension/voice-draft-protocol.js",
   "extension/voice-first-tap-chain.js",
   "extension/voice-preroll-buffer.js",
