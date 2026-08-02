@@ -150,6 +150,7 @@ public final class OverlayService extends Service {
     private boolean currentStreamingTurnRouted;
     private boolean currentStreamingTurnCommitRequested;
     private String currentStreamingTranscript = "";
+    private MoaTranscriptRevisionGate currentTranscriptRevisionGate;
     private final MoaSpeechTranscriptAccumulator streamingTranscriptAccumulator = new MoaSpeechTranscriptAccumulator();
     private final MoaAgentRunTracker agentRuns = new MoaAgentRunTracker();
     private boolean agentRunPolling;
@@ -535,18 +536,8 @@ public final class OverlayService extends Service {
     }
 
     private void addMessage(boolean assistant, String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return;
-        }
-        messages.add(new ChatMessage(assistant, text.trim()));
-        trimHistory();
-        renderMessages();
-    }
-
-    private void trimHistory() {
-        while (messages.size() > MAX_HISTORY_MESSAGES) {
-            messages.remove(0);
-        }
+        MoaOverlayMessageHistory.add(messages, new ChatMessage(assistant, safe(text)),
+                MAX_HISTORY_MESSAGES, this::renderMessages);
     }
 
     private void showOrb() {
@@ -3199,6 +3190,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 updateConversationId(sessionId);
+                currentTranscriptRevisionGate = new MoaTranscriptRevisionGate(sessionId, sessionBranch, turnId);
                 liveConversation.begin(turnId);
                 showTranscriptOverlay("");
                 renderVoiceTranscriptRows();
@@ -3261,16 +3253,15 @@ public final class OverlayService extends Service {
                 updateMicState();
             }
             @Override
-            public void onTranscriptPartial(String turnId, String text) {
-                if (!isCurrentStreamingGeneration(generation)) {
-                    return;
-                }
+            public void onTranscriptPartial(String turnId, String text, long transcriptSequence) {
+                if (!isCurrentStreamingGeneration(generation)) return;
+                MoaTranscriptRevisionGate gate = currentTranscriptRevisionGate;
+                MoaTranscriptRevisionGate.Snapshot accepted = gate == null ? null
+                        : gate.acceptProviderSnapshot(turnId, text, transcriptSequence, false);
+                if (gate != null && accepted == null) return;
                 markStreamingTurnProgressing();
-                // Gateway transcript events are authoritative whole-turn
-                // snapshots, not deltas. Merging a revised snapshot repeats
-                // the entire utterance when the recognizer changes an early
-                // word while preserving the later text.
-                String transcript = streamingTranscriptAccumulator.replaceSnapshot(text);
+                String transcript = streamingTranscriptAccumulator.replaceSnapshot(
+                        accepted == null ? text : accepted.text);
                 currentStreamingTranscript = safe(transcript);
                 liveConversation.updateUserPartial(turnId, currentStreamingTranscript);
                 // A commit request stops capture; it does not promote a provider
@@ -3284,12 +3275,15 @@ public final class OverlayService extends Service {
                 }
             }
             @Override
-            public void onTranscriptFinal(String turnId, String text) {
-                if (!isCurrentStreamingGeneration(generation)) {
-                    return;
-                }
+            public void onTranscriptFinal(String turnId, String text, long transcriptSequence) {
+                if (!isCurrentStreamingGeneration(generation)) return;
+                MoaTranscriptRevisionGate gate = currentTranscriptRevisionGate;
+                MoaTranscriptRevisionGate.Snapshot accepted = gate == null ? null
+                        : gate.acceptProviderSnapshot(turnId, text, transcriptSequence, true);
+                if (gate != null && accepted == null) return;
                 markStreamingTurnProgressing();
-                String transcript = safe(streamingTranscriptAccumulator.replaceSnapshot(text));
+                String transcript = safe(streamingTranscriptAccumulator.replaceSnapshot(
+                        accepted == null ? text : accepted.text));
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
                     liveConversation.finalizeUser(turnId, transcript);
@@ -3298,16 +3292,38 @@ public final class OverlayService extends Service {
                         String followUpRunId = nextStreamingVoiceFollowUpRunId;
                         currentStreamingTurnRouted = true;
                         nextStreamingVoiceFollowUpRunId = "";
-                        addMessage(false, transcript);
+                        MoaOverlayMessageHistory.add(messages, new ChatMessage(false, transcript, false,
+                                stableSessionId, sessionBranch, turnId, 0L, true), MAX_HISTORY_MESSAGES, OverlayService.this::renderMessages);
                         updateVoiceUserTranscript(transcript, true);
                         requestAgentRunFollowUp(followUpRunId, transcript, true);
                     } else if (shouldRouteStreamingTranscriptThroughMoa(transcript)) {
                         routeStreamingTranscriptThroughMoa(transcript);
                     } else {
-                        addMessage(false, transcript);
+                        MoaOverlayMessageHistory.add(messages, new ChatMessage(false, transcript, false,
+                                stableSessionId, sessionBranch, turnId, 0L, true), MAX_HISTORY_MESSAGES, OverlayService.this::renderMessages);
                         updateVoiceUserTranscript(transcript, true);
                     }
                 }
+            }
+
+            @Override
+            public void onTranscriptPrefixRevision(JSONObject event) {
+                if (!isCurrentStreamingGeneration(generation)) return;
+                MoaTranscriptRevisionGate gate = currentTranscriptRevisionGate;
+                MoaTranscriptRevisionGate.Snapshot accepted = gate == null ? null : gate.acceptPrefixRevision(event);
+                if (accepted == null) return;
+                currentStreamingTranscript = safe(streamingTranscriptAccumulator.replaceSnapshot(accepted.text));
+                liveConversation.updateUserPartial(event.optString("turn_id", ""), currentStreamingTranscript);
+                updateVoiceUserTranscript(currentStreamingTranscript, false);
+                renderVoiceTranscriptRows();
+                if (orbView != null) orbView.announceForAccessibility("Transcript corrected");
+            }
+            @Override
+            public void onTranscriptRevision(JSONObject event) {
+                if (!isCurrentStreamingGeneration(generation)) return;
+                String activeTurn = streamingVoiceController != null && streamingVoiceController.isActive() ? streamingVoiceController.turnId() : "";
+                if (MoaOverlayMessageHistory.replaceFinalizedUser(messages, event, stableSessionId,
+                        sessionBranch, activeTurn, OverlayService.this::renderMessages) && orbView != null) orbView.announceForAccessibility("Transcript corrected");
             }
             @Override
             public void onAssistantText(String turnId, String text) {

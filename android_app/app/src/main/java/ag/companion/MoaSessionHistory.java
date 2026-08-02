@@ -112,6 +112,7 @@ final class MoaSessionHistory {
         final String userMessageId;
         final String assistantMessageId;
         final boolean textTruncated;
+        final long transcriptRevision;
 
         private Turn(TurnBuilder builder) {
             stableId = builder.stableId;
@@ -128,6 +129,7 @@ final class MoaSessionHistory {
             userMessageId = builder.userMessageId;
             assistantMessageId = builder.assistantMessageId;
             textTruncated = builder.textTruncated;
+            transcriptRevision = builder.transcriptRevision;
         }
 
         String metadataLine() {
@@ -138,6 +140,7 @@ final class MoaSessionHistory {
             parts.add("branch " + firstNonEmpty(branchId, "default"));
             if (!completionState.isEmpty()) parts.add(completionState);
             if (textTruncated) parts.add("text truncated by gateway");
+            if (transcriptRevision > 0L) parts.add("corrected transcript");
             return String.join("  ·  ", parts);
         }
     }
@@ -157,6 +160,7 @@ final class MoaSessionHistory {
         String userMessageId = "";
         String assistantMessageId = "";
         boolean textTruncated;
+        long transcriptRevision;
 
         TurnBuilder(String stableId) {
             this.stableId = stableId;
@@ -178,6 +182,17 @@ final class MoaSessionHistory {
                             ? "" : message.optJSONObject("completion").optString("state", ""));
             createdAt = firstNonEmpty(createdAt, message.optString("created_at", ""));
             textTruncated = textTruncated || message.optBoolean("text_truncated", false);
+            JSONObject voiceHistory = message.optJSONObject("voice_history");
+            if (voiceHistory != null) {
+                Object revision = voiceHistory.opt("current_revision");
+                if (revision instanceof Number) {
+                    double number = ((Number) revision).doubleValue();
+                    long integer = ((Number) revision).longValue();
+                    if (Double.isFinite(number) && number == integer && integer >= 0L) {
+                        transcriptRevision = Math.max(transcriptRevision, integer);
+                    }
+                }
+            }
         }
 
         Turn build() {

@@ -53,9 +53,15 @@ final class MoaStreamingVoiceSessionController {
 
         void onRecordingStopped();
 
-        void onTranscriptPartial(String turnId, String text);
+        void onTranscriptPartial(String turnId, String text, long transcriptSequence);
 
-        void onTranscriptFinal(String turnId, String text);
+        void onTranscriptFinal(String turnId, String text, long transcriptSequence);
+
+        default void onTranscriptPrefixRevision(JSONObject event) {
+        }
+
+        default void onTranscriptRevision(JSONObject event) {
+        }
 
         void onAssistantText(String turnId, String text);
 
@@ -153,6 +159,7 @@ final class MoaStreamingVoiceSessionController {
     private boolean draftCommitAfterControl;
     private String voiceDraftId = "";
     private long voiceDraftRevision;
+    private boolean transcriptRevisionsEnabled;
 
     private final Choreographer.FrameCallback playbackFrameCallback = this::onPlaybackFrame;
 
@@ -301,6 +308,7 @@ final class MoaStreamingVoiceSessionController {
             draftCommitAfterControl = false;
             voiceDraftId = "";
             voiceDraftRevision = 0L;
+            transcriptRevisionsEnabled = false;
             assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
@@ -489,6 +497,7 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
+            transcriptRevisionsEnabled = false;
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
@@ -586,6 +595,7 @@ final class MoaStreamingVoiceSessionController {
             loggedVoiceActivity = false;
             sessionReady = false;
             pendingCommitAfterSessionReady = false;
+            transcriptRevisionsEnabled = false;
             assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
@@ -1234,6 +1244,16 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onJsonEvent(JSONObject event) {
             handleVoiceDraftEvent(event);
+            if (event != null && "session_ready".equals(event.optString("type", ""))) {
+                JSONObject capabilities = event.optJSONObject("capabilities");
+                JSONObject revisions = capabilities == null
+                        ? null : capabilities.optJSONObject("transcript_revisions_v1");
+                synchronized (lock) {
+                    transcriptRevisionsEnabled = revisions != null
+                            && revisions.optBoolean("supported", false)
+                            && revisions.optInt("version", -1) == 1;
+                }
+            }
         }
 
         @Override
@@ -1278,7 +1298,16 @@ final class MoaStreamingVoiceSessionController {
                     lifecycleTrace.transcriptPartialReceived();
                 }
             }
-            post(() -> callback.onTranscriptPartial(transcriptTurnId, text));
+            post(() -> callback.onTranscriptPartial(transcriptTurnId, text, -1L));
+        }
+
+        @Override
+        public void onTranscriptPartial(String transcriptTurnId, String text, long transcriptSequence) {
+            Log.i(TAG, "transcriptPartial chars=" + safe(text).length());
+            synchronized (lock) {
+                if (lifecycleTrace != null) lifecycleTrace.transcriptPartialReceived();
+            }
+            post(() -> callback.onTranscriptPartial(transcriptTurnId, text, transcriptSequence));
         }
 
         @Override
@@ -1289,7 +1318,32 @@ final class MoaStreamingVoiceSessionController {
                     lifecycleTrace.resultReceived("transcript");
                 }
             }
-            post(() -> callback.onTranscriptFinal(transcriptTurnId, text));
+            post(() -> callback.onTranscriptFinal(transcriptTurnId, text, -1L));
+        }
+
+        @Override
+        public void onTranscriptFinal(String transcriptTurnId, String text, long transcriptSequence) {
+            Log.i(TAG, "transcriptFinal chars=" + safe(text).length());
+            synchronized (lock) {
+                if (lifecycleTrace != null) lifecycleTrace.resultReceived("transcript");
+            }
+            post(() -> callback.onTranscriptFinal(transcriptTurnId, text, transcriptSequence));
+        }
+
+        @Override
+        public void onTranscriptPrefixRevision(JSONObject event) {
+            synchronized (lock) {
+                if (!transcriptRevisionsEnabled) return;
+            }
+            post(() -> callback.onTranscriptPrefixRevision(event));
+        }
+
+        @Override
+        public void onTranscriptRevision(JSONObject event) {
+            synchronized (lock) {
+                if (!transcriptRevisionsEnabled) return;
+            }
+            post(() -> callback.onTranscriptRevision(event));
         }
 
         @Override

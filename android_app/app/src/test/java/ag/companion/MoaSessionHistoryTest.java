@@ -19,7 +19,8 @@ public final class MoaSessionHistoryTest {
                                 .put("source_surface", "android")
                                 .put("source_kind", "voice")
                                 .put("classification", "chat")
-                                .put("completion_state", "completed"))
+                                .put("completion_state", "completed")
+                                .put("voice_history", new JSONObject().put("current_revision", 2)))
                         .put(canonical("msg_assistant_1", "turn_1", "assistant", "I saved that idea.")
                                 .put("text_truncated", true))
                         // Canonical message identity prevents duplicate rendering.
@@ -44,7 +45,8 @@ public final class MoaSessionHistoryTest {
         assertEquals("I saved that idea.", android.assistantText);
         assertEquals("msg_user_1", android.userMessageId);
         assertEquals("msg_assistant_1", android.assistantMessageId);
-        assertEquals("android  ·  voice  ·  chat  ·  branch default  ·  completed  ·  text truncated by gateway", android.metadataLine());
+        assertEquals(2L, android.transcriptRevision);
+        assertEquals("android  ·  voice  ·  chat  ·  branch default  ·  completed  ·  text truncated by gateway  ·  corrected transcript", android.metadataLine());
 
         MoaSessionHistory.Turn browser = history.turns.get(1);
         assertEquals("browser", browser.sourceSurface);

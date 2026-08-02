@@ -41,7 +41,21 @@ final class MoaVoiceGatewaySocket {
 
         void onTranscriptPartial(String turnId, String text);
 
+        default void onTranscriptPartial(String turnId, String text, long transcriptSequence) {
+            onTranscriptPartial(turnId, text);
+        }
+
         void onTranscriptFinal(String turnId, String text);
+
+        default void onTranscriptFinal(String turnId, String text, long transcriptSequence) {
+            onTranscriptFinal(turnId, text);
+        }
+
+        default void onTranscriptPrefixRevision(JSONObject event) {
+        }
+
+        default void onTranscriptRevision(JSONObject event) {
+        }
 
         void onAssistantText(String turnId, String text);
 
@@ -402,13 +416,21 @@ final class MoaVoiceGatewaySocket {
                 break;
             case "transcript_partial":
                 if (callback != null) {
-                    callback.onTranscriptPartial(event.optString("turn_id", ""), event.optString("text", ""));
+                    callback.onTranscriptPartial(event.optString("turn_id", ""), event.optString("text", ""),
+                            event.optLong("transcript_sequence", -1L));
                 }
                 break;
             case "transcript_final":
                 if (callback != null) {
-                    callback.onTranscriptFinal(event.optString("turn_id", ""), event.optString("text", ""));
+                    callback.onTranscriptFinal(event.optString("turn_id", ""), event.optString("text", ""),
+                            event.optLong("transcript_sequence", -1L));
                 }
+                break;
+            case "transcript_prefix_revision":
+                if (callback != null) callback.onTranscriptPrefixRevision(event);
+                break;
+            case "transcript_revision":
+                if (callback != null) callback.onTranscriptRevision(event);
                 break;
             case "assistant_text":
                 if (callback != null) {
