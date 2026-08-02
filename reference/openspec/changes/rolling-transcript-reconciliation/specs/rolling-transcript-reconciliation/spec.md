@@ -100,6 +100,44 @@ revision is newer; it SHALL NOT update assistant text or a current capture.
 - **THEN** it does not claim or apply a complete finalized revision
 - **AND** it does not modify an assistant message or the current capture
 
+### Requirement: Browser preserves the live tail and rejects stale correction authority
+
+The browser extension SHALL accept rolling correction events only when
+`transcript_revisions_v1` version 1 was advertised for the exact voice session.
+Each accepted prefix revision SHALL bind the current session, branch, turn,
+canonical user `message_id`, strictly increasing transcript sequence, and
+strictly increasing batch revision. The browser SHALL render the event's
+authoritative whole snapshot and SHALL NOT infer text overlap. Canonical History
+hydration SHALL never replace a newer finalized user-message revision with an
+older or same-revision/different-text response. Copy SHALL read the currently
+rendered corrected text.
+
+#### Scenario: rolling correction preserves a newer live tail
+
+- **GIVEN** the browser displays a whole transcript snapshot with an editable
+  live tail
+- **WHEN** a newer authorized prefix revision supplies corrected
+  `finalized_text`, current `unsealed_text`, and their authoritative whole text
+- **THEN** the browser replaces the prior snapshot with that whole text
+- **AND** a later out-of-order prefix event cannot rewind the newer live tail
+
+#### Scenario: correction cannot cross message authority
+
+- **GIVEN** the browser has a live capture and retained user and assistant
+  messages from multiple branches
+- **WHEN** a correction has a duplicate revision, stale sequence, wrong
+  session, wrong branch, wrong turn, wrong canonical message id, or assistant
+  speaker
+- **THEN** the browser leaves all visible and copyable text unchanged
+
+#### Scenario: corrected history is immediately copyable
+
+- **GIVEN** canonical History returns a strictly newer completed transcript
+  revision for the exact retained user message
+- **WHEN** the browser renders the new revision and the user selects Copy
+- **THEN** Copy writes the corrected visible text
+- **AND** a later stale History response cannot restore the older text
+
 ### Requirement: Durable claims bound duplicate paid recognition
 
 Every queued span SHALL use a durable claim with an attempt identity, lease,

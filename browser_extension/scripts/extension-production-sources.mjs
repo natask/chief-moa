@@ -59,6 +59,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/capture-copy-disposition.js",
   "extension/stop-intent.js",
   "extension/tool-receipt-runtime.js",
+  "extension/transcript-revision-protocol.js",
   "extension/tweaks.js",
   "extension/ui-spec-runtime.js",
   "extension/user-scripts-runtime.js",

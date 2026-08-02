@@ -2590,6 +2590,7 @@
       }
       if (session.capture_ready === false) throw new Error("microphone capture did not become ready");
       state.draftMode = session.draft_mode === true;
+      state.transcriptRevision = AgeeTranscriptRevisionProtocol.createState({ sessionId: session.session_id, branchId: session.branch_id, turnId: state.turnId });
       voiceDraftControls?.bind({ draftMode: state.draftMode, voiceSessionId: session.voiceSessionId,
         sessionId: session.session_id, branchId: session.branch_id, turnId: state.turnId });
       if (!isLiveVoiceStateActive(state)) {
@@ -2645,6 +2646,7 @@
     }
 
     if (msg.type === "session_ready") {
+      AgeeTranscriptRevisionProtocol.acceptReady(state.transcriptRevision, msg);
       state.sessionReady = true; state.transcriptFinalizeSupported = msg.transcript_finalize?.supported === true;
       updateCue(state.cueId, "", "running");
       if (state.commitWhenDraftReady) commitLiveVoiceTurn(state);
@@ -2679,21 +2681,19 @@
       return;
     }
     if (msg.type === "mic_level") {
-      // Retained as a tolerated additive gateway event. The bare companion has
-      // no amplitude ring or animation loop to drive.
+      // Tolerated only; no amplitude ring or animation loop is driven here.
       return;
     }
-    if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
-      // Every transcript event carries the whole transcript so far — the
-      // gateway accumulates finals and folds the live interim in before it
-      // broadcasts (voice-stt-streaming.js joinTranscript). The recognizer
-      // revises what it already sent as it hears more, so stitching these
-      // together locally repeats the sentence on every revision. Show what
-      // the gateway said the turn is.
-      const text = String(msg.text || "").trim();
-      if (!text) return;
-      state.transcript = text;
-      if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
+    if (msg.type === "transcript_prefix_revision") {
+      const revision = AgeeTranscriptRevisionProtocol.acceptPrefixRevision(state.transcriptRevision, msg);
+      if (!revision) return;
+      state.transcript = revision.text; if (isCurrentTurn) setTranscript(revision.text, true);
+      updateCueLabel(state.cueId, revision.text); ensureVoiceCueCard(state, revision.text, ""); return;
+    } if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
+      const snapshot = AgeeTranscriptRevisionProtocol.acceptStreamingSnapshot(state.transcriptRevision, msg);
+      if (!snapshot) return;
+      const text = snapshot.text;
+      state.transcript = text; if (isCurrentTurn) setTranscript(text, msg.type === "transcript_partial");
       updateCueLabel(state.cueId, text);
       ensureVoiceCueCard(state, text, "");
       if (captureCopy.isPending()) return;
@@ -2766,7 +2766,7 @@
       return;
     }
     if (msg.type === "turn_done") {
-      const status = String(msg.status || "completed").toLowerCase();
+      AgeeTranscriptRevisionProtocol.markTerminal(state.transcriptRevision); const status = String(msg.status || "completed").toLowerCase();
       // Carry the gateway's own turn metadata so the done handler can render
       // honestly and, when assistant_text never arrived, look the stored turn up
       // by its canonical id.

@@ -422,6 +422,14 @@ if (
 }
 
 if (
+  !manifest.content_scripts?.[0]?.js?.includes("transcript-revision-protocol.js") ||
+  !/acceptPrefixRevision/.test(backgroundSource) ||
+  !/acceptPrefixRevision/.test(contentSource)
+) {
+  throw new Error("rolling transcript corrections must be capability-gated and exact-authority checked");
+}
+
+if (
   !manifest.content_scripts?.[0]?.js?.includes("voice-draft-protocol.js") ||
   !manifest.content_scripts?.[0]?.js?.includes("voice-draft-controls.js") ||
   !manifest.content_scripts?.[0]?.css?.includes("voice-draft-controls.css") ||

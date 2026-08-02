@@ -8,6 +8,7 @@
 import { getEffectiveGatewayConfig } from "./config.js";
 import { createDeviceCredentialRuntime } from "./device-credential-runtime.js";
 import { createBrowserToolCatalogView } from "./browser-tool-catalog-view.js";
+import "./transcript-revision-protocol.js";
 import {
   buildAssignmentRequest,
   buildFallbackRequest,
@@ -41,6 +42,7 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 let historyRefresh = null;
 let historyRefreshGeneration = 0;
+const historyRevisionLedger = new Map();
 
 let audioCtx = null;
 let playbackTime = 0;
@@ -527,13 +529,14 @@ function normalizeHistoryMessages(payload) {
       ? normalizeVoiceHistory(record)
       : null;
     const sessionId = String(record.session_id || record.sessionId || "").trim();
+    const branchId = String(record.branch_id || record.branchId || "").trim();
     if (speaker) {
       const text = speaker === "user"
         ? firstText(record, ["text", "content", "user_text", "transcript", "instruction"])
         : firstText(record, ["text", "content", "assistant_text", "reply_text", "reply", "display"]);
       if (text) messages.push({
         id: baseId, turnId: turnId || baseId, speaker, text, meta, createdAt,
-        sourceIndex: index, kind, completion, sessionId, voiceHistory,
+        sourceIndex: index, kind, completion, sessionId, branchId, voiceHistory,
       });
       return;
     }
@@ -797,10 +800,11 @@ async function refreshHistory({ reason = "refresh", reconcileState = null } = {}
     .then((response) => {
       if (!response?.ok) throw new Error(response?.error || "Could not load saved history.");
       const messages = normalizeHistoryMessages(response);
+      const guardedMessages = AgeeTranscriptRevisionProtocol.guardHistory(messages, historyRevisionLedger);
       if (generation !== historyRefreshGeneration) return false;
-      renderHistory(messages);
+      renderHistory(guardedMessages);
       clearHistoryError();
-      reconcileTerminalCard(reconcileState, messages);
+      reconcileTerminalCard(reconcileState, guardedMessages);
       if (!turn) setStatus("Ready.");
       return true;
     })
@@ -820,6 +824,7 @@ async function refreshHistory({ reason = "refresh", reconcileState = null } = {}
 function refreshAfterTerminal(state) {
   refreshHistory({ reason: "turn completed", reconcileState: state });
   setTimeout(() => refreshHistory({ reason: "turn reconciliation", reconcileState: state }), 1200);
+  for (const delay of [5000, 30000, 120000]) setTimeout(() => refreshHistory({ reason: "transcript reconciliation" }), delay);
 }
 
 function addTurnCard(youText) {
@@ -917,6 +922,7 @@ function newTurnState(kind, youText) {
     replyText: "",
     done: false,
     terminalPending: false,
+    transcriptRevision: null,
     watchdog: null,
     ui: addTurnCard(youText || ""),
   };
@@ -1092,13 +1098,22 @@ function handleVoiceEvent(payload) {
   if (!msg.type) return;
 
   if (msg.type === "session_ready") {
+    AgeeTranscriptRevisionProtocol.acceptReady(state.transcriptRevision, msg);
     if (state.kind === "voice") setStatus("Listening — release to send.", "listening");
     return;
   }
+  if (msg.type === "transcript_prefix_revision") {
+    const revision = AgeeTranscriptRevisionProtocol.acceptPrefixRevision(state.transcriptRevision, msg);
+    if (!revision) return;
+    state.transcript = revision.text;
+    updateCard(state, { you: revision.text });
+    return;
+  }
   if (msg.type === "transcript_partial" || msg.type === "transcript_final") {
-    const text = String(msg.text || "").trim();
-    if (!text) return;
-    if (msg.type === "transcript_partial" && state.transcriptFinal) return;
+    if (msg.type === "transcript_partial" && state.transcriptFinal && !state.transcriptRevision?.supported) return;
+    const snapshot = AgeeTranscriptRevisionProtocol.acceptStreamingSnapshot(state.transcriptRevision, msg);
+    if (!snapshot) return;
+    const text = snapshot.text;
     state.transcript = text;
     state.transcriptFinal = msg.type === "transcript_final";
     updateCard(state, { you: text });
@@ -1120,6 +1135,7 @@ function handleVoiceEvent(payload) {
     return;
   }
   if (msg.type === "turn_done") {
+    AgeeTranscriptRevisionProtocol.markTerminal(state.transcriptRevision);
     completeVoiceTurn(state, msg);
     return;
   }
@@ -1158,6 +1174,7 @@ async function startTurn(kind, options) {
       return null;
     }
     state.voiceSessionId = res.voiceSessionId;
+    state.transcriptRevision = AgeeTranscriptRevisionProtocol.createState({ sessionId: res.session_id, branchId: res.branch_id, turnId: state.turnId });
     const attached = await request({ cmd: "voiceSessionAttach", voiceSessionId: res.voiceSessionId });
     if (!attached?.ok) {
       failTurn(state, String(attached?.error || "Could not attach to the voice session."));

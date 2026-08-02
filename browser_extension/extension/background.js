@@ -13,6 +13,7 @@ import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
 import { sendToOffscreenReceiver, waitForOffscreenReceiver } from "./offscreen-voice-bridge.js";
 import { pcm16VoiceActivity } from "./browser-voice-activity.js";
 import "./voice-draft-protocol.js";
+import "./transcript-revision-protocol.js";
 import { captureActiveTabJpeg, captureBoundTabJpeg } from "./browser-visual-capture-runtime.js";
 import { browserContextDescriptor, browserSessionExecutionAdapters } from "./browser-context-adapter.js";
 import { devReloadDecision } from "./dev-reload-gate.js";
@@ -2130,9 +2131,6 @@ async function updateBrowserAgentPresentation(patch = {}) {
       Object.hasOwn(patch, "response_text") ? patch.response_text : sameCue ? activeBrowserAgentPresentation?.response_text : "",
     ),
     status: String(patch.status || (sameCue ? activeBrowserAgentPresentation?.status : "running") || "running"),
-    // Derived revisions (corrected / writing-skill rewrites) travel with the
-    // turn when a producer supplies them. No gateway route emits them yet, so
-    // these stay undefined and the overlay's copy rail falls back to literal.
     user_variants: Object.hasOwn(patch, "user_variants")
       ? patch.user_variants
       : sameCue ? activeBrowserAgentPresentation?.user_variants : undefined,
@@ -2844,8 +2842,8 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
     if (!ticket?.ws_url) {
       throw abortSetup(`Gateway reachable at ${cfg.gatewayUrl || "(unset)"}, but it did not return a voice session WebSocket URL.`);
     }
-    session.sessionId = ticket.session_id;
-    session.branchId = branchForSession;
+    session.sessionId = ticket.session_id; session.branchId = branchForSession;
+    session.transcriptRevision = AgeeTranscriptRevisionProtocol.createState({ sessionId: session.sessionId, branchId: session.branchId, turnId });
   } catch (error) {
     if (voiceSessions.get(id) === session) {
       closeVoiceSession(id, "voice session setup failed");
@@ -3147,7 +3145,7 @@ async function forwardVoiceSessionEvent(session, event) {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
   if (parsed?.type === "session_ready") {
-    if (session.draftMode) {
+    AgeeTranscriptRevisionProtocol.acceptReady(session.transcriptRevision, parsed); if (session.draftMode) {
       const pointer = AgeeVoiceDraftProtocol.validateReady(parsed, { operation: "create",
         sessionId: session.sessionId, branchId: session.branchId, turnId: session.turnId });
       if (!pointer) {
@@ -3174,7 +3172,12 @@ async function forwardVoiceSessionEvent(session, event) {
         .catch((error) => handleOffscreenVoiceError(session.id, error));
     }
   }
-  if (parsed?.type === "voice_draft_state" && session.draftMode) {
+  if (["transcript_partial", "transcript_final"].includes(parsed?.type) && !AgeeTranscriptRevisionProtocol.acceptStreamingSnapshot(session.transcriptRevision, parsed)) return;
+  const prefixRevision = parsed?.type === "transcript_prefix_revision" ? AgeeTranscriptRevisionProtocol.acceptPrefixRevision(session.transcriptRevision, parsed) : false;
+  if (parsed?.type === "transcript_prefix_revision") {
+    if (!prefixRevision) return;
+    updateBrowserAgentPresentation({ cue_id: session.cueId, user_text: prefixRevision.text, status: session.committed ? "processing" : "listening" }).catch(() => {});
+  } if (parsed?.type === "voice_draft_state" && session.draftMode) {
     const pointer = AgeeVoiceDraftProtocol.validateState(parsed, { pointer: session.voiceDraft,
       action: session.pendingDraftAction || parsed.voice_draft?.action });
     if (!pointer) {
@@ -3203,11 +3206,7 @@ async function forwardVoiceSessionEvent(session, event) {
     return;
   }
   if (parsed?.type === "turn_progress") {
-    // Keepalive the gateway emits every ~5s between commit and turn_done. Route it
-    // to the content script exactly like assistant_text / turn_done (the generic
-    // relay below) so the client's post-commit response watchdog resets on it and
-    // any future UI can read parsed.stage. Delivered here and returned so the
-    // generic forward does not double-send it.
+    // The gateway keepalive resets the client response watchdog.
     deliverVoiceSessionEvent(session, { event: parsed });
     return;
   }
@@ -3236,6 +3235,7 @@ async function forwardVoiceSessionEvent(session, event) {
     }).catch(() => {});
   }
   if (parsed?.type === "turn_done") {
+    AgeeTranscriptRevisionProtocol.markTerminal(session.transcriptRevision);
     const status = String(parsed.status || "completed").toLowerCase();
     if (session.transcriptionOnly && status === "completed") {
       parsed.clipboard_copied = await copyDictationTranscript(session);

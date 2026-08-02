@@ -35,6 +35,9 @@
   overlap inference. Apply complete corrections only to the exact retained
   finalized user message, never assistant text or the current capture, and
   announce the update without moving accessibility focus.
+- [x] 3.6 Capability-gate browser prefix revisions, bind them to exact
+  session/branch/turn/canonical-user-message authority, reject stale sequence
+  or batch revisions, and keep canonical History plus Copy monotonic.
 
 ## 4. Verification and rollout
 
@@ -46,7 +49,10 @@
 - [ ] 4.2a Add Android tests for stale, wrong-identity, out-of-order, duplicate,
   and missing-tail events, plus exact finalized-user-message targeting and
   focus-preserving accessibility behavior.
-- [x] 4.3 Run `cd gateway && npm run check`, the repo-wide source-size policy,
+- [x] 4.2b Add deterministic browser tests for a corrected rolling prefix plus
+  live tail, out-of-order delivery, wrong authority, immutable same-revision
+  History, and Copy's corrected-text source.
+- [ ] 4.3 Run `cd gateway && npm run check`, the repo-wide source-size policy,
   and strict OpenSpec validation.
 - [ ] 4.4 Create an isolated preview with rollback evidence, then enable a
   duration-limited cohort and record measured quality benefit and provider cost
