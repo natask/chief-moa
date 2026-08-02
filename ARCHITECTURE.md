@@ -1128,6 +1128,18 @@ after commit, and issues one HTTPS synthesis request for each TTS phrase. Those
 phrase requests overlap with continued model generation, but they are not a
 provider audio-delta stream.
 
+Clients that negotiate `voice_drafts_v1` use a separate, bounded gateway draft
+store before a canonical voice turn exists. PCM remains in that store through
+pause, resume, and park, including process restart. Those controls and discard
+do not admit a provider, attach conversation context, run tools, or write a
+canonical turn. Explicit `commit_turn` is SEND: the gateway revision-checks and
+claims the draft for the exact session, branch, and turn, verifies the stored
+PCM, then feeds it through the ordinary provider path once. The store removes
+content and records terminal `sent` only after the canonical turn writer accepts
+the result; `discarded` removes content without creating an intent. Gateways add
+the capability to health and `session_ready`; clients that omit `voice_draft`
+retain the legacy protocol.
+
 Native-audio provider experiments keep credentials on the gateway and use one
 provider WebSocket per admitted turn today. Vertex, OpenAI Realtime, and Grok
 Voice fit that duplex experiment shape. Claude does not: Anthropic's documented

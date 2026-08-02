@@ -1,10 +1,10 @@
 ## 1. Store and protocol
 
-- [ ] 1.1 Add revisioned bounded draft persistence, quota, boot recovery, and
-  content-free discard/consume tombstones.
-- [ ] 1.2 Add draft-mode WebSocket start and pause/resume/park/discard controls.
-- [ ] 1.3 Route SEND through existing `commit_turn` provider orchestration.
-- [ ] 1.4 Advertise `voice_drafts_v1` only when the full server path is active.
+- [x] 1.1 Add revisioned bounded draft persistence, quota, boot recovery, and
+  content-free discarded/sent tombstones.
+- [x] 1.2 Add draft-mode WebSocket start and pause/resume/park/discard controls.
+- [x] 1.3 Route SEND through existing `commit_turn` provider orchestration.
+- [x] 1.4 Advertise `voice_drafts_v1` only when the full server path is active.
 
 ## 2. Android
 
@@ -22,8 +22,8 @@
 
 ## 4. Verification and release
 
-- [ ] 4.1 Prove pause/park/resume/discard invoke zero provider/model/tool calls.
-- [ ] 4.2 Prove park -> restart -> resume -> send preserves audio order.
+- [x] 4.1 Prove pause/park/resume/discard invoke zero provider/model/tool calls.
+- [x] 4.2 Prove park -> restart -> resume -> send preserves audio order.
 - [ ] 4.3 Run gateway, Android unit/build, and browser verify/smoke gates.
 - [ ] 4.4 Run correctness, privacy, resource, compatibility, and no-gaming
   auditors; repair every BLOCK.

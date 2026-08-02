@@ -1,5 +1,4 @@
 "use strict";
-
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -24,6 +23,8 @@ const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
 const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
+const { VoiceDraftSessionBridge, createVoiceDraftSessionRuntime, disabledVoiceDraftSessionRuntime }
+  = require("./voice-draft-session");
 const { bindBrowserVoiceInvocationContext } = require("./browser-invocation-context");
 const { completeNoSpeech, completeTranscriptFinalization, handleTranscriptFinalize }
   = require("./voice-transcript-finalize");
@@ -44,6 +45,7 @@ function createVoiceSessionServer(options) {
   const pendingReplacements = new Map();
   const steeringCoordinator = createVoiceTurnSteeringCoordinator({ connections, pending: pendingReplacements });
   const agentProfile = options?.agentProfile || null;
+  const voiceDraftRuntime = createVoiceDraftSessionRuntime({ dataDir, store: options?.voiceDraftStore });
   const contextProvider = typeof options?.contextProvider === "function" ? options.contextProvider : null;
   const toolHandler = typeof options?.toolHandler === "function" ? options.toolHandler : null;
   const sessionAdmission = createVoiceSessionAdmission({
@@ -76,6 +78,7 @@ function createVoiceSessionServer(options) {
       phraseAssistGenerator: options?.phraseAssistGenerator, phraseAssistOptions: options?.phraseAssistOptions,
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
       blobStore: options?.blobStore || null,
+      voiceDraftRuntime,
     });
     connections.add(connection);
     ws.once("close", () => {
@@ -83,13 +86,12 @@ function createVoiceSessionServer(options) {
     });
     connection.start();
   });
-
   return {
     endpoint: VOICE_SESSION_ENDPOINT,
     sessionsDir,
     providerEventsFile,
     status() {
-      return sessionAdmission.status();
+      return { ...sessionAdmission.status(), voice_drafts_v1: voiceDraftRuntime.status() };
     },
     activityStatus() {
       return summarizeVoiceActivity(connections);
@@ -105,7 +107,6 @@ function createVoiceSessionServer(options) {
     },
   };
 }
-
 class VoiceSessionConnection {
   constructor(ws, options) {
     this.ws = ws;
@@ -131,8 +132,10 @@ class VoiceSessionConnection {
     this.ttsRetryReceipts = new Map();
     this.turnProgressIntervalMs = normalizeTurnProgressIntervalMs(options.turnProgressIntervalMs);
     this.phraseAssist = createVoicePhraseAssistSessionBridge(this, options, sanitizeId);
+    this.voiceDraft = new VoiceDraftSessionBridge(
+      this, options.voiceDraftRuntime || disabledVoiceDraftSessionRuntime(),
+    );
   }
-
   startTurnProgress(turn, stage) {
     const nextStage = normalizeProgressStage(stage);
     if (nextStage) {
@@ -174,7 +177,6 @@ class VoiceSessionConnection {
     }, intervalMs);
     this.turnProgressTimer.unref?.();
   }
-
   stopTurnProgress() {
     if (this.turnProgressTimer) {
       clearInterval(this.turnProgressTimer);
@@ -182,7 +184,6 @@ class VoiceSessionConnection {
     }
     this.turnProgressStage = "";
   }
-
   start() {
     this.ws.on("message", (data, isBinary) => {
       if (isBinary) {
@@ -194,13 +195,14 @@ class VoiceSessionConnection {
       });
     });
     this.ws.on("close", () => {
+      void this.voiceDraft.parkOnClose();
       void this.closeCurrentTurn("closed");
     });
     this.ws.on("error", () => {
+      void this.voiceDraft.parkOnClose();
       void this.closeCurrentTurn("error");
     });
   }
-
   async handleText(data) {
     let event;
     try {
@@ -209,12 +211,10 @@ class VoiceSessionConnection {
       this.sendError("text messages must be valid JSON");
       return;
     }
-
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       this.sendError("text messages must be JSON objects");
       return;
     }
-
     const type = String(event.type || "");
     if (type === "session_start") {
       await this.handleSessionStart(event);
@@ -222,6 +222,10 @@ class VoiceSessionConnection {
     }
     if (type === "commit_turn") {
       await this.handleCommitTurn(event);
+      return;
+    }
+    if (type === "voice_draft_control") {
+      await this.voiceDraft.control(event);
       return;
     }
     if (type === "finalize_transcript") {
@@ -252,7 +256,6 @@ class VoiceSessionConnection {
     }
     this.sendError(`unsupported voice event type: ${type || "missing"}`);
   }
-
   handleAudio(data) {
     const chunk = toBuffer(data);
     if (chunk.length === 0) {
@@ -262,7 +265,7 @@ class VoiceSessionConnection {
       this.sendError("pcm16 audio frames must contain an even number of bytes");
       return;
     }
-
+    if (this.voiceDraft.append(chunk)) return;
     if (!this.turn) {
       this.bufferEarlyAudio(chunk);
       return;
@@ -270,10 +273,8 @@ class VoiceSessionConnection {
     if (this.turn.status !== "recording") {
       return;
     }
-
     this.writeTurnAudio(this.turn, chunk);
   }
-
   writeTurnAudio(turn, chunk) {
     if (!turn.audioStream) {
       return;
@@ -289,7 +290,6 @@ class VoiceSessionConnection {
       turn.sttStream.push(chunk);
     }
   }
-
   bufferEarlyAudio(chunk) {
     this.earlyAudio.push({ at: Date.now(), chunk });
     this.earlyAudioBytes += chunk.length;
@@ -298,7 +298,6 @@ class VoiceSessionConnection {
       this.earlyAudioBytes -= dropped.chunk.length;
     }
   }
-
   flushEarlyAudio(turn) {
     const buffered = this.earlyAudio;
     this.earlyAudio = [];
@@ -310,7 +309,6 @@ class VoiceSessionConnection {
       this.writeTurnAudio(turn, entry.chunk);
     }
   }
-
   async handleSessionStart(event) {
     const sessionId = sanitizeId(event.session_id || randomId("session"), "session_id");
     const conversationId = sanitizeId(event.conversation_id || sessionId, "conversation_id");
@@ -319,6 +317,11 @@ class VoiceSessionConnection {
     const nextTurnIdentity = { sessionId, conversationId, branchId, turnId,
       deviceId: sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || ""),
       contextAction: event.context_action || event.contextAction };
+    if (await this.voiceDraft.start(event, nextTurnIdentity)) {
+      this.earlyAudio = [];
+      this.earlyAudioBytes = 0;
+      return;
+    }
     const pendingReplacement = this.steeringCoordinator.take(nextTurnIdentity);
     const priorConnection = pendingReplacement ? null : this.steeringCoordinator.findActive(this, nextTurnIdentity);
     const priorTurn = priorConnection?.turn || null;
@@ -350,7 +353,6 @@ class VoiceSessionConnection {
     this.voiceProvider = admitted.provider;
     const providerStatus = this.voiceProvider.status();
     fs.mkdirSync(turnDir, { recursive: true });
-
     const turn = {
       sessionId,
       conversationId,
@@ -406,14 +408,12 @@ class VoiceSessionConnection {
     this.phraseAssist.configureTurn(turn, event.phrase_assist || event.phraseAssist);
     turn.contextPrompt = this.contextPromptForTurn(turn);
     turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
-
     turn.audioStream = fs.createWriteStream(turn.pcmPath, { flags: "w" });
     turn.audioStream.on("error", (error) => {
       turn.status = "error";
       writeTurnMetadata(turn, { status: "error", error: cleanError(error) });
       this.sendError(`failed to write audio: ${cleanError(error)}`);
     });
-
     this.turn = turn;
     if (typeof this.voiceProvider.createLiveTurnSession === "function") {
       turn.providerEvents = this.createProviderEvents(turn);
@@ -470,6 +470,7 @@ class VoiceSessionConnection {
       transcript_finalize: {
         supported: !turn.liveSession && typeof this.voiceProvider?.transcribeTurn === "function",
       },
+      capabilities: { voice_drafts_v1: this.voiceDraft.runtime.capability },
       ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
     turn.providerEvents = turn.providerEvents || this.createProviderEvents(turn);
@@ -486,7 +487,6 @@ class VoiceSessionConnection {
       device_id: deviceId,
     });
   }
-
   contextPromptForTurn(turn) {
     if (!this.contextProvider) {
       return "";
@@ -506,13 +506,15 @@ class VoiceSessionConnection {
       return "";
     }
   }
-
-  async handleCommitTurn(event) {
+  async handleCommitTurn(event, preparedDraft = false) {
+    if (this.voiceDraft.active && !preparedDraft) {
+      await this.handleVoiceDraftSend(event);
+      return;
+    }
     if (this.responding) {
       this.sendError("turn is already being committed");
       return;
     }
-
     const turn = this.currentTurnFor(event.turn_id);
     if (!turn) {
       return;
@@ -521,14 +523,11 @@ class VoiceSessionConnection {
       this.sendError(`turn is not recordable: ${turn.status}`);
       return;
     }
-
     if (bindBrowserVoiceInvocationContext(turn, event)) turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
-
     this.responding = true;
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     turn.providerEvents = providerEvents;
     const providerHooks = this.providerHooks(turn, providerEvents);
-
     try {
       await this.phraseAssist.stop(turn);
       turn.status = "committed";
@@ -559,13 +558,24 @@ class VoiceSessionConnection {
       this.responding = false;
     }
   }
-
+  async handleVoiceDraftSend(event) {
+    if (this.responding) {
+      this.sendError("turn is already being committed");
+      return;
+    }
+    const commit = await this.voiceDraft.prepareSend(event);
+    await this.handleSessionStart(commit.startEvent);
+    const turn = this.currentTurnFor(commit.identity.turnId);
+    if (!turn) return;
+    turn.voiceDraftCommit = commit;
+    this.writeTurnAudio(turn, commit.audio);
+    await this.handleCommitTurn({ ...event, turn_id: commit.identity.turnId }, true);
+  }
   async handleTextTurn(event) {
     if (this.responding) {
       this.sendError("turn is already being committed");
       return;
     }
-
     const turn = this.currentTurnFor(event.turn_id);
     if (!turn) {
       return;
@@ -574,7 +584,6 @@ class VoiceSessionConnection {
       this.sendError(`turn is not recordable: ${turn.status}`);
       return;
     }
-
     const text = String(event.text || event.prompt || "").trim().replace(/\s+/g, " ").slice(0, 1000);
     if (!text) {
       this.sendError("text_turn requires text");
@@ -588,12 +597,10 @@ class VoiceSessionConnection {
       this.sendError("voice provider does not support text_turn");
       return;
     }
-
     this.responding = true;
     const providerEvents = turn.providerEvents || this.createProviderEvents(turn);
     turn.providerEvents = providerEvents;
     const providerHooks = this.providerHooks(turn, providerEvents);
-
     try {
       await this.phraseAssist.stop(turn);
       turn.status = "committed";
@@ -620,7 +627,6 @@ class VoiceSessionConnection {
       this.responding = false;
     }
   }
-
   createProviderEvents(turn) {
     return {
       transcript: "",
@@ -636,7 +642,6 @@ class VoiceSessionConnection {
       events: Array.isArray(turn?.providerEvents?.events) ? turn.providerEvents.events : [],
     };
   }
-
   providerHooks(turn, providerEvents) {
     const assertTurnActive = () => {
       if (this.turn !== turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
@@ -851,7 +856,6 @@ class VoiceSessionConnection {
       },
     };
   }
-
   async handleToolCall(turn, providerEvents, call) {
     const name = String(call?.name || "").trim();
     const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args) ? call.args : {};
@@ -896,7 +900,6 @@ class VoiceSessionConnection {
       return result;
     }
   }
-
   // A tool result may carry a client-actionable action (page_tweak or
   // companion_motion). The tool response we send the provider is not visible to
   // the client, and native-audio models go silent after a tool call, so the
@@ -908,7 +911,6 @@ class VoiceSessionConnection {
     const action = result && typeof result === "object" ? result.action : null;
     await this.emitClientAction(turn, action, typeof result?.message === "string" ? result.message : "");
   }
-
   // Emit one client-forwardable action envelope. page_tweak carries a `record`;
   // companion_motion carries a `plan`. Unknown or malformed actions are ignored.
   async emitClientAction(turn, action, message = "") {
@@ -939,7 +941,6 @@ class VoiceSessionConnection {
       });
     }
   }
-
   async completeLiveTurn(turn, providerResult) {
     if (this.turn !== turn || turn.completing || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
@@ -956,7 +957,6 @@ class VoiceSessionConnection {
       this.responding = false;
     }
   }
-
   async completeTurnWithProviderResult(turn, providerEvents, providerResult) {
     providerResult = await mergeTranscriptSidecar({
       turn,
@@ -974,7 +974,6 @@ class VoiceSessionConnection {
     const selected = selectFinalTranscript(providerResult, providerEvents);
     const { transcript, assistantText, rejected: transcriptQualityRejected } = selected;
     const assistantAudioFormat = providerResult?.audio_format || ASSISTANT_AUDIO_FORMAT;
-
     const hasAssistantOutput = Boolean(assistantText)
       || providerEvents.assistantAudioStarted
       || turn.assistantAudioBytes > 0;
@@ -984,7 +983,6 @@ class VoiceSessionConnection {
       });
       return;
     }
-
     writeTurnMetadata(turn, {
       status: "committed",
       committed_at: nowIso(),
@@ -999,12 +997,10 @@ class VoiceSessionConnection {
         audio_format: assistantAudioFormat,
       },
     });
-
     const providerHooks = this.providerHooks(turn, providerEvents);
     if (transcript && !providerEvents.transcriptFinalSent) {
       await providerHooks.onTranscriptFinal(transcript);
     }
-
     let transcriptSource = String(providerResult?.transcript_source || "").trim();
     if (!transcriptSource || (transcriptSource === "synthetic" && transcript)) {
       transcriptSource = transcript ? "stt" : "synthetic";
@@ -1016,6 +1012,10 @@ class VoiceSessionConnection {
       assistantText,
       assistantAudioFormat,
     });
+    if (turn.voiceDraftCommit) {
+      if (!canonicalRecord) throw new Error("canonical voice draft acceptance failed");
+      await this.voiceDraft.markSent(turn.voiceDraftCommit);
+    }
     if (turn.finalizeTranscriptOnly) {
       await completeTranscriptFinalization(
         this, turn, providerEvents, providerResult, canonicalRecord, transcript,
@@ -1099,7 +1099,6 @@ class VoiceSessionConnection {
       }
     }
     this.stopTurnProgress();
-
     const hasPlaybackTail = turn.assistantAudioBytes > 0 && turn.assistantAudioSegments.length > 0;
     turn.status = hasPlaybackTail ? "playback" : "completed";
     turn.ttsRecovery = ["partial", "failed"].includes(doneTtsDelivery)
@@ -1133,7 +1132,6 @@ class VoiceSessionConnection {
       ...(providerResult?.streaming ? { streaming: true } : {}),
       ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
     });
-
     // the session so a barge-in during that tail can report its checkpoint.
     // Text-only turns still close immediately for old-client compatibility.
     if (turn.ttsRecovery) retainTtsRecoveryTurn(this, turn);
@@ -1141,7 +1139,6 @@ class VoiceSessionConnection {
       this.turn = null;
     }
   }
-
   // Persist an interrupted/canceled/closed live turn into the SAME canonical
   // conversation record path as a completed turn, so whatever transcript or
   // assistant text the provider produced before the cutoff still carries
