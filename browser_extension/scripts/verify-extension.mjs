@@ -425,8 +425,8 @@ if (
   !manifest.content_scripts?.[0]?.js?.includes("transcript-revision-protocol.js") ||
   !/acceptPrefixRevision/.test(backgroundSource) ||
   !/acceptPrefixRevision/.test(contentSource) ||
-  !/transcript_reconciliation: AgeeTranscriptRevisionProtocol\.reconciliationOptIn/.test(backgroundSource) ||
-  !/contextAction: action, retainedAudio: !sampleText/.test(backgroundSource)
+  !/\["", "continue"\]\.includes\(action\)[\s\S]{0,180}reconciliationSessionFields/.test(backgroundSource) ||
+  !/reconciliationSessionFields\(\{ contextAction: action, retainedAudio: !sampleText \}\)/.test(backgroundSource)
 ) {
   throw new Error("rolling transcript corrections must be consented, capability-gated, and exact-authority checked");
 }

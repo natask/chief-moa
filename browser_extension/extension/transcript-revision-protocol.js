@@ -23,8 +23,14 @@
   }
 
   function reconciliationOptIn({ contextAction = "", retainedAudio = false } = {}) {
-    if (retainedAudio !== true || String(contextAction).trim().toLowerCase() === "incognito") return null;
+    const action = String(contextAction).trim().toLowerCase();
+    if (retainedAudio !== true || (action && action !== "continue")) return null;
     return { enabled: true, version: 1, privacy_scope: "retained" };
+  }
+
+  function reconciliationSessionFields(input = {}) {
+    const consent = reconciliationOptIn(input);
+    return consent ? { context_action: "continue", transcript_reconciliation: consent } : {};
   }
 
   function createState(expected = {}) {
@@ -118,6 +124,7 @@
     markTerminal,
     normalizeCapability,
     reconciliationOptIn,
+    reconciliationSessionFields,
     sameAuthority,
   });
 })();

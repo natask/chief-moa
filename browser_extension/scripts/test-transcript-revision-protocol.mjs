@@ -15,8 +15,19 @@ const state = protocol.createState(authority);
 assert(JSON.stringify(protocol.reconciliationOptIn({ retainedAudio: true })) ===
   JSON.stringify({ enabled: true, version: 1, privacy_scope: "retained" }),
 "ordinary retained audio explicitly opts in");
+assert(JSON.stringify(protocol.reconciliationSessionFields({ retainedAudio: true })) === JSON.stringify({
+  context_action: "continue",
+  transcript_reconciliation: { enabled: true, version: 1, privacy_scope: "retained" },
+}), "eligible session binds explicit continue and consent in one payload fragment");
+assert(Object.keys(protocol.reconciliationSessionFields({ retainedAudio: false })).length === 0,
+  "ineligible session adds neither continue nor consent");
 assert(protocol.reconciliationOptIn({ retainedAudio: true, contextAction: "incognito" }) === null,
   "incognito audio never opts in");
+assert(protocol.reconciliationOptIn({ retainedAudio: true, contextAction: "new" }) === null &&
+  protocol.reconciliationOptIn({ retainedAudio: true, contextAction: "fork" }) === null,
+  "new and fork admission do not opt in as normal continuation");
+assert(Object.keys(protocol.reconciliationSessionFields({ retainedAudio: true, contextAction: "incognito" })).length === 0,
+  "private session cannot gain continue authority through the consent helper");
 assert(protocol.reconciliationOptIn({ retainedAudio: false }) === null,
   "a session without retained audio never opts in");
 

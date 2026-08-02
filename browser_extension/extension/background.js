@@ -2909,8 +2909,7 @@ async function startVoiceSessionProxyLocked(tabId, { cueId, turnId, assistantOve
         turn_id: turnId,
         all_branches_context: false,
         ...(transcriptionOnly === true ? { transcription_only: true } : {}),
-        ...(action ? { context_action: action } : {}),
-        ...(AgeeTranscriptRevisionProtocol.reconciliationOptIn({ contextAction: action, retainedAudio: !sampleText }) ? { transcript_reconciliation: AgeeTranscriptRevisionProtocol.reconciliationOptIn({ contextAction: action, retainedAudio: !sampleText }) } : {}),
+        ...(["", "continue"].includes(action) ? AgeeTranscriptRevisionProtocol.reconciliationSessionFields({ contextAction: action, retainedAudio: !sampleText }) : { context_action: action }),
         client: {
           platform: "browser",
           source: "agee-extension",

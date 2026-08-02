@@ -106,8 +106,9 @@ The browser extension SHALL accept rolling correction events only when
 `transcript_revisions_v1` version 1 was advertised for the exact voice session.
 It SHALL request reconciliation only with exact
 `{enabled:true, version:1, privacy_scope:"retained"}` consent for a normal
-retained-audio session and SHALL omit that consent for incognito or non-audio
-sessions.
+retained-audio session, SHALL bind that consent to explicit
+`context_action:"continue"` on the same `session_start`, and SHALL omit consent
+for incognito, new, fork, or non-audio sessions.
 Each accepted prefix revision SHALL bind the current session, branch, turn,
 canonical user `message_id`, strictly increasing transcript sequence, and
 strictly increasing batch revision. The browser SHALL render the event's

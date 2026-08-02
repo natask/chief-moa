@@ -10,8 +10,9 @@ not infer overlap between corrected and live text.
 
 Ordinary audio sessions explicitly send
 `transcript_reconciliation:{enabled:true,version:1,privacy_scope:"retained"}`.
-Incognito and non-audio/sample sessions omit the opt-in, leaving them
-ineligible for the second provider pass.
+That consent shares a `session_start` with `context_action:"continue"`.
+Incognito, new, fork, and non-audio/sample sessions omit the opt-in, leaving
+them ineligible for the second provider pass.
 
 `transcript-revision-protocol.js` is shared by the service worker, page
 companion, and side panel. The service worker rejects mismatched events before
