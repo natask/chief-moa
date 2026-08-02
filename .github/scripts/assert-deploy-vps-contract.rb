@@ -43,6 +43,7 @@ VERIFY_SCRIPT = <<~'BASH'
   bash scripts/vps/test-preview-tls-proxy.sh
   bash scripts/vps/test-install-promotion-control-plane.sh
   bash scripts/vps/test-install-release-control-database-credentials.sh
+  bash scripts/vps/test-auto-update.sh
   bash scripts/vps/test-update-rollback.sh
   bash scripts/vps/test-wait-for-live-commit.sh
   cd gateway

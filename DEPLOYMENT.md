@@ -348,6 +348,40 @@ idempotent. A stale pre-release updater cannot bootstrap the new backup format
 by republishing the ref alone; run the verified candidate promoter from its
 isolated fetched worktree once. Later timer promotions are self-contained.
 
+The timer always executes `promote-candidate.sh` from an isolated worktree at
+the exact fetched `vps-deploy` commit. It must not execute that script from the
+active checkout: an older deployment protocol can otherwise fail before the
+checkout step and permanently prevent its own replacement.
+
+If a host predates this candidate-owned bootstrap, audit it read-only first:
+
+```sh
+bash /opt/chief-moa/app/scripts/vps/audit-remote-deployment.sh
+```
+
+Install missing promotion-role or release-control database credentials through
+their existing idempotent installers. Then run the exact verified candidate
+promoter once from a detached worktree, with the active checkout passed
+explicitly as `APP_DIR`:
+
+```sh
+app=/opt/chief-moa/app
+target="$(git -C "$app" ls-remote origin refs/heads/vps-deploy | awk '{print $1}')"
+bootstrap="/opt/chief-moa/auto-update-candidates/${target:0:12}/source"
+git -C "$app" fetch --no-tags origin vps-deploy
+test "$(git -C "$app" rev-parse 'origin/vps-deploy^{commit}')" = "$target"
+git -C "$app" worktree add --detach "$bootstrap" "$target"
+APP_DIR="$app" MOA_VPS_APP_DIR="$app" \
+  bash "$bootstrap/scripts/vps/promote-candidate.sh" vps-deploy
+git -C "$app" worktree remove --force "$bootstrap"
+```
+
+This is an active promotion, not a repair shortcut. Run it only after the
+normal preview, drain, compatibility, rollback, and smoke prerequisites can
+pass. A public health response with `release_control.ready:false` does not
+prove the private promotion environment or its role credentials are installed;
+the read-only audit and both installer `--check` modes are authoritative.
+
 When the live VPS cannot safely host a candidate, start a device-reachable,
 isolated Mac preview:
 

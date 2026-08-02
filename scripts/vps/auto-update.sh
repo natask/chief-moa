@@ -14,7 +14,8 @@
 set -euo pipefail
 
 APP_DIR="${MOA_VPS_APP_DIR:-/opt/chief-moa/app}"
-LOCK_FILE="/var/lock/chief-moa-auto-update.lock"
+MOA_ROOT="${MOA_ROOT:-/opt/chief-moa}"
+LOCK_FILE="${MOA_AUTO_UPDATE_LOCK_FILE:-/var/lock/chief-moa-auto-update.lock}"
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
@@ -34,8 +35,31 @@ if [ "$target" = "$current" ]; then
 fi
 
 echo "auto-update: promoting $current -> $target (origin/vps-deploy)"
+
+# Run the promotion contract from the verified candidate, not from the active
+# checkout. The active checkout can be older than a deployment-protocol change;
+# invoking its promoter can wedge forever before it reaches the checkout step
+# that would install the repair. A detached candidate worktree keeps the active
+# tree immutable until the candidate's own guarded updater applies it.
+candidate_root="${MOA_AUTO_UPDATE_CANDIDATE_ROOT:-$MOA_ROOT/auto-update-candidates}"
+candidate_source="$candidate_root/${target:0:12}/source"
+cleanup_candidate() {
+  git -C "$APP_DIR" worktree remove --force "$candidate_source" >/dev/null 2>&1 || true
+}
+trap cleanup_candidate EXIT
+mkdir -p "$candidate_root/${target:0:12}"
+cleanup_candidate
+git -C "$APP_DIR" fetch --no-tags origin vps-deploy
+fetched_target="$(git -C "$APP_DIR" rev-parse 'origin/vps-deploy^{commit}')"
+if [ "$fetched_target" != "$target" ]; then
+  echo "auto-update: vps-deploy moved while preparing $target; retrying on the next timer." >&2
+  exit 0
+fi
+git -C "$APP_DIR" worktree add --detach "$candidate_source" "$target" >/dev/null
+
 set +e
-bash "$APP_DIR/scripts/vps/promote-candidate.sh" vps-deploy
+APP_DIR="$APP_DIR" MOA_VPS_APP_DIR="$APP_DIR" \
+  bash "$candidate_source/scripts/vps/promote-candidate.sh" vps-deploy
 status=$?
 set -e
 if [ "$status" -eq 75 ]; then
