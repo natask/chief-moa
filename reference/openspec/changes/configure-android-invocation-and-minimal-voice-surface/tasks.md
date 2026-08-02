@@ -82,9 +82,16 @@
 
 ## 7. Provider Choice And Routed Follow-Ups
 
-- [ ] 7.1 Add an Android selector backed only by gateway profile options and
+- [x] 7.1 Add an Android selector backed only by gateway profile options and
   provider capabilities; acceptance: configured choices return a new profile
   version, unavailable choices explain why, and no raw key field exists.
+  Evidence: the full-app `MoaProviderSettingsView` renders only the authenticated
+  gateway provider catalog, disables unavailable/active choices with the
+  gateway-reported reason, and confirms `profile_version` changed after an
+  atomic device-scoped selection. `MoaGatewayClientTest` proves GET catalog +
+  PUT selection request shapes contain no provider credential field, while
+  `MoaProviderCatalogTest` covers active, configured, unavailable, reason, and
+  default-model rendering.
 - [ ] 7.2 Verify the browser mascot and compact Copy surface through the
   `overlay-companion-ribbons` / `quiet-companion-controls` package-and-reload
   path; acceptance: loaded-browser evidence proves the mascot and the chosen

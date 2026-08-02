@@ -223,6 +223,18 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject providerCatalog(String scope, String deviceId) throws Exception {
+        String query = scopedQuery(scope, deviceId);
+        String responseText = getText(apiEndpoint("/v1/agent/provider-catalog" + query), 15000);
+        return new JSONObject(responseText);
+    }
+
+    JSONObject selectProvider(JSONObject body) throws Exception {
+        String responseText = writeJson("PUT", apiEndpoint("/v1/agent/provider-selection"),
+                body.toString(), 15000);
+        return new JSONObject(responseText);
+    }
+
     JSONObject activeCompanionPet(String scope, String deviceId) throws Exception {
         String query = scopedQuery(scope, deviceId);
         try {
@@ -353,8 +365,17 @@ final class MoaGatewayClient {
     }
 
     private String postJson(String endpoint, String requestBody, int readTimeoutMs) throws Exception {
+        return writeJson("POST", endpoint, requestBody, readTimeoutMs);
+    }
+
+    private String writeJson(
+            String method,
+            String endpoint,
+            String requestBody,
+            int readTimeoutMs
+    ) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
-        connection.setRequestMethod("POST");
+        connection.setRequestMethod(method);
         connection.setConnectTimeout(3500);
         connection.setReadTimeout(readTimeoutMs);
         connection.setDoOutput(true);

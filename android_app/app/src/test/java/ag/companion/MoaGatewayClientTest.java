@@ -16,6 +16,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class MoaGatewayClientTest {
@@ -220,6 +221,28 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void providerCatalogAndSelectionUseDeviceScopedGatewayAuthority() throws Exception {
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, "secret-token");
+
+        JSONObject catalog = client.providerCatalog("device", "android_abc");
+        JSONObject selected = client.selectProvider(new JSONObject()
+                .put("scope", "device")
+                .put("device_id", "android_abc")
+                .put("choice_id", "openai-realtime")
+                .put("model_id", "gpt-realtime"));
+
+        assertEquals("gateway", catalog.getString("credentials_owner"));
+        assertEquals("profile-2", selected.getString("profile_version"));
+        assertEquals("GET", requests.get(0).method);
+        assertEquals("/v1/agent/provider-catalog?scope=device&device_id=android_abc", requests.get(0).target);
+        assertEquals("PUT", requests.get(1).method);
+        assertEquals("/v1/agent/provider-selection", requests.get(1).path);
+        assertEquals("Bearer secret-token", requests.get(1).authorization);
+        assertTrue(requests.get(1).body.contains("\"choice_id\":\"openai-realtime\""));
+        assertFalse(requests.get(1).body.contains("api_key"));
+    }
+
+    @Test
     public void httpErrorsIncludeStatus() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl, "");
 
@@ -299,6 +322,10 @@ public final class MoaGatewayClientTest {
             return new TestResponse(200, "{\"session_id\":\"legacy session\",\"messages\":[]}");
         } else if ("/v1/agent/profile".equals(request.path)) {
             return new TestResponse(200, "{\"profile\":{\"language\":\"am-ET\",\"language_primary\":\"am-ET\",\"input_languages\":\"am-ET,en-US\",\"input_language_primary\":\"am-ET\"}}");
+        } else if ("/v1/agent/provider-catalog".equals(request.path)) {
+            return new TestResponse(200, "{\"credentials_owner\":\"gateway\",\"choices\":[]}");
+        } else if ("/v1/agent/provider-selection".equals(request.path)) {
+            return new TestResponse(200, "{\"profile_version\":\"profile-2\",\"profile\":{\"voice_provider\":\"openai-realtime\"}}");
         } else if ("/v1/media/bookmarks/bookmark_1".equals(request.path)) {
             return new TestResponse(200, "DELETE".equals(request.method)
                     ? "{\"deleted\":true}" : "{\"bookmark\":{\"id\":\"bookmark_1\"}}");
