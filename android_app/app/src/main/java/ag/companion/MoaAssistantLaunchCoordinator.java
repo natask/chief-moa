@@ -21,12 +21,15 @@ final class MoaAssistantLaunchCoordinator {
     }
 
     static void startVoiceService(Context context, String source) {
-        startVoiceService(context, source, false);
+        startVoiceService(context, source, MoaInvocationResolver.Invocation.ASSISTANT);
     }
 
-    static void startVoiceService(Context context, String source, boolean transcriptionOnly) {
+    static void startVoiceService(
+            Context context,
+            String source,
+            MoaInvocationResolver.Invocation invocation) {
         Intent service = new Intent(context, OverlayService.class)
-                .setAction(serviceAction(transcriptionOnly))
+                .setAction(serviceAction(invocation))
                 .putExtra(OverlayService.EXTRA_START_VOICE, true)
                 .putExtra(EXTRA_SOURCE, source == null ? "unknown" : source);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -36,10 +39,17 @@ final class MoaAssistantLaunchCoordinator {
         }
     }
 
-    static String serviceAction(boolean transcriptionOnly) {
-        return transcriptionOnly
-                ? OverlayService.ACTION_DICTATION_BUTTON
-                : OverlayService.ACTION_ASSIST_BUTTON;
+    static String serviceAction(MoaInvocationResolver.Invocation invocation) {
+        if (invocation == MoaInvocationResolver.Invocation.DICTATION) {
+            return OverlayService.ACTION_DICTATION_BUTTON;
+        }
+        if (invocation == MoaInvocationResolver.Invocation.HANDS_FREE) {
+            return OverlayService.ACTION_HANDS_FREE_BUTTON;
+        }
+        if (invocation == MoaInvocationResolver.Invocation.ASSISTANT) {
+            return OverlayService.ACTION_ASSIST_BUTTON;
+        }
+        throw new IllegalArgumentException("Control center is not a voice-service invocation");
     }
 
     static boolean isAssistAction(String action) {

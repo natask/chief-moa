@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ag</string>
-    <string name="control_center_shortcut_short">Settings</string>
+    <string name="dictation_shortcut_short">Dictation</string>
+    <string name="dictation_shortcut_long">Start Ag dictation</string>
+    <string name="assistant_shortcut_short">Assistant</string>
+    <string name="assistant_shortcut_long">Start Ag Assistant</string>
+    <string name="hands_free_shortcut_short">Hands-free</string>
+    <string name="hands_free_shortcut_long">Start Ag hands-free mode</string>
+    <string name="control_center_shortcut_short">Control center</string>
     <string name="control_center_shortcut_long">Open Ag control center</string>
     <string name="accessibility_service_description">Ag uses screen access to read visible text, identify buttons, and perform user-requested taps, back, and home actions while the companion overlay is running.</string>
     <string name="media_control_service_label">Ag media control</string>

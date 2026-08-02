@@ -3,12 +3,45 @@
     <shortcut
         android:enabled="true"
         android:icon="@drawable/ic_moa_orb"
+        android:shortcutId="dictation"
+        android:shortcutLongLabel="@string/dictation_shortcut_long"
+        android:shortcutShortLabel="@string/dictation_shortcut_short">
+        <intent
+            android:action="ag.companion.action.START_DICTATION"
+            android:targetClass="ag.companion.MoaAssistActivity"
+            android:targetPackage="ag.companion" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_moa_orb"
+        android:shortcutId="assistant"
+        android:shortcutLongLabel="@string/assistant_shortcut_long"
+        android:shortcutShortLabel="@string/assistant_shortcut_short">
+        <intent
+            android:action="ag.companion.action.START_ASSISTANT"
+            android:targetClass="ag.companion.MoaAssistActivity"
+            android:targetPackage="ag.companion" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_moa_orb"
+        android:shortcutId="hands_free"
+        android:shortcutLongLabel="@string/hands_free_shortcut_long"
+        android:shortcutShortLabel="@string/hands_free_shortcut_short">
+        <intent
+            android:action="ag.companion.action.START_HANDS_FREE"
+            android:targetClass="ag.companion.MoaAssistActivity"
+            android:targetPackage="ag.companion" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_moa_orb"
         android:shortcutId="control_center"
         android:shortcutLongLabel="@string/control_center_shortcut_long"
         android:shortcutShortLabel="@string/control_center_shortcut_short">
         <intent
             android:action="ag.companion.action.SHOW_CONTROL_CENTER"
-            android:targetClass="ag.companion.MainActivity"
+            android:targetClass="ag.companion.MoaAssistActivity"
             android:targetPackage="ag.companion" />
     </shortcut>
 </shortcuts>

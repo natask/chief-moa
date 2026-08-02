@@ -47,6 +47,7 @@ public final class OverlayService extends Service {
 
     static final String ACTION_ASSIST_BUTTON = "ag.companion.action.ASSIST_BUTTON";
     static final String ACTION_DICTATION_BUTTON = "ag.companion.action.DICTATION_BUTTON";
+    static final String ACTION_HANDS_FREE_BUTTON = "ag.companion.action.HANDS_FREE_BUTTON";
     static final String ACTION_COLLAPSE_SURFACES = "ag.companion.action.COLLAPSE_SURFACES";
     static final String ACTION_HIDE_OVERLAY = "ag.companion.action.HIDE_OVERLAY";
     static final String ACTION_REFRESH_ORB_SCALE = "ag.companion.REFRESH_ORB_SCALE";
@@ -290,9 +291,13 @@ public final class OverlayService extends Service {
             return START_STICKY;
         }
         if (isVoiceInvocation(intent)) {
-            mainHandler.post(ACTION_DICTATION_BUTTON.equals(intent.getAction())
-                    ? this::handleLauncherDictationInvocation
-                    : this::handleVoiceInvocation);
+            if (ACTION_DICTATION_BUTTON.equals(intent.getAction())) {
+                mainHandler.post(this::handleLauncherDictationInvocation);
+            } else if (ACTION_HANDS_FREE_BUTTON.equals(intent.getAction())) {
+                mainHandler.post(this::handleHandsFreeInvocation);
+            } else {
+                mainHandler.post(this::handleVoiceInvocation);
+            }
         }
         return START_STICKY;
     }
@@ -2241,6 +2246,24 @@ public final class OverlayService extends Service {
         handleOrbStartTalkLoop();
     }
 
+    private void handleHandsFreeInvocation() {
+        if (pushToTalkVoiceTurn || audioNoteActive || continuousVoiceLoop) {
+            return;
+        }
+        voiceInvocationLatched = false;
+        launcherDictationLatched = false;
+        nextStreamingTurnTranscriptionOnly = false;
+        launcherDictationTarget = null;
+        manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
+        stopAssistantAudioForBargeIn();
+        suppressFirstTapTurnEmptyCue = false;
+        if (streamingVoiceAvailable()) {
+            startStreamingVoiceTurn(true, true);
+        } else {
+            startLocalVoiceTurn(false, true);
+        }
+    }
+
     private void handleOrbStartFreshTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
@@ -3604,7 +3627,8 @@ public final class OverlayService extends Service {
         }
         return intent.getBooleanExtra(EXTRA_START_VOICE, false)
                 || ACTION_ASSIST_BUTTON.equals(intent.getAction())
-                || ACTION_DICTATION_BUTTON.equals(intent.getAction());
+                || ACTION_DICTATION_BUTTON.equals(intent.getAction())
+                || ACTION_HANDS_FREE_BUTTON.equals(intent.getAction());
     }
 
     private void completeLauncherDictation(String status) {

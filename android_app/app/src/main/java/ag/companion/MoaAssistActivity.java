@@ -26,10 +26,19 @@ public final class MoaAssistActivity extends Activity {
     }
 
     private void handleAssistLaunch() {
+        MoaInvocationResolver.Invocation invocation =
+                MoaInvocationResolver.resolve(getIntent().getAction());
+        if (invocation == MoaInvocationResolver.Invocation.CONTROL_CENTER) {
+            Log.i(TAG, "handleAssistLaunch invocation=" + invocation);
+            startActivity(new Intent(this, MainActivity.class));
+            finishAndSuppressAnimation();
+            return;
+        }
         boolean overlayPermissionGranted = Settings.canDrawOverlays(this);
         boolean microphonePermissionGranted = hasMicrophonePermission();
         MoaAssistLaunchDecision.Action action = MoaAssistLaunchDecision.decide(overlayPermissionGranted, microphonePermissionGranted);
         Log.i(TAG, "handleAssistLaunch action=" + action
+                + " invocation=" + invocation
                 + " intent=" + getIntent().getAction()
                 + " source=" + getIntent().getStringExtra(MoaAssistantLaunchCoordinator.EXTRA_SOURCE)
                 + " overlay=" + overlayPermissionGranted
@@ -44,11 +53,11 @@ public final class MoaAssistActivity extends Activity {
             return;
         }
 
-        startVoiceService();
+        startVoiceService(invocation);
         finishAndSuppressAnimation();
     }
 
-    private void startVoiceService() {
+    private void startVoiceService(MoaInvocationResolver.Invocation invocation) {
         String source = getIntent().getStringExtra(MoaAssistantLaunchCoordinator.EXTRA_SOURCE);
         if (source == null || source.trim().isEmpty()) {
             source = getIntent().getAction();
@@ -57,7 +66,7 @@ public final class MoaAssistActivity extends Activity {
         MoaAssistantLaunchCoordinator.startVoiceService(
                 this,
                 source,
-                Intent.ACTION_MAIN.equals(getIntent().getAction()));
+                invocation);
     }
 
     private void finishAndSuppressAnimation() {

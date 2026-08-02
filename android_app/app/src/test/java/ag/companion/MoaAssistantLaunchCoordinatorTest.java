@@ -29,9 +29,21 @@ public final class MoaAssistantLaunchCoordinatorTest {
     public void launcherUsesDictationWhileAssistantKeepsReasoning() {
         assertEquals(
                 OverlayService.ACTION_DICTATION_BUTTON,
-                MoaAssistantLaunchCoordinator.serviceAction(true));
+                MoaAssistantLaunchCoordinator.serviceAction(
+                        MoaInvocationResolver.Invocation.DICTATION));
         assertEquals(
                 OverlayService.ACTION_ASSIST_BUTTON,
-                MoaAssistantLaunchCoordinator.serviceAction(false));
+                MoaAssistantLaunchCoordinator.serviceAction(
+                        MoaInvocationResolver.Invocation.ASSISTANT));
+        assertEquals(
+                OverlayService.ACTION_HANDS_FREE_BUTTON,
+                MoaAssistantLaunchCoordinator.serviceAction(
+                        MoaInvocationResolver.Invocation.HANDS_FREE));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void controlCenterCannotBeAccidentallyRoutedIntoVoiceService() {
+        MoaAssistantLaunchCoordinator.serviceAction(
+                MoaInvocationResolver.Invocation.CONTROL_CENTER);
     }
 }
