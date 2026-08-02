@@ -160,6 +160,7 @@ final class MoaStreamingVoiceSessionController {
     private String voiceDraftId = "";
     private long voiceDraftRevision;
     private boolean transcriptRevisionsEnabled;
+    private boolean transcriptReconciliationRequested;
 
     private final Choreographer.FrameCallback playbackFrameCallback = this::onPlaybackFrame;
 
@@ -241,6 +242,12 @@ final class MoaStreamingVoiceSessionController {
         String requested = normalizedSourceSurface(requestedSource);
         if (!requested.isEmpty()) return requested;
         return transcriptionOnly ? "android-launcher-dictation" : "android-overlay";
+    }
+
+    void setTranscriptReconciliationEnabled(boolean enabled) {
+        synchronized (lock) {
+            if (!active) transcriptReconciliationRequested = enabled;
+        }
     }
 
     void setVoiceDraftEnabled(boolean enabled) {
@@ -638,10 +645,10 @@ final class MoaStreamingVoiceSessionController {
         boolean sent = draft
                 ? socket != null && socket.sendVoiceDraftStart(currentSessionId, currentTurnId, branchId,
                         turnSource,
-                        deviceId, transcriptionOnly)
+                        deviceId, transcriptionOnly, transcriptReconciliationRequested)
                 : socket != null && socket.sendSessionStart(currentSessionId, currentTurnId, branchId,
                         null, turnSource,
-                        deviceId, transcriptionOnly);
+                        deviceId, transcriptionOnly, transcriptReconciliationRequested);
         if (!sent) {
             reportError("Could not send session_start to voice gateway.", null);
             return;

@@ -167,6 +167,13 @@ final class MoaVoiceGatewaySocket {
     boolean sendSessionStart(String sessionId, String turnId, String branchId,
             JSONObject profileOverride, String source, String deviceId,
             boolean transcriptionOnly) {
+        return sendSessionStart(sessionId, turnId, branchId, profileOverride, source,
+                deviceId, transcriptionOnly, false);
+    }
+
+    boolean sendSessionStart(String sessionId, String turnId, String branchId,
+            JSONObject profileOverride, String source, String deviceId,
+            boolean transcriptionOnly, boolean transcriptReconciliationEnabled) {
         try {
             JSONObject format = new JSONObject();
             format.put("encoding", MoaAudioCaptureController.ENCODING);
@@ -183,6 +190,7 @@ final class MoaVoiceGatewaySocket {
             body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
             if (!safe(deviceId).isEmpty()) body.put("device_id", safe(deviceId));
             applyTranscriptionMode(body, transcriptionOnly);
+            applyTranscriptReconciliation(body, transcriptReconciliationEnabled);
             if (profileOverride != null && profileOverride.length() > 0) {
                 body.put("profile_override", profileOverride);
             }
@@ -195,12 +203,26 @@ final class MoaVoiceGatewaySocket {
 
     boolean sendVoiceDraftStart(String sessionId, String turnId, String branchId,
             String source, String deviceId, boolean transcriptionOnly) {
+        return sendVoiceDraftStart(sessionId, turnId, branchId, source, deviceId,
+                transcriptionOnly, false);
+    }
+
+    boolean sendVoiceDraftStart(String sessionId, String turnId, String branchId,
+            String source, String deviceId, boolean transcriptionOnly,
+            boolean transcriptReconciliationEnabled) {
         return sendJson(buildVoiceDraftStart(sessionId, turnId, branchId, source,
-                deviceId, transcriptionOnly));
+                deviceId, transcriptionOnly, transcriptReconciliationEnabled));
     }
 
     static JSONObject buildVoiceDraftStart(String sessionId, String turnId, String branchId,
             String source, String deviceId, boolean transcriptionOnly) {
+        return buildVoiceDraftStart(sessionId, turnId, branchId, source, deviceId,
+                transcriptionOnly, false);
+    }
+
+    static JSONObject buildVoiceDraftStart(String sessionId, String turnId, String branchId,
+            String source, String deviceId, boolean transcriptionOnly,
+            boolean transcriptReconciliationEnabled) {
         try {
             JSONObject format = new JSONObject();
             format.put("encoding", MoaAudioCaptureController.ENCODING);
@@ -220,6 +242,7 @@ final class MoaVoiceGatewaySocket {
             body.put("source", safe(source).isEmpty() ? "android-overlay" : safe(source));
             if (!safe(deviceId).isEmpty()) body.put("device_id", safe(deviceId));
             applyTranscriptionMode(body, transcriptionOnly);
+            applyTranscriptReconciliation(body, transcriptReconciliationEnabled);
             body.put("voice_draft", draft);
             return body;
         } catch (JSONException error) {
@@ -267,6 +290,17 @@ final class MoaVoiceGatewaySocket {
             throws JSONException {
         if (transcriptionOnly) {
             body.put("transcription_only", true);
+        }
+        return body;
+    }
+
+    static JSONObject applyTranscriptReconciliation(JSONObject body, boolean enabled)
+            throws JSONException {
+        if (enabled) {
+            body.put("transcript_reconciliation", new JSONObject()
+                    .put("enabled", true)
+                    .put("version", 1)
+                    .put("privacy_scope", "retained"));
         }
         return body;
     }

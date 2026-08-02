@@ -3305,7 +3305,6 @@ public final class OverlayService extends Service {
                     }
                 }
             }
-
             @Override
             public void onTranscriptPrefixRevision(JSONObject event) {
                 if (!isCurrentStreamingGeneration(generation)) return;
@@ -3612,6 +3611,7 @@ public final class OverlayService extends Service {
                 && draftCapability.isFreshFor(gatewayUrl, System.currentTimeMillis());
         streamingVoiceController.setVoiceDraftEnabled(exactDraftMode);
         streamingVoiceController.setTranscriptionOnly(transcriptionOnly);
+        streamingVoiceController.setTranscriptReconciliationEnabled(!incognito);
         if (!pendingReplacementTurnId.isEmpty()) {
             streamingVoiceController.setTurnIdentity(pendingReplacementTurnId, androidDeviceId());
             pendingReplacementTurnId = "";
