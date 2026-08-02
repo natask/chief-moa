@@ -104,7 +104,7 @@ test("configured app channels expose only current reads without authentication",
     request("GET"), manifestResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest`),
   );
   assert.equal(manifestResponse.status, 200);
-  assert.equal(manifestResponse.payload.release_id, "companion-release-5");
+  assert.equal(manifestResponse.payload.release_id, "default-release-12");
 
   const apkResponse = responseStream();
   await state.handlers.routeAndroidOta(
@@ -112,7 +112,7 @@ test("configured app channels expose only current reads without authentication",
   );
   await finished(apkResponse);
   assert.equal(apkResponse.status, 200);
-  assert.equal(apkResponse.body().toString(), "other-apk-body");
+  assert.equal(apkResponse.body().toString(), "default-apk-body");
 
   for (const [method, pathname] of [
     ["GET", `/v1/android/updates/apps/${OTHER_APP_ID}/releases/companion-release-4.apk`],
@@ -267,13 +267,10 @@ test("health reports release identity and normalizes rollback availability", (t)
   });
 });
 
-// A second application id (ag.companion, the renamed app's own clean install)
-// gets its own release chain -- a distinct otaDir, its own `/apps/<id>/...`
-// routes, and its own current/manifest -- that never shares state with the
-// default ai.moa.assistant channel above. These tests use two independent
-// otaDir directories and an androidOta stub that only answers for the dir it
-// was actually called with, so a bug that accidentally shared state (e.g. a
-// missed channel.otaDir threading) would surface as a wrong-manifest failure.
+// The historical channels map carried an app-specific otaDir. It now acts only
+// as an alias allowlist: even if an older caller still supplies a populated
+// retired store, every app-scoped operation resolves through the canonical
+// otaDir and leaves the retired bytes untouched.
 const OTHER_APP_ID = "ag.companion";
 
 function twoChannelHarness(overrides = {}) {
@@ -342,7 +339,7 @@ test("an unrecognized application id is rejected rather than falling back to a d
   assert.deepEqual(response, { status: 404, payload: { error: "unknown android application id" } });
 });
 
-test("two channels resolve independently and never leak each other's manifest, APK, or rollback state", async (t) => {
+test("app-scoped routes alias the canonical manifest, APK, and rollback state", async (t) => {
   const state = twoChannelHarness();
   t.after(state.cleanup);
 
@@ -357,21 +354,21 @@ test("two channels resolve independently and never leak each other's manifest, A
     request("GET"), otherResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest`),
   );
   assert.equal(otherResponse.status, 200);
-  assert.equal(otherResponse.payload.release_id, "companion-release-5");
+  assert.equal(otherResponse.payload.release_id, "default-release-12");
   assert.equal(
     otherResponse.payload.download_url,
     `https://gateway.test/v1/android/updates/apps/${OTHER_APP_ID}/latest.apk`,
   );
-  assert.notEqual(defaultResponse.payload.release_id, otherResponse.payload.release_id);
+  assert.equal(defaultResponse.payload.release_id, otherResponse.payload.release_id);
 
-  // Publishing/rolling back one channel must not touch the other's state.
+  // The alias mutates the canonical head and never touches the retired store.
   const rollbackResponse = {};
   await state.handlers.routeAndroidOta(
     request("POST"), rollbackResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/rollback`),
   );
   assert.equal(rollbackResponse.status, 200);
-  assert.equal(state.rolledBack[state.otherDir], true);
-  assert.equal(state.rolledBack[state.otaDir], false);
+  assert.equal(state.rolledBack[state.otaDir], true);
+  assert.equal(state.rolledBack[state.otherDir], false);
   assert.deepEqual(state.calls.events[0].payload, { from_release_id: "x", to_release_id: "y", app_id: OTHER_APP_ID });
 
   const apkResponse = responseStream();
@@ -384,15 +381,15 @@ test("two channels resolve independently and never leak each other's manifest, A
     request("GET"), otherApkResponse, url(`/v1/android/updates/apps/${OTHER_APP_ID}/latest.apk`),
   );
   await finished(otherApkResponse);
-  assert.equal(otherApkResponse.body().toString(), "other-apk-body");
+  assert.equal(otherApkResponse.body().toString(), "default-apk-body");
 });
 
-test("health reports each configured channel independently alongside the default", (t) => {
+test("health reports configured aliases from the canonical release snapshot", (t) => {
   const state = twoChannelHarness();
   t.after(state.cleanup);
   const health = state.handlers.health();
   assert.equal(health.release_id, "default-release-12");
-  assert.equal(health.channels[OTHER_APP_ID].release_id, "companion-release-5");
-  assert.equal(health.channels[OTHER_APP_ID].dir, state.otherDir);
+  assert.equal(health.channels[OTHER_APP_ID].release_id, "default-release-12");
+  assert.equal(health.channels[OTHER_APP_ID].dir, state.otaDir);
   assert.equal(health.channels[OTHER_APP_ID].endpoint, `/v1/android/updates/apps/${OTHER_APP_ID}/latest`);
 });

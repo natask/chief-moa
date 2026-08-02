@@ -2,14 +2,10 @@
 
 const fs = require("node:fs");
 
-// The store's default/legacy channel (ai.moa.assistant) is served at the
-// original unscoped routes, exactly as before this module gained a channel
-// concept -- an already-installed phone running that app must keep resolving
-// updates the same way it always has, with the same warnings, event shapes,
-// and health payload. Every other application id is served only through its
-// own "/apps/<app_id>/..." route family, backed by its own otaDir (see
-// `channels` below), so a device asking for one app's updates can never be
-// handed another app's manifest or APK.
+// Stable Android delivery has one canonical store. The app-scoped route family
+// exists only for compatibility with clients shipped during the package rename.
+// `channels` remains a map for caller compatibility, but its values must never
+// select another store: configured keys are only an allowlist of route aliases.
 const DEFAULT_APP_ID = "ai.moa.assistant";
 
 function createAndroidOtaHandlers(deps) {
@@ -21,14 +17,13 @@ function createAndroidOtaHandlers(deps) {
 
   const defaultChannel = { appId: DEFAULT_APP_ID, otaDir, base: "/v1/android/updates" };
 
-  // channels maps a non-default app_id to its own otaDir. The default app id
-  // always resolves to `defaultChannel` above, never to an entry in this map,
-  // so it cannot be redefined or shadowed by configuration.
+  // Keep accepting the historical { app_id: otaDir } shape while deliberately
+  // ignoring its values. This lets a candidate roll over an older deployment
+  // configuration without reading, migrating, or mutating its retired stores.
   function resolveChannel(appId) {
     if (appId === DEFAULT_APP_ID) return defaultChannel;
-    const dir = channels[appId];
-    if (!dir) return null;
-    return { appId, otaDir: dir, base: `/v1/android/updates/apps/${encodeURIComponent(appId)}` };
+    if (!Object.prototype.hasOwnProperty.call(channels, appId)) return null;
+    return { appId, otaDir, base: `/v1/android/updates/apps/${encodeURIComponent(appId)}` };
   }
 
   async function routeAndroidOta(request, response, url) {
@@ -47,8 +42,9 @@ function createAndroidOtaHandlers(deps) {
     // Temporary pre-device-auth bootstrap: an installed Android app must be
     // able to discover and download the current signed update without carrying
     // the shared gateway bearer token. Keep the public surface exact: only the
-    // current manifest and its current APK, on the default or a configured app
-    // channel. Version-pinned artifacts and every mutation remain protected.
+    // current manifest and its current APK, on the canonical route or a
+    // configured compatibility alias. Version-pinned artifacts and every
+    // mutation remain protected.
     const publicCurrentRead = Boolean(manifest || currentApk || appManifest || appApk);
     if (!publicCurrentRead && !authorized(request)) {
       sendJson(response, 401, { error: "missing or invalid gateway token" }); return true;
@@ -66,10 +62,8 @@ function createAndroidOtaHandlers(deps) {
     return true;
   }
 
-  // Every handler below defaults its `channel` argument to the original
-  // single-store default channel, so calling it the old way (as the existing
-  // gateway test suite and any other direct caller does) reproduces the exact
-  // pre-channel behavior, warnings, and JSON shapes byte-for-byte.
+  // Every handler below defaults its `channel` argument to the canonical route,
+  // preserving the existing direct-call contract.
   function readManifest(channel = defaultChannel) {
     try { return androidOta.buildLatestManifest(channel.otaDir); }
     catch (error) {
@@ -90,10 +84,8 @@ function createAndroidOtaHandlers(deps) {
     return served;
   }
 
-  // The store module returns rollback download_url as the legacy unscoped
-  // "/v1/android/updates/releases/<id>.apk" shape regardless of which otaDir
-  // it read from; rebase that suffix onto the resolved channel's own base so
-  // a non-default channel's rollback link stays inside that channel's routes.
+  // Rebase the canonical store's rollback link onto the requested route family
+  // so an app-scoped client keeps using its compatibility alias.
   function releaseSuffix(downloadUrl) {
     const match = String(downloadUrl || "").match(/\/releases\/[^/]+\.apk$/);
     return match ? match[0] : downloadUrl;
@@ -174,21 +166,18 @@ function createAndroidOtaHandlers(deps) {
         built_at: manifest.built_at, git_sha: manifest.git_sha, rollback_available: Boolean(manifest.rollback_available),
       }
       : { configured: false, dir: otaDir, endpoint: "/v1/android/updates/latest" };
-    // Only attach a `channels` key when at least one non-default channel is
-    // actually configured, so a caller with no channels configured (every
-    // existing test and, until a second app id is wired up, every deployment)
-    // sees the exact original health shape.
+    // Only attach a `channels` key when an alias is configured, preserving the
+    // original health shape for callers without aliases.
     if (channelIds.length === 0) return result;
     const channelHealth = {};
     for (const appId of channelIds) {
       const channel = resolveChannel(appId);
-      const channelManifest = readManifest(channel);
-      channelHealth[appId] = channelManifest
+      channelHealth[appId] = manifest
         ? {
           configured: true, dir: channel.otaDir, endpoint: `${channel.base}/latest`,
-          version_code: channelManifest.version_code, version_name: channelManifest.version_name,
-          release_id: channelManifest.release_id, built_at: channelManifest.built_at,
-          git_sha: channelManifest.git_sha, rollback_available: Boolean(channelManifest.rollback_available),
+          version_code: manifest.version_code, version_name: manifest.version_name,
+          release_id: manifest.release_id, built_at: manifest.built_at,
+          git_sha: manifest.git_sha, rollback_available: Boolean(manifest.rollback_available),
         }
         : { configured: false, dir: channel.otaDir, endpoint: `${channel.base}/latest` };
     }
