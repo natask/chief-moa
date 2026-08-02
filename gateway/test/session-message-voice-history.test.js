@@ -69,3 +69,12 @@ test("reports a failed backend probe as unknown and keeps retranscription disabl
   assert.equal(history.audio_accessible, false);
   assert.equal(history.retranscription_available, false);
 });
+
+test("preserves the automatic reconciliation source in canonical history", () => {
+  const history = projectVoiceHistory({ transcript_revisions: [
+    { revision: 0, transcript: "live text", source: "original" },
+    { revision: 1, transcript: "batch text", source: "automatic_reconcile", transcript_source: "stt-auto-reconcile" },
+  ] });
+  assert.equal(history.current_revision, 1);
+  assert.equal(history.transcript_revisions[1].source, "automatic_reconcile");
+});

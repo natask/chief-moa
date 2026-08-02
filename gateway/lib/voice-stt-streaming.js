@@ -14,6 +14,8 @@
 //   parseResults(data)    -> array of { transcript, isFinal, languageCode } for
 //                            a single 'data' event payload.
 //   onPartial(text)       -> async; broadcast the live (interim) transcript.
+//   onFinalSegment(info)  -> async; report a provider-declared natural speech
+//                            boundary with its absolute PCM byte offset.
 //
 // Everything Google-specific lives in the provider; everything about UNBOUNDED
 // duration lives here. gRPC streamingRecognize sessions are capped by the
@@ -96,6 +98,7 @@ function createStreamingSttSession(options) {
     ? options.parseResults
     : () => [];
   const onPartial = typeof options?.onPartial === "function" ? options.onPartial : null;
+  const onFinalSegment = typeof options?.onFinalSegment === "function" ? options.onFinalSegment : null;
   const rotateAfterMs = Math.max(10000, Number(options?.rotateAfterMs) || DEFAULT_ROTATE_AFTER_MS);
   const drainTimeoutMs = Math.max(200, Number(options?.drainTimeoutMs) || DEFAULT_DRAIN_TIMEOUT_MS);
   const logger = typeof options?.logger === "function" ? options.logger : noopLogger;
@@ -126,6 +129,8 @@ function createStreamingSttSession(options) {
     // provider result identity is scoped to one stream generation; rotations
     // get a new namespace so identical words spoken later remain legitimate.
     finalSegmentIds: new Set(),
+    finalSegments: [],
+    totalAudioBytes: 0,
   };
 
   function currentDisplayText() {
@@ -142,7 +147,7 @@ function createStreamingSttSession(options) {
       .catch((error) => logger("stt_stream_partial_error", { error: String(error?.message || error) }));
   }
 
-  function handleData(data) {
+  function handleData(data, streamContext) {
     let results;
     try {
       results = parseResults(data) || [];
@@ -160,14 +165,37 @@ function createStreamingSttSession(options) {
       if (result?.isFinal) {
         const providerIdentity = String(result?.segmentId || result?.resultEndOffset || "").trim();
         const segmentId = providerIdentity
-          ? `${state.streamGeneration}:${providerIdentity}`
+          ? `${streamContext.generation}:${providerIdentity}`
           : "";
         if (segmentId && state.finalSegmentIds.has(segmentId)) {
           continue;
         }
         if (segmentId) state.finalSegmentIds.add(segmentId);
-        state.committedText = joinTranscript(state.committedText, transcript);
+        const priorCommittedText = state.committedText;
+        state.committedText = joinTranscript(priorCommittedText, transcript);
+        const segmentTranscript = priorCommittedText && transcript.startsWith(`${priorCommittedText} `)
+          ? transcript.slice(priorCommittedText.length).trim()
+          : transcript;
         state.interim = "";
+        const relativeEndBytes = resultEndOffsetBytes(result?.resultEndOffset, options?.bytesPerSecond);
+        const absoluteEndBytes = relativeEndBytes == null
+          ? null
+          : Math.min(state.totalAudioBytes, streamContext.baseAudioByteOffset + relativeEndBytes);
+        if (absoluteEndBytes != null) {
+          state.finalSegments.push({
+            transcript: segmentTranscript,
+            endAudioByteOffset: absoluteEndBytes,
+            streamGeneration: streamContext.generation,
+          });
+          if (onFinalSegment) {
+            Promise.resolve().then(() => onFinalSegment({
+              transcript: segmentTranscript,
+              stream_generation: streamContext.generation,
+              result_end_offset_ms: Math.round(relativeEndBytes * 1000 / normalizedBytesPerSecond(options?.bytesPerSecond)),
+              absolute_audio_byte_offset: absoluteEndBytes,
+            })).catch((error) => logger("stt_stream_final_segment_error", { error: String(error?.message || error) }));
+          }
+        }
         changed = true;
       } else {
         state.interim = transcript;
@@ -216,7 +244,7 @@ function createStreamingSttSession(options) {
     }
   }
 
-  function openNewStream() {
+  function openNewStream(baseAudioByteOffset = state.totalAudioBytes) {
     let stream;
     try {
       stream = openStream();
@@ -231,7 +259,8 @@ function createStreamingSttSession(options) {
       state.fatalReason = "openStream() did not return a writable stream";
       return null;
     }
-    stream.on("data", handleData);
+    const streamContext = { generation: state.streamGeneration, baseAudioByteOffset };
+    stream.on("data", (data) => handleData(data, streamContext));
     stream.on("error", (error) => onStreamError(stream, error));
     stream.on("end", () => onStreamEnd(stream));
     if (configMessage !== undefined && configMessage !== null) {
@@ -329,19 +358,22 @@ function createStreamingSttSession(options) {
       state.rotating = false;
       return;
     }
-    const next = openNewStream();
+    state.streamGeneration += 1;
+    const nextBase = state.pendingChunks.length > 0
+      ? state.pendingChunks[0].startAudioByteOffset
+      : state.totalAudioBytes;
+    const next = openNewStream(nextBase);
     if (!next) {
       state.rotating = false;
       return;
     }
     state.stream = next;
-    state.streamGeneration += 1;
     state.rotations += 1;
     // Replay any audio buffered during the transition.
     const pending = state.pendingChunks;
     state.pendingChunks = [];
-    for (const chunk of pending) {
-      writeToStream(next, audioMessage(chunk));
+    for (const entry of pending) {
+      writeToStream(next, audioMessage(entry.chunk));
     }
     armRotateTimer();
     state.rotating = false;
@@ -369,8 +401,10 @@ function createStreamingSttSession(options) {
     push(chunk) {
       if (state.aborted || state.finalized || state.fatal) return;
       if (!chunk || chunk.length === 0) return;
+      const startAudioByteOffset = state.totalAudioBytes;
+      state.totalAudioBytes += chunk.length;
       if (state.rotating || !state.stream) {
-        state.pendingChunks.push(chunk);
+        state.pendingChunks.push({ chunk, startAudioByteOffset });
         return;
       }
       writeToStream(state.stream, audioMessage(chunk));
@@ -393,8 +427,8 @@ function createStreamingSttSession(options) {
       if (stream) {
         const pending = state.pendingChunks;
         state.pendingChunks = [];
-        for (const chunk of pending) {
-          writeToStream(stream, audioMessage(chunk));
+        for (const entry of pending) {
+          writeToStream(stream, audioMessage(entry.chunk));
         }
         await drainStream(stream);
         detachStream(stream);
@@ -436,9 +470,36 @@ function createStreamingSttSession(options) {
       };
     },
 
+    snapshot() {
+      return {
+        text: currentDisplayText(),
+        committedText: state.committedText,
+        interim: state.interim,
+        totalAudioBytes: state.totalAudioBytes,
+        finalSegments: state.finalSegments.map((segment) => ({ ...segment })),
+      };
+    },
+
     // Test/diagnostic surface.
     _state: state,
   };
+}
+
+function normalizedBytesPerSecond(value) {
+  const bytes = Number(value);
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : 32000;
+}
+
+function resultEndOffsetBytes(value, bytesPerSecond) {
+  const match = /^(\d+):(\d+)$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  const nanos = Number(match[2]);
+  if (!Number.isSafeInteger(seconds) || seconds < 0 || !Number.isSafeInteger(nanos) || nanos < 0 || nanos >= 1e9) {
+    return null;
+  }
+  const exact = (seconds + nanos / 1e9) * normalizedBytesPerSecond(bytesPerSecond);
+  return Math.max(0, Math.floor(exact / 2) * 2);
 }
 
 module.exports = {

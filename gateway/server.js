@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { createVoiceSessionServer } = require("./lib/voice-session-server");
+const { createRollingTranscriptReconcileRuntime } = require("./lib/rolling-transcript-reconcile");
+const { appendTranscriptRevision } = require("./lib/transcript-revisions");
 const {
   createAgentProfileStore,
   normalizeDeviceId,
@@ -891,6 +893,12 @@ if (REMINDER_SWEEP_INTERVAL_MS > 0) {
   reminderSweepTimer.unref();
 }
 
+const transcriptReconcileRuntime = createRollingTranscriptReconcileRuntime({
+  dataDir: DATA_DIR,
+  providerForJob: internalTtsProvider,
+  canonicalReadyForJob: ({ sessionId, turnId }) => Boolean(readVoiceTurnRecord(sessionId, turnId)?.response),
+  onFinalRevision: applyAutomaticTranscriptRevision,
+});
 const voiceSessionServer = createVoiceSessionServer({
   dataDir: DATA_DIR,
   systemPrompt: SYSTEM_PROMPT,
@@ -905,6 +913,7 @@ const voiceSessionServer = createVoiceSessionServer({
   reasoner: runAndroidCascadedVoiceReasoning,
   phraseAssistGenerator: runVoicePhraseAssistGeneration,
   blobStore,
+  transcriptReconcileRuntime,
 });
 const { routeVoiceControls } = createVoiceControlHandlers({
   authorized, sendJson, handleVoiceRetranscribe, handleVoiceTurnsList,
@@ -1903,6 +1912,9 @@ async function writeCompletedVoiceTurnRecord(record) {
     return;
   }
   writeVoiceTurnRecord(record);
+  transcriptReconcileRuntime.notifyCanonicalCommitted({
+    sessionId: record.session_id, branchId: record.branch_id || "default", turnId: record.id,
+  });
   await recordVoiceTurnCompletedProductEvent(record);
   scheduleCaptureBlockProjection(record);
   // Capture-only dictation is an STT-only boundary. Its literal capture
@@ -8210,34 +8222,14 @@ async function handleVoiceRetranscribe(request, response, url) {
   const record = readVoiceTurnRecord(sessionId, turnId);
   let revision = 1;
   if (record) {
-    // Non-destructive: seed revision 0 with the original the first time, then
-    // append this retranscription. The primary transcript is updated to the
-    // fresh one but the original stays recoverable in transcript_revisions.
-    const revisions = Array.isArray(record.transcript_revisions) ? record.transcript_revisions.slice() : [];
-    if (revisions.length === 0) {
-      revisions.push({
-        revision: 0,
-        transcript: String(record.transcript || ""),
-        transcript_source: String(record.transcript_source || ""),
-        source: "original",
-        created_at: String(record.updated_at || record.created_at || now),
-      });
-    }
-    revision = revisions.length;
-    revisions.push({
-      revision,
+    const appended = appendTranscriptRevision(record, {
       transcript,
       transcript_source: "stt-retranscribe",
-      source: "retranscribe",
-      language_codes: codes,
-      windowed: transcription?.windowed === true,
-      created_at: now,
+      transcriptSource: "stt-retranscribe",
+      source: "retranscribe", languageCodes: codes,
+      windowed: transcription?.windowed === true, createdAt: now,
     });
-    record.transcript_revisions = revisions;
-    record.retranscribed = true;
-    record.transcript = transcript;
-    record.transcript_source = "stt-retranscribe";
-    record.updated_at = now;
+    revision = appended.revision;
     const voiceSession = record.references?.voice_session;
     if (voiceSession && typeof voiceSession === "object") {
       const providerEvents = Array.isArray(voiceSession.provider_events) ? voiceSession.provider_events : [];
@@ -8298,6 +8290,55 @@ function normalizeRetranscribeLanguageCodes(value) {
     .filter(Boolean)
     .filter((code) => code.toLowerCase() !== "auto");
   return Array.from(new Set(codes)).slice(0, 2);
+}
+
+async function applyAutomaticTranscriptRevision(input) {
+  const sessionId = sanitizeOptionalId(input.sessionId, "default");
+  const turnId = sanitizeOptionalId(input.turnId, "");
+  const record = turnId ? readVoiceTurnRecord(sessionId, turnId) : null;
+  if (!record || isIncognitoBranch(record.branch_id) || record.references?.voice_session?.incomplete === true) {
+    return false;
+  }
+  if (record.transcript_revisions?.some((value) => value.reconciliation_id === input.reconciliationId)) {
+    return true;
+  }
+  if (String(record.transcript || "").trim() === String(input.transcript || "").trim()) {
+    return true;
+  }
+  const appended = appendTranscriptRevision(record, {
+    transcript: input.transcript,
+    transcriptSource: "stt-auto-reconcile",
+    source: "automatic_reconcile",
+    reconciliationId: input.reconciliationId,
+    createdAt: input.updatedAt,
+  });
+  if (!appended) return false;
+  const voiceSession = record.references?.voice_session;
+  if (voiceSession && typeof voiceSession === "object") {
+    const providerEvents = Array.isArray(voiceSession.provider_events) ? voiceSession.provider_events : [];
+    providerEvents.push({
+      type: "transcript_auto_reconciled",
+      ts: appended.createdAt,
+      revision: appended.revision,
+      transcript_chars: String(input.transcript || "").length,
+    });
+    voiceSession.provider_events = providerEvents;
+  }
+  writeVoiceTurnRecord(record);
+  voiceSessionServer.publishTranscriptRevision({
+    type: "transcript_revision",
+    session_id: sessionId,
+    branch_id: String(record.branch_id || "default"),
+    turn_id: turnId,
+    message_id: `turn:${sessionId}:${record.branch_id || "default"}:${turnId}:user`,
+    speaker: "user",
+    revision: appended.revision,
+    text: String(input.transcript || ""),
+    transcript_source: "stt-auto-reconcile",
+    source: "automatic_reconcile",
+    updated_at: appended.createdAt,
+  });
+  return true;
 }
 
 const VOICE_DIAGNOSIS_LIMIT_MAX = 20;
@@ -9815,6 +9856,7 @@ async function recordStreamingVoiceTurn(turn) {
   const branchId = stashedContext?.thread?.branch_id
     || (incognito && !isIncognitoBranch(callerBranchId) ? newBranchId("incognito") : callerBranchId);
   if (incognito) {
+    transcriptReconcileRuntime.deleteTurn({ sessionId, branchId, turnId });
     await deleteVoiceTurnPcm(sessionId, turnId);
   }
 

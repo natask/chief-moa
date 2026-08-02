@@ -198,18 +198,20 @@ function runVoiceTurn(target, voiceServer) {
 
 function assertStableTranscriptEvents(events) {
   const partial = eventOfType(events, "transcript_partial");
-  assert.deepEqual(Object.keys(partial).sort(), ["branch_id", "session_id", "text", "turn_id", "type"]);
+  assert.deepEqual(Object.keys(partial).sort(), ["branch_id", "session_id", "text", "transcript_sequence", "turn_id", "type"]);
   assert.equal(partial.session_id, "shape_session");
   assert.equal(partial.branch_id, "shape_branch");
   assert.equal(partial.turn_id, "shape_turn");
   assert.equal(partial.text, "partial transcript");
+  assert.equal(partial.transcript_sequence, 1);
 
   const final = eventOfType(events, "transcript_final");
-  assert.deepEqual(Object.keys(final).sort(), ["branch_id", "session_id", "text", "turn_id", "type"]);
+  assert.deepEqual(Object.keys(final).sort(), ["branch_id", "session_id", "text", "transcript_sequence", "turn_id", "type"]);
   assert.equal(final.session_id, "shape_session");
   assert.equal(final.branch_id, "shape_branch");
   assert.equal(final.turn_id, "shape_turn");
   assert.equal(final.text, "final transcript");
+  assert.equal(final.transcript_sequence, 2);
 }
 
 function assertStableAssistantEvents(events) {

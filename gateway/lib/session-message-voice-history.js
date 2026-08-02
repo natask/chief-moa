@@ -44,7 +44,9 @@ function completedTranscriptRevisions(record) {
       revision,
       transcript: bounded.text,
       transcript_source: boundedLabel(value.transcript_source, 80),
-      source: value.source === "retranscribe" ? "retranscribe" : "original",
+      source: value.source === "automatic_reconcile"
+        ? "automatic_reconcile"
+        : (value.source === "retranscribe" ? "retranscribe" : "original"),
       created_at: boundedLabel(value.created_at, 80),
       text_complete: !bounded.truncated,
       stored_text_chars: transcript.length,

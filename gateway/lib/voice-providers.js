@@ -1882,9 +1882,8 @@ class CascadedVoiceProvider {
             resultEndOffset: result?.resultEndOffset?.seconds != null ? `${result.resultEndOffset.seconds}:${result.resultEndOffset.nanos || 0}` : (result?.result_end_offset?.seconds != null ? `${result.result_end_offset.seconds}:${result.result_end_offset.nanos || 0}` : ""),
           }));
         },
-        onPartial: hooks && typeof hooks.onTranscriptPartial === "function"
-          ? (text) => hooks.onTranscriptPartial(text)
-          : null,
+        onPartial: hooks?.onTranscriptPartial,
+        onFinalSegment: hooks?.onTranscriptFinalSegment, bytesPerSecond: sampleRate * channels * 2,
         rotateAfterMs: this.streamingSttRotateAfterMs,
         logger: (event, details) => {
           try {

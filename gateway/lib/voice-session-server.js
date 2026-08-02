@@ -20,13 +20,16 @@ const {
 const { createVoiceSessionAdmission } = require("./voice-session-admission");
 const { voiceProviderEnvForProfile } = require("./voice-provider-catalog");
 const { createVoiceTurnSteeringCoordinator, planVoiceTurnRelation } = require("./voice-turn-steering");
-const { startVoiceSessionHeartbeat } = require("./voice-session-heartbeat");
+const { startVoiceSessionHeartbeat, summarizeVoiceActivity } = require("./voice-session-heartbeat");
 const { sanitizeTtsDelivery, summarizeTtsTerminal } = require("./voice-tts-terminal");
 const { handleTtsRetry, retainTtsRecoveryTurn, releaseTtsRecoveryTurn } = require("./voice-tts-retry");
 const { createVoicePhraseAssistSessionBridge } = require("./voice-phrase-assist");
 const { VoiceDraftSessionBridge, createVoiceDraftSessionRuntime, disabledVoiceDraftSessionRuntime }
   = require("./voice-draft-session");
 const { startVoicePrewarm } = require("./voice-prewarm");
+const { isIncognitoBranch } = require("./thread-store");
+const { createVoiceTranscriptReconcileBridge, publishTranscriptRevision }
+  = require("./voice-transcript-reconcile-session");
 const { bindBrowserVoiceInvocationContext } = require("./browser-invocation-context");
 const { completeNoSpeech, completeTranscriptFinalization, handleTranscriptFinalize }
   = require("./voice-transcript-finalize");
@@ -81,6 +84,7 @@ function createVoiceSessionServer(options) {
       onTurnCompleted: typeof options?.onTurnCompleted === "function" ? options.onTurnCompleted : null,
       blobStore: options?.blobStore || null,
       voiceDraftRuntime,
+      transcriptReconcileRuntime: options?.transcriptReconcileRuntime || null,
     });
     connections.add(connection);
     ws.once("close", () => {
@@ -93,10 +97,13 @@ function createVoiceSessionServer(options) {
     sessionsDir,
     providerEventsFile,
     status() {
-      return { ...sessionAdmission.status(), voice_drafts_v1: voiceDraftRuntime.status() };
+      return { ...sessionAdmission.status(), voice_drafts_v1: voiceDraftRuntime.status(), transcript_reconciliation: options?.transcriptReconcileRuntime?.status?.() || { active: 0, queued: 0 } };
     },
     activityStatus() {
       return summarizeVoiceActivity(connections);
+    },
+    publishTranscriptRevision(payload) {
+      publishTranscriptRevision(connections, payload);
     },
     handleUpgrade(request, socket, head) {
       wss.handleUpgrade(request, socket, head, (ws) => {
@@ -137,6 +144,9 @@ class VoiceSessionConnection {
     this.voiceDraft = new VoiceDraftSessionBridge(
       this, options.voiceDraftRuntime || disabledVoiceDraftSessionRuntime(),
     );
+    this.transcriptReconcile = createVoiceTranscriptReconcileBridge(
+      this, options.transcriptReconcileRuntime, WebSocket.OPEN);
+    this.sessionIdentity = null;
   }
   startTurnProgress(turn, stage) {
     const nextStage = normalizeProgressStage(stage);
@@ -285,6 +295,7 @@ class VoiceSessionConnection {
     turn.audioChunks += 1;
     turn.lastAudioAt = nowIso();
     turn.audioStream.write(chunk);
+    this.transcriptReconcile.push(turn, chunk);
     if (turn.liveSession) {
       turn.liveSession.sendAudio(chunk);
     }
@@ -405,6 +416,7 @@ class VoiceSessionConnection {
       transportSummary: {},
       syntheticText: "",
       turnRelation: turnRelation?.next || null,
+      transcriptSequence: 0,
     };
     this.phraseAssist.configureTurn(turn, event.phrase_assist || event.phraseAssist);
     turn.contextPrompt = this.contextPromptForTurn(turn);
@@ -416,6 +428,10 @@ class VoiceSessionConnection {
       this.sendError(`failed to write audio: ${cleanError(error)}`);
     });
     this.turn = turn;
+    this.sessionIdentity = { sessionId, branchId, turnId };
+    this.transcriptReconcile.configure(turn, { provider: this.voiceProvider,
+      languageCodes: providerStatus.prompt_language_codes || providerStatus.language_codes || ["en-US"],
+      incognito: isIncognitoBranch(branchId) || nextTurnIdentity.contextAction === "incognito" });
     startVoicePrewarm(this.voiceProvider, turn);
     if (typeof this.voiceProvider.createLiveTurnSession === "function") {
       turn.providerEvents = this.createProviderEvents(turn);
@@ -472,7 +488,10 @@ class VoiceSessionConnection {
       transcript_finalize: {
         supported: !turn.liveSession && typeof this.voiceProvider?.transcribeTurn === "function",
       },
-      capabilities: { voice_drafts_v1: this.voiceDraft.runtime.capability },
+      capabilities: {
+        voice_drafts_v1: this.voiceDraft.runtime.capability,
+        transcript_revisions_v1: this.transcriptReconcile.capability(turn),
+      },
       provider_bundle: turn.providerBundle,
       ...(turn.turnRelation ? { turn_relation: turn.turnRelation } : {}),
     });
@@ -547,6 +566,7 @@ class VoiceSessionConnection {
         this.startTurnProgress(turn, "reasoning");
       }
       await closeAudioStream(turn);
+      this.transcriptReconcile.finish(turn);
       const providerResult = turn.liveSession
         ? await commitLiveSession(turn)
         : await this.voiceProvider.processTurn(turn, providerHooks);
@@ -666,6 +686,8 @@ class VoiceSessionConnection {
       const value = record ? String(text || "").trim() : String(text ?? "");
       if (!value) return;
       spec.stamp(value);
+      const transcriptSequence = type.startsWith("transcript_")
+        ? this.transcriptReconcile.sequence(turn) : null;
       if (record) await this.recordProviderEvent(turn, providerEvents, type, { text: value });
       await this.sendEvent({
         type,
@@ -673,6 +695,7 @@ class VoiceSessionConnection {
         branch_id: turn.branchId,
         turn_id: turn.turnId,
         [spec.key]: value,
+        ...(transcriptSequence ? { transcript_sequence: transcriptSequence } : {}),
         ...(revisions ? await this.phraseAssist.revisionField(turn, value) : {}),
       });
     };
@@ -680,6 +703,10 @@ class VoiceSessionConnection {
       isTurnActive: () => !turnSuperseded(),
       onTurnProgress: async (stage) => {
         this.startTurnProgress(turn, stage);
+      },
+      onTranscriptFinalSegment: async (segment) => {
+        if (turnSuperseded()) return;
+        this.transcriptReconcile.seal(turn, segment);
       },
       onStageStart: async (stage, details) => {
         if (turnSuperseded()) return;
@@ -1610,6 +1637,7 @@ class VoiceSessionConnection {
     await sendWs(this.ws, JSON.stringify(payload));
   }
 
+
   sendError(message) {
     if (this.ws.readyState !== WebSocket.OPEN) {
       return;
@@ -1782,8 +1810,10 @@ function effectiveProfileForSession(profile, event) {
 // throws — a streaming fault must never take the session down.
 function abortSttStream(turn) {
   if (!turn || !turn.sttStream) {
+    turn?.transcriptReconciler?.abandon();
     return;
   }
+  turn.transcriptReconciler?.abandon();
   const stream = turn.sttStream;
   turn.sttStream = null;
   try {
@@ -1972,39 +2002,6 @@ function randomId(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
-function summarizeVoiceActivity(connections) {
-  const summary = {
-    active_voice_connections: 0,
-    active_turns: 0,
-    active_recording_turns: 0,
-    active_committed_turns: 0,
-    active_responding_connections: 0,
-    drain_safe: true,
-    turn_statuses: {},
-  };
-  for (const connection of connections || []) {
-    summary.active_voice_connections += 1;
-    if (connection?.responding) {
-      summary.active_responding_connections += 1;
-    }
-    const turn = connection?.turn;
-    if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
-      continue;
-    }
-    const status = String(turn.status || "unknown");
-    summary.active_turns += 1;
-    summary.turn_statuses[status] = (summary.turn_statuses[status] || 0) + 1;
-    if (status === "recording") {
-      summary.active_recording_turns += 1;
-    } else {
-      summary.active_committed_turns += 1;
-    }
-  }
-  summary.drain_safe = summary.active_voice_connections === 0
-    && summary.active_turns === 0
-    && summary.active_responding_connections === 0;
-  return summary;
-}
 function normalizeStageName(stage) {
   const value = String(stage || "")
     .trim()
