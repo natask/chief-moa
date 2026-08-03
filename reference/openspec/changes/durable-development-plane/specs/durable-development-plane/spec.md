@@ -65,6 +65,13 @@ kind-specific evidence SHALL fail the task and block dependent work.
   verification references
 - **THEN** the QA task fails and no dependent task launches
 
+#### Scenario: Final QA freezes the integrated commit
+
+- **WHEN** integration names a Git commit, every task completes, and final QA
+  supplies verification references
+- **THEN** the system freezes that commit digest and accumulated QA evidence as
+  the candidate that needs user review
+
 ### Requirement: Integration is serial across intents
 
 The system SHALL allow at most one active integration task across all durable

@@ -19,3 +19,4 @@
       advance the graph from terminal worker receipts.
 - [x] D12 Fail closed when a worker exits cleanly without structured output and
       verification evidence for its task kind.
+- [x] D13 Freeze the exact integrated Git candidate automatically after final QA.

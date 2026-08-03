@@ -116,3 +116,21 @@ test("first dispatch plans the riff before launching validated work", async (t) 
   assert.ok(result.intent.plan_id);
   assert.deepEqual(result.launched.map((item) => item.task_id), ["build"]);
 });
+
+test("integration plus final QA freezes the exact Git candidate automatically", async (t) => {
+  const { plane, coordinator, runs } = setup(t);
+  await plane.capture({ intent_id: "intent_candidate", riff: "Build and verify", objective: "Ship candidate" });
+  await plane.definePlan("intent_candidate", { tasks: [
+    { task_id: "integrate", title: "Integrate", kind: "integration", acceptance_check: "candidate committed", parallel_safe: false },
+    { task_id: "qa_final", title: "Final QA", kind: "qa", depends_on: ["integrate"], acceptance_check: "candidate passes" },
+  ] });
+  await coordinator.dispatch("intent_candidate");
+  Object.assign(runs.get("run_integrate"), { status: "completed", output: 'DEVELOPMENT_RECEIPT {"passed":true,"output_refs":["git://abcdef1234567"],"verification_refs":["test://integration"]}' });
+  await coordinator.dispatch("intent_candidate");
+  Object.assign(runs.get("run_qa_final"), { status: "completed", output: 'DEVELOPMENT_RECEIPT {"passed":true,"verification_refs":["qa://final"]}' });
+  const state = await coordinator.reconcile("intent_candidate");
+  assert.equal(state.status, "needs_user");
+  assert.equal(state.candidate.candidate_ref, "git://abcdef1234567");
+  assert.equal(state.candidate.candidate_digest, "abcdef1234567");
+  assert.deepEqual(state.candidate.verification_refs, ["agent-run://run_integrate", "test://integration", "agent-run://run_qa_final", "qa://final"]);
+});

@@ -62,6 +62,14 @@ function receiptRefs(value) {
   return Array.isArray(value) ? [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 64) : [];
 }
 
+function gitCandidate(refs) {
+  for (const ref of refs) {
+    const match = String(ref || "").match(/^git:\/\/([0-9a-f]{7,64})$/i);
+    if (match) return { candidate_ref: ref, candidate_digest: match[1].toLowerCase() };
+  }
+  return null;
+}
+
 function runReceipt(run, task) {
   const runRef = `agent-run://${run.id}`;
   if (run.status === "completed") {
@@ -71,8 +79,9 @@ function runReceipt(run, task) {
     const verificationRefs = receiptRefs(receipt.verification_refs || receipt.verificationRefs);
     const missingOutput = ["implementation", "integration"].includes(task.kind) && !outputRefs.length;
     const missingVerification = ["qa", "integration"].includes(task.kind) && !verificationRefs.length;
-    if (receipt.passed !== true || missingOutput || missingVerification) {
-      const reason = String(receipt.failure || (missingOutput ? `${task.kind} receipt needs output_refs` : missingVerification ? `${task.kind} receipt needs verification_refs` : "worker reported that acceptance failed")).slice(0, 2_000);
+    const missingCandidate = task.kind === "integration" && !gitCandidate(outputRefs);
+    if (receipt.passed !== true || missingOutput || missingVerification || missingCandidate) {
+      const reason = String(receipt.failure || (missingOutput ? `${task.kind} receipt needs output_refs` : missingVerification ? `${task.kind} receipt needs verification_refs` : missingCandidate ? "integration receipt needs a git://<commit-sha> output ref" : "worker reported that acceptance failed")).slice(0, 2_000);
       return { passed: false, output_refs: outputRefs, verification_refs: [runRef, ...verificationRefs], failure: reason, idempotency_key: `agent-run-result:${run.id}:rejected-receipt` };
     }
     return { passed: true, output_refs: [runRef, ...outputRefs], verification_refs: [runRef, ...verificationRefs], failure: "", idempotency_key: `agent-run-result:${run.id}:completed` };
@@ -122,6 +131,19 @@ function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, pla
       intent = await plane.finishTask(intentId, task.task_id, runReceipt(run, task));
       if (task.kind === "integration" && integrationQueue) {
         await integrationQueue.release(intentId, task.task_id, run.status);
+      }
+    }
+    if (!intent.candidate && intent.tasks.length && intent.tasks.every((task) => task.state === "completed")) {
+      const integrationRefs = intent.tasks.filter((task) => task.kind === "integration").flatMap((task) => task.output_refs);
+      const candidate = gitCandidate(integrationRefs);
+      if (candidate) {
+        const verificationRefs = [...new Set(intent.tasks.filter((task) => ["qa", "integration"].includes(task.kind)).flatMap((task) => task.verification_refs))];
+        intent = await plane.freezeCandidate(intentId, {
+          ...candidate,
+          summary: `All planned implementation, integration, and QA tasks completed for ${intent.objective || intent.intent_id}.`,
+          verification_refs: verificationRefs,
+          idempotency_key: `automatic-candidate:${candidate.candidate_digest}`,
+        });
       }
     }
     return intent;
@@ -183,4 +205,4 @@ function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, pla
   return { dispatch, reconcile, status };
 }
 
-module.exports = { createDevelopmentPlaneCoordinator, taskPrompt, structuredReceipt, runReceipt, TERMINAL };
+module.exports = { createDevelopmentPlaneCoordinator, taskPrompt, structuredReceipt, runReceipt, gitCandidate, TERMINAL };
