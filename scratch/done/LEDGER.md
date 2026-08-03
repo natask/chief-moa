@@ -1,3 +1,4 @@
+- Accepted the exact voice-draft-to-turn handoff without misreporting it as a microphone failure — Codex / GPT-5 — 3b8f7992
 - Made every Ag toolbar click restore the removed mascot while opening the workspace — Codex / GPT-5 — aefd0bb4
 - Turned explicit browser video captures into editable durable intents with preserved recording, exact transcript provenance, retention controls, and history — Codex / GPT-5 — 70e8ed40
 - Bounded collapsed Android transcript rendering and moved compact Copy/History controls into retained History — agent: Codex/GPT-5 — d8803e29
