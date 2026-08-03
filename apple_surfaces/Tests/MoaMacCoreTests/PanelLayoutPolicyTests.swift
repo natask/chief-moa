@@ -125,3 +125,29 @@ func nonNotchedAndExternalDisplaysAttachBelowMenuBar(
 func invalidGeometryRequestsAppKitCenterFallback(value: PanelLayoutInput) {
     #expect(PanelLayoutPolicy.decision(for: value) == nil)
 }
+
+@Test func panelHoverExpandsTemporarilyAndExitCollapses() {
+    var state = PanelPresentationState()
+    state.handle(.pointerEntered)
+    #expect(state.phase == .hoverExpanded)
+    #expect(state.isExpanded)
+    state.handle(.pointerExited)
+    #expect(state.phase == .compact)
+}
+
+@Test(arguments: [PanelPresentationEvent.interacted, .gainedFocus])
+func panelInteractionPinsExpansion(event: PanelPresentationEvent) {
+    var state = PanelPresentationState()
+    state.handle(.pointerEntered)
+    state.handle(event)
+    state.handle(.pointerExited)
+    #expect(state.phase == .pinned)
+    #expect(state.isExpanded)
+}
+
+@Test func explicitCollapseResetsPinnedPanel() {
+    var state = PanelPresentationState(phase: .pinned)
+    state.handle(.collapse)
+    #expect(state.phase == .compact)
+    #expect(!state.isExpanded)
+}

@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import CoreGraphics
 import MoaMacCore
 import MoaMacShell
@@ -8,8 +9,21 @@ import MoaMacUI
 import SwiftUI
 
 private final class CommandPanel: NSPanel {
+    var interactionHandler: (() -> Void)?
+    private(set) var isProcessingPointerInteraction = false
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
+            isProcessingPointerInteraction = true
+        }
+        super.sendEvent(event)
+        if event.type == .leftMouseUp || event.type == .rightMouseUp || event.type == .otherMouseUp {
+            interactionHandler?()
+            isProcessingPointerInteraction = false
+        }
+    }
 }
 
 private final class AgentRailPanel: NSPanel {
@@ -67,13 +81,16 @@ private final class AgentRailPanel: NSPanel {
 @MainActor final class CommandPanelController {
     static let shared = CommandPanelController()
     private let model = CommandModel()
+    private let presentation = PanelPresentationModel()
     private var panel: CommandPanel?
     private var previousApplication: NSRunningApplication?
     private(set) var shortcutLabel = "Control-Space"
     private var isApplyingPanelPosition = false
     private var moveObserver: NSObjectProtocol?
-    private let panelOriginXKey = "ag.command-panel.origin-x"
-    private let panelOriginYKey = "ag.command-panel.origin-y"
+    private var focusObserver: NSObjectProtocol?
+    private var presentationObserver: AnyCancellable?
+    private let panelAnchorXKey = "ag.command-panel.anchor-center-x"
+    private let panelAnchorYKey = "ag.command-panel.anchor-top-y"
 
     func setShortcutLabel(_ value: String) { shortcutLabel = value }
 
@@ -108,8 +125,8 @@ private final class AgentRailPanel: NSPanel {
     }
 
     func resetPanelPosition() {
-        UserDefaults.standard.removeObject(forKey: panelOriginXKey)
-        UserDefaults.standard.removeObject(forKey: panelOriginYKey)
+        UserDefaults.standard.removeObject(forKey: panelAnchorXKey)
+        UserDefaults.standard.removeObject(forKey: panelAnchorYKey)
         if let panel { position(panel, preferSaved: false) }
     }
 
@@ -119,14 +136,14 @@ private final class AgentRailPanel: NSPanel {
         let current = NSRunningApplication.current
         let frontmost = NSWorkspace.shared.frontmostApplication
         if frontmost?.processIdentifier != current.processIdentifier { previousApplication = frontmost }
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
 
     func hide() {
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         Task {
             await model.cancelVoice()
+            presentation.handle(.collapse)
             panel?.orderOut(nil)
             previousApplication?.activate(options: [])
             previousApplication = nil
@@ -134,10 +151,14 @@ private final class AgentRailPanel: NSPanel {
     }
 
     private func makePanel() -> CommandPanel {
-        let view = CommandPaletteView(model: model, shortcutLabel: shortcutLabel) { [weak self] in self?.hide() }
+        let view = CommandPaletteView(
+            model: model,
+            presentation: presentation,
+            shortcutLabel: shortcutLabel
+        ) { [weak self] in self?.hide() }
         let hosting = NSHostingView(rootView: view)
         let panel = CommandPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 720),
+            contentRect: NSRect(origin: .zero, size: PanelPresentationMetrics.compactSize),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -152,6 +173,7 @@ private final class AgentRailPanel: NSPanel {
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
+        panel.interactionHandler = { [weak self] in self?.presentation.handle(.interacted) }
         moveObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification,
             object: panel,
@@ -159,12 +181,38 @@ private final class AgentRailPanel: NSPanel {
         ) { [weak self, weak panel] _ in
             Task { @MainActor in
                 guard let self, let panel, !self.isApplyingPanelPosition else { return }
-                UserDefaults.standard.set(panel.frame.origin.x, forKey: self.panelOriginXKey)
-                UserDefaults.standard.set(panel.frame.origin.y, forKey: self.panelOriginYKey)
+                UserDefaults.standard.set(panel.frame.midX, forKey: self.panelAnchorXKey)
+                UserDefaults.standard.set(panel.frame.maxY, forKey: self.panelAnchorYKey)
             }
         }
+        focusObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self, weak panel] _ in
+            Task { @MainActor in
+                guard panel?.isProcessingPointerInteraction != true else { return }
+                self?.presentation.handle(.gainedFocus)
+            }
+        }
+        presentationObserver = presentation.$state
+            .removeDuplicates()
+            .sink { [weak self, weak panel] state in
+                guard let self, let panel else { return }
+                self.resize(panel, expanded: state.isExpanded)
+            }
         self.panel = panel
         return panel
+    }
+
+    private func resize(_ panel: NSPanel, expanded: Bool) {
+        let size = expanded ? PanelPresentationMetrics.expandedSize : PanelPresentationMetrics.compactSize
+        guard panel.frame.size != size else { return }
+        let current = panel.frame
+        let origin = NSPoint(x: current.midX - size.width / 2, y: current.maxY - size.height)
+        isApplyingPanelPosition = true
+        panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        isApplyingPanelPosition = false
     }
 
     private func position(_ panel: NSPanel, preferSaved: Bool = true) {
@@ -189,9 +237,12 @@ private final class AgentRailPanel: NSPanel {
 
     private func savedPanelOrigin(for panel: NSPanel) -> NSPoint? {
         let defaults = UserDefaults.standard
-        guard defaults.object(forKey: panelOriginXKey) != nil,
-              defaults.object(forKey: panelOriginYKey) != nil else { return nil }
-        let origin = NSPoint(x: defaults.double(forKey: panelOriginXKey), y: defaults.double(forKey: panelOriginYKey))
+        guard defaults.object(forKey: panelAnchorXKey) != nil,
+              defaults.object(forKey: panelAnchorYKey) != nil else { return nil }
+        let origin = NSPoint(
+            x: defaults.double(forKey: panelAnchorXKey) - panel.frame.width / 2,
+            y: defaults.double(forKey: panelAnchorYKey) - panel.frame.height
+        )
         let frame = NSRect(origin: origin, size: panel.frame.size)
         return NSScreen.screens.contains { $0.visibleFrame.intersects(frame) } ? origin : nil
     }

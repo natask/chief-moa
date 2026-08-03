@@ -64,6 +64,9 @@
       search, running/recent status, selected-run detail, refresh, and stop.
       Keep full event timelines, artifact actions, and retained audio under
       4.1b.
+- [x] 4.1e Make the panel content-sized at rest, hover-expanded, and interaction-
+      pinned until explicit collapse, Hide, or Escape. Verify compact and Agents
+      states with offscreen bitmap snapshots that never open a QA window.
 - [ ] 4.2 Add visual pointer/caption guidance as inert overlays.
 - [ ] 4.3 Complete semantic AX proposal validation, approval, execution, and
       durable receipts from `privacy-first-macos-surface`.

@@ -34,13 +34,21 @@ Settings and the existing screen-context grant UI remain in a normal deeper
 window reached only through the menu-bar Settings action.
 
 The top-attached panel is movable after its initial notch placement and saves
-the user's position. It exposes Home and Agents modes in one 820-point native
-workspace. Agents mode uses a narrow project sidebar and selected-run detail
-pane. A separate transparent floating `NSPanel` parks at most six agent avatars
+the user's top-center anchor. Its resting island is content-sized at 392 by 64
+points. Pointer entry temporarily opens a 720 by 520 point Home/Agents workspace;
+pointer exit collapses only that temporary hover state. Any mouse interaction or
+key-window focus pins the workspace, so leaving the panel cannot make active work
+disappear. Collapse, Hide, and Escape are the only explicit exits from the pinned
+state. Agents mode uses a narrow project sidebar and selected-run detail pane.
+A separate transparent floating `NSPanel` parks at most six agent avatars
 on the right edge of the active screen. The rail and the Agents workspace share
 one observable model; selecting a parked avatar opens Agents. This adapts the
 public AppKit pattern confirmed in OpenClicky and the installed HeyClicky binary
 while using Ag branding, SF Symbols, and Chief Moa data.
+
+Visual QA renders SwiftUI snapshots directly to bitmap artifacts. It does not
+launch the app, create a visible QA window, change Spaces, or steal foreground
+focus from the user's desktop.
 
 Microphone denial remains visible in the island. The recovery state names the
 Microphone pane, opens it only after a user action, rechecks permission when Ag

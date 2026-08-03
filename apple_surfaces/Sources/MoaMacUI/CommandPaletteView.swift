@@ -1,10 +1,12 @@
 #if os(macOS)
 import AppKit
+import MoaMacCore
 import MoaMacShell
 import SwiftUI
 
 public struct CommandPaletteView: View {
     @ObservedObject private var model: CommandModel
+    @ObservedObject private var presentation: PanelPresentationModel
     private let dismiss: () -> Void
     private let shortcutLabel: String
     @FocusState private var promptFocused: Bool
@@ -12,25 +14,65 @@ public struct CommandPaletteView: View {
     @State private var showingBrowserHandoff = false
     @State private var boundaryPulse = false
 
-    public init(model: CommandModel, shortcutLabel: String = "Control-Space", dismiss: @escaping () -> Void = {}) {
+    public init(
+        model: CommandModel,
+        presentation: PanelPresentationModel = PanelPresentationModel(),
+        shortcutLabel: String = "Control-Space",
+        dismiss: @escaping () -> Void = {}
+    ) {
         self.model = model
+        self.presentation = presentation
         self.shortcutLabel = shortcutLabel
         self.dismiss = dismiss
     }
 
     public var body: some View {
+        Group {
+            if presentation.isExpanded { expandedSurface }
+            else { compactSurface }
+        }
+        .frame(
+            width: presentation.isExpanded ? PanelPresentationMetrics.expandedSize.width : PanelPresentationMetrics.compactSize.width,
+            height: presentation.isExpanded ? PanelPresentationMetrics.expandedSize.height : PanelPresentationMetrics.compactSize.height,
+            alignment: .top
+        )
+        .background(Color.black.opacity(0.97), in: RoundedRectangle(cornerRadius: presentation.isExpanded ? 24 : 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: presentation.isExpanded ? 24 : 22, style: .continuous)
+                .stroke(boundaryColor, lineWidth: model.voiceState.isActive ? 3 : 1)
+                .opacity(boundaryPulse ? 1 : (model.voiceState.isActive ? 0.9 : 0.34))
+        )
+        .shadow(color: boundaryColor.opacity(model.voiceState.isActive ? 0.42 : 0), radius: 18)
+        .animation(.snappy(duration: 0.22), value: model.voiceState.phase)
+        .onAppear {
+            model.refreshMicrophonePermission()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshMicrophonePermission()
+        }
+        .onChange(of: model.interactionPulse) {
+            boundaryPulse = true
+            withAnimation(.easeOut(duration: 0.42)) { boundaryPulse = false }
+        }
+        .onHover { inside in
+            presentation.handle(inside ? .pointerEntered : .pointerExited)
+        }
+        .onExitCommand(perform: cancelAndDismiss)
+    }
+
+    private var compactSurface: some View {
+        compactHeader
+    }
+
+    private var expandedSurface: some View {
         VStack(spacing: 0) {
             islandHeader
-
             if model.panelSection == .agents && !model.voiceState.isActive {
-                AgentWorkspaceView(model: model)
-                    .padding(14)
+                AgentWorkspaceView(model: model).padding(12)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        if model.voiceState.phase == .denied {
-                            microphoneRecovery
-                        }
+                        if model.voiceState.phase == .denied { microphoneRecovery }
                         if editingConnection { connectionEditor }
                         if showingBrowserHandoff { browserHandoff }
                         conversationContent
@@ -44,40 +86,74 @@ public struct CommandPaletteView: View {
                                     .accessibilityLabel("Live microphone level")
                             }
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                        } else {
-                            composer
-                        }
-                        Text("\(shortcutLabel) toggles assistant voice · Dictate is literal · screen recording is not required")
+                        } else { composer }
+                        Text("\(shortcutLabel) toggles voice · Dictate is literal")
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.42))
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 14)
+                    .padding(.top, 12)
                     .padding(.bottom, 16)
                 }
             }
         }
-        .frame(width: 820, height: 720, alignment: .top)
-        .background(Color.black.opacity(0.97), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(boundaryColor, lineWidth: model.voiceState.isActive ? 3 : 1)
-                .opacity(boundaryPulse ? 1 : (model.voiceState.isActive ? 0.9 : 0.34))
-        )
-        .shadow(color: boundaryColor.opacity(model.voiceState.isActive ? 0.42 : 0), radius: 18)
-        .animation(.snappy(duration: 0.22), value: model.voiceState.phase)
-        .onAppear {
-            model.refreshMicrophonePermission()
-            promptFocused = !model.voiceState.isActive
+    }
+
+    private var compactHeader: some View {
+        HStack(spacing: 11) {
+            if model.voiceState.isActive {
+                islandButton("Cancel", systemImage: "xmark", tint: .red) {
+                    Task { await model.cancelVoice() }
+                }
+            } else {
+                ZStack {
+                    Circle().fill(.white.opacity(0.08))
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(.cyan)
+                }
+                .frame(width: 38, height: 38)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(islandTitle)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text(compactSubtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.48))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+
+            if model.voiceState.isActive {
+                islandButton("Finish", systemImage: "checkmark", tint: .orange) {
+                    Task { await model.finishVoice() }
+                }
+            } else {
+                if model.runningAgentCount > 0 {
+                    Label("\(model.runningAgentCount)", systemImage: "bolt.fill")
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                }
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.38))
+                    .accessibilityLabel("Hover to expand")
+            }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            model.refreshMicrophonePermission()
-        }
-        .onChange(of: model.interactionPulse) {
-            boundaryPulse = true
-            withAnimation(.easeOut(duration: 0.42)) { boundaryPulse = false }
-        }
-        .onExitCommand(perform: cancelAndDismiss)
+        .padding(.horizontal, 12)
+        .frame(height: PanelPresentationMetrics.compactSize.height)
+    }
+
+    private var compactSubtitle: String {
+        if model.voiceState.isActive { return model.voiceState.message }
+        if model.voiceState.phase == .denied { return "Microphone needs attention" }
+        if model.runningAgentCount > 0 { return "\(model.runningAgentCount) agents working" }
+        return model.status.isEmpty ? "Hover to open" : model.status
     }
 
     private var islandHeader: some View {
@@ -131,12 +207,16 @@ public struct CommandPaletteView: View {
                         Image(systemName: model.isConfigured ? "network.badge.shield.half.filled" : "network.slash")
                     }
                     .help("Gateway connection")
+                    Button { presentation.handle(.collapse) } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .help("Collapse")
                     Button(action: cancelAndDismiss) { Image(systemName: "xmark") }
                         .help("Hide")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.72))
-                .frame(minWidth: 88, alignment: .trailing)
+                .frame(minWidth: 118, alignment: .trailing)
             }
         }
         .padding(.horizontal, 14)
