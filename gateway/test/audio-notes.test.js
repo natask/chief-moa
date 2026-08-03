@@ -101,6 +101,66 @@ test("store rejects empty and over-quota bodies without deleting bytes", (t) => 
   assert.deepEqual(fs.readFileSync(store.audioPath(note.id)), Buffer.from([1, 2]));
 });
 
+test("remove deletes metadata and bytes, frees quota, and is idempotent", async (t) => {
+  const dataDir = tempDir(t);
+  const store = createAudioNotesStore({ dataDir, maxTotalBytes: 2 });
+  const note = store.create({ bytes: Buffer.from([1, 2]) });
+  const blobPath = store.audioPath(note.id);
+
+  assert.deepEqual(await store.remove(note.id), {
+    deleted: true,
+    id: note.id,
+    already_deleted: false,
+    metadata_deleted: true,
+    local_deleted: true,
+    remote_status: "not_applicable",
+  });
+  assert.equal(store.get(note.id), null);
+  assert.equal(fs.existsSync(blobPath), false);
+  assert.equal(store.status().total_bytes, 0);
+  assert.equal((await store.remove(note.id)).already_deleted, true);
+  assert.ok(store.create({ bytes: Buffer.from([3, 4]) }).id);
+});
+
+test("remove keeps metadata and quota when remote deletion is partial, then retries", async (t) => {
+  const dataDir = tempDir(t);
+  let remoteExists = true;
+  let deletes = 0;
+  const blobStore = {
+    mode: "gcs",
+    finalizeSpool: () => {},
+    delete: async (key) => {
+      deletes += 1;
+      fs.rmSync(path.join(dataDir, key), { force: true });
+      if (deletes > 1) remoteExists = false;
+    },
+    stat: async () => remoteExists ? { size: 2, source: "gcs" } : null,
+  };
+  const store = createAudioNotesStore({ dataDir, blobStore, maxTotalBytes: 2 });
+  const note = store.create({ bytes: Buffer.from([1, 2]) });
+
+  await assert.rejects(store.remove(note.id), (error) => {
+    assert.equal(error.statusCode, 502);
+    assert.deepEqual(error.deletion, {
+      deleted: false,
+      id: note.id,
+      metadata_deleted: false,
+      local_deleted: true,
+      remote_status: "failed",
+      retryable: true,
+    });
+    return true;
+  });
+  assert.ok(store.get(note.id));
+  assert.equal(store.status().total_bytes, 2);
+  assert.throws(() => store.create({ bytes: Buffer.from([3]) }), /quota/);
+
+  const retried = await store.remove(note.id);
+  assert.equal(retried.deleted, true);
+  assert.equal(retried.remote_status, "deleted_or_absent");
+  assert.equal(store.status().total_bytes, 0);
+});
+
 test("blob-backed notes finalize and stream through the blob store", async (t) => {
   const dataDir = tempDir(t);
   const calls = { finalized: [], streamed: [] };
@@ -258,4 +318,212 @@ test("sendAudio reports blob read failures", async () => {
   await response.done;
   assert.equal(response.statusCode, 502);
   assert.equal(response.json().error, "audio note read failed: bucket unavailable");
+});
+
+test("remove handler returns idempotent receipts and honest partial failures", async () => {
+  let attempts = 0;
+  const handlers = createAudioNoteHandlers({
+    store: {
+      remove: async (id) => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("remote unavailable");
+          error.statusCode = 502;
+          error.deletion = { deleted: false, id, remote_status: "unverified", retryable: true };
+          throw error;
+        }
+        return { deleted: true, id, already_deleted: attempts > 2 };
+      },
+    },
+  });
+
+  let response = new MemoryResponse();
+  await handlers.remove(response, new URL("/v1/audio-notes/note_1", "http://local"));
+  await response.done;
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().deletion.remote_status, "unverified");
+
+  response = new MemoryResponse();
+  await handlers.remove(response, new URL("/v1/audio-notes/note_1", "http://local"));
+  await response.done;
+  assert.deepEqual(response.json(), { deleted: true, id: "note_1", already_deleted: false });
+
+  response = new MemoryResponse();
+  await handlers.remove(response, new URL("/v1/audio-notes/note_1/audio", "http://local"));
+  await response.done;
+  assert.equal(response.statusCode, 404);
+});
+
+test("remove coalesces concurrent deletion attempts and validates empty identifiers", async (t) => {
+  const dataDir = tempDir(t);
+  let releaseDelete;
+  let deleteCalls = 0;
+  const deleteStarted = new Promise((resolve) => {
+    releaseDelete = resolve;
+  });
+  const blobStore = {
+    mode: "gcs",
+    finalizeSpool: () => {},
+    delete: async (key) => {
+      deleteCalls += 1;
+      await deleteStarted;
+      fs.rmSync(path.join(dataDir, key), { force: true });
+    },
+    flush: async () => {},
+    stat: async () => null,
+  };
+  const store = createAudioNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from([1, 2]) });
+
+  const first = store.remove(note.id);
+  const second = store.remove(note.id);
+  assert.equal(deleteCalls, 1);
+  releaseDelete();
+  assert.deepEqual(await first, await second);
+  assert.equal(deleteCalls, 1);
+  assert.deepEqual(await store.remove(null), {
+    deleted: true,
+    id: "",
+    already_deleted: true,
+    metadata_deleted: true,
+    local_deleted: true,
+    remote_status: "deleted_or_absent",
+  });
+});
+
+test("remove preserves metadata when remote deletion fails", async (t) => {
+  const dataDir = tempDir(t);
+  const blobStore = {
+    mode: "gcs",
+    finalizeSpool: () => {},
+    delete: async () => { throw new Error("bucket denied"); },
+  };
+  const store = createAudioNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from([1, 2]) });
+
+  await assert.rejects(store.remove(note.id), (error) => {
+    assert.equal(error.statusCode, 502);
+    assert.match(error.message, /blob deletion failed: bucket denied/);
+    assert.equal(error.deletion.local_deleted, false);
+    assert.equal(error.deletion.remote_status, "failed");
+    return true;
+  });
+  assert.ok(store.get(note.id));
+  assert.equal(store.status().total_bytes, 2);
+});
+
+test("remove reports an undeleted local spool after remote deletion", async (t) => {
+  const dataDir = tempDir(t);
+  let flushCalls = 0;
+  const blobStore = {
+    mode: "gcs",
+    finalizeSpool: () => {},
+    delete: async () => {},
+    flush: async () => { flushCalls += 1; },
+  };
+  const store = createAudioNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from([1]) });
+
+  await assert.rejects(store.remove(note.id), (error) => {
+    assert.match(error.message, /local spool deletion failed/);
+    assert.equal(error.deletion.local_deleted, false);
+    assert.equal(error.deletion.remote_status, "unverified");
+    return true;
+  });
+  assert.equal(flushCalls, 1);
+  assert.ok(store.get(note.id));
+});
+
+test("remove reports remote verification failures without discarding metadata", async (t) => {
+  const dataDir = tempDir(t);
+  const blobStore = {
+    mode: "gcs",
+    finalizeSpool: () => {},
+    delete: async (key) => fs.rmSync(path.join(dataDir, key), { force: true }),
+    stat: async () => { throw new Error("stat unavailable"); },
+  };
+  const store = createAudioNotesStore({ dataDir, blobStore });
+  const note = store.create({ bytes: Buffer.from([1]) });
+
+  await assert.rejects(store.remove(note.id), (error) => {
+    assert.match(error.message, /remote deletion could not be verified: stat unavailable/);
+    assert.equal(error.deletion.local_deleted, true);
+    assert.equal(error.deletion.remote_status, "unverified");
+    return true;
+  });
+  assert.ok(store.get(note.id));
+});
+
+test("remove reports local byte deletion failures and retained bytes", async (t) => {
+  const dataDir = tempDir(t);
+  const throwingStore = createAudioNotesStore({ dataDir: path.join(dataDir, "throwing") });
+  const throwingNote = throwingStore.create({ bytes: Buffer.from([1]) });
+  const throwingPath = throwingStore.audioPath(throwingNote.id);
+  const originalRmSync = fs.rmSync;
+  fs.rmSync = (target, options) => {
+    if (target === throwingPath) throw new Error("disk denied");
+    return originalRmSync(target, options);
+  };
+  try {
+    await assert.rejects(throwingStore.remove(throwingNote.id), (error) => {
+      assert.equal(error.statusCode, 500);
+      assert.match(error.message, /local deletion failed: disk denied/);
+      assert.equal(error.deletion.local_deleted, false);
+      return true;
+    });
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
+
+  const retainedStore = createAudioNotesStore({ dataDir: path.join(dataDir, "retained") });
+  const retainedNote = retainedStore.create({ bytes: Buffer.from([2]) });
+  const retainedPath = retainedStore.audioPath(retainedNote.id);
+  fs.rmSync = (target, options) => target === retainedPath ? undefined : originalRmSync(target, options);
+  try {
+    await assert.rejects(retainedStore.remove(retainedNote.id), (error) => {
+      assert.equal(error.statusCode, 500);
+      assert.match(error.message, /local bytes remain after deletion/);
+      assert.equal(error.deletion.local_deleted, false);
+      return true;
+    });
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
+});
+
+test("remove reports metadata deletion failures and retained metadata", async (t) => {
+  const dataDir = tempDir(t);
+  const throwingStore = createAudioNotesStore({ dataDir: path.join(dataDir, "throwing") });
+  const throwingNote = throwingStore.create({ bytes: Buffer.from([1]) });
+  const throwingMetadata = path.join(throwingStore.notesDir, `${throwingNote.id}.json`);
+  const originalRmSync = fs.rmSync;
+  fs.rmSync = (target, options) => {
+    if (target === throwingMetadata) throw new Error("metadata denied");
+    return originalRmSync(target, options);
+  };
+  try {
+    await assert.rejects(throwingStore.remove(throwingNote.id), (error) => {
+      assert.equal(error.statusCode, 500);
+      assert.match(error.message, /metadata deletion failed: metadata denied/);
+      assert.equal(error.deletion.local_deleted, true);
+      return true;
+    });
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
+
+  const retainedStore = createAudioNotesStore({ dataDir: path.join(dataDir, "retained") });
+  const retainedNote = retainedStore.create({ bytes: Buffer.from([2]) });
+  const retainedMetadata = path.join(retainedStore.notesDir, `${retainedNote.id}.json`);
+  fs.rmSync = (target, options) => target === retainedMetadata ? undefined : originalRmSync(target, options);
+  try {
+    await assert.rejects(retainedStore.remove(retainedNote.id), (error) => {
+      assert.equal(error.statusCode, 500);
+      assert.match(error.message, /metadata remains after deletion/);
+      assert.equal(error.deletion.local_deleted, true);
+      return true;
+    });
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
 });

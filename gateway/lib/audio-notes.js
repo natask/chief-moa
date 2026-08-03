@@ -17,6 +17,7 @@ function createAudioNotesStore(options = {}) {
   // through to the bucket once the spool is pruned. Metadata JSON stays local.
   const blobStore = options.blobStore || null;
   const maxTotalBytes = normalizeMaxTotalBytes(options.maxTotalBytes);
+  const removals = new Map();
   // Quota refuses new notes instead of pruning old ones: stored notes are
   // user speech and must never be silently deleted.
   let totalBytes = listNoteFiles(notesDir)
@@ -120,6 +121,67 @@ function createAudioNotesStore(options = {}) {
     return { stream: fs.createReadStream(filePath), size: stat.size, contentType };
   }
 
+  async function remove(id) {
+    const safeId = cleanToken(id, 120);
+    if (!safeId) return deletionReceipt("", true, remoteStatus(blobStore));
+    if (removals.has(safeId)) return removals.get(safeId);
+    const pending = removeOnce(safeId).finally(() => removals.delete(safeId));
+    removals.set(safeId, pending);
+    return pending;
+  }
+
+  async function removeOnce(id) {
+    const note = get(id);
+    if (!note) return deletionReceipt(id, true, remoteStatus(blobStore));
+    const blobPath = audioPathForNote(notesDir, note);
+    const key = noteBlobKey(note);
+    if (blobStore) {
+      try {
+        await blobStore.delete(key);
+        if (blobStore.mode === "gcs" && typeof blobStore.flush === "function") {
+          await blobStore.flush();
+        }
+      } catch (error) {
+        throw deletionError(note, "audio note blob deletion failed", error, "failed", !fs.existsSync(blobPath));
+      }
+      if (fs.existsSync(blobPath)) {
+        throw deletionError(note, "audio note local spool deletion failed", null, "unverified", false);
+      }
+      if (blobStore.mode === "gcs" && typeof blobStore.stat === "function") {
+        let remaining;
+        try {
+          remaining = await blobStore.stat(key);
+        } catch (error) {
+          throw deletionError(note, "audio note remote deletion could not be verified", error, "unverified", true);
+        }
+        if (remaining) {
+          throw deletionError(note, "audio note remote blob remains after deletion", null, "failed", true);
+        }
+      }
+    } else {
+      try {
+        fs.rmSync(blobPath, { force: true });
+      } catch (error) {
+        throw deletionError(note, "audio note local deletion failed", error, "not_applicable", !fs.existsSync(blobPath), 500);
+      }
+      if (fs.existsSync(blobPath)) {
+        throw deletionError(note, "audio note local bytes remain after deletion", null, "not_applicable", false, 500);
+      }
+    }
+
+    const metadataPath = path.join(notesDir, `${note.id}.json`);
+    try {
+      fs.rmSync(metadataPath, { force: true });
+    } catch (error) {
+      throw deletionError(note, "audio note metadata deletion failed", error, remoteStatus(blobStore), true, 500);
+    }
+    if (fs.existsSync(metadataPath)) {
+      throw deletionError(note, "audio note metadata remains after deletion", null, remoteStatus(blobStore), true, 500);
+    }
+    totalBytes = Math.max(0, totalBytes - (Number(note.bytes) || 0));
+    return deletionReceipt(note.id, false, remoteStatus(blobStore));
+  }
+
   function status() {
     return {
       notes_dir: notesDir,
@@ -138,6 +200,7 @@ function createAudioNotesStore(options = {}) {
     audioPath,
     readStream,
     stream,
+    remove,
     status,
   };
 }
@@ -226,12 +289,58 @@ function createAudioNoteHandlers(options = {}) {
     found.stream.pipe(response);
   }
 
+  async function remove(response, url) {
+    const id = audioNoteIdFromPath(url.pathname);
+    if (!id) {
+      sendJson(response, 404, { error: "audio note not found" });
+      return;
+    }
+    try {
+      sendJson(response, 200, await store.remove(id));
+    } catch (error) {
+      const payload = { error: cleanError(error) };
+      if (error?.deletion) payload.deletion = error.deletion;
+      sendJson(response, Number(error?.statusCode) || 500, payload);
+    }
+  }
+
   return {
     create,
     list,
     get,
     sendAudio,
+    remove,
   };
+}
+
+function deletionReceipt(id, alreadyDeleted, remote) {
+  return {
+    deleted: true,
+    id,
+    already_deleted: alreadyDeleted,
+    metadata_deleted: true,
+    local_deleted: true,
+    remote_status: remote,
+  };
+}
+
+function deletionError(note, message, cause, remote, localDeleted, statusCode = 502) {
+  const detail = cause ? `: ${cleanError(cause)}` : "";
+  const error = new Error(`${message}${detail}`);
+  error.statusCode = statusCode;
+  error.deletion = {
+    deleted: false,
+    id: note.id,
+    metadata_deleted: false,
+    local_deleted: localDeleted,
+    remote_status: remote,
+    retryable: true,
+  };
+  return error;
+}
+
+function remoteStatus(blobStore) {
+  return blobStore?.mode === "gcs" ? "deleted_or_absent" : "not_applicable";
 }
 
 function writeNote(notesDir, note) {

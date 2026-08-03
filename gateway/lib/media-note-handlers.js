@@ -6,7 +6,7 @@ function createMediaNoteHandlers(deps) {
   async function routeMediaNotes(request, response, url) {
     const path = url.pathname;
     const audioCollection = path === "/v1/audio-notes" && ["GET", "POST"].includes(request.method);
-    const audioItem = request.method === "GET" && path.startsWith("/v1/audio-notes/");
+    const audioItem = ["GET", "DELETE"].includes(request.method) && path.startsWith("/v1/audio-notes/");
     const videoCollection = path === "/v1/video-notes" && ["GET", "POST"].includes(request.method);
     const videoItem = ["GET", "DELETE"].includes(request.method) && path.startsWith("/v1/video-notes/");
     if (!(audioCollection || audioItem || videoCollection || videoItem)) return false;
@@ -22,6 +22,7 @@ function createMediaNoteHandlers(deps) {
 
   async function routeAudio(request, response, url) {
     if (request.method === "POST") await audioNoteHandlers.create(request, response);
+    else if (request.method === "DELETE") await audioNoteHandlers.remove(response, url);
     else if (url.pathname === "/v1/audio-notes") audioNoteHandlers.list(response, url);
     else if (url.pathname.endsWith("/audio")) await audioNoteHandlers.sendAudio(response, url);
     else audioNoteHandlers.get(response, url);

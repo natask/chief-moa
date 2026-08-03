@@ -46,6 +46,9 @@ async function main() {
       assert.ok(found, "dual read found the bucket copy");
       assert.strictEqual(found.size, 14);
       assert.strictEqual(Buffer.concat(await collect(found.stream)).toString(), "pcm-note-bytes");
+      assert.strictEqual((await store.remove(note.id)).deleted, true);
+      assert.ok(!fake.objects.has(`audio-notes/${note.id}.pcm`), "audio note delete removed the bucket copy");
+      assert.strictEqual(store.get(note.id), null, "audio note delete removed canonical metadata");
     });
 
     await step("video note round-trips and remove deletes the bucket object", async () => {
