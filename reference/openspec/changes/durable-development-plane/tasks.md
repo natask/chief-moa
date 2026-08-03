@@ -15,3 +15,5 @@
       separate QA page. Capture the raw riff and screen recording there too.
 - [x] D10 Let an accepted candidate enter release policy without re-deriving
       the user's intent.
+- [x] D11 Turn the saved riff into a validated task graph on first dispatch and
+      advance the graph from terminal worker receipts.

@@ -35,6 +35,11 @@ Acceptance atomically creates a release-policy handoff containing the frozen
 candidate ref, digest, and QA evidence. The handoff is a proposal for the
 existing active-promotion policy. It does not grant direct deployment authority.
 
+The first dispatch asks the configured model for a JSON-only task graph. The
+development plane validates that untrusted output before storing or running it.
+Terminal agent-run receipts trigger reconciliation and dispatch of the next
+dependency-safe batch without requiring the QA page to remain open.
+
 QA is a task kind. A candidate cannot become ready until every planned task has
 completed and at least one QA task exists. User acceptance binds the exact
 candidate digest. The development plane can launch bounded workers. It does not

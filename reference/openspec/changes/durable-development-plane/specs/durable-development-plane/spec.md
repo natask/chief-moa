@@ -29,6 +29,19 @@ active worker or memory budget.
 - **WHEN** a pending task depends on incomplete work
 - **THEN** the pending task does not appear in the runnable set
 
+### Requirement: First dispatch turns the riff into validated work
+
+The system SHALL ask the configured planner for a task graph when a durable
+intent has no plan. It SHALL validate the graph with the same dependency,
+resource, and task rules used for manually supplied plans before launching any
+worker. Terminal worker receipts SHALL advance the next dependency-safe batch.
+
+#### Scenario: Invalid planner output executes nothing
+
+- **WHEN** the planner returns malformed JSON, a cyclic graph, or unsupported
+  task fields
+- **THEN** the system stores no plan and launches no task worker
+
 ### Requirement: QA precedes final user review
 
 The system SHALL freeze a final candidate only after every planned task

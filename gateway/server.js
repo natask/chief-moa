@@ -120,6 +120,7 @@ const { createDevelopmentPlane } = require("./lib/development-plane");
 const { createDevelopmentPlaneHandlers } = require("./lib/development-plane-handlers");
 const { createDevelopmentPlaneCoordinator } = require("./lib/development-plane-coordinator");
 const { createDevelopmentIntegrationQueue } = require("./lib/development-integration-queue");
+const { extractPlan, planningMessages } = require("./lib/development-planner");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -728,6 +729,7 @@ const workerPull = createWorkerPullStore({
   },
 });
 let brokerCompletionSpine = null;
+let developmentPlaneCoordinator = null;
 const { routeAgentWorkers } = createAgentWorkerHandlers({
   authorizedAgent, agentAuthError, readJsonBody, sendJson,
   workerPull, WorkerPullError, randomId, cleanError, ownerActor,
@@ -759,9 +761,10 @@ const { routeIntentPlane } = createIntentPlaneHandlers({
 });
 const developmentPlane = createDevelopmentPlane({ events: eventSubstrate });
 const developmentIntegrationQueue = createDevelopmentIntegrationQueue({ events: eventSubstrate });
-const developmentPlaneCoordinator = createDevelopmentPlaneCoordinator({
+developmentPlaneCoordinator = createDevelopmentPlaneCoordinator({
   plane: developmentPlane,
   integrationQueue: developmentIntegrationQueue,
+  planIntent: async (intent) => extractPlan(await callModelOrFallback(planningMessages(intent))),
   createRun: startAgentRun,
   readRun: readAgentRun,
 });
@@ -7108,8 +7111,15 @@ function agentLaunchFingerprint(input) {
 }
 
 async function recordCanonicalAgentCompletion(run) {
-  if (!brokerCompletionSpine) return null;
-  return brokerCompletionSpine.complete(run);
+  const result = brokerCompletionSpine ? await brokerCompletionSpine.complete(run) : null;
+  if (developmentPlaneCoordinator && run.source === "development-plane" && run.intent_id) {
+    developmentPlaneCoordinator.dispatch(run.intent_id, {
+      harness: run.harness,
+      working_dir: run.working_dir,
+      project_id: run.project_id,
+    }).catch((error) => appendAgentEvent(run.id, "development_advance_failed", { error: cleanError(error) }));
+  }
+  return result;
 }
 
 function useWorkerPullForAgentRuns() {

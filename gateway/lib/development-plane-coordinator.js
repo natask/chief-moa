@@ -14,7 +14,8 @@ function excerpt(value, max) {
 }
 
 function taskPrompt(intent, task) {
-  const criteria = intent.acceptance_criteria.slice(0, 20).map((item) => `- ${excerpt(item, 400)}`);
+  const criteria = (intent.acceptance_criteria || []).slice(0, 20).map((item) => `- ${excerpt(item, 400)}`);
+  const evidence = (intent.evidence_refs || []).slice(0, 20);
   return [
     "Complete one bounded task from a durable development intent.",
     "Do not broaden the task. Preserve unrelated work. Return exact output and verification references.",
@@ -32,6 +33,9 @@ function taskPrompt(intent, task) {
     "",
     "Intent acceptance criteria:",
     ...(criteria.length ? criteria : ["- Use the task acceptance check."]),
+    "",
+    "Attached evidence:",
+    ...(evidence.length ? evidence.map((item) => `- ${item}`) : ["- None"]),
   ].join("\n");
 }
 
@@ -67,7 +71,7 @@ function runStatus(task, readRun) {
   }
 }
 
-function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, createRun, readRun, startRun = () => {} } = {}) {
+function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, planIntent = null, createRun, readRun, startRun = () => {} } = {}) {
   if (!plane?.get || !plane?.runnable || !plane?.claimTask || !plane?.finishTask) {
     throw new Error("development coordinator requires a development plane");
   }
@@ -92,6 +96,11 @@ function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, cre
   async function dispatch(intentId, options = {}) {
     let intent = await reconcile(intentId);
     if (!intent.exists) throw new Error("intent not found");
+    if (!intent.plan_id) {
+      if (typeof planIntent !== "function") throw new Error("development planner is not configured");
+      const tasks = await planIntent(intent);
+      intent = await plane.definePlan(intentId, { tasks, idempotency_key: "automatic-plan" });
+    }
     const limits = {
       max_parallel: numberLimit(options.max_parallel || options.maxParallel, 4, 128),
       memory_budget_mb: numberLimit(options.memory_budget_mb || options.memoryBudgetMb, 8_192, 1_048_576),

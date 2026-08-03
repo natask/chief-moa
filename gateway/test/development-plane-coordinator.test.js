@@ -77,3 +77,23 @@ test("task prompts preserve scope and acceptance evidence", () => {
     title: "Build", kind: "implementation", acceptance_check: "pass", path_claims: [], depends_on: [],
   }).length < 50_000);
 });
+
+test("first dispatch plans the riff before launching validated work", async (t) => {
+  const { plane, runs } = setup(t);
+  const coordinator = createDevelopmentPlaneCoordinator({
+    plane,
+    planIntent: async (intent) => {
+      assert.equal(intent.riff, "Split this riff");
+      return [
+        { task_id: "build", title: "Build", acceptance_check: "passes" },
+        { task_id: "qa", title: "QA", kind: "qa", depends_on: ["build"], acceptance_check: "verified" },
+      ];
+    },
+    createRun(body) { const run={id:`run_${body.stable_launch_key.split(":").at(-1)}`,status:"queued",...body}; runs.set(run.id,run); return run; },
+    readRun(id) { return runs.get(id); },
+  });
+  await plane.capture({ intent_id: "intent_autoplan", riff: "Split this riff" });
+  const result = await coordinator.dispatch("intent_autoplan");
+  assert.ok(result.intent.plan_id);
+  assert.deepEqual(result.launched.map((item) => item.task_id), ["build"]);
+});
