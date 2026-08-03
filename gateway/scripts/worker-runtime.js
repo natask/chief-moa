@@ -33,6 +33,8 @@ async function main() {
     stateFile: args["state-file"] || env.MOA_WORKER_STATE_FILE || "",
     name: args.name || env.MOA_WORKER_NAME || "Moa worker",
     machineLabel: args["machine-label"] || env.MOA_WORKER_MACHINE_LABEL || "",
+    projectConfigFile: args["project-config-file"] || env.MOA_WORKER_PROJECT_CONFIG_FILE || "",
+    workspaceRoot: args["workspace-root"] || env.MOA_WORKER_WORKSPACE_ROOT || "",
     projects: parseProjects(args.project || env.MOA_WORKER_PROJECTS || ""),
     projectAliases: args["project-alias"] || env.MOA_WORKER_PROJECT_ALIASES || "",
     once: args.once === true || env.MOA_WORKER_ONCE === "1",
