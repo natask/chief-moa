@@ -33,6 +33,8 @@ test("isolated VPS preview proves the device bearer and voice-ticket path", () =
   assert.match(promotion, /smoke-better-auth-device\.js/);
   assert.match(promotion, /NODE_TLS_REJECT_UNAUTHORIZED=0/);
   assert.match(smoke, /const headers = \{ origin,/);
+  assert.match(promotion, /curl -fsS --max-time 15 .*\/health/);
   const updater = read("scripts/vps/update.sh");
+  assert.match(updater, /curl -fsS --max-time 15 .*\/health/);
   assert.match(updater, /compose run --rm --no-deps gateway-db-init\ncompose up -d --no-deps gateway/);
 });

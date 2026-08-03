@@ -134,7 +134,7 @@ node_runtime "$SCRIPT_DIR/validate-promotion-evidence.js" \
 # no-interruption evidence.
 port="$(env_value GATEWAY_PORT)"
 port="${port:-8787}"
-if ! curl -fsS --max-time 5 "http://127.0.0.1:$port/health" | node_runtime -e '
+if ! curl -fsS --max-time 15 "http://127.0.0.1:$port/health" | node_runtime -e '
   let input = "";
   process.stdin.on("data", (chunk) => { input += chunk; });
   process.stdin.on("end", () => {

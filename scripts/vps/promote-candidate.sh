@@ -24,7 +24,7 @@ current="$(git -C "$APP_DIR" rev-parse HEAD)"
 
 require_drain() {
   local activity
-  activity="$(curl -fsS --max-time 5 "$MOA_CONTROL_PLANE_URL/health")"
+  activity="$(curl -fsS --max-time 15 "$MOA_CONTROL_PLANE_URL/health")"
   if ! node_runtime -e '
     let input = "";
     process.stdin.on("data", (chunk) => { input += chunk; });
