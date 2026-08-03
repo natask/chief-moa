@@ -169,6 +169,16 @@ Moa Gateway
   no visibility. This additive schema does not by itself migrate existing
   request handlers to multi-tenant authority.
 
+  Production account activation is a staged, predecessor-readable migration.
+  `gateway-db-init` applies additive gateway Postgres migrations before the HTTP
+  listener starts. The gateway image contains `auth.mjs` and the migration
+  journal, and Compose passes only the declared Better Auth configuration. With
+  `MOA_AUTH=better-auth`, owner browser sessions and approved device bearer
+  sessions are accepted alongside the existing `MOA_GATEWAY_TOKEN`; legacy
+  clients remain valid during migration. The isolated VPS preview must prove
+  owner sign-in, device-code claim and approval, device bearer access to a
+  protected route, and voice-ticket minting before active configuration changes.
+
   `GET /v1/sessions/:id/messages` is the canonical bounded read model for
   cross-surface conversation history. It merges gateway-owned chat, voice,
   browser, and broker records into stable user/assistant messages, preserves

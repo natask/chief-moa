@@ -71,9 +71,16 @@ preview_token="$(openssl rand -hex 32)"
 preview_password="$(openssl rand -hex 32)"
 preview_release_password="$(openssl rand -hex 32)"
 preview_release_publisher_password="$(openssl rand -hex 32)"
+preview_auth_secret="$(openssl rand -hex 32)"
+preview_auth_password="$(openssl rand -base64 24 | tr -d '\n')"
 cat > "$preview_env" <<ENV
 MOA_MODE=self-host
 MOA_GATEWAY_TOKEN=$preview_token
+MOA_AUTH=better-auth
+BETTER_AUTH_URL=https://127.0.0.1:$preview_tls_port
+BETTER_AUTH_SECRET=$preview_auth_secret
+BETTER_AUTH_OWNER_EMAIL=preview-owner@agee.invalid
+BETTER_AUTH_TRUSTED_ORIGINS=https://127.0.0.1:$preview_tls_port
 POSTGRES_PASSWORD=$preview_password
 RELEASE_CONTROL_POSTGRES_PASSWORD=$preview_release_password
 RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD=$preview_release_publisher_password
@@ -111,6 +118,11 @@ wait_for_preview_tls
 unauthorized="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 "$preview_url/v1/supervisor/status")"
 [ "$unauthorized" = "401" ] || { echo "promotion blocked: preview auth gate returned $unauthorized" >&2; exit 1; }
 curl -kfsS --max-time 5 -H "Authorization: Bearer $preview_token" "$preview_url/v1/supervisor/status" >/dev/null
+MOA_AUTH_SMOKE_ORIGIN="$preview_url" \
+MOA_AUTH_SMOKE_EMAIL="preview-owner@agee.invalid" \
+MOA_AUTH_SMOKE_PASSWORD="$preview_auth_password" \
+NODE_TLS_REJECT_UNAUTHORIZED=0 \
+  node_runtime "$source_dir/gateway/scripts/smoke-better-auth-device.js"
 
 # Recheck immediately before minting apply authority. update.sh checks again
 # immediately before checkout mutation.

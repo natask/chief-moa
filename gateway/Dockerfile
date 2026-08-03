@@ -33,8 +33,9 @@ RUN corepack enable \
   && pnpm install --frozen-lockfile --prod \
   && pnpm store prune
 
-COPY gateway/server.js gateway/schema.sql gateway/agent-launcher-profiles.json ./
+COPY gateway/server.js gateway/auth.mjs gateway/schema.sql gateway/agent-launcher-profiles.json ./
 COPY gateway/lib ./lib
+COPY gateway/migrations ./migrations
 COPY gateway/public ./public
 COPY gateway/scripts ./scripts
 COPY gateway/agent-workflows ./agent-workflows

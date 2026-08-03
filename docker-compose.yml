@@ -26,6 +26,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      gateway-db-init:
+        condition: service_completed_successfully
       release-control-db-init:
         condition: service_completed_successfully
     # Loopback publish by default: on a VPS only Caddy (same compose network)
@@ -46,6 +48,13 @@ services:
       ANDROID_OTA_DIR: ${ANDROID_OTA_DIR:-/srv/android-ota}
       ANDROID_OTA_LEGACY_DIR: /data/android-ota
       DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
+      # Better Auth is additive during the device migration: the broad legacy
+      # bearer remains valid while account/device sessions come online.
+      MOA_AUTH: ${MOA_AUTH:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_OWNER_EMAIL: ${BETTER_AUTH_OWNER_EMAIL:-}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-}
       # First rollout remains disabled until the new database has one complete
       # backup/restore cycle. Enabling later exposes already-migrated routes.
       MOA_RELEASE_CONTROL_ENABLED: ${MOA_RELEASE_CONTROL_ENABLED:-0}
@@ -135,6 +144,19 @@ services:
     networks:
       - default
       - release-publisher-db
+
+  # Apply the gateway's additive Postgres migrations before opening the HTTP
+  # listener. The migration journal makes repeat starts a no-op, and the
+  # existing gateway token stays valid before and after Better Auth activation.
+  gateway-db-init:
+    image: chief-moa-gateway:${GATEWAY_IMAGE_TAG:-local}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://moa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the compose env file}@postgres:5432/moa_gateway}
+    command: ["node_modules/.bin/node-pg-migrate", "up", "--single-transaction"]
 
   # Existing Postgres volumes predate release control, so docker-entrypoint
   # initialization is insufficient. This one-shot service creates the separate

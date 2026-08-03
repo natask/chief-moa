@@ -175,6 +175,10 @@ MOA_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 node_runtime "$SCRIPT_DIR/validate-promotion-evidence.js" \
   --file "$EVIDENCE_FILE" --commit "$candidate_sha" --target gateway \
   --control-plane-url "${MOA_CONTROL_PLANE_URL:-}"
+# The gateway migration journal is additive and predecessor-readable. Apply it
+# from the exact candidate image before recreating the listener; a failed
+# migration leaves the old gateway running and cannot become a receipt.
+compose run --rm --no-deps gateway-db-init
 compose up -d --no-deps gateway
 
 if ! wait_for_gateway_health "http://127.0.0.1:$port/health" 45; then

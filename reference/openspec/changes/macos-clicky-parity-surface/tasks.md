@@ -12,6 +12,11 @@
       APIs, service labels, and generic-password commands.
 - [x] 1.6 Replace the pasted gateway token with browser-backed Ag device sign-in
       and one narrowly scoped macOS Keychain session item.
+      Source acceptance requires the production image to include the Better
+      Auth runtime and migrations, Compose to pass its bounded configuration,
+      and an isolated device-flow smoke. Active acceptance additionally requires
+      `api.agee.app` to report Better Auth enabled and a real Mac device session
+      to authenticate both a protected read and a voice ticket.
 
 ## 2. QA artifact
 

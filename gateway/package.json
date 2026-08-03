@@ -89,6 +89,7 @@
     "smoke:gateway": "node scripts/smoke-main-machine.js",
     "smoke:main-machine": "node scripts/smoke-main-machine.js",
     "smoke:remote-mode": "node scripts/smoke-remote-mode.js",
+    "smoke:better-auth-device": "node scripts/smoke-better-auth-device.js",
     "smoke:router-loop": "node scripts/smoke-router-loop.js",
     "smoke:session-history": "node scripts/smoke-session-history.js",
     "smoke:session-messages": "node scripts/smoke-session-messages.js",
