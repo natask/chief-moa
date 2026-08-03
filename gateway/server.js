@@ -118,6 +118,7 @@ const { createIntentPlane } = require("./lib/intent-plane");
 const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
 const { createDevelopmentPlane } = require("./lib/development-plane");
 const { createDevelopmentPlaneHandlers } = require("./lib/development-plane-handlers");
+const { createDevelopmentPlaneCoordinator } = require("./lib/development-plane-coordinator");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -755,8 +756,14 @@ const { routeIntentPlane } = createIntentPlaneHandlers({
   plane: intentPlane, readJsonBody, sendJson, cleanError,
 });
 const developmentPlane = createDevelopmentPlane({ events: eventSubstrate });
+const developmentPlaneCoordinator = createDevelopmentPlaneCoordinator({
+  plane: developmentPlane,
+  createRun: startAgentRun,
+  readRun: readAgentRun,
+});
 const { routeDevelopmentPlane } = createDevelopmentPlaneHandlers({
-  plane: developmentPlane, readJsonBody, sendJson, cleanError,
+  plane: developmentPlane, coordinator: developmentPlaneCoordinator,
+  readJsonBody, sendJson, cleanError,
 });
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,

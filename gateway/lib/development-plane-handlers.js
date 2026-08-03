@@ -1,13 +1,13 @@
 "use strict";
 
-function createDevelopmentPlaneHandlers({ plane, readJsonBody, sendJson, cleanError }) {
+function createDevelopmentPlaneHandlers({ plane, coordinator, readJsonBody, sendJson, cleanError }) {
   async function routeDevelopmentPlane(request, response, url) {
     try {
       if (request.method === "POST" && url.pathname === "/v1/development/intents") {
         sendJson(response, 201, { intent: await plane.capture(await readJsonBody(request)) });
         return true;
       }
-      const match = url.pathname.match(/^\/v1\/development\/intents\/([^/]+)(?:\/(plan|runnable|candidate|decision|tasks)(?:\/([^/]+)\/(claim|finish))?)?$/);
+      const match = url.pathname.match(/^\/v1\/development\/intents\/([^/]+)(?:\/(plan|runnable|dispatch|workers|candidate|decision|tasks)(?:\/([^/]+)\/(claim|finish))?)?$/);
       if (!match) return false;
       const intentId = decodeURIComponent(match[1]);
       const action = match[2] || "";
@@ -23,8 +23,13 @@ function createDevelopmentPlaneHandlers({ plane, readJsonBody, sendJson, cleanEr
         }) });
         return true;
       }
+      if (request.method === "GET" && action === "workers") {
+        sendJson(response, 200, await coordinator.status(intentId));
+        return true;
+      }
       const body = await readJsonBody(request);
       if (request.method === "POST" && action === "plan") sendJson(response, 201, { intent: await plane.definePlan(intentId, body) });
+      else if (request.method === "POST" && action === "dispatch") sendJson(response, 202, await coordinator.dispatch(intentId, body));
       else if (request.method === "POST" && action === "candidate") sendJson(response, 200, { intent: await plane.freezeCandidate(intentId, body) });
       else if (request.method === "POST" && action === "decision") sendJson(response, 200, { intent: await plane.decide(intentId, body) });
       else if (request.method === "POST" && action === "tasks" && match[4] === "claim") sendJson(response, 200, { intent: await plane.claimTask(intentId, decodeURIComponent(match[3]), body) });

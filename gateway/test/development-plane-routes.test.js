@@ -10,6 +10,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "development-plane-routes-
 process.env.DATA_DIR = dataDir;
 process.env.MOA_MODE = "local";
 process.env.MOA_GATEWAY_TOKEN = "development-plane-route-token";
+process.env.MOA_WORKER_PULL = "1";
 process.env.GBRAIN_BIN = "__missing__";
 process.env.BRAIN_STORE_DIR = dataDir;
 const { server } = require("../server");
@@ -65,4 +66,23 @@ test("riff, graph, runnable work, QA, candidate, and acceptance are one API reco
   assert.equal(fetched.status, 200);
   assert.equal(fetched.json.intent.riff, "Build what I described and keep the intent durable.");
   assert.equal(fetched.json.intent.status, "accepted");
+});
+
+test("dispatch launches bounded agent runs and reports their state", async () => {
+  await call("POST", "/v1/development/intents", { intent_id: "route_dispatch", riff: "Run this graph" });
+  await call("POST", "/v1/development/intents/route_dispatch/plan", { tasks: [
+    { task_id: "first", title: "First", acceptance_check: "echo completes", estimated_memory_mb: 400 },
+    { task_id: "second", title: "Second", acceptance_check: "echo completes", estimated_memory_mb: 400 },
+  ] });
+  const dispatched = await call("POST", "/v1/development/intents/route_dispatch/dispatch", {
+    max_parallel: 1, memory_budget_mb: 800, harness: "echo", working_dir: process.cwd(),
+  });
+  assert.equal(dispatched.status, 202, JSON.stringify(dispatched.json));
+  assert.equal(dispatched.json.launched.length, 1);
+  assert.equal(dispatched.json.launched[0].task_id, "first");
+
+  const workers = await call("GET", "/v1/development/intents/route_dispatch/workers");
+  assert.equal(workers.status, 200, JSON.stringify(workers.json));
+  assert.equal(workers.json.workers.length, 1);
+  assert.equal(workers.json.workers[0].task_id, "first");
 });
