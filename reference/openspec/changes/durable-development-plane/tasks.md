@@ -17,3 +17,5 @@
       the user's intent.
 - [x] D11 Turn the saved riff into a validated task graph on first dispatch and
       advance the graph from terminal worker receipts.
+- [x] D12 Fail closed when a worker exits cleanly without structured output and
+      verification evidence for its task kind.

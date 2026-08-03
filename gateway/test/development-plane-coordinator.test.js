@@ -48,7 +48,7 @@ test("bounded dispatch launches only safe runnable tasks and exposes heartbeat s
     last_heartbeat_at: "2026-08-02T00:01:00Z", lease_expires_at: "", progress: { phase: "test" }, updated_at: "2026-08-02T00:00:00Z",
   });
 
-  Object.assign(runs.get("run_one"), { status: "completed", artifact_refs: ["commit-one"] });
+  Object.assign(runs.get("run_one"), { status: "completed", output: 'Done\nDEVELOPMENT_RECEIPT {"passed":true,"output_refs":["git://commit-one"],"verification_refs":["test://one"]}' });
   const second = await coordinator.dispatch("intent_dispatch", { max_parallel: 2, memory_budget_mb: 1_000 });
   assert.equal(second.intent.tasks.find((item) => item.task_id === "one").state, "completed");
   assert.deepEqual(second.launched.map((item) => item.task_id), ["two"]);
@@ -73,9 +73,28 @@ test("task prompts preserve scope and acceptance evidence", () => {
   assert.match(prompt, /Do not broaden the task/);
   assert.match(prompt, /Allowed path claims: app\/ui/);
   assert.match(prompt, /- It works/);
+  assert.match(prompt, /DEVELOPMENT_RECEIPT/);
   assert.ok(taskPrompt({ intent_id: "i", objective: "", riff: "x".repeat(100_000), acceptance_criteria: [] }, {
     title: "Build", kind: "implementation", acceptance_check: "pass", path_claims: [], depends_on: [],
   }).length < 50_000);
+});
+
+test("completed runs fail closed without kind-specific evidence", async (t) => {
+  const { plane, coordinator, runs } = setup(t);
+  await plane.capture({ intent_id: "intent_receipt", riff: "Verify receipts" });
+  await plane.definePlan("intent_receipt", { tasks: [{ task_id: "qa", title: "QA", kind: "qa", acceptance_check: "pass" }] });
+  await coordinator.dispatch("intent_receipt");
+  Object.assign(runs.get("run_qa"), { status: "completed", output: "looks good" });
+  let state = await coordinator.reconcile("intent_receipt");
+  assert.equal(state.tasks[0].state, "failed");
+  assert.match(state.tasks[0].failure, /without a DEVELOPMENT_RECEIPT/);
+
+  await plane.capture({ intent_id: "intent_qa_refs", riff: "Verify QA refs" });
+  await plane.definePlan("intent_qa_refs", { tasks: [{ task_id: "qa_refs", title: "QA", kind: "qa", acceptance_check: "pass" }] });
+  await coordinator.dispatch("intent_qa_refs");
+  Object.assign(runs.get("run_qa_refs"), { status: "completed", output: 'DEVELOPMENT_RECEIPT {"passed":true,"output_refs":[],"verification_refs":[]}' });
+  state = await coordinator.reconcile("intent_qa_refs");
+  assert.match(state.tasks[0].failure, /needs verification_refs/);
 });
 
 test("first dispatch plans the riff before launching validated work", async (t) => {

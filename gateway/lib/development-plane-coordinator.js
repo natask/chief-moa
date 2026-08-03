@@ -36,18 +36,52 @@ function taskPrompt(intent, task) {
     "",
     "Attached evidence:",
     ...(evidence.length ? evidence.map((item) => `- ${item}`) : ["- None"]),
+    "",
+    "Finish with one line beginning DEVELOPMENT_RECEIPT followed by JSON:",
+    '{"passed":true,"output_refs":["git://..."],"verification_refs":["test://..."]}',
+    "Use passed=false and include failure when the acceptance check did not pass. QA and integration require verification_refs. Implementation and integration require output_refs.",
   ].join("\n");
 }
 
-function runReceipt(run) {
+function structuredReceipt(run) {
+  const output = String(run.output || run.stdout || "");
+  const marker = "DEVELOPMENT_RECEIPT";
+  const index = output.lastIndexOf(marker);
+  if (index < 0) return null;
+  const tail = output.slice(index + marker.length).trim();
+  const start = tail.indexOf("{");
+  const end = tail.lastIndexOf("}");
+  if (start < 0 || end < start) return null;
+  try {
+    const value = JSON.parse(tail.slice(start, end + 1));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch { return null; }
+}
+
+function receiptRefs(value) {
+  return Array.isArray(value) ? [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 64) : [];
+}
+
+function runReceipt(run, task) {
   const runRef = `agent-run://${run.id}`;
-  const artifactRefs = Array.isArray(run.artifact_refs) ? run.artifact_refs : [];
-  const deploymentRefs = Array.isArray(run.deployment_refs) ? run.deployment_refs : [];
+  if (run.status === "completed") {
+    const receipt = structuredReceipt(run);
+    if (!receipt) return { passed: false, output_refs: [], verification_refs: [runRef], failure: "worker completed without a DEVELOPMENT_RECEIPT", idempotency_key: `agent-run-result:${run.id}:missing-receipt` };
+    const outputRefs = receiptRefs(receipt.output_refs || receipt.outputRefs);
+    const verificationRefs = receiptRefs(receipt.verification_refs || receipt.verificationRefs);
+    const missingOutput = ["implementation", "integration"].includes(task.kind) && !outputRefs.length;
+    const missingVerification = ["qa", "integration"].includes(task.kind) && !verificationRefs.length;
+    if (receipt.passed !== true || missingOutput || missingVerification) {
+      const reason = String(receipt.failure || (missingOutput ? `${task.kind} receipt needs output_refs` : missingVerification ? `${task.kind} receipt needs verification_refs` : "worker reported that acceptance failed")).slice(0, 2_000);
+      return { passed: false, output_refs: outputRefs, verification_refs: [runRef, ...verificationRefs], failure: reason, idempotency_key: `agent-run-result:${run.id}:rejected-receipt` };
+    }
+    return { passed: true, output_refs: [runRef, ...outputRefs], verification_refs: [runRef, ...verificationRefs], failure: "", idempotency_key: `agent-run-result:${run.id}:completed` };
+  }
   return {
-    passed: run.status === "completed",
-    output_refs: [runRef, ...artifactRefs.map((ref) => `artifact://${ref}`)],
-    verification_refs: [runRef, ...deploymentRefs.map((ref) => `deployment://${ref}`)],
-    failure: run.status === "completed" ? "" : String(run.error || run.output || `agent run ${run.status}`).slice(0, 2_000),
+    passed: false,
+    output_refs: [],
+    verification_refs: [runRef],
+    failure: String(run.error || run.output || `agent run ${run.status}`).slice(0, 2_000),
     idempotency_key: `agent-run-result:${run.id}:${run.status}`,
   };
 }
@@ -85,7 +119,7 @@ function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, pla
       let run;
       try { run = readRun(task.run_id); } catch { continue; }
       if (!TERMINAL.has(run.status)) continue;
-      intent = await plane.finishTask(intentId, task.task_id, runReceipt(run));
+      intent = await plane.finishTask(intentId, task.task_id, runReceipt(run, task));
       if (task.kind === "integration" && integrationQueue) {
         await integrationQueue.release(intentId, task.task_id, run.status);
       }
@@ -149,4 +183,4 @@ function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, pla
   return { dispatch, reconcile, status };
 }
 
-module.exports = { createDevelopmentPlaneCoordinator, taskPrompt, runReceipt, TERMINAL };
+module.exports = { createDevelopmentPlaneCoordinator, taskPrompt, structuredReceipt, runReceipt, TERMINAL };

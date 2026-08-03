@@ -52,6 +52,19 @@ completes and at least one completed task is a QA task.
 - **WHEN** implementation completes without a completed QA task
 - **THEN** the system refuses to freeze the candidate
 
+### Requirement: Clean exit is not task acceptance
+
+The system SHALL require a structured development receipt from a completed
+worker. Implementation and integration receipts SHALL name output references.
+QA and integration receipts SHALL name verification references. Missing
+kind-specific evidence SHALL fail the task and block dependent work.
+
+#### Scenario: QA exits without evidence
+
+- **WHEN** a QA worker exits with status completed but provides no structured
+  verification references
+- **THEN** the QA task fails and no dependent task launches
+
 ### Requirement: Integration is serial across intents
 
 The system SHALL allow at most one active integration task across all durable
