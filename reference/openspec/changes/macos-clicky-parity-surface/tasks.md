@@ -27,8 +27,11 @@
 - [x] 2.1 Build and test `Ag`, scan for packaged destinations/provider
       credentials, and create a versioned ad-hoc-signed ZIP plus SHA-256.
 - [x] 2.2 Add macOS CI for the exact build/test/package/scan path.
-- [ ] 2.3 Install the QA bundle only when it will not disturb an existing app or
+- [x] 2.3 Install the QA bundle only when it will not disturb an existing app or
       TCC identity; otherwise record the installation blocker and artifact.
+      The fixed-notch candidate was installed while Ag was not running, with
+      the previous app preserved for rollback and the installed frame measured
+      by the no-network geometry smoke. See `fixed-notch-runtime-qa-20260803.md`.
 
 ## 3. Voice invocation
 
