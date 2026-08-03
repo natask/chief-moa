@@ -53,10 +53,17 @@ test("store exposes byte streams and fails soft for missing blobs", async (t) =>
   stream.on("data", (chunk) => chunks.push(chunk));
   await once(stream, "end");
   assert.equal(Buffer.concat(chunks).toString(), "stream me");
+  const streamed = await store.stream(note.id);
+  const streamedChunks = [];
+  streamed.stream.on("data", (chunk) => streamedChunks.push(chunk));
+  await once(streamed.stream, "end");
+  assert.equal(Buffer.concat(streamedChunks).toString(), "stream me");
+  assert.equal(streamed.size, 9);
   const blob = store.videoPath(note.id);
   fs.rmSync(blob);
   fs.mkdirSync(blob);
   assert.equal(await store.readBytes(note.id), null);
+  assert.equal(await store.stream(note.id), null);
   fs.rmSync(blob, { recursive: true });
   assert.equal(store.videoPath(note.id), "");
   assert.equal(await store.readBytes(note.id), null);
@@ -186,10 +193,12 @@ test("video handler distinguishes metadata, blob, non-file, and successful strea
   fs.writeFileSync(blob, "bytes");
   const note = { id: "note", content_type: "video/webm" };
   let filePath = blob;
+  let streamFailure = false;
   const handlers = createVideoNoteHandlers({ store: {
     get: (id) => id === "note" ? note : null,
     videoPath: () => filePath,
     stream: async () => {
+      if (streamFailure) throw new Error("bucket\nread failed");
       if (!filePath) return null;
       let stat;
       try {
@@ -212,6 +221,12 @@ test("video handler distinguishes metadata, blob, non-file, and successful strea
   response = captureResponse();
   await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/bad/extra/video"));
   assert.equal(response.status, 404);
+  streamFailure = true;
+  response = captureResponse();
+  await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));
+  assert.equal(response.status, 502);
+  assert.match(response.json.error, /bucket read failed/);
+  streamFailure = false;
   filePath = "";
   response = captureResponse();
   await handlers.sendVideo(response, new URL("https://gateway.test/v1/video-notes/note/video"));

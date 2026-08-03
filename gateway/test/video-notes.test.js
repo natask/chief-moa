@@ -56,6 +56,38 @@ test("retention is bounded to supported evidence policies", () => {
   assert.equal(store.create({ bytes: Buffer.from("b"), retention: "forever" }).retention, "user_kept");
 });
 
+test("intent annotation preserves raw evidence and allows only failed-to-complete transcript repair", async () => {
+  const dataDir = tempDataDir();
+  const store = createVideoNotesStore({ dataDir });
+  const bytes = Buffer.from("unaltered-video-source");
+  const note = store.create({ bytes, retention: "user_kept" });
+  const failed = store.annotateIntent(note.id, {
+    transcript: { state: "failed", error: "provider unavailable", prompt_version: "v1" },
+    intent: { intent_id: "intent_video_one", status: "captured" },
+  });
+  assert.equal(failed.transcript.state, "failed");
+  assert.deepEqual(await store.readBytes(note.id), bytes);
+  assert.equal(failed.sha256, note.sha256);
+
+  const complete = store.annotateIntent(note.id, {
+    transcript: { state: "complete", text: "Exact provider transcript.", provider: "test", prompt_version: "v1" },
+    intent: { intent_id: "intent_video_one", status: "captured" },
+  });
+  assert.equal(complete.transcript.text, "Exact provider transcript.");
+  assert.equal(complete.video.evidence_ref, note.evidence_ref);
+  assert.deepEqual(await store.readBytes(note.id), bytes);
+  assert.throws(() => store.annotateIntent(note.id, {
+    transcript: { state: "complete", text: "Different transcript.", provider: "test", prompt_version: "v1" },
+    intent: { intent_id: "intent_video_one" },
+  }), /collision/);
+  assert.throws(() => store.linkIntent(note.id, { intent_id: "intent_video_two" }), /linkage collision/);
+  assert.throws(() => store.annotateTranscript("missing", { state: "failed" }), (error) => error.statusCode === 404);
+  assert.throws(() => store.linkIntent("missing", { intent_id: "intent_video_one" }), (error) => error.statusCode === 404);
+  assert.throws(() => store.annotateTranscript(note.id, { state: "complete", text: "" }), /empty/);
+  assert.throws(() => store.annotateTranscript(note.id, { state: "failed", text: "x".repeat(64_001) }), /64000/);
+  assert.throws(() => store.linkIntent(note.id, {}), /intent_id/);
+});
+
 test("empty body is refused and quota refuses instead of pruning", () => {
   const dataDir = tempDataDir();
   const store = createVideoNotesStore({ dataDir, maxTotalBytes: 10 });

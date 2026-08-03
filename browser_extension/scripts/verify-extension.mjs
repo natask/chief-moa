@@ -36,6 +36,7 @@ const requiredFiles = [
   "extension/tool-receipt-runtime.js",
   "extension/voice-sampler.js",
   "extension/voice-sampler-runtime.js",
+  "extension/video-intent-view.js",
   "extension/youtube-media.js",
   "extension/offscreen-livekit.html",
   "extension/offscreen-livekit.js",

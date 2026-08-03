@@ -422,6 +422,7 @@ async function stopAndUploadVideoCapture(msg) {
     "content-type": blob.type || "video/webm",
     "x-moa-surface": "agee-extension",
     "x-moa-duration-ms": String(durationMs),
+    "x-moa-retention": "user_kept",
   };
   if (msg.sessionId) headers["x-moa-session-id"] = msg.sessionId;
   if (msg.gatewayToken) headers.authorization = `Bearer ${msg.gatewayToken}`;

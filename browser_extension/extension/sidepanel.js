@@ -17,6 +17,12 @@ import {
   parseAssignmentMutationResponse,
   parseReleaseControlView,
 } from "./release-control-runtime.js";
+import {
+  videoEvidenceRef,
+  videoIntentEditCommand,
+  videoIntentItems,
+  videoNoteId,
+} from "./video-intent-view.js";
 
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
@@ -31,6 +37,9 @@ const sendBtn = document.getElementById("sendBtn");
 const companionIdentityEl = document.getElementById("companionIdentity");
 const companionIdentityImageEl = document.getElementById("companionIdentityImage");
 const companionIdentityNameEl = document.getElementById("companionIdentityName");
+const capturedIntentsEl = document.getElementById("capturedIntents");
+const capturedIntentsStatusEl = document.getElementById("capturedIntentsStatus");
+const capturedIntentsRefreshBtn = document.getElementById("capturedIntentsRefresh");
 
 const TURN_WATCHDOG_MS = 90000;
 const ACTIVE_COMPANION_CACHE_KEY = "ageeActiveCompanionPetCache";
@@ -43,6 +52,7 @@ let reconnectAttempt = 0;
 let historyRefresh = null;
 let historyRefreshGeneration = 0;
 const historyRevisionLedger = new Map();
+const videoObjectUrls = new Set();
 
 let audioCtx = null;
 let playbackTime = 0;
@@ -90,6 +100,170 @@ chrome.storage.onChanged.addListener((changes, area) => {
     renderCompanionIdentity(changes[ACTIVE_COMPANION_CACHE_KEY].newValue);
   }
 });
+
+async function capturedIntentGateway(path, { method = "GET", body, responseType = "json" } = {}) {
+  const config = await getEffectiveGatewayConfig();
+  if (!config.gatewayUrl) throw new Error("No gateway is configured.");
+  const headers = {};
+  if (config.gatewayToken) headers.authorization = `Bearer ${config.gatewayToken}`;
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const response = await fetch(`${config.gatewayUrl}${path}`, {
+    method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 300);
+    throw new Error(`Gateway returned ${response.status}${detail ? `: ${detail}` : ""}`);
+  }
+  return responseType === "blob" ? response.blob() : response.json();
+}
+
+function videoIntentHistory(history) {
+  const details = document.createElement("details");
+  details.className = "video-intent-history";
+  const summary = document.createElement("summary");
+  const events = Array.isArray(history?.events) ? history.events : [];
+  summary.textContent = `History · ${events.length} durable event${events.length === 1 ? "" : "s"}`;
+  const list = document.createElement("ol");
+  for (const event of events) {
+    const item = document.createElement("li");
+    item.textContent = `${event.event_type} · ${event.occurred_at || "time unavailable"}`;
+    list.appendChild(item);
+  }
+  details.append(summary, list);
+  const source = events.find((event) => event.event_type === "intent.source_recorded");
+  if (typeof source?.payload?.raw_text === "string") {
+    const original = document.createElement("pre");
+    original.className = "video-intent-source";
+    original.textContent = source.payload.raw_text;
+    details.appendChild(original);
+  }
+  return details;
+}
+
+function renderVideoIntent({ intent, note, history }) {
+  const card = document.createElement("article");
+  card.className = "video-intent-card";
+  const status = document.createElement("div");
+  status.className = "video-intent-status";
+  status.textContent = intent.lifecycle_state || "captured";
+  const objective = document.createElement("textarea");
+  objective.value = intent.normalized_objective || intent.statement || "";
+  objective.maxLength = 2000;
+  objective.setAttribute("aria-label", "Editable captured intent");
+  const evidence = videoEvidenceRef(intent);
+  const meta = document.createElement("div");
+  meta.className = "video-intent-meta";
+  meta.textContent = note
+    ? `${evidence} · kept until you delete it · ${note.bytes || 0} bytes · ${note.duration_ms || 0} ms`
+    : `${evidence} · original recording deleted; transcript and intent history retained`;
+  const provenance = document.createElement("div");
+  provenance.className = "video-intent-provenance";
+  provenance.textContent = note?.transcript
+    ? `Transcript: ${note.transcript.state} · ${note.transcript.provider || "provider unavailable"} · ${note.transcript.model || "model unavailable"} · SHA-256 ${note.sha256}`
+    : "Transcript provenance remains in durable intent history.";
+  const actions = document.createElement("div");
+  actions.className = "video-intent-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.textContent = "Save edit";
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      await capturedIntentGateway(`/v1/intent-runtime/intents/${encodeURIComponent(intent.intent_id)}/transition`, {
+        method: "POST", body: videoIntentEditCommand(intent, objective.value, crypto.randomUUID()),
+      });
+      capturedIntentsStatusEl.textContent = "Intent edit saved as durable history.";
+      await refreshCapturedIntents();
+    } catch (error) {
+      capturedIntentsStatusEl.textContent = `Could not save: ${String(error?.message || error)}`;
+    } finally { save.disabled = false; }
+  });
+  actions.appendChild(save);
+  if (note?.video?.href) {
+    if (note.transcript?.state === "failed") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry transcript";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        try {
+          await capturedIntentGateway(`/v1/video-notes/${encodeURIComponent(note.id)}/intent`, {
+            method: "POST", body: { user_confirmed: true },
+          });
+          capturedIntentsStatusEl.textContent = "Transcript retry completed.";
+          await refreshCapturedIntents();
+        } catch (error) {
+          capturedIntentsStatusEl.textContent = `Transcript retry failed: ${String(error?.message || error)}`;
+          retry.disabled = false;
+        }
+      });
+      actions.appendChild(retry);
+    }
+    const load = document.createElement("button");
+    load.type = "button";
+    load.textContent = "Load recording";
+    load.addEventListener("click", async () => {
+      load.disabled = true;
+      try {
+        const blob = await capturedIntentGateway(note.video.href, { responseType: "blob" });
+        const url = URL.createObjectURL(blob);
+        videoObjectUrls.add(url);
+        const player = document.createElement("video");
+        player.controls = true;
+        player.src = url;
+        card.appendChild(player);
+        load.remove();
+      } catch (error) {
+        capturedIntentsStatusEl.textContent = `Could not load recording: ${String(error?.message || error)}`;
+        load.disabled = false;
+      }
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "delete";
+    remove.textContent = "Delete recording";
+    remove.addEventListener("click", async () => {
+      if (!confirm("Delete the original screen recording? The transcript and durable intent history will remain.")) return;
+      remove.disabled = true;
+      try {
+        await capturedIntentGateway(`/v1/video-notes/${encodeURIComponent(note.id)}`, { method: "DELETE" });
+        capturedIntentsStatusEl.textContent = "Original recording deleted; transcript and intent history retained.";
+        await refreshCapturedIntents();
+      } catch (error) {
+        capturedIntentsStatusEl.textContent = `Could not delete recording: ${String(error?.message || error)}`;
+        remove.disabled = false;
+      }
+    });
+    actions.append(load, remove);
+  }
+  card.append(status, objective, meta, provenance, actions, videoIntentHistory(history));
+  return card;
+}
+
+async function refreshCapturedIntents() {
+  capturedIntentsRefreshBtn.disabled = true;
+  capturedIntentsStatusEl.textContent = "Loading captured intents…";
+  for (const url of videoObjectUrls) URL.revokeObjectURL(url);
+  videoObjectUrls.clear();
+  try {
+    const payload = await capturedIntentGateway("/v1/intent-runtime/intents?limit=100");
+    const intents = videoIntentItems(payload).slice(0, 20);
+    const records = await Promise.all(intents.map(async (intent) => {
+      const id = videoNoteId(intent);
+      const [noteResult, history] = await Promise.all([
+        capturedIntentGateway(`/v1/video-notes/${encodeURIComponent(id)}`).catch(() => null),
+        capturedIntentGateway(`/v1/intent-runtime/intents/${encodeURIComponent(intent.intent_id)}/history`).catch(() => null),
+      ]);
+      return { intent, note: noteResult?.note || null, history };
+    }));
+    capturedIntentsEl.replaceChildren(...records.map(renderVideoIntent));
+    capturedIntentsStatusEl.textContent = intents.length
+      ? "Video captures stay here as editable intents; no work is dispatched automatically."
+      : "No video-led intents yet. Shift-click the browser record button to capture one.";
+  } catch (error) {
+    capturedIntentsStatusEl.textContent = `Captured intents unavailable: ${String(error?.message || error)}`;
+  } finally { capturedIntentsRefreshBtn.disabled = false; }
+}
 
 // ---- Release cockpit -------------------------------------------------------
 
@@ -1361,6 +1535,8 @@ form.addEventListener("submit", async (e) => {
 ensurePort();
 hydrateCompanionIdentity().catch(() => renderCompanionIdentity(null));
 historyRetryBtn.addEventListener("click", () => refreshHistory({ reason: "manual retry" }));
+capturedIntentsRefreshBtn.addEventListener("click", refreshCapturedIntents);
+refreshCapturedIntents();
 refreshHistory({ reason: "initial" });
 refreshReleaseCockpit();
 createBrowserToolCatalogView({

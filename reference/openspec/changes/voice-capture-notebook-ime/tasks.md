@@ -99,6 +99,24 @@ gain page-action authority because it runs inside the browser extension.
   promotion have not yet been recorded. This slice does not satisfy
   the full audio-note-first lifecycle in section 1.
 
+## 0D. Authorized Browser Video-Led Intent Slice
+
+- [x] 0D.1 Keep screen-and-microphone capture behind the browser's explicit
+  source picker, visible recording state, and explicit Stop action.
+- [x] 0D.2 Store the original WebM, SHA-256, retention, duration, and evidence
+  reference before transcription or intent admission.
+- [x] 0D.3 Store the provider transcript and provenance as immutable intent
+  source history, then admit one deterministic editable `captured` intent linked
+  to the video evidence.
+- [x] 0D.4 Replace the automatic video chat turn with an inert capture result;
+  create no model answer, TTS, tool request, agent run, or automatic dispatch.
+- [x] 0D.5 Add a browser side-panel review surface for status, editable intent,
+  evidence playback, retention, transcript retry, deletion, and durable history.
+- Acceptance: Shift-clicking the browser record button, selecting a source,
+  narrating, and explicitly stopping stores the original recording and creates
+  one reviewable captured intent. Focused gateway/browser tests pass. Loaded-
+  extension capture QA and safe preview/promotion evidence remain required.
+
 ## 0. Reconcile Current State
 
 - [ ] 0.1 Build a claims ledger for raw audio notes, streaming transcription,
@@ -235,7 +253,7 @@ gain page-action authority because it runs inside the browser extension.
 - [ ] Design and validate a complete Amharic character keyboard and transliteration
   model as its own product change.
 - [ ] Define drill consent, corpus, rubric, evaluation, and deletion behavior.
-- [ ] Define video capture and media-specific gestures after the basic gesture
-  contract is proven discoverable and reliable.
+- [ ] Define additional media-specific gestures only after the explicit
+  Shift-click video capture contract is proven discoverable and reliable.
 - [ ] Evaluate monetization outside sensitive keyboard/capture surfaces through a
   separate privacy and business-model decision.

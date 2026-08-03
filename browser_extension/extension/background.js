@@ -3667,13 +3667,7 @@ async function uploadAudioNote(cfg, pcmBytes, durationMs) {
 }
 // ---- End record mode -------------------------------------------------------
 
-// ---- Video notes: screen recording + narration → gateway video turn --------
-// A video note is a screen recording with spoken narration: the user shows and
-// tells what they mean, the blob is stored via /v1/video-notes, then a normal
-// /v1/voice/turns request references it (video_note_id) so Gemini watches the
-// recording and the reply flows back through the existing cue surface. The
-// offscreen document owns capture and upload; this file owns session state,
-// the desktopCapture picker, and the turn.
+// ---- Video notes: explicit screen+narration capture → durable intent --------
 
 function chooseDesktopMediaStreamId(tab) {
   return new Promise((resolve, reject) => {
@@ -3760,13 +3754,11 @@ async function stopVideoNoteSession(tabId, cueId) {
     })
     .catch((error) => ({ stored: false, error: String(error?.message || error) }));
   if (result?.stored && result.note?.id) {
-    // The reply comes back on the same cue via progress/done messages; the
-    // stop response only confirms the note was stored.
-    runVideoNoteTurn(session.tabId ?? tabId, cueId, result.note).catch((error) => {
+    createVideoNoteIntent(session.tabId ?? tabId, cueId, result.note).catch((error) => {
       send(session.tabId ?? tabId, {
         cmd: "error",
         cueId,
-        text: `Video note turn failed: ${String(error?.message || error)}`,
+        text: `Video intent capture failed: ${String(error?.message || error)}`,
       });
     });
   }
@@ -3782,34 +3774,17 @@ function discardVideoNoteSession(_reason = "discarded") {
     .catch(() => {});
 }
 
-// Send the stored note through the normal conversational turn path with
-// video_note_id attached. The gateway watches the recording (narration rides
-// the video's audio track) and replies like any other turn.
-async function runVideoNoteTurn(tabId, cueId, note) {
+async function createVideoNoteIntent(tabId, cueId, note) {
   const cfg = await getConfig();
-  send(tabId, { cmd: "progress", cueId, text: "watching your video…" });
-  const sessionId = await getStableSessionId();
-  const deviceId = await getStableDeviceId();
-  const data = await callGateway(cfg, "/v1/voice/turns", {
-    body: {
-      source: "agee-extension",
-      device_id: deviceId,
-      session_id: sessionId,
-      conversation_id: sessionId,
-      branch_id: cueId,
-      all_branches_context: true,
-      video_note_id: note.id,
-      client: {
-        platform: "browser",
-        source: "agee-extension",
-        device_id: deviceId,
-        input: "video",
-      },
-    },
+  send(tabId, { cmd: "progress", cueId, text: "preserving transcript and intent…" });
+  const data = await callGateway(cfg, `/v1/video-notes/${encodeURIComponent(note.id)}/intent`, {
+    body: { user_confirmed: true },
   });
-  const reply = String(data.display || data.text || data.speak || "").trim();
-  const speak = String(data.speak || "").trim();
-  send(tabId, { cmd: "done", cueId, summary: reply || "Done.", speak });
+  const transcriptFailed = data?.transcript?.state !== "complete";
+  const summary = transcriptFailed
+    ? "Recording preserved. Intent saved with transcription pending; retry from Captured intents."
+    : "Intent saved for review. Recording kept until you delete it in Captured intents.";
+  send(tabId, { cmd: "done", cueId, summary, speak: "" });
   return data;
 }
 // ---- End video notes --------------------------------------------------------

@@ -54,6 +54,16 @@ does not delay clipboard delivery, infer a topic, mutate a conversation, or
 dispatch work. Later reflection, topic extraction, recurring-thought detection,
 and user-approved intent routing consume the literal block as derived work.
 
+The first video-led slice keeps the same source-before-derivation boundary but
+uses the browser's existing screen-and-microphone WebM note. Explicit Stop is
+the user-confirmation boundary: the gateway stores the original bytes and hash,
+derives a provider-attributed narration transcript, appends that transcript as
+immutable intent source history, and creates one editable `captured` intent.
+The side panel shows lifecycle, evidence, retention, transcript provenance,
+edits, and event history. It can retry failed transcription or explicitly
+delete the raw recording while retaining the transcript and intent history.
+No chat response, speech output, agent run, tool request, or dispatch occurs.
+
 ## Considered Shapes
 
 ### A. Treat every segment as a voice-chat turn
@@ -205,8 +215,8 @@ surface. Any future ad model needs a separate privacy/threat-model decision.
 6. Add the IME in an opt-in build path and verify sensitive-field behavior on a
    physical device.
 7. Add explicit block dispatch and multi-select dispatch.
-8. Consider Amharic character layout, drills, video, and gesture accelerators as
-   separate changes.
+8. Verify the explicit browser video-led intent path, then consider additional
+   media gestures, Amharic character layout, and drills as separate changes.
 
 ## Verification Strategy
 

@@ -3528,10 +3528,8 @@
 
   // ---- Video note mode -----------------------------------------------------
   // Shift+click on the record button captures a screen recording with mic
-  // narration: show and tell instead of describe. The background owns the
-  // desktopCapture picker, the offscreen recording, the /v1/video-notes upload,
-  // and the follow-up gateway turn; the reply lands on this cue via the normal
-  // progress/done messages, exactly like a typed command.
+  // narration: show and tell instead of describe. Explicit stop stores the
+  // recording and creates a reviewable intent without dispatching work.
   let videoNoteActive = false;
   let videoNotePending = false;
 
@@ -3595,8 +3593,7 @@
       videoNotePending = false;
       if (!res && extensionContextInvalidated) return;
       if (res?.stored) {
-        // The reply arrives on this same cue as progress/done messages.
-        updateCue(cueId, "video stored — sending to Ag ...", "running");
+        updateCue(cueId, "video stored — preserving intent...", "running");
         return;
       }
       updateCue(cueId, res?.error || "Video note upload failed.", "error");

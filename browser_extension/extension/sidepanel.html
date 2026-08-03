@@ -142,6 +142,92 @@
       #history[data-stale="true"] {
         opacity: 0.72;
       }
+      .captured-intents-head {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        margin-top: 4px;
+      }
+      .captured-intents-head button,
+      .video-intent-actions button {
+        background: #1b1d22;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        padding: 5px 8px;
+      }
+      #capturedIntents {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .video-intent-card {
+        background: #121318;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+      }
+      .video-intent-meta,
+      .video-intent-provenance,
+      #capturedIntentsStatus {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .video-intent-status {
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .video-intent-card textarea {
+        background: #17181d;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font: inherit;
+        line-height: 1.45;
+        min-height: 96px;
+        padding: 8px;
+        resize: vertical;
+        width: 100%;
+      }
+      .video-intent-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .video-intent-actions .delete {
+        color: var(--error);
+      }
+      .video-intent-card video {
+        max-height: 240px;
+        width: 100%;
+      }
+      .video-intent-history {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .video-intent-history ol {
+        margin: 7px 0 0;
+        padding-left: 18px;
+      }
+      .video-intent-source {
+        background: #17181d;
+        border-radius: 7px;
+        color: var(--text);
+        font-family: inherit;
+        margin: 8px 0 0;
+        max-height: 180px;
+        overflow: auto;
+        padding: 8px;
+        white-space: pre-wrap;
+      }
       #historyError {
         align-items: flex-start;
         background: #24191b;
@@ -607,6 +693,12 @@
     <main>
       <h2 class="section-title" id="nowTitle">Now</h2>
       <section id="log" aria-labelledby="nowTitle"></section>
+      <div class="captured-intents-head">
+        <h2 class="section-title" id="capturedIntentsTitle">Captured intents</h2>
+        <button id="capturedIntentsRefresh" type="button">Refresh</button>
+      </div>
+      <div id="capturedIntentsStatus" role="status"></div>
+      <section id="capturedIntents" aria-labelledby="capturedIntentsTitle"></section>
       <h2 class="section-title" id="historyTitle">History</h2>
       <div id="historyError" role="status" hidden>
         <span id="historyErrorText"></span>

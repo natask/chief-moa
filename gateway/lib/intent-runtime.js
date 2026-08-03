@@ -24,6 +24,7 @@ const {
   listIntents,
   rehydrateProject,
   rehydrateIntentForMutation,
+  readIntentStream,
 } = require("./intent-runtime-rehydration");
 const { buildIntentContextPacket } = require("./intent-context-packet");
 
@@ -568,6 +569,33 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     });
   }
 
+  async function recordSource(intentId, input = {}) {
+    const rawText = String(input.raw_text || input.rawText || "");
+    if (!rawText) throw new Error("raw_text is required");
+    if (Buffer.byteLength(rawText, "utf8") > 64_000) throw new Error("raw_text exceeds max length 64000 bytes");
+    const provenance = input.provenance && typeof input.provenance === "object" && !Array.isArray(input.provenance)
+      ? input.provenance
+      : {};
+    if (JSON.stringify(provenance).length > 4_000) throw new Error("source provenance exceeds max length 4000");
+    const revision = Number(input.revision || 1);
+    if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("source revision must be a positive integer");
+    return appendIntentEvent(intentId, input, "intent.source_recorded", {
+      raw_text: rawText,
+      source_digest: crypto.createHash("sha256").update(rawText).digest("hex"),
+      revision,
+      media_type: text(input.media_type || input.mediaType || "text/plain", 80),
+      source_ref: text(input.source_ref || input.sourceRef, MAX_TEXT.ref),
+      provenance,
+    });
+  }
+
+  async function history(intentId, limits = {}) {
+    const safeIntentId = requireBoundedText(intentId, MAX_TEXT.id, "intent_id");
+    const result = await readIntentStream(events, safeIntentId, limits);
+    if (!result.events.length) return null;
+    return { intent_id: safeIntentId, ...result };
+  }
+
   async function launch(input = {}) {
     const raw = String(input.message || input.command || input.raw_text || input.rawText || "");
     if (!raw.trim()) throw new Error("message is required");
@@ -775,6 +803,8 @@ function createIntentRuntime({ events, idFactory, now } = {}) {
     list,
     rehydrate,
     contextPacket,
+    recordSource,
+    history,
     launch,
     ingestMessage,
     claim,

@@ -1131,3 +1131,44 @@ test("append result mismatch and overlong identifiers fail closed", async () => 
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("source transcript and edit history remain durable and reviewable", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "moa-intent-source-history-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const runtime = makeRuntime(tempDir, [
+    "2026-08-03T01:00:00.000Z",
+    "2026-08-03T01:00:01.000Z",
+    "2026-08-03T01:00:02.000Z",
+  ]);
+  await runtime.capture({
+    intent_id: "intent_video_history",
+    statement: "Original transcript",
+    normalized_objective: "Original transcript",
+    evidence_refs: ["video-note://vnote_history"],
+    idempotency_key: "capture-video-history",
+  });
+  await runtime.recordSource("intent_video_history", {
+    raw_text: "Original transcript, word for word.",
+    source_ref: "video-note://vnote_history#transcript",
+    media_type: "text/plain; source=video-audio",
+    provenance: { provider: "fixture", admitted_by: "explicit_stop" },
+    idempotency_key: "source-video-history",
+  });
+  await runtime.transition("intent_video_history", {
+    type: "intent.enriched",
+    statement: "User-edited intent",
+    normalized_objective: "User-edited intent",
+    idempotency_key: "edit-video-history",
+  });
+
+  const state = await runtime.get("intent_video_history");
+  assert.equal(state.lifecycle_state, "captured");
+  assert.equal(state.normalized_objective, "User-edited intent");
+  assert.equal(state.source_revisions[0].source_ref, "video-note://vnote_history#transcript");
+  const history = await runtime.history("intent_video_history");
+  assert.deepEqual(history.events.map((event) => event.event_type), [
+    "intent.captured", "intent.source_recorded", "intent.enriched",
+  ]);
+  assert.equal(history.events[1].payload.raw_text, "Original transcript, word for word.");
+  assert.equal(history.events[1].payload.provenance.admitted_by, "explicit_stop");
+});

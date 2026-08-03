@@ -106,6 +106,38 @@ function createVideoNotesStore(options = {}) {
     return readNoteFile(filePath);
   }
 
+  // Derived metadata is stored without rewriting or replacing captured bytes.
+  // Transcript lands before intent admission so the durable source exists first.
+  function annotateTranscript(id, value) {
+    const note = get(id);
+    if (!note) throw Object.assign(new Error("video note not found"), { statusCode: 404 });
+    const transcript = normalizeTranscriptAnnotation(value);
+    if (note.transcript?.state === "complete"
+      && JSON.stringify(note.transcript) !== JSON.stringify(transcript)) {
+      throw Object.assign(new Error("video note transcript annotation collision"), { statusCode: 409 });
+    }
+    const updated = { ...note, transcript };
+    writeNote(notesDir, updated);
+    return clone(updated);
+  }
+
+  function linkIntent(id, value) {
+    const note = get(id);
+    if (!note) throw Object.assign(new Error("video note not found"), { statusCode: 404 });
+    const intent = normalizeIntentAnnotation(value);
+    if (note.intent?.intent_id && note.intent.intent_id !== intent.intent_id) {
+      throw Object.assign(new Error("video note intent linkage collision"), { statusCode: 409 });
+    }
+    const updated = { ...note, intent };
+    writeNote(notesDir, updated);
+    return clone(updated);
+  }
+
+  function annotateIntent(id, input = {}) {
+    annotateTranscript(id, input.transcript);
+    return linkIntent(id, input.intent);
+  }
+
   function videoPath(id) {
     const note = get(id);
     if (!note) return "";
@@ -189,6 +221,9 @@ function createVideoNotesStore(options = {}) {
     create,
     list,
     get,
+    annotateTranscript,
+    linkIntent,
+    annotateIntent,
     videoPath,
     readBytes,
     readStream,
@@ -321,6 +356,34 @@ function bareMimeType(contentType) {
 
 function normalizeRetention(value) {
   return value === "short_lived" ? "short_lived" : DEFAULT_RETENTION;
+}
+
+function normalizeTranscriptAnnotation(value) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const state = input.state === "complete" ? "complete" : "failed";
+  const transcript = typeof input.text === "string" ? input.text : "";
+  if (state === "complete" && !transcript.trim()) throw new Error("completed video transcript is empty");
+  if (Buffer.byteLength(transcript, "utf8") > 64_000) throw new Error("video transcript exceeds 64000 bytes");
+  return {
+    state,
+    text: transcript,
+    provider: cleanText(input.provider, 120),
+    model: cleanText(input.model, 160),
+    prompt_version: cleanText(input.prompt_version, 120),
+    created_at: cleanText(input.created_at, 80) || new Date().toISOString(),
+    error: state === "failed" ? cleanText(input.error, 500) : "",
+  };
+}
+
+function normalizeIntentAnnotation(value) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const intentId = cleanToken(input.intent_id, 160);
+  if (!intentId) throw new Error("video note intent_id is required");
+  return {
+    intent_id: intentId,
+    href: `/v1/intent-runtime/intents/${encodeURIComponent(intentId)}`,
+    status: cleanText(input.status, 80) || "captured",
+  };
 }
 
 function writeNote(notesDir, note) {
