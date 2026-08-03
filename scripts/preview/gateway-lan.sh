@@ -126,7 +126,11 @@ start_preview() {
     -l "${PREVIEW_LABEL}" \
     -o "${PREVIEW_LOG_FILE}" \
     -e "${PREVIEW_LOG_FILE}" \
-    -- "${PREVIEW_SCRIPT_PATH}" run
+    -- /usr/bin/env \
+      "MOA_PREVIEW_PORT=${PREVIEW_PORT}" \
+      "MOA_PREVIEW_ROOT=${PREVIEW_ROOT}" \
+      "MOA_PREVIEW_GCP_PROJECT=${PREVIEW_PROJECT}" \
+      "${PREVIEW_SCRIPT_PATH}" run
 
   local _attempt
   for _attempt in {1..40}; do
@@ -214,6 +218,11 @@ smoke_preview() {
 stop_preview() {
   local preview_pid=""
   if ! preview_pid="$(running_pid)"; then
+    if launch_service_exists; then
+      launchctl remove "${PREVIEW_LABEL}"
+      echo "Gateway preview service removed after an incomplete start."
+      return 0
+    fi
     echo "Gateway preview is not running."
     return 0
   fi
