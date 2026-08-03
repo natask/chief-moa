@@ -134,6 +134,12 @@ active backup, records the M4 chain, then delegates the active mutation to the
 guarded updater. Missing credentials or an active voice turn safely defer the
 timer instead of weakening the gate.
 
+Install the timer with `scripts/vps/install-auto-update.sh`. It polls 90 seconds
+after boot, then waits until each one-shot worker has finished before starting
+the next 120-second delay. The installer removes the retired
+`chief-moa-auto-update.timer.d/interval.conf` activation-relative override; do
+not restore an `OnUnitActiveSec` trigger for this long-running worker.
+
 ```sh
 /opt/chief-moa/app/scripts/vps/update.sh --ref master
 ```

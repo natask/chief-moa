@@ -50,14 +50,13 @@
 
 ## 1b. Promotion Scheduling
 
-- [ ] 1b.1 Keep the promotion poll interval longer than the worst-case
-      promotion, and make a running promotion immune to its own trigger. A
-      120-second timer against a ~20-minute promotion re-triggered the unit
-      mid-flight and TERMed it; the droplet now carries a 1800s drop-in at
-      `/etc/systemd/system/chief-moa-auto-update.timer.d/interval.conf`.
-      Acceptance: the interval is tracked in the repo rather than living only
-      as a hand-applied drop-in, and a promotion that outruns the interval is
-      reported as a configuration fault, not a timeout.
+- [x] 1b.1 Make promotion polling completion-relative and immune to its own
+      trigger. `OnUnitInactiveSec=120` starts only after the one-shot worker
+      exits, and the installer removes the retired activation-relative 1800s
+      drop-in.
+      Acceptance: a generated timer has no `OnUnitActiveSec`, carries the
+      completion-relative trigger, removes the legacy override, and is covered
+      by an isolated installer test.
 - [x] 1b.2 Stop using a paid GitHub-hosted runner as the long-lived production
       observer. GitHub verifies and publishes the exact `vps-deploy` ref;
       `scripts/release/push-master.sh` waits for that exact SHA at public health

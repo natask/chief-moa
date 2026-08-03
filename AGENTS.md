@@ -117,8 +117,10 @@ The VPS gateway auto-promotes (user-approved policy, 2026-07-06): every push
 to master that touches the gateway deploy path is verified by the
 `Deploy VPS gateway` workflow, which on success moves the `vps-deploy` ref;
 a systemd timer on the droplet (`scripts/vps/auto-update.sh`) promotes that
-ref within ~2 minutes through `scripts/vps/update.sh`, whose backup +
-restore-check gate still aborts before touching the service if either fails.
+ref after the prior worker finishes plus a ~2-minute completion-relative delay
+through `scripts/vps/update.sh`. A long preview/build cannot collide with its
+own next timer trigger. The state-compatibility and rollback gates still abort
+before touching the service if either fails.
 Agents deploy the gateway by merging verified work to master when the
 active-promotion gate below passes. If the gate is not proven, they wait.
 Manual promotion (`scripts/vps/push.sh`) uses the same gate.

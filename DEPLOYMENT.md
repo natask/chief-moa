@@ -325,9 +325,13 @@ The former same-droplet backup timers and local pull LaunchAgent are retired.
 They copied the entire voice spool on every run, consumed gigabytes, and added
 latency without providing off-host disaster recovery.
 
-The poll interval must stay longer than the worst-case promotion. A promotion
-takes roughly 20 minutes on this droplet; a 120-second timer re-triggered the
-unit mid-flight and TERMed it, which looked like a timeout and was not.
+The timer schedule is completion-relative: `OnUnitInactiveSec=120` starts the
+next poll delay only after the one-shot promotion worker exits. A promotion may
+therefore run longer than 20 minutes without colliding with its own next
+trigger. Do not restore the old `OnUnitActiveSec` schedule; its 120-second
+activation-relative interval elapsed during a promotion and the resulting
+collision looked like a timeout. The installer also removes the known legacy
+1800-second activation-relative drop-in so it cannot remain as a second trigger.
 GitHub Actions verifies the candidate and publishes `vps-deploy`; it does not
 hold a paid runner open while the droplet builds. `scripts/release/push-master.sh`
 waits from the operator machine until public `/health` reports the exact commit.

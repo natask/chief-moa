@@ -162,3 +162,12 @@ caller that does not identify itself keeps the old, stricter behaviour.
 Leases should also be minutes, not a day. A 24-hour lease on a two-minute retry
 loop is a freeze, not a lease. Changing the value is a follow-up task because
 it touches the promoter's evidence contract, not the store.
+
+## Decision 7: promotion polling follows completion
+
+The systemd timer uses `OnUnitInactiveSec`, so its retry delay begins only after
+the one-shot promotion worker exits. Promotion duration is therefore outside
+the poll interval: a slow preview or image build cannot collide with the timer
+that launched it. `flock` remains defense in depth for manual overlap, not the
+primary scheduling model. The installer removes the retired activation-relative
+drop-in so the host has one canonical trigger.

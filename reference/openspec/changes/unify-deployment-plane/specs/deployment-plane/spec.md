@@ -173,22 +173,22 @@ running.
 
 ### Requirement: A promotion is never interrupted by its own trigger
 
-The system SHALL keep the promotion poll interval longer than the worst-case
-promotion duration, and a promotion already in progress SHALL NOT be terminated
-by a later trigger of the same schedule.
+The system SHALL schedule the next promotion poll relative to completion of the
+prior one-shot worker. A promotion already in progress SHALL NOT have another
+trigger from the same schedule, regardless of its duration.
 
 #### Scenario: the schedule fires while a promotion is running
 
 - GIVEN a promotion in progress
-- WHEN the poll interval elapses
+- WHEN its ordinary poll delay would otherwise have elapsed
 - THEN the running promotion continues to completion
-- AND the new trigger is skipped rather than replacing it.
+- AND the next poll delay has not started yet.
 
 #### Scenario: the promotion duration grows past the interval
 
-- WHEN a promotion regularly takes longer than the poll interval
-- THEN the mismatch is reported as a configuration fault
-- AND it is not reported as a promotion timeout.
+- WHEN a promotion runs longer than the ordinary retry delay
+- THEN the next delay begins only after that promotion exits
+- AND no activation-relative trigger interrupts or overlaps it.
 
 ### Requirement: A failed promotion leaves persistent state in place
 
