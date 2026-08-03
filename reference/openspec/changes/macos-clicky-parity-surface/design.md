@@ -48,7 +48,9 @@ while using Ag branding, SF Symbols, and Chief Moa data.
 
 Visual QA renders SwiftUI snapshots directly to bitmap artifacts. It does not
 launch the app, create a visible QA window, change Spaces, or steal foreground
-focus from the user's desktop.
+focus from the user's desktop. When interactive QA is explicitly requested,
+`--isolated-qa-space` changes both panels from all-Spaces behavior to the active
+QA Space for that process only; production launches retain the all-Spaces rail.
 
 Microphone denial remains visible in the island. The recovery state names the
 Microphone pane, opens it only after a user action, rechecks permission when Ag

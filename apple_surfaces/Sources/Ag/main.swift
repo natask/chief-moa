@@ -8,6 +8,8 @@ import MoaMacShell
 import MoaMacUI
 import SwiftUI
 
+private let usesIsolatedQASpace = CommandLine.arguments.contains("--isolated-qa-space")
+
 private final class CommandPanel: NSPanel {
     var interactionHandler: (() -> Void)?
     private(set) var isProcessingPointerInteraction = false
@@ -62,7 +64,9 @@ private final class AgentRailPanel: NSPanel {
         panel.hasShadow = false
         panel.level = .floating
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.collectionBehavior = usesIsolatedQASpace
+            ? [.moveToActiveSpace, .fullScreenAuxiliary]
+            : [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         self.panel = panel
         return panel
@@ -171,7 +175,9 @@ private final class AgentRailPanel: NSPanel {
         panel.hidesOnDeactivate = false
         panel.isMovable = true
         panel.isMovableByWindowBackground = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.collectionBehavior = usesIsolatedQASpace
+            ? [.moveToActiveSpace, .fullScreenAuxiliary]
+            : [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.interactionHandler = { [weak self] in self?.presentation.handle(.interacted) }
         moveObserver = NotificationCenter.default.addObserver(
