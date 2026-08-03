@@ -29,6 +29,19 @@ git fetch origin master --quiet
 git merge-base --is-ancestor origin/master HEAD \
   || fail "branch does not contain origin/master; rebase or merge master first so the push is a fast-forward"
 
+# A repository commit is not necessarily a gateway deployment. The VPS workflow
+# is path-filtered, so waiting for /health to report a new SHA after an Android,
+# Apple, extension, or docs-only release can never succeed. Keep the exact-live
+# check mandatory whenever this release actually touches the gateway deploy
+# path.
+gateway_deploy_changed=false
+if ! git diff --quiet origin/master HEAD -- \
+  .github/scripts/assert-deploy-vps-contract.rb \
+  .github/workflows/deploy-vps.yml \
+  gateway docker-compose.yml docker-compose.vps.yml scripts/vps; then
+  gateway_deploy_changed=true
+fi
+
 # Mirror the extension release gate locally so the failure (if any) is instant
 # instead of a CI round-trip: packaged source changes require a manifest bump.
 if ! git diff --quiet origin/master HEAD -- browser_extension/extension; then
@@ -89,8 +102,12 @@ log "all checks green; fast-forwarding master (this starts the deploy)"
 git push origin "HEAD:master"
 released_sha="$(git rev-parse HEAD)"
 log "master -> ${released_sha:0:12}. Deploy workflows now re-run on master against the identical tree."
-log "gateway: droplet timer promotes within ~2 minutes of the vps-deploy ref moving."
-if ! bash scripts/vps/wait-for-live-commit.sh "$released_sha"; then
-  fail "master and vps-deploy were published, but the active gateway did not prove the exact commit; inspect the droplet promotion receipt"
+if [ "$gateway_deploy_changed" = true ]; then
+  log "gateway: droplet timer promotes within ~2 minutes of the vps-deploy ref moving."
+  if ! bash scripts/vps/wait-for-live-commit.sh "$released_sha"; then
+    fail "master and vps-deploy were published, but the active gateway did not prove the exact commit; inspect the droplet promotion receipt"
+  fi
+  log "gateway: exact live commit verified"
+else
+  log "gateway: deploy path unchanged; exact live-commit wait is not applicable"
 fi
-log "gateway: exact live commit verified"
