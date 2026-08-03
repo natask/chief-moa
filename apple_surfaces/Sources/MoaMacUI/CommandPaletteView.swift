@@ -65,9 +65,16 @@ public struct CommandPaletteView: View {
 
             if !model.voiceState.partial.isEmpty || !model.voiceState.final.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.voiceState.final.isEmpty ? "Live transcript" : "Final transcript")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text(transcriptLabel)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if model.voiceActivity == .dictation && !model.voiceState.final.isEmpty {
+                            Button("Copy") { model.copyDictation() }
+                                .buttonStyle(.plain)
+                        }
+                    }
                     Text(model.voiceState.final.isEmpty ? model.voiceState.partial : model.voiceState.final)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -99,6 +106,18 @@ public struct CommandPaletteView: View {
                 .buttonStyle(.plain)
                 .help(model.voiceState.isActive ? "Finish and send" : "Start listening")
                 .accessibilityLabel(model.voiceState.isActive ? "Finish and send" : "Start listening")
+                Button {
+                    Task { await model.handleDictation() }
+                } label: {
+                    Image(systemName: model.voiceState.isActive && model.voiceActivity == .dictation
+                          ? "stop.circle.fill" : "text.cursor")
+                        .font(.title2)
+                        .foregroundStyle(model.voiceActivity == .dictation ? .orange : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(model.voiceState.isActive && model.voiceActivity == .dictation
+                      ? "Finish literal dictation" : "Start literal dictation")
+                .accessibilityLabel("Literal dictation")
                 Button(action: send) {
                     if model.isSending { ProgressView().controlSize(.small) }
                     else { Image(systemName: "arrow.up.circle.fill").font(.title2) }
@@ -113,7 +132,7 @@ public struct CommandPaletteView: View {
                 .font(.caption2)
                 .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
 
-            Text("\(shortcutLabel) or the mic toggles listening · no screen context attached")
+            Text("\(shortcutLabel) toggles assistant voice · Dictate captures literal text · no screen context attached")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -142,6 +161,13 @@ public struct CommandPaletteView: View {
         case .denied, .interrupted, .failed: .red
         default: .white
         }
+    }
+
+    private var transcriptLabel: String {
+        if model.voiceActivity == .dictation {
+            return model.voiceState.final.isEmpty ? "Live dictation" : "Literal dictation"
+        }
+        return model.voiceState.final.isEmpty ? "Live transcript" : "Final transcript"
     }
 
     private var connectionEditor: some View {

@@ -20,6 +20,7 @@ import MoaMacShell
     #expect(body["conversation_id"] as? String == "mac-session")
     #expect(body["turn_id"] as? String == "turn-one")
     #expect(body["delivery_intent"] as? String == "assistant_voice")
+    #expect(body["transcription_only"] == nil)
     #expect(body["screen"] == nil)
     #expect(body["ax"] == nil)
     let format = try #require(body["format"] as? [String: Any])
@@ -45,11 +46,27 @@ import MoaMacShell
     }
 }
 
+@Test func dictationSessionDeclaresTranscriptionOnlyWithoutAssistantDelivery() throws {
+    let start = try GatewayVoiceSessionStart(
+        origin: #require(URL(string: "https://moa.example")),
+        sessionID: "mac-session",
+        turnID: "turn-dictation",
+        mode: .dictation
+    )
+    #expect(start.mode == .dictation)
+    let body = try #require(JSONSerialization.jsonObject(with: start.body) as? [String: Any])
+    #expect(body["source"] as? String == "moa-macos-dictation")
+    #expect(body["delivery_intent"] as? String == "literal_dictation")
+    #expect(body["transcription_only"] as? Bool == true)
+}
+
 @Test func voiceCommitAndCancelEventsBindTheTurn() throws {
     let commit = try #require(JSONSerialization.jsonObject(with: GatewayVoiceClientEvent.commit(turnID: "turn-1")) as? [String: String])
     #expect(commit == ["type": "commit_turn", "turn_id": "turn-1"])
     let cancel = try #require(JSONSerialization.jsonObject(with: GatewayVoiceClientEvent.cancel(turnID: "turn-1")) as? [String: String])
     #expect(cancel == ["type": "cancel_turn", "turn_id": "turn-1"])
+    let finalize = try #require(JSONSerialization.jsonObject(with: GatewayVoiceClientEvent.finalizeTranscript(turnID: "turn-1")) as? [String: String])
+    #expect(finalize == ["type": "finalize_transcript", "turn_id": "turn-1"])
     #expect(throws: GatewayVoiceError.eventTooLarge) {
         try GatewayVoiceClientEvent.commit(turnID: String(repeating: "t", count: GatewayVoiceSessionStart.maximumEventBytes))
     }
@@ -74,6 +91,7 @@ import MoaMacShell
     (#"{"type":"transcript_partial","text":"  hello  "}"#, .transcriptPartial("hello")),
     (#"{"type":"transcript_final","text":"finished"}"#, .transcriptFinal("finished")),
     (#"{"type":"turn_done","status":"completed"}"#, .turnDone(status: "completed", reason: nil)),
+    (#"{"type":"transcript_finalized","status":"completed","transcript":"done"}"#, .turnDone(status: "completed", reason: nil)),
     (#"{"type":"turn_done","status":"no_speech","reason":"stt_empty"}"#, .turnDone(status: "no_speech", reason: "stt_empty")),
     (#"{"type":"error","message":"provider unavailable"}"#, .failure("provider unavailable")),
     (#"{"type":"assistant_text","text":"spoken reply"}"#, .assistantText("spoken reply")),
@@ -204,6 +222,7 @@ private actor StubVoiceTransport: GatewayVoiceTransporting {
     private(set) var tokens: [String] = []
     private(set) var audio: [Data] = []
     private(set) var commits = 0
+    private(set) var finalizes = 0
     private(set) var cancels = 0
     private var handler: (@MainActor @Sendable (GatewayVoiceServerEvent) -> Void)?
 
@@ -216,6 +235,7 @@ private actor StubVoiceTransport: GatewayVoiceTransporting {
 
     func sendAudio(_ data: Data) async throws { audio.append(data) }
     func commit() async throws { commits += 1 }
+    func finalizeTranscript() async throws { finalizes += 1 }
     func cancel() async { cancels += 1 }
     func emit(_ event: GatewayVoiceServerEvent) async { if let handler { await handler(event) } }
 }
@@ -262,6 +282,7 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
 @MainActor private final class StubCaptureController: VoiceCaptureControlling {
     var handler: (@MainActor @Sendable (GatewayVoiceServerEvent) -> Void)?
     var starts = 0
+    var dictationStarts = 0
     var commits = 0
     var cancels = 0
 
@@ -279,6 +300,15 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
         handler?(.transcriptFinal("protected fixture phrase"))
         handler?(.assistantText("audible assistant reply"))
         handler?(.turnDone(status: "completed", reason: nil))
+    }
+
+    func startDictation(origin: URL, bearerToken: String, sessionID: String, turnID: String,
+                        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
+                        eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void) async throws {
+        dictationStarts += 1
+        handler = eventHandler
+        eventHandler(.sessionReady)
+        eventHandler(.transcriptPartial("protected fixture phrase"))
     }
 
     func cancel() async { cancels += 1 }
@@ -346,6 +376,27 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     await #expect(throws: VoiceCaptureError.notActive) { try await controller.stopAndCommit() }
 }
 
+@MainActor @Test func voiceControllerDictationFinalizesWithoutAssistantCommit() async throws {
+    let microphone = StubMicrophone()
+    let transport = StubVoiceTransport()
+    let controller = VoiceCaptureController(
+        permission: StubPermission(allowed: true),
+        microphone: microphone,
+        transport: transport
+    )
+    try await controller.startDictation(
+        origin: URL(string: "https://moa.example")!,
+        bearerToken: "gateway-token",
+        sessionID: "session",
+        turnID: "dictation-turn",
+        levelHandler: { _ in }
+    ) { _ in }
+    #expect(await transport.starts.first?.mode == .dictation)
+    try await controller.stopAndCommit()
+    #expect(await transport.finalizes == 1)
+    #expect(await transport.commits == 0)
+}
+
 @Test func pcmLevelMeterIsBoundedAndTracksSilenceAndSignal() {
     #expect(VoiceLevelMeter.normalizedLevel(forPCM16: Data()) == 0)
     #expect(VoiceLevelMeter.normalizedLevel(forPCM16: Data([0, 0, 0, 0])) == 0)
@@ -396,6 +447,23 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     #expect(model.prompt.isEmpty)
     await model.cancelVoice()
     #expect(capture.cancels == 1)
+}
+
+@MainActor @Test func commandModelDictationUsesSeparateCaptureAndNeverAcceptsAssistantReply() async {
+    let capture = StubCaptureController()
+    let model = CommandModel(
+        store: VoiceTestConnectionStore(),
+        sender: UnusedChatSender(),
+        voiceController: capture
+    )
+    model.token = "gateway-token"
+    await model.handleDictation()
+    #expect(capture.dictationStarts == 1)
+    #expect(model.voiceActivity == .dictation)
+    await model.handleDictation()
+    #expect(capture.commits == 1)
+    #expect(model.voiceState.final == "protected fixture phrase")
+    #expect(model.reply.isEmpty)
 }
 
 @MainActor @Test func commandModelLoadsAuthenticatedSessionHistoryInPlace() async {

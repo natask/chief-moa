@@ -96,6 +96,7 @@ final class MoaStreamingVoiceSessionController {
     private final String branchId;
     private final boolean autoCommitOnSilence;
     private boolean transcriptionOnly;
+    private String sourceSurface = "";
     private final Callback callback;
     private final Context metricsContext;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -221,6 +222,18 @@ final class MoaStreamingVoiceSessionController {
                 transcriptionOnly = enabled;
             }
         }
+    }
+
+    void setSourceSurface(String source) {
+        synchronized (lock) {
+            if (!active) sourceSurface = normalizedSourceSurface(source);
+        }
+    }
+
+    static String sourceSurface(boolean transcriptionOnly, String requestedSource) {
+        String requested = normalizedSourceSurface(requestedSource);
+        if (!requested.isEmpty()) return requested;
+        return transcriptionOnly ? "android-launcher-dictation" : "android-overlay";
     }
 
     void setVoiceDraftEnabled(boolean enabled) {
@@ -611,12 +624,13 @@ final class MoaStreamingVoiceSessionController {
 
         boolean draft;
         synchronized (lock) { draft = voiceDraftEnabled; }
+        String turnSource = sourceSurface(transcriptionOnly, sourceSurface);
         boolean sent = draft
                 ? socket != null && socket.sendVoiceDraftStart(currentSessionId, currentTurnId, branchId,
-                        transcriptionOnly ? "android-launcher-dictation" : "android-overlay",
+                        turnSource,
                         deviceId, transcriptionOnly)
                 : socket != null && socket.sendSessionStart(currentSessionId, currentTurnId, branchId,
-                        null, transcriptionOnly ? "android-launcher-dictation" : "android-overlay",
+                        null, turnSource,
                         deviceId, transcriptionOnly);
         if (!sent) {
             reportError("Could not send session_start to voice gateway.", null);
@@ -1025,6 +1039,11 @@ final class MoaStreamingVoiceSessionController {
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static String normalizedSourceSurface(String value) {
+        String source = safe(value).toLowerCase(java.util.Locale.US);
+        return source.matches("[a-z0-9][a-z0-9._-]{0,63}") ? source : "";
     }
 
     private final class CaptureCallback implements MoaAudioCaptureController.Callback {

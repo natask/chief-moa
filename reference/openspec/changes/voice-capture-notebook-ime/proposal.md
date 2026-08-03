@@ -2,12 +2,14 @@
 
 ## Status
 
-Partially implemented. Ask/Note/Coach delivery state and browser literal
-dictation exist. The current candidate also adds worker-authoritative
-cross-tab dictation state and an additive capture-block projection for completed
-browser dictation turns. These candidate changes are not a production promotion,
-and they do not complete the Android notebook, audio-first capture lifecycle, or
-IME described by this change.
+Partially implemented. Ask/Note/Coach delivery state, browser literal dictation,
+worker-authoritative cross-tab state, and the additive capture-block projection
+exist. The current candidate adds the first real Android voice IME: it blocks
+sensitive editors, binds a transcript candidate to its originating editor, and
+inserts only through `InputConnection` after an explicit Insert action. These
+candidate changes are not a production promotion, and they do not complete the
+Android notebook, audio-first capture lifecycle, IME language controls, native
+Mac dictation activity, or physical-device acceptance described by this change.
 
 ## Why
 

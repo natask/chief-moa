@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ag</string>
+    <string name="ime_name">Ag voice typing</string>
+    <string name="ime_subtype_english">Ag voice typing · English</string>
+    <string name="ime_subtype_amharic">Ag voice typing · Amharic</string>
     <string name="dictation_shortcut_short">Dictation</string>
     <string name="dictation_shortcut_long">Start Ag dictation</string>
     <string name="assistant_shortcut_short">Assistant</string>

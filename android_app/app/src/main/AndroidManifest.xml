@@ -93,6 +93,19 @@
         </service>
 
         <service
+            android:name=".AgVoiceInputMethodService"
+            android:exported="true"
+            android:label="@string/ime_name"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/ag_voice_input_method" />
+        </service>
+
+        <service
             android:name=".MoaQuickTileService"
             android:exported="true"
             android:icon="@drawable/ic_moa_orb"

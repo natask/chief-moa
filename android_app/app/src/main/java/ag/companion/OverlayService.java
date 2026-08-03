@@ -676,18 +676,15 @@ public final class OverlayService extends Service {
     private void syncVoiceDraftControlSlots() {
         if (compactOverlayRoot == null || orbParams == null
                 || voiceDraftPauseControl == null || voiceDraftCancelControl == null) return;
-        int width = dp(72);
-        int height = dp(36);
-        int gap = dp(6);
-        int centerX = orbParams.x + Math.max(1, orbParams.width) / 2;
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int left = Math.max(0, Math.min(centerX - width / 2, screenWidth - width));
-        compactOverlayRoot.put(voiceDraftPauseControl,
-                new Rect(left, Math.max(0, orbParams.y - height - gap), left + width,
-                        Math.max(0, orbParams.y - height - gap) + height), true);
-        compactOverlayRoot.put(voiceDraftCancelControl,
-                new Rect(left, orbParams.y + Math.max(1, orbParams.height) + gap, left + width,
-                        orbParams.y + Math.max(1, orbParams.height) + gap + height), true);
+        Rect orb = orbScreenBounds();
+        MoaVoiceDraftControlGeometry.Slots slots = MoaVoiceDraftControlGeometry.slots(
+                orb.left, orb.top, orb.right, orb.bottom,
+                getResources().getDisplayMetrics().widthPixels,
+                getResources().getDisplayMetrics().heightPixels, dp(72), dp(36), dp(6));
+        compactOverlayRoot.put(voiceDraftCancelControl, new Rect(
+                slots.cancel.left, slots.cancel.top, slots.cancel.right, slots.cancel.bottom), true);
+        compactOverlayRoot.put(voiceDraftPauseControl, new Rect(
+                slots.pause.left, slots.pause.top, slots.pause.right, slots.pause.bottom), true);
     }
 
     private void updateVoiceDraftControls() {

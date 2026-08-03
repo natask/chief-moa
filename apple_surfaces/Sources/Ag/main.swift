@@ -31,6 +31,16 @@ private final class CommandPanel: NSPanel {
         Task { await model.handleSummon() }
     }
 
+    func invokeDictation() {
+        let wasActive = model.voiceState.isActive
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            wasActive ? .levelChange : .alignment,
+            performanceTime: .now
+        )
+        show()
+        Task { await model.handleDictation() }
+    }
+
     func show() {
         let panel = panel ?? makePanel()
         position(panel)
@@ -144,6 +154,7 @@ struct AgApp: App {
         MenuBarExtra("Ag", systemImage: "sparkles") {
             Button("Speak with Ag") { CommandPanelController.shared.invoke() }
                 .keyboardShortcut(" ", modifiers: .control)
+            Button("Dictate literal text") { CommandPanelController.shared.invokeDictation() }
             SettingsLink { Text("Privacy & Screen Context…") }
             Divider()
             Button("Quit Ag") { NSApp.terminate(nil) }

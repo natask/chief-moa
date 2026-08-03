@@ -151,6 +151,17 @@ Relevant work:
 
 ## Voice and latency
 
+Reliable literal dictation is the first product milestone across every runnable
+Surface. Before broader assistant automation expands, Android, browser, and
+native desktop must share one gateway-owned transcription contract with these
+outcomes: capture is visibly active, final text is editable and copyable,
+sensitive fields fail closed, no reasoning/TTS/agent work runs on the dictation
+path, and each completed capture is durable or exposes an honest retryable
+failure. Platform insertion remains Surface-owned: Android uses an IME
+`InputConnection`, browser uses the clipboard, and native desktop uses its own
+clipboard/insertion authority. A scaffold that cannot yet run on its platform
+must report dictation as missing rather than claiming parity.
+
 The voice runtime should accept interchangeable speech-to-text, speech-to-
 speech, reasoning, and text-to-speech providers behind one stable client
 protocol. A provider change should not require a new Android or browser event
@@ -181,6 +192,7 @@ sample only when the user enabled that retention class.
 
 Relevant work:
 
+- `voice-capture-notebook-ime`
 - `provider-agnostic-voice-agent-runtime`
 - `streaming-cascaded-voice`
 - `voice-latency-prewarm`
@@ -252,18 +264,22 @@ Do not delete uncertain user knowledge.
 
 ## Current order of work
 
-1. Prove and finish the browser read, act, anchored-UI, and delegated-task loop.
-2. Replace copied gateway tokens with account sign-in and user-bound device
+1. Complete the literal dictation pipeline across gateway, browser, Android,
+   and runnable native desktop surfaces. Finish capture durability, transcript
+   editing/copy, safe platform insertion, recording visibility, and real-device
+   acceptance before treating assistant expansion as the lead milestone.
+2. Prove and finish the browser read, act, anchored-UI, and delegated-task loop.
+3. Replace copied gateway tokens with account sign-in and user-bound device
    registration. Enforce user ownership through database and object storage.
-3. Fix and physically verify the Android install and core UI, including the
+4. Fix and physically verify the Android install and core UI, including the
    duplicate-app report.
-4. Measure and reduce end-to-end voice latency on browser and Android. Add the
+5. Measure and reduce end-to-end voice latency on browser and Android. Add the
    correction-based voice-quality loop.
-5. Finish the shared workspace, session controls, Settings, History, and visual
+6. Finish the shared workspace, session controls, Settings, History, and visual
    system across surfaces.
-6. Prove agent-assisted self-hosting with isolated preview, backup, restore,
+7. Prove agent-assisted self-hosting with isolated preview, backup, restore,
    device registration, and rollback evidence.
-7. Consolidate documentation and adopt one remote-capable QA and release plane.
+8. Consolidate documentation and adopt one remote-capable QA and release plane.
 
 ## Open decisions
 
@@ -275,6 +291,11 @@ Do not delete uncertain user knowledge.
   isolated candidates.
 
 ## Change log
+
+### 2026-08-02
+
+- Moved reliable literal dictation to the first product milestone across all
+  runnable surfaces.
 
 ### 2026-07-31
 

@@ -10,6 +10,11 @@ public enum GatewayVoiceError: Error, Equatable, Sendable {
     case invalidAssistantAudioFormat
 }
 
+public enum GatewayVoiceMode: Equatable, Sendable {
+    case assistant
+    case dictation
+}
+
 public struct GatewayVoiceAudioFormat: Equatable, Sendable {
     public let encoding: String
     public let sampleRate: Double
@@ -70,8 +75,9 @@ public struct GatewayVoiceSessionStart: Sendable {
 
     public let endpoint: URL
     public let body: Data
+    public let mode: GatewayVoiceMode
 
-    public init(origin: URL, sessionID: String, turnID: String) throws {
+    public init(origin: URL, sessionID: String, turnID: String, mode: GatewayVoiceMode = .assistant) throws {
         let httpEndpoint = try GatewayOrigin.endpoint(origin: origin, path: ["v1", "voice", "sessions"])
         guard var components = URLComponents(url: httpEndpoint, resolvingAgainstBaseURL: false) else {
             throw MoaMacError.invalidDestination
@@ -79,16 +85,20 @@ public struct GatewayVoiceSessionStart: Sendable {
         components.scheme = httpEndpoint.scheme == "https" ? "wss" : "ws"
         guard let endpoint = components.url else { throw MoaMacError.invalidDestination }
         self.endpoint = endpoint
+        self.mode = mode
+
+        let source = mode == .dictation ? "moa-macos-dictation" : "moa-macos"
 
         let event = Event(
             type: "session_start",
-            source: "moa-macos",
+            source: source,
             sessionID: sessionID,
             conversationID: sessionID,
             branchID: "default",
             turnID: turnID,
-            deliveryIntent: "assistant_voice",
-            client: .init(platform: "macos", source: "moa-macos", input: "voice"),
+            deliveryIntent: mode == .dictation ? "literal_dictation" : "assistant_voice",
+            transcriptionOnly: mode == .dictation ? true : nil,
+            client: .init(platform: "macos", source: source, input: "voice"),
             playbackPolicy: .init(assistantOverlap: false),
             format: .init(encoding: "pcm16", sampleRate: 16_000, channels: 1)
         )
@@ -117,6 +127,7 @@ public struct GatewayVoiceSessionStart: Sendable {
         let branchID: String
         let turnID: String
         let deliveryIntent: String
+        let transcriptionOnly: Bool?
         let client: Client
         let playbackPolicy: PlaybackPolicy
         let format: Format
@@ -128,6 +139,7 @@ public struct GatewayVoiceSessionStart: Sendable {
             case branchID = "branch_id"
             case turnID = "turn_id"
             case deliveryIntent = "delivery_intent"
+            case transcriptionOnly = "transcription_only"
             case playbackPolicy = "playback_policy"
         }
     }
@@ -140,6 +152,10 @@ public enum GatewayVoiceClientEvent {
 
     public static func cancel(turnID: String) throws -> Data {
         try encode(type: "cancel_turn", turnID: turnID)
+    }
+
+    public static func finalizeTranscript(turnID: String) throws -> Data {
+        try encode(type: "finalize_transcript", turnID: turnID)
     }
 
     private static func encode(type: String, turnID: String) throws -> Data {
@@ -201,7 +217,7 @@ public enum GatewayVoiceServerEventDecoder {
             ))
         case "assistant_audio_done":
             return .assistantAudioDone
-        case "turn_done":
+        case "turn_done", "transcript_finalized":
             guard let status = object["status"] as? String, !status.isEmpty else {
                 throw GatewayVoiceError.invalidEvent
             }

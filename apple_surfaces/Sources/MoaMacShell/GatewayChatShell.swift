@@ -140,6 +140,11 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
 }
 
 @MainActor public final class CommandModel: ObservableObject {
+    public enum VoiceActivity: Equatable, Sendable {
+        case assistant
+        case dictation
+    }
+
     @Published public var origin: String
     @Published public var token: String
     @Published public var prompt = ""
@@ -147,6 +152,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var status = "Ready"
     @Published public private(set) var isSending = false
     @Published public private(set) var voiceState = VoiceTranscriptState()
+    @Published public private(set) var voiceActivity: VoiceActivity = .assistant
     @Published public private(set) var voiceLevels = Array(repeating: 0.08, count: 18)
     @Published public private(set) var historyEntries: [GatewayHistoryEntry] = []
     @Published public private(set) var isShowingHistory = false
@@ -351,6 +357,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         reply = ""
         status = "Ready"
         voiceState.apply(.reset)
+        voiceActivity = .assistant
         voiceLevels = Array(repeating: 0.08, count: 18)
         historyEntries = []
         isShowingHistory = false
@@ -385,43 +392,60 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     /// One explicit summon starts a latched capture. The next summon commits
     /// that same turn, even when the microphone or socket is still starting.
     public func handleSummon() async {
+        await handleVoice(.assistant)
+    }
+
+    public func handleDictation() async {
+        await handleVoice(.dictation)
+    }
+
+    private func handleVoice(_ requestedActivity: VoiceActivity) async {
         interactionPulse &+= 1
         if voiceState.isActive {
             await finishVoice()
         } else {
-            await startVoice()
+            await startVoice(requestedActivity)
         }
     }
 
     public func startVoice() async {
+        await startVoice(.assistant)
+    }
+
+    private func startVoice(_ activity: VoiceActivity) async {
         guard !voiceState.isActive else { return }
         voiceGeneration &+= 1
         let generation = voiceGeneration
         voiceReleaseRequested = false
+        voiceActivity = activity
         reply = ""
         voiceState.apply(.begin)
         do {
             guard isConfigured else { throw MoaMacError.missingToken }
             guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
             let turnID = "turn-\(UUID().uuidString.lowercased())"
-            try await voiceController.start(
-                origin: url,
-                bearerToken: token,
-                sessionID: sessionID,
-                turnID: turnID,
-                levelHandler: { [weak self] level in
+            let levelHandler: @MainActor @Sendable (Double) -> Void = { [weak self] level in
                     guard let self, self.voiceGeneration == generation else { return }
                     self.voiceLevels.removeFirst()
                     self.voiceLevels.append(level)
                 }
-            ) { [weak self] event in
+            let eventHandler: @MainActor @Sendable (GatewayVoiceServerEvent) -> Void = { [weak self] event in
                 guard let self, self.voiceGeneration == generation else { return }
                 switch event {
-                case let .assistantText(text): self.reply = text
-                case let .assistantTextDelta(delta): self.reply += delta
+                case let .assistantText(text) where activity == .assistant: self.reply = text
+                case let .assistantTextDelta(delta) where activity == .assistant: self.reply += delta
                 default: break
                 }
                 self.voiceState.apply(.server(event))
+            }
+            if activity == .dictation {
+                try await voiceController.startDictation(
+                    origin: url, bearerToken: token, sessionID: sessionID, turnID: turnID,
+                    levelHandler: levelHandler, eventHandler: eventHandler)
+            } else {
+                try await voiceController.start(
+                    origin: url, bearerToken: token, sessionID: sessionID, turnID: turnID,
+                    levelHandler: levelHandler, eventHandler: eventHandler)
             }
             guard voiceGeneration == generation else {
                 await voiceController.cancel()
@@ -466,6 +490,17 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         voiceLevels = Array(repeating: 0.08, count: 18)
         if voiceState.isActive {
             voiceState.apply(.interrupted("Transcription canceled"))
+        }
+    }
+
+    public func copyDictation() {
+        guard voiceActivity == .dictation, !voiceState.final.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if pasteboard.setString(voiceState.final, forType: .string) {
+            status = "Copied — clipboard replaced"
+        } else {
+            status = "Could not copy — transcript preserved"
         }
     }
 }

@@ -33,6 +33,21 @@ Android app
   Android Assistant and voice-command intents remain reasoning-capable assistant
   turns.
 
+  The opt-in `AgVoiceInputMethodService` is Android's global focused-field
+  dictation authority. It opens the existing transcription-only gateway voice
+  contract with source `android-ime`, presents partial text as provisional, and
+  retains the final text as a local candidate until the user taps Insert. The
+  candidate binds to the exact editor generation and editor identity that
+  started capture; focus or editor changes invalidate it. Password and other
+  sensitive input variations fail closed before microphone or network work and
+  clear prior candidate text. Insertion uses only the active
+  `InputConnection.commitText(...)`; the IME never uses Accessibility to type.
+
+  During a resumable voice draft, Cancel is attached to the left of the
+  companion and Pause/Resume to the right at the companion's vertical center.
+  Neither control occupies the upper user-transcript lane or lower assistant-
+  reply lane. The controls remain separate bounded touch surfaces.
+
   The companion and compact conversation ribbons use separate, tightly bounded
   overlay windows coordinated from one anchor. Voice capture disposition stays
   on the companion's origin-matched gesture; entering capture creates no
@@ -537,6 +552,12 @@ explicit app launch, menu-bar Speak, or Control-Space
   -> second invocation commits it; reply text and hosted PCM play in place
   -> typed Send remains a bounded authenticated POST /v1/chat
 ```
+
+The same panel also exposes a separate explicit Dictate activity. Dictate sends
+`transcription_only:true` with source `moa-macos-dictation`, finalizes with
+`finalize_transcript`, renders no assistant reply, and keeps the exact final
+text available behind a user-owned Copy action with a clipboard receipt. It
+does not replace or overload the Control-Space assistant summon.
 
 The command panel stores the non-secret canonical gateway origin in app
 preferences. The gateway bearer token exists only in process memory, defaults
@@ -2382,6 +2403,13 @@ queues.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaAssistActivity.java`:
   launcher and Android Assistant/voice-command entry that forwards into the
   single overlay service without rendering the full app.
+- `android_app/app/src/main/java/ag/companion/AgVoiceInputMethodService.java`:
+  opt-in voice-first Android IME; owns sensitive-editor refusal, editor-bound
+  transcript candidates, explicit `InputConnection` insertion, basic editing
+  keys, and keyboard switching.
+- `android_app/app/src/main/java/ag/companion/MoaImeEditorPolicy.java`:
+  fail-closed password/sensitive editor classification and immutable editor-
+  generation binding for IME candidates.
 - `android_app/app/src/main/java/ai/moa/assistant/OverlayService.java`:
   floating orb, transcript, voice loop, chat panel, TTS, and gateway calls.
 - `android_app/app/src/main/java/ai/moa/assistant/MoaGatewayClient.java`:

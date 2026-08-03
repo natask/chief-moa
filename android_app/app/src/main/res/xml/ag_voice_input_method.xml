@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="ag.companion.MainActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype
+        android:icon="@drawable/ic_moa_orb"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard"
+        android:label="@string/ime_subtype_english" />
+    <subtype
+        android:icon="@drawable/ic_moa_orb"
+        android:imeSubtypeLocale="am_ET"
+        android:imeSubtypeMode="keyboard"
+        android:label="@string/ime_subtype_amharic" />
+</input-method>

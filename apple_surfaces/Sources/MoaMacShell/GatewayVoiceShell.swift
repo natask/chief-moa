@@ -29,7 +29,12 @@ public protocol GatewayVoiceTransporting: Sendable {
     ) async throws
     func sendAudio(_ data: Data) async throws
     func commit() async throws
+    func finalizeTranscript() async throws
     func cancel() async
+}
+
+public extension GatewayVoiceTransporting {
+    func finalizeTranscript() async throws { try await commit() }
 }
 
 public struct SystemMicrophonePermission: MicrophonePermissionRequesting {
@@ -178,6 +183,12 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         try await webSocket.send(.string(String(decoding: event, as: UTF8.self)))
     }
 
+    public func finalizeTranscript() async throws {
+        guard let webSocket else { throw VoiceCaptureError.notActive }
+        let event = try GatewayVoiceClientEvent.finalizeTranscript(turnID: turnID)
+        try await webSocket.send(.string(String(decoding: event, as: UTF8.self)))
+    }
+
     public func cancel() async {
         if let webSocket, !turnID.isEmpty {
             if let event = try? GatewayVoiceClientEvent.cancel(turnID: turnID) {
@@ -304,8 +315,30 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
         eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
     ) async throws
+    func startDictation(
+        origin: URL,
+        bearerToken: String,
+        sessionID: String,
+        turnID: String,
+        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
+        eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
+    ) async throws
     func stopAndCommit() async throws
     func cancel() async
+}
+
+@MainActor public extension VoiceCaptureControlling {
+    func startDictation(
+        origin: URL,
+        bearerToken: String,
+        sessionID: String,
+        turnID: String,
+        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
+        eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
+    ) async throws {
+        try await start(origin: origin, bearerToken: bearerToken, sessionID: sessionID,
+                        turnID: turnID, levelHandler: levelHandler, eventHandler: eventHandler)
+    }
 }
 
 @MainActor public final class VoiceCaptureController: VoiceCaptureControlling {
@@ -314,6 +347,7 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
     private let transport: any GatewayVoiceTransporting
     private let audioPlayer: any AssistantAudioPlaying
     private var active = false
+    private var mode: GatewayVoiceMode = .assistant
 
     public convenience init() {
         self.init(
@@ -344,9 +378,37 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
         eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
     ) async throws {
+        try await start(mode: .assistant, origin: origin, bearerToken: bearerToken,
+                        sessionID: sessionID, turnID: turnID,
+                        levelHandler: levelHandler, eventHandler: eventHandler)
+    }
+
+    public func startDictation(
+        origin: URL,
+        bearerToken: String,
+        sessionID: String,
+        turnID: String,
+        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
+        eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
+    ) async throws {
+        try await start(mode: .dictation, origin: origin, bearerToken: bearerToken,
+                        sessionID: sessionID, turnID: turnID,
+                        levelHandler: levelHandler, eventHandler: eventHandler)
+    }
+
+    private func start(
+        mode: GatewayVoiceMode,
+        origin: URL,
+        bearerToken: String,
+        sessionID: String,
+        turnID: String,
+        levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
+        eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void
+    ) async throws {
         guard !active else { throw VoiceCaptureError.alreadyActive }
         guard await permission.requestPermission() else { throw VoiceCaptureError.microphoneDenied }
-        let start = try GatewayVoiceSessionStart(origin: origin, sessionID: sessionID, turnID: turnID)
+        let start = try GatewayVoiceSessionStart(
+            origin: origin, sessionID: sessionID, turnID: turnID, mode: mode)
         audioPlayer.stop()
         try await transport.connect(start: start, bearerToken: bearerToken, turnID: turnID) { [weak self] event in
             guard let self else { return }
@@ -371,6 +433,7 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
                 Task { try? await transport.sendAudio(data) }
             }
             active = true
+            self.mode = mode
         } catch {
             await transport.cancel()
             throw error
@@ -381,12 +444,17 @@ public actor URLSessionGatewayVoiceTransport: GatewayVoiceTransporting {
         guard active else { throw VoiceCaptureError.notActive }
         microphone.stop()
         active = false
-        try await transport.commit()
+        if mode == .dictation {
+            try await transport.finalizeTranscript()
+        } else {
+            try await transport.commit()
+        }
     }
 
     public func cancel() async {
         microphone.stop()
         active = false
+        mode = .assistant
         audioPlayer.stop()
         await transport.cancel()
     }

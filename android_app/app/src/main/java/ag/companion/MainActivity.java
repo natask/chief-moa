@@ -256,6 +256,7 @@ public final class MainActivity extends Activity {
         developerSection.addView(diagnosticsCard());
         developerSection.addView(releaseController.createView());
         developerSection.addView(actionCard());
+        developerSection.addView(MoaImeSettingsView.create(this));
         developerSection.addView(MoaPresentationSettingsView.create(this));
         developerSection.addView(MoaProviderSettingsView.create(this));
         developerSection.addView(orbSizeCard());
