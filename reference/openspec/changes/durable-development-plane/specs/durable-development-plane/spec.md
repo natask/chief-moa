@@ -63,7 +63,8 @@ completes and at least one completed task is a QA task.
 The system SHALL require a structured development receipt from a completed
 worker. Implementation and integration receipts SHALL name output references.
 QA and integration receipts SHALL name verification references. Missing
-kind-specific evidence SHALL fail the task and block dependent work.
+kind-specific evidence SHALL fail the task and block dependent work. Only a
+receipt on the final output line SHALL count as authoritative evidence.
 
 #### Scenario: QA exits without evidence
 

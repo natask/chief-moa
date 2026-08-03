@@ -7,7 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { createEventSubstrateStore } = require("../lib/event-substrate");
 const { createDevelopmentPlane } = require("../lib/development-plane");
-const { createDevelopmentPlaneCoordinator, taskPrompt } = require("../lib/development-plane-coordinator");
+const { createDevelopmentPlaneCoordinator, taskPrompt, structuredReceipt } = require("../lib/development-plane-coordinator");
 
 function setup(t) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "development-coordinator-"));
@@ -74,6 +74,8 @@ test("task prompts preserve scope and acceptance evidence", () => {
   assert.match(prompt, /Allowed path claims: app\/ui/);
   assert.match(prompt, /- It works/);
   assert.match(prompt, /DEVELOPMENT_RECEIPT/);
+  assert.doesNotMatch(prompt, /DEVELOPMENT_RECEIPT \{/);
+  assert.equal(structuredReceipt({ output: prompt }), null);
   assert.ok(taskPrompt({ intent_id: "i", objective: "", riff: "x".repeat(100_000), acceptance_criteria: [] }, {
     title: "Build", kind: "implementation", acceptance_check: "pass", path_claims: [], depends_on: [],
   }).length < 50_000);

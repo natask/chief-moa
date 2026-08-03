@@ -37,8 +37,8 @@ function taskPrompt(intent, task) {
     "Attached evidence:",
     ...(evidence.length ? evidence.map((item) => `- ${item}`) : ["- None"]),
     "",
-    "Finish with one line beginning DEVELOPMENT_RECEIPT followed by JSON:",
-    '{"passed":true,"output_refs":["git://..."],"verification_refs":["test://..."]}',
+    "Finish with one final line beginning DEVELOPMENT_RECEIPT followed by a JSON object.",
+    "The object must contain passed, output_refs, verification_refs, and failure. Do not print this marker before the final line.",
     "Use passed=false and include failure when the acceptance check did not pass. QA and integration require verification_refs. Implementation and integration require output_refs.",
   ].join("\n");
 }
@@ -46,14 +46,12 @@ function taskPrompt(intent, task) {
 function structuredReceipt(run) {
   const output = String(run.output || run.stdout || "");
   const marker = "DEVELOPMENT_RECEIPT";
-  const index = output.lastIndexOf(marker);
-  if (index < 0) return null;
-  const tail = output.slice(index + marker.length).trim();
-  const start = tail.indexOf("{");
-  const end = tail.lastIndexOf("}");
-  if (start < 0 || end < start) return null;
+  const line = output.trim().split(/\r?\n/).at(-1)?.trim() || "";
+  if (!line.startsWith(`${marker} `)) return null;
+  const json = line.slice(marker.length).trim();
+  if (!json.startsWith("{") || !json.endsWith("}")) return null;
   try {
-    const value = JSON.parse(tail.slice(start, end + 1));
+    const value = JSON.parse(json);
     return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   } catch { return null; }
 }

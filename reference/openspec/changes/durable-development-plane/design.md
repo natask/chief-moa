@@ -43,6 +43,8 @@ dependency-safe batch without requiring the QA page to remain open.
 Exit code zero is not acceptance evidence. Every worker must emit a structured
 development receipt. Implementation and integration name output refs. QA and
 integration name verification refs. Missing or failed evidence blocks the graph.
+Only a receipt on the final output line is authoritative. Reflected prompt text
+and earlier marker-like output cannot satisfy the gate.
 The integration receipt must name a Git commit. Once final QA completes, that
 commit and the accumulated QA refs become the frozen candidate automatically.
 
