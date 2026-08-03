@@ -255,6 +255,12 @@ private struct StaticConnectionStore: GatewayConnectionStore {
     func saveOrigin(_ origin: String) throws {}
 }
 
+private struct EmptyDeviceSessionStore: DeviceSessionStoring {
+    func load() -> String { "" }
+    func save(_ token: String) throws {}
+    func clear() throws {}
+}
+
 private actor FakeChatSender: GatewayChatSending {
     private(set) var bodies: [Data] = []
     func send(_ request: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply {
@@ -282,7 +288,8 @@ private actor FakeBrowserSender: BrowserDelegationSending {
 
 @MainActor @Test func commandModelSendsOneInertTurnAndPreservesGatewayOnlyBoundary() async throws {
     let sender = FakeChatSender()
-    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: sender)
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: sender,
+                             deviceSessionStore: EmptyDeviceSessionStore())
     #expect(model.token.isEmpty)
     model.token = "gateway-token"
     #expect(model.isConfigured)
@@ -303,7 +310,8 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     let device = BrowserDevice(id: "browser-one", surfaceType: "browser_extension", online: true,
                                localToolManifest: [.init(tool: "browser.tab.open")])
     let browser = FakeBrowserSender(devices: [device])
-    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender(), browserSender: browser)
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender(),
+                             browserSender: browser, deviceSessionStore: EmptyDeviceSessionStore())
     model.token = "gateway-token"
     await model.refreshBrowserDevices()
     #expect(model.browserDevices == [device])
@@ -404,24 +412,69 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     #expect(model.token.isEmpty)
 }
 
-@MainActor @Test func sessionCredentialIsMemoryOnlyAndClearsOnDisconnect() async {
-    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender())
+@MainActor @Test func sessionCredentialClearsFromMemoryOnDisconnect() async {
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender(),
+                             deviceSessionStore: EmptyDeviceSessionStore())
     #expect(model.token.isEmpty)
     model.token = "temporary-token"
     #expect(model.useConnectionForSession())
     await model.disconnect()
     #expect(model.token.isEmpty)
-    let replacement = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender())
+    let replacement = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender(),
+                                   deviceSessionStore: EmptyDeviceSessionStore())
     #expect(replacement.token.isEmpty)
 }
 
-@Test func runnableAppleSourcesPermitOnlyTheDedicatedAgAccountKeychainStore() throws {
+@Test func portableAuthFilePersistsWithOwnerOnlyPermissionsAndClears() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = FileDeviceSessionStore(directory: root)
+    #expect(store.load().isEmpty)
+    try store.save("device-session-token")
+    #expect(store.load() == "device-session-token")
+    let directoryMode = try #require(FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions] as? NSNumber)
+    let fileMode = try #require(FileManager.default.attributesOfItem(atPath: store.authFileURL.path)[.posixPermissions] as? NSNumber)
+    #expect(directoryMode.intValue & 0o777 == 0o700)
+    #expect(fileMode.intValue & 0o777 == 0o600)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: store.authFileURL.path)
+    #expect(store.load().isEmpty)
+    try store.save("device-session-token")
+    #expect(store.load() == "device-session-token")
+    try store.clear()
+    #expect(store.load().isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: store.authFileURL.path))
+}
+
+@Test func portableAuthFileRejectsMalformedOversizedAndLinkedCredentials() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let store = FileDeviceSessionStore(directory: root)
+    try Data("not-json".utf8).write(to: store.authFileURL)
+    #expect(store.load().isEmpty)
+    try Data(repeating: 0x41, count: FileDeviceSessionStore.maximumFileBytes + 1).write(to: store.authFileURL)
+    #expect(store.load().isEmpty)
+    try FileManager.default.removeItem(at: store.authFileURL)
+    let target = root.appendingPathComponent("target")
+    try Data(#"{"version":1,"access_token":"stolen"}"#.utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: store.authFileURL, withDestinationURL: target)
+    #expect(store.load().isEmpty)
+    #expect(throws: PortableAuthStoreError.unsafePath) { try store.save("replacement") }
+    #expect(throws: PortableAuthStoreError.unsafePath) { try store.clear() }
+}
+
+@Test func portableAuthHomeHonorsAgHome() {
+    #expect(FileDeviceSessionStore.defaultDirectory(environment: ["AG_HOME": "/tmp/ag-portable-home"]).path == "/tmp/ag-portable-home")
+    #expect(FileDeviceSessionStore.defaultDirectory(environment: [:]).lastPathComponent == ".ag")
+}
+
+@Test func runnableAppleSourcesUseOnlyThePortableAgAccountFile() throws {
     let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     let package = tests.deletingLastPathComponent().deletingLastPathComponent()
     let roots = ["Sources", "Resources", "scripts"].map { package.appendingPathComponent($0) }
     let forbidden = [
         ["Sec", "Item"].joined(),
-        ["Keychain", "Token"].joined(),
+        ["Key", "chain"].joined(),
         ["app", ".agee", ".moa-mac", ".gateway"].joined(),
         ["generic", "-password"].joined(),
     ]
@@ -430,14 +483,15 @@ private actor FakeBrowserSender: BrowserDelegationSending {
         for case let file as URL in enumerator where file.hasDirectoryPath == false {
             let text = try String(contentsOf: file, encoding: .utf8)
             for pattern in forbidden {
-                if file.lastPathComponent == "GatewayDeviceAuth.swift" && pattern == "SecItem" { continue }
                 #expect(!text.contains(pattern), "Forbidden credential persistence API in \(file.path)")
             }
         }
     }
     let authStore = package.appendingPathComponent("Sources/MoaMacShell/GatewayDeviceAuth.swift")
     let authText = try String(contentsOf: authStore, encoding: .utf8)
-    #expect(authText.contains("app.agee.ag.account-session"))
+    #expect(authText.contains("AG_HOME"))
+    #expect(authText.contains("auth.json"))
+    #expect(authText.contains("0o600"))
     for providerSecret in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "MOA_GATEWAY_TOKEN"] {
         #expect(!authText.contains(providerSecret))
     }

@@ -47,12 +47,14 @@ It presents that projection inside the panel. The token remains an
 Authorization header rather than URL material, and the Mac app creates no
 parallel conversation/history database.
 
-The user configures the origin and gateway bearer token. The origin has no
-packaged default and is stored in app preferences. The token defaults to empty,
-exists only in process memory, and is cleared on explicit disconnect and app
-termination. Apple runnable sources and configuration prohibit credential
-persistence APIs. Provider keys, CLI OAuth tokens, and model-subscription
-tokens remain gateway/execution-machine concerns.
+The user configures the origin and signs in through the browser-backed device
+flow. The non-secret origin is stored in app preferences. The revocable Ag
+device bearer is cached in a portable `AG_HOME/auth.json` file, defaulting to
+`~/.ag/auth.json`, with owner-only directory/file permissions and atomic
+replacement. Explicit disconnect deletes the file. The cache follows Codex's
+portable file credential-store pattern so the account is not tied to macOS.
+Provider keys, vendor CLI OAuth tokens, and model-subscription tokens remain
+gateway/execution-machine concerns.
 
 ## Privacy boundary
 

@@ -2579,9 +2579,14 @@ queues.
   macOS chat request and inert reply decoding.
 - `apple_surfaces/Sources/MoaMacCore/GatewayVoice.swift`: bounded literal voice
   session envelope, PCM frame, server-event, and capture-state contracts.
-- `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: session-only
-  gateway credential state, summon lifecycle, and redirect-rejecting ephemeral
-  chat transport.
+- `apple_surfaces/Sources/MoaMacShell/GatewayChatShell.swift`: browser-backed
+  device sign-in, portable Ag account-session state, summon lifecycle, and
+  redirect-rejecting ephemeral chat transport. The revocable device bearer is
+  cached in `AG_HOME/auth.json` (default `~/.ag/auth.json`) with atomic writes
+  and owner-only permissions. This follows Codex's portable file-cache model
+  rather than binding account access to a platform credential store. The file
+  is a password-equivalent secret; provider and integration credentials remain
+  gateway-owned.
 - `apple_surfaces/Sources/MoaMacShell/GatewayVoiceShell.swift`: explicit
   microphone capture and authenticated voice WebSocket adapter.
 - `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact

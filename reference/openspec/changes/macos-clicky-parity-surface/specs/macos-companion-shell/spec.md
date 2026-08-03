@@ -72,7 +72,7 @@ the returned text as inert presentation data.
 #### Scenario: A configured user submits text
 
 - **WHEN** a non-empty bounded prompt is submitted with a valid origin and
-  session-only token
+  signed-in Ag device bearer
 - **THEN** exactly one request is sent with `source: moa-macos`
 - **AND** the reply appears without executing any returned local action
 
@@ -93,22 +93,24 @@ SHALL NOT extract OAuth material from local vendor CLIs.
 
 - **WHEN** the user signs in through the browser-backed device flow
 - **THEN** the origin may be stored in app preferences and the revocable Ag
-  device session is stored in the macOS Keychain
+  device session is stored in the portable owner-only Ag auth file
 - **AND** no provider key or vendor CLI OAuth token is requested or persisted
 
 ### Requirement: Apple clients narrowly persist the Ag device session
 
 The macOS surface SHALL NOT persist gateway infrastructure tokens, provider
-credentials, or integration credentials. It MAY use one dedicated Keychain
-generic-password item for the revocable Ag account device session. Non-secret
-origins and session identifiers MAY remain in app preferences.
+credentials, or integration credentials. It MAY use one portable, owner-only
+`AG_HOME/auth.json` file (default `~/.ag/auth.json`) for the revocable Ag
+account device session. Writes SHALL be atomic and existing symlinks or
+non-regular files SHALL fail closed. Non-secret origins and session identifiers
+MAY remain in app preferences.
 
 #### Scenario: A new process starts or the user disconnects
 
 - **WHEN** the app starts, explicitly disconnects, stops the proactive surface,
   or terminates
-- **THEN** the Ag device session is restored only from its dedicated Keychain item
-- **AND** explicit sign-out deletes that item and clears the in-memory session
+- **THEN** the Ag device session is restored only from its portable auth file
+- **AND** explicit sign-out deletes that file and clears the in-memory session
 
 ### Requirement: Voice capture provides local, non-retained level feedback
 

@@ -8,10 +8,11 @@
 - [x] 1.4 Prove typed turns contain no AX or screenshot evidence and redirects,
       invalid origins, oversized input, oversized responses, and missing tokens
       fail closed.
-- [x] 1.5 Add a static Apple-source gate that rejects credential persistence
-      APIs, service labels, and generic-password commands.
+- [x] 1.5 Add a static Apple-source gate that rejects platform credential-store
+      APIs, legacy service labels, generic-password commands, and provider keys.
 - [x] 1.6 Replace the pasted gateway token with browser-backed Ag device sign-in
-      and one narrowly scoped macOS Keychain session item.
+      and one narrowly scoped portable Ag auth file (`AG_HOME/auth.json`,
+      default `~/.ag/auth.json`) with owner-only permissions.
       Source acceptance requires the production image to include the Better
       Auth runtime and migrations, Compose to pass its bounded configuration,
       and an isolated device-flow smoke. Active acceptance additionally requires

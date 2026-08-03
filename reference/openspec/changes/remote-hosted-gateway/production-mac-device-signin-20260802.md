@@ -29,8 +29,17 @@ database had no auth tables, and the production device/sign-in pages returned
    schema/image while preserving the active Postgres and named volumes, then
    explicitly enable Better Auth and recreate only the gateway while it is
    drain-safe.
-6. Require a real owner browser approval and Mac Keychain session before calling
+6. Require a real owner browser approval and portable Mac auth-file session before calling
    the production surface accepted.
+
+## Portable credential-cache follow-up — 2026-08-03
+
+The production device flow remains unchanged, but the native client no longer
+binds its returned bearer to macOS Keychain. Ag follows Codex's portable file
+credential-cache model: `AG_HOME/auth.json`, default `~/.ag/auth.json`, is an
+atomic, owner-only password-equivalent cache. Explicit disconnect removes it.
+This preserves browser/device sign-in while making the session-store contract
+portable to future non-Mac native clients.
 
 Developer ID signing, notarization, universal packaging, and installation/TCC
 promotion remain separate Mac distribution gates; they do not block proving the

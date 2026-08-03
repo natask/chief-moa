@@ -182,7 +182,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             voiceController: VoiceCaptureController(),
             historyLoader: URLSessionGatewayHistoryLoader(),
             browserSender: URLSessionBrowserDelegationSender()
-            , deviceAuthorizer: URLSessionDeviceAuthorizer(), deviceSessionStore: KeychainDeviceSessionStore()
+            , deviceAuthorizer: URLSessionDeviceAuthorizer(), deviceSessionStore: FileDeviceSessionStore()
         )
     }
 
@@ -201,7 +201,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         self.historyLoader = historyLoader ?? URLSessionGatewayHistoryLoader()
         self.browserSender = browserSender ?? URLSessionBrowserDelegationSender()
         self.deviceAuthorizer = deviceAuthorizer ?? URLSessionDeviceAuthorizer()
-        self.deviceSessionStore = deviceSessionStore ?? KeychainDeviceSessionStore()
+        self.deviceSessionStore = deviceSessionStore ?? FileDeviceSessionStore()
         let savedOrigin = store.loadOrigin()
         origin = savedOrigin.isEmpty ? "https://api.agee.app" : savedOrigin
         token = self.deviceSessionStore.load()

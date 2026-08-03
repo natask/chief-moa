@@ -12,7 +12,7 @@ fi
 prohibited_pattern='posthog|sentry|Sparkle\.framework|SPUStandardUpdaterController|SUFeedURL|SkyLight|SLSPost|SLPS'
 destination_pattern='https?://[[:alnum:]]'
 credential_pattern='sk-(proj-)?[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|phc_[A-Za-z0-9_-]{16,}|gsk_[A-Za-z0-9_-]{16,}|xai-[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.'
-persistence_pattern="Keychain""Token|app"'\.agee\.moa-mac\.gateway|generic'"-password"
+persistence_pattern="Sec""Item|app"'\.agee\.moa-mac\.gateway|generic'"-password"
 if rg -n -i "$persistence_pattern" Sources Resources; then
   echo "Credential persistence API or identifier found in Apple runnable sources/configuration." >&2
   exit 1
