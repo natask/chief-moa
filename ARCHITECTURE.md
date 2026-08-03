@@ -2672,6 +2672,22 @@ forbid adding a new bounded module. The active
 
 ## Deployment Finish Loop
 
+### Durable development plane
+
+One user riff owns the full development record. The gateway stores the raw riff
+before planning, then binds one acyclic task graph to it. Dependencies decide
+which work must run in order. Path claims, memory budgets, and worker limits
+decide which ready tasks may run together. Each task carries its own acceptance
+check and verification references.
+
+The final candidate becomes reviewable only after every planned task completes
+and the graph contains completed QA. The user's accept or reject receipt binds
+the exact candidate digest. This development record does not merge, publish, or
+deploy by itself. Later workers consume its runnable tasks, and the serial
+integration and release paths consume its accepted candidate.
+
+Contract: `reference/openspec/changes/durable-development-plane`.
+
 Agents must treat preview deployment or release artifact creation as part of
 completion for deployable surfaces:
 

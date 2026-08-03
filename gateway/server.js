@@ -116,6 +116,8 @@ const { createIntentWorkflow } = require("./lib/intent-workflow");
 const { createBrokerCompletionSpine } = require("./lib/broker-completion-spine");
 const { createIntentPlane } = require("./lib/intent-plane");
 const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
+const { createDevelopmentPlane } = require("./lib/development-plane");
+const { createDevelopmentPlaneHandlers } = require("./lib/development-plane-handlers");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -752,6 +754,10 @@ const intentPlane = createIntentPlane({ events: eventSubstrate });
 const { routeIntentPlane } = createIntentPlaneHandlers({
   plane: intentPlane, readJsonBody, sendJson, cleanError,
 });
+const developmentPlane = createDevelopmentPlane({ events: eventSubstrate });
+const { routeDevelopmentPlane } = createDevelopmentPlaneHandlers({
+  plane: developmentPlane, readJsonBody, sendJson, cleanError,
+});
 const { routeWorkHistory, executeWorkHistoryIntent } = createWorkHistoryHandlers({
   workHistory,
   intentWorkflow,
@@ -1155,6 +1161,18 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const handled = await routeIntentPlane(request, response, url);
+      if (handled) return;
+    }
+
+    // One durable record from the user's raw riff through dependency-aware
+    // work, QA, the frozen candidate, and the user's exact decision. This
+    // surface records authority and schedule state. It executes no work.
+    if (url.pathname.startsWith("/v1/development/")) {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      const handled = await routeDevelopmentPlane(request, response, url);
       if (handled) return;
     }
 
