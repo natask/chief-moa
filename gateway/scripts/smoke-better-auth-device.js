@@ -90,7 +90,10 @@ async function main() {
 }
 
 async function request(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
+  // Better Auth rejects state-changing browser routes without an allowed
+  // Origin. Model the real sign-in/device browser instead of bypassing its
+  // CSRF boundary in the deployment smoke.
+  const headers = { origin, ...(options.headers || {}) };
   let body;
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";

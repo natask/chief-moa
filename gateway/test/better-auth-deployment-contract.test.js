@@ -28,9 +28,11 @@ test("compose migrates before boot and passes only declared auth configuration",
 
 test("isolated VPS preview proves the device bearer and voice-ticket path", () => {
   const promotion = read("scripts/vps/promote-candidate.sh");
+  const smoke = read("gateway/scripts/smoke-better-auth-device.js");
   assert.match(promotion, /MOA_AUTH=better-auth/);
   assert.match(promotion, /smoke-better-auth-device\.js/);
   assert.match(promotion, /NODE_TLS_REJECT_UNAUTHORIZED=0/);
+  assert.match(smoke, /const headers = \{ origin,/);
   const updater = read("scripts/vps/update.sh");
   assert.match(updater, /compose run --rm --no-deps gateway-db-init\ncompose up -d --no-deps gateway/);
 });
