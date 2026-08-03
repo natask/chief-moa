@@ -213,6 +213,15 @@ Moa Gateway
   are not yet projected into capture blocks; that reconciliation remains a
   separate additive change.
 
+  Browser video-led capture is a separate explicit-stop intake path. The
+  extension first stores the original screen-and-microphone WebM as a
+  user-kept `video_note`; only then may the gateway derive a provider-attributed
+  narration transcript and admit a deterministic `intent-runtime` record. The
+  intent keeps the video evidence ref, immutable transcript source event,
+  editable objective, lifecycle, and append-only history. Provider failure
+  leaves the video intact and creates a visible retryable captured intent.
+  Capture alone never creates a chat reply, agent run, tool request, or dispatch.
+
   Streaming STT treats provider hypotheses as replacements, not append-only
   text. Final result identities are idempotent within a provider stream, while
   bounded word overlap reconciles stream rotation and reconnect boundaries.
@@ -573,6 +582,14 @@ explicit app launch, menu-bar Speak, or Control-Space
   -> typed Send remains a bounded authenticated POST /v1/chat
 ```
 
+The main panel is movable after its initial notch placement and includes an
+Agents workspace backed by authenticated bounded reads of `GET /v1/agent/runs`.
+A separate transparent floating `NSPanel` may show up to six parked run avatars
+on the active screen edge. Both views share one in-memory projection and render
+gateway summaries as inert text. Stop sends a run-scoped cancellation request
+back to the gateway. The Mac creates no local agent-run store and does not scan
+a vendor CLI home to populate this UI.
+
 The same panel also exposes a separate explicit Dictate activity. Dictate sends
 `transcription_only:true` with source `moa-macos-dictation`, finalizes with
 `finalize_transcript`, renders no assistant reply, and keeps the exact final
@@ -580,10 +597,11 @@ text available behind a user-owned Copy action with a clipboard receipt. It
 does not replace or overload the Control-Space assistant summon.
 
 The command panel stores the non-secret canonical gateway origin in app
-preferences. The gateway bearer token exists only in process memory, defaults
-to empty, and is cleared on explicit disconnect/stop and app termination.
-Credential persistence APIs are prohibited in Apple runnable sources and
-configuration. The panel contains no packaged destination or provider
+preferences. Its revocable Ag device bearer is restored from the portable,
+owner-only `AG_HOME/auth.json` file and is deleted on explicit disconnect.
+Platform credential-store APIs and provider/integration credential persistence
+remain prohibited in Apple runnable sources. The panel contains no packaged
+destination or provider
 credentials, rejects redirects, uses an ephemeral URL session, and never
 attaches screen context implicitly. Provider selection and credentials remain
 gateway-owned. Listening is visible through a persistent boundary and a short
@@ -2302,6 +2320,12 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   `executable=false` and `model_used=false`; later reflection, topic, or intent
   derivation remains proposal data until the user explicitly accepts a separate
   action.
+- `video_led_intent`: a user-confirmed intent admitted only after explicit stop
+  of a browser screen-and-microphone recording. The original `video_note` bytes,
+  SHA-256, retention, provider transcript/provenance, editable objective,
+  lifecycle, evidence links, and event history remain separately inspectable;
+  deleting the recording is explicit and does not erase the transcript or
+  intent history.
 - `delivery_intent`: the canonical intent-runtime projection that links one
   user-authored objective and revision to its source evidence, OpenSpec or
   acceptance contract, work tasks, queued/executing runs, exact candidate,
@@ -2603,9 +2627,14 @@ queues.
   consumed by the app.
 - `apple_surfaces/Sources/MoaMacShell/GatewayVoiceShell.swift`: explicit
   microphone capture and authenticated voice WebSocket adapter.
+- `apple_surfaces/Sources/MoaMacShell/GatewayAgentRuns.swift`: bounded,
+  redirect-rejecting canonical agent-run projection and cancellation adapter.
 - `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact
   voice/typed companion surface; it does not own Accessibility or pixel-capture
   authority.
+- `apple_surfaces/Sources/MoaMacUI/AgentSurfacesView.swift`: inert agent-project
+  sidebar, selected-run workspace, and parked-agent rail over the shared
+  gateway projection.
 - `android_app/deploy/ota`: Android APK OTA artifact build and
   main-machine sync scripts.
 - `browser_extension/extension`: thin browser client for command,

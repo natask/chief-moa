@@ -303,6 +303,31 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     }
 }
 
+private actor FakeAgentRunLoader: GatewayAgentRunLoading {
+    private(set) var loadCount = 0
+    private(set) var canceled: [String] = []
+
+    func load(origin: URL, bearerToken: String, limit: Int) async throws -> [GatewayAgentRun] {
+        loadCount += 1
+        return [
+            GatewayAgentRun(
+                id: "run_active",
+                status: "running",
+                harness: "codex",
+                source: "mac-test",
+                promptPreview: "Build the visible artifact",
+                outputPreview: "Inspecting the native surface",
+                active: true
+            ),
+            GatewayAgentRun(id: "run_done", status: "completed", promptPreview: "Finished work")
+        ]
+    }
+
+    func cancel(origin: URL, bearerToken: String, runID: String) async throws {
+        canceled.append(runID)
+    }
+}
+
 @MainActor @Test func commandModelSendsOneInertTurnAndPreservesGatewayOnlyBoundary() async throws {
     let sender = FakeChatSender()
     let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: sender,
@@ -362,6 +387,28 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     #expect(model.browserHandoffPhase == .completed)
     #expect(model.browserURL.isEmpty)
     #expect(await browser.requests.count == 1)
+}
+
+@MainActor @Test func commandModelProjectsGatewayAgentsIntoWorkspaceAndParkedRail() async {
+    let loader = FakeAgentRunLoader()
+    let model = CommandModel(
+        store: StaticConnectionStore(origin: "https://moa.example"),
+        sender: FakeChatSender(),
+        deviceSessionStore: EmptyDeviceSessionStore(),
+        agentRunLoader: loader
+    )
+    model.token = "gateway-token"
+    model.showAgents()
+    await model.refreshAgentRuns()
+    #expect(model.panelSection == .agents)
+    #expect(model.agentRuns.map(\.id) == ["run_active", "run_done"])
+    #expect(model.runningAgentCount == 1)
+    #expect(model.agentRunStatus.isEmpty)
+    _ = AgentWorkspaceView(model: model).body
+    _ = AgentRailView(model: model, open: {}).body
+    await model.cancelAgentRun("run_active")
+    #expect(await loader.canceled == ["run_active"])
+    #expect(await loader.loadCount >= 2)
 }
 
 @MainActor @Test func macShellSafeStoppedControlsRemainInert() async {

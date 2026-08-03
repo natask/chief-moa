@@ -148,3 +148,39 @@ create a client-local history database or place the bearer token in a URL.
   malformed content
 - **THEN** the panel reports the failure without leaking the token or falling
   back to a private client history
+
+### Requirement: Canonical agent projects remain visible beside the Mac surface
+
+The macOS companion SHALL provide a movable Agents workspace and MAY show a
+separate transparent parked-agent rail. Both SHALL project bounded gateway-owned
+run summaries from authenticated `GET /v1/agent/runs`. The Mac SHALL NOT create
+a separate agent-run database or execute returned run text.
+
+#### Scenario: The gateway has agent runs
+
+- **WHEN** a connected Mac refreshes the agent projection
+- **THEN** the project sidebar groups running and recent runs and the detail pane
+  shows bounded prompt, activity, and run metadata
+- **AND** at most six newest runs appear as parked avatars on the screen edge
+- **AND** selecting an avatar opens the same Agents workspace
+
+#### Scenario: The user moves the companion
+
+- **WHEN** the user drags the main panel away from its initial notch placement
+- **THEN** later summons retain that visible user-owned position
+- **AND** an explicit Reset panel position command restores automatic placement
+
+#### Scenario: The user stops a running agent
+
+- **WHEN** the user selects Stop on a running gateway run
+- **THEN** the Mac sends one authenticated request to that run's canonical
+  cancel endpoint
+- **AND** refreshes the projection without treating the response as executable
+  content
+
+#### Scenario: Agent projection is unavailable
+
+- **WHEN** the Mac is disconnected, unauthorized, redirected, receives an
+  oversized response, or receives malformed run data
+- **THEN** it reports the projection failure and preserves the trust boundary
+- **AND** it does not fall back to scanning local Codex or vendor CLI state

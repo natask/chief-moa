@@ -59,6 +59,11 @@
       presentation beyond the live assistant reply.
 - [x] 4.1c Add local PCM-derived waveform feedback alongside existing live
       partial/final transcript presentation.
+- [x] 4.1d Add a movable Clicky-style Agents workspace and an all-Spaces parked
+      agent rail backed by bounded gateway run summaries. Include project
+      search, running/recent status, selected-run detail, refresh, and stop.
+      Keep full event timelines, artifact actions, and retained audio under
+      4.1b.
 - [ ] 4.2 Add visual pointer/caption guidance as inert overlays.
 - [ ] 4.3 Complete semantic AX proposal validation, approval, execution, and
       durable receipts from `privacy-first-macos-surface`.

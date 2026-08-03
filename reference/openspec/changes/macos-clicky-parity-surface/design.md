@@ -33,6 +33,15 @@ durable gateway history is not rendered in this surface.
 Settings and the existing screen-context grant UI remain in a normal deeper
 window reached only through the menu-bar Settings action.
 
+The top-attached panel is movable after its initial notch placement and saves
+the user's position. It exposes Home and Agents modes in one 820-point native
+workspace. Agents mode uses a narrow project sidebar and selected-run detail
+pane. A separate transparent floating `NSPanel` parks at most six agent avatars
+on the right edge of the active screen. The rail and the Agents workspace share
+one observable model; selecting a parked avatar opens Agents. This adapts the
+public AppKit pattern confirmed in OpenClicky and the installed HeyClicky binary
+while using Ag branding, SF Symbols, and Chief Moa data.
+
 Microphone denial remains visible in the island. The recovery state names the
 Microphone pane, opens it only after a user action, rechecks permission when Ag
 becomes active again, and offers an explicit retry. Screen Recording is labeled
@@ -69,6 +78,14 @@ replacement. Explicit disconnect deletes the file. The cache follows Codex's
 portable file credential-store pattern so the account is not tied to macOS.
 Provider keys, vendor CLI OAuth tokens, and model-subscription tokens remain
 gateway/execution-machine concerns.
+
+The Mac reads bounded summaries from authenticated `GET /v1/agent/runs` and
+requests cancellation through authenticated `POST /v1/agent/runs/:id/cancel`.
+Both use the same canonical origin, portable Ag device session, redirect
+rejection, ephemeral networking, and response-size boundary as the companion
+surface. Run text is inert presentation and never becomes a local command. The
+Mac does not create a parallel run database or inspect vendor CLI state to
+populate the workspace.
 
 ## Privacy boundary
 

@@ -22,40 +22,45 @@ public struct CommandPaletteView: View {
         VStack(spacing: 0) {
             islandHeader
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if model.voiceState.phase == .denied {
-                        microphoneRecovery
-                    }
-                    if editingConnection { connectionEditor }
-                    if showingBrowserHandoff { browserHandoff }
-                    conversationContent
-                    if model.voiceState.isActive {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(model.voiceState.message, systemImage: "waveform")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.74))
-                            VoiceWaveform(levels: model.voiceLevels)
-                                .frame(height: 38)
-                                .accessibilityLabel("Live microphone level")
+            if model.panelSection == .agents && !model.voiceState.isActive {
+                AgentWorkspaceView(model: model)
+                    .padding(14)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if model.voiceState.phase == .denied {
+                            microphoneRecovery
                         }
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                    } else {
-                        composer
+                        if editingConnection { connectionEditor }
+                        if showingBrowserHandoff { browserHandoff }
+                        conversationContent
+                        if model.voiceState.isActive {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Label(model.voiceState.message, systemImage: "waveform")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.74))
+                                VoiceWaveform(levels: model.voiceLevels)
+                                    .frame(height: 38)
+                                    .accessibilityLabel("Live microphone level")
+                            }
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        } else {
+                            composer
+                        }
+                        Text("\(shortcutLabel) toggles assistant voice · Dictate is literal · screen recording is not required")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.42))
                     }
-                    Text("\(shortcutLabel) toggles assistant voice · Dictate is literal · screen recording is not required")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.42))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 16)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 16)
             }
         }
-        .frame(width: 560, height: 440, alignment: .top)
-        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22))
+        .frame(width: 820, height: 720, alignment: .top)
+        .background(Color.black.opacity(0.97), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay(
-            UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22)
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .stroke(boundaryColor, lineWidth: model.voiceState.isActive ? 3 : 1)
                 .opacity(boundaryPulse ? 1 : (model.voiceState.isActive ? 0.9 : 0.34))
         )
@@ -88,23 +93,36 @@ public struct CommandPaletteView: View {
                     .frame(width: 44, height: 44)
             }
 
-            VStack(spacing: 2) {
-                Text(islandTitle)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                Text(model.voiceState.isActive ? model.voiceState.message : model.status)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
+            if model.voiceState.isActive {
+                VStack(spacing: 2) {
+                    Text(islandTitle)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(model.voiceState.message)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                HStack(spacing: 7) {
+                    navigationTab(.home, systemImage: "house.fill")
+                    navigationTab(.agents, systemImage: "rectangle.stack.fill")
+                    Spacer()
+                    Text(model.status)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.52))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
 
             if model.voiceState.isActive {
                 islandButton("Finish", systemImage: "checkmark", tint: .orange) {
                     Task { await model.finishVoice() }
                 }
             } else {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Button { showingBrowserHandoff.toggle() } label: {
                         Image(systemName: "safari")
                     }
@@ -129,11 +147,36 @@ public struct CommandPaletteView: View {
         }
     }
 
+    private func navigationTab(_ section: CommandModel.PanelSection, systemImage: String) -> some View {
+        Button {
+            section == .agents ? model.showAgents() : model.showHome()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                Text(section.rawValue)
+                if section == .agents && model.runningAgentCount > 0 {
+                    Text("\(model.runningAgentCount)")
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(.black)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(.orange, in: Capsule())
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white.opacity(model.panelSection == section ? 0.96 : 0.58))
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(.white.opacity(model.panelSection == section ? 0.12 : 0.03), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var islandTitle: String {
         if model.voiceState.isActive {
             return model.voiceActivity == .dictation ? "Ag is dictating" : "Ag is listening"
         }
         if model.voiceState.phase == .denied { return "Microphone blocked" }
+        if model.panelSection == .agents { return "Ag agents" }
         return "Ag"
     }
 

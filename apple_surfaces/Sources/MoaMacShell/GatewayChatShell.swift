@@ -140,6 +140,11 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
 }
 
 @MainActor public final class CommandModel: ObservableObject {
+    public enum PanelSection: String, CaseIterable, Sendable {
+        case home = "Home"
+        case agents = "Agents"
+    }
+
     public enum ConnectionState: Equatable, Sendable {
         case disconnected
         case openingBrowser
@@ -174,6 +179,10 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var interactionPulse: UInt64 = 0
     @Published public private(set) var connectionState: ConnectionState = .disconnected
     @Published public private(set) var microphonePermission = SystemMicrophonePermission.currentState
+    @Published public var panelSection: PanelSection = .home
+    @Published public private(set) var agentRuns: [GatewayAgentRun] = []
+    @Published public private(set) var agentRunStatus = ""
+    @Published public private(set) var isLoadingAgentRuns = false
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
@@ -183,6 +192,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     private let deviceAuthorizer: any DeviceAuthorizing
     private let deviceSessionStore: any DeviceSessionStoring
     private let deviceVerificationOpener: any DeviceVerificationOpening
+    private let agentRunLoader: any GatewayAgentRunLoading
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -195,7 +205,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             historyLoader: URLSessionGatewayHistoryLoader(),
             browserSender: URLSessionBrowserDelegationSender()
             , deviceAuthorizer: URLSessionDeviceAuthorizer(), deviceSessionStore: FileDeviceSessionStore(),
-            deviceVerificationOpener: SystemDeviceVerificationOpener()
+            deviceVerificationOpener: SystemDeviceVerificationOpener(),
+            agentRunLoader: URLSessionGatewayAgentRunLoader()
         )
     }
 
@@ -207,7 +218,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         browserSender: (any BrowserDelegationSending)? = nil,
         deviceAuthorizer: (any DeviceAuthorizing)? = nil,
         deviceSessionStore: (any DeviceSessionStoring)? = nil,
-        deviceVerificationOpener: (any DeviceVerificationOpening)? = nil
+        deviceVerificationOpener: (any DeviceVerificationOpening)? = nil,
+        agentRunLoader: (any GatewayAgentRunLoading)? = nil
     ) {
         self.store = store
         self.sender = sender
@@ -217,6 +229,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         self.deviceAuthorizer = deviceAuthorizer ?? URLSessionDeviceAuthorizer()
         self.deviceSessionStore = deviceSessionStore ?? FileDeviceSessionStore()
         self.deviceVerificationOpener = deviceVerificationOpener ?? SystemDeviceVerificationOpener()
+        self.agentRunLoader = agentRunLoader ?? URLSessionGatewayAgentRunLoader()
         let savedOrigin = store.loadOrigin()
         origin = savedOrigin.isEmpty ? "https://api.agee.app" : savedOrigin
         let savedToken = self.deviceSessionStore.load()
@@ -226,6 +239,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     }
 
     public var isConfigured: Bool { !origin.isEmpty && !token.isEmpty }
+    public var runningAgentCount: Int { agentRuns.filter(\.isRunning).count }
     public var isSigningIn: Bool {
         if case .openingBrowser = connectionState { return true }
         if case .waitingForApproval = connectionState { return true }
@@ -283,6 +297,46 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         connectionState = .disconnected
         resetPresentation()
         status = "Disconnected — session credential cleared"
+    }
+
+    public func showHome() { panelSection = .home }
+
+    public func showAgents() {
+        panelSection = .agents
+        Task { await refreshAgentRuns() }
+    }
+
+    public func refreshAgentRuns() async {
+        guard !isLoadingAgentRuns else { return }
+        guard let url = URL(string: origin), isConfigured else {
+            agentRuns = []
+            agentRunStatus = "Connect to your gateway to see agents"
+            return
+        }
+        isLoadingAgentRuns = true
+        defer { isLoadingAgentRuns = false }
+        do {
+            agentRuns = try await agentRunLoader.load(origin: url, bearerToken: token, limit: 25)
+            agentRunStatus = agentRuns.isEmpty ? "No agents have run yet" : ""
+        } catch GatewayChatTransportError.unauthorized {
+            agentRunStatus = "Your Ag session expired — sign in again"
+        } catch {
+            agentRunStatus = "Could not refresh agents"
+        }
+    }
+
+    public func cancelAgentRun(_ runID: String) async {
+        guard let url = URL(string: origin), isConfigured else {
+            agentRunStatus = "Connect to your gateway first"
+            return
+        }
+        do {
+            try await agentRunLoader.cancel(origin: url, bearerToken: token, runID: runID)
+            agentRunStatus = "Stop requested"
+            await refreshAgentRuns()
+        } catch {
+            agentRunStatus = "Could not stop that agent"
+        }
     }
 
     public func refreshBrowserDevices() async {
@@ -401,6 +455,9 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         browserDevices = []
         selectedBrowserID = ""
         browserHandoffPhase = .idle
+        agentRuns = []
+        agentRunStatus = ""
+        panelSection = .home
     }
 
     public func toggleHistory() async {
