@@ -44,4 +44,12 @@ assert.match(surfaceControlsSource, /restoreVisibility/, "a removed launcher sta
 assert.match(surfaceControlsSource, /explicitlyRevealed[\s\S]{0,180}ageeLauncherHidden: false/, "opening by shortcut or toolbar restores the launcher");
 assert.match(contentSource, /surfaceControls\?\.reveal\(\)/, "explicit content-script summons reveal the launcher");
 
+const backgroundSource = readFileSync(join(root, "extension", "background.js"), "utf8");
+const actionStart = backgroundSource.indexOf("chrome.action.onClicked.addListener");
+const actionEnd = backgroundSource.indexOf("chrome.commands.onCommand.addListener", actionStart);
+assert.ok(actionStart >= 0 && actionEnd > actionStart, "toolbar click handler is present");
+const actionSource = backgroundSource.slice(actionStart, actionEnd);
+assert.match(actionSource, /openAgentPanel\(tab\);[\s\S]*summonOverlay\(tab, "open"\);/, "toolbar click opens the workspace and always summons the mascot");
+assert.doesNotMatch(actionSource, /if\s*\([^)]*opened[^)]*\)/, "mascot summon is not conditional on side-panel failure");
+
 console.log("launcher-removal-runtime ok");

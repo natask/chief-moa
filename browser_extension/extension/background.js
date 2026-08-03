@@ -5044,14 +5044,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.action.onClicked.addListener((tab) => {
-  // The toolbar icon opens the extension-owned agent panel. Unlike the injected
-  // overlay, the side panel renders on every page — chrome:// pages, the Web
-  // Store, the PDF viewer — and persists across tab switches. sidePanel.open
-  // must be the first synchronous call in this handler: the user-gesture flag
-  // for this API decays almost immediately (crbug.com/1478648), so no awaits
-  // before it.
-  const opened = openAgentPanel(tab);
-  if (!opened) summonOverlay(tab, "open");
+  // The toolbar icon is an explicit summon: always restore the mascot, even
+  // when the user previously dragged it to Remove Ag. Keep opening the durable
+  // side-panel workspace too. sidePanel.open must remain the first synchronous
+  // call because its user-gesture flag decays almost immediately
+  // (crbug.com/1478648); the overlay summon then continues asynchronously.
+  openAgentPanel(tab);
+  summonOverlay(tab, "open");
 });
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
