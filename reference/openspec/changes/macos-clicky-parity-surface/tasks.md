@@ -59,14 +59,17 @@
       presentation beyond the live assistant reply.
 - [x] 4.1c Add local PCM-derived waveform feedback alongside existing live
       partial/final transcript presentation.
-- [x] 4.1d Add a movable Clicky-style Agents workspace and an all-Spaces parked
+- [x] 4.1d Add an explicitly opened Clicky-style Agents workspace and an all-Spaces parked
       agent rail backed by bounded gateway run summaries. Include project
       search, running/recent status, selected-run detail, refresh, and stop.
       Keep full event timelines, artifact actions, and retained audio under
       4.1b.
-- [x] 4.1e Make the panel content-sized at rest, hover-expanded, and interaction-
-      pinned until explicit collapse, Hide, or Escape. Verify compact and Agents
-      states with offscreen bitmap snapshots that never open a QA window.
+- [x] 4.1e Keep the compact panel fixed at the built-in physical notch, ignore
+      hover for window geometry, and open the larger workspace only through an
+      explicit click or menu action while preserving the same top-center anchor.
+      Remove dragging, saved arbitrary positions, and pointer-selected displays.
+      Verify compact and Agents states with offscreen bitmap snapshots that
+      never open a QA window.
 - [ ] 4.2 Add visual pointer/caption guidance as inert overlays.
 - [ ] 4.3 Complete semantic AX proposal validation, approval, execution, and
       durable receipts from `privacy-first-macos-surface`.

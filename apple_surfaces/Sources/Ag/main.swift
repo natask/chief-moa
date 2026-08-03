@@ -3,6 +3,7 @@ import AppKit
 import Carbon.HIToolbox
 import Combine
 import CoreGraphics
+import Darwin
 import MoaMacCore
 import MoaMacShell
 import MoaMacUI
@@ -11,20 +12,13 @@ import SwiftUI
 private let usesIsolatedQASpace = CommandLine.arguments.contains("--isolated-qa-space")
 
 private final class CommandPanel: NSPanel {
-    var interactionHandler: (() -> Void)?
-    private(set) var isProcessingPointerInteraction = false
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
-            isProcessingPointerInteraction = true
-        }
-        super.sendEvent(event)
-        if event.type == .leftMouseUp || event.type == .rightMouseUp || event.type == .otherMouseUp {
-            interactionHandler?()
-            isProcessingPointerInteraction = false
-        }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        // The controller owns a physical-screen-safe frame. AppKit otherwise
+        // pushes a notch panel down to visibleFrame when it is ordered front.
+        frameRect
     }
 }
 
@@ -89,12 +83,8 @@ private final class AgentRailPanel: NSPanel {
     private var panel: CommandPanel?
     private var previousApplication: NSRunningApplication?
     private(set) var shortcutLabel = "Control-Space"
-    private var isApplyingPanelPosition = false
-    private var moveObserver: NSObjectProtocol?
-    private var focusObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
     private var presentationObserver: AnyCancellable?
-    private let panelAnchorXKey = "ag.command-panel.anchor-center-x"
-    private let panelAnchorYKey = "ag.command-panel.anchor-top-y"
 
     func setShortcutLabel(_ value: String) { shortcutLabel = value }
 
@@ -120,6 +110,7 @@ private final class AgentRailPanel: NSPanel {
 
     func invokeAgents() {
         model.showAgents()
+        presentation.handle(.open)
         show()
     }
 
@@ -128,10 +119,27 @@ private final class AgentRailPanel: NSPanel {
         AgentRailPanelController.shared.sync(model: model)
     }
 
-    func resetPanelPosition() {
-        UserDefaults.standard.removeObject(forKey: panelAnchorXKey)
-        UserDefaults.standard.removeObject(forKey: panelAnchorYKey)
-        if let panel { position(panel, preferSaved: false) }
+    func runGeometrySmoke() -> Bool {
+        let panel = panel ?? makePanel()
+        presentation.handle(.collapse)
+        position(panel)
+        let compactExpected = panel.frame
+        panel.orderFrontRegardless()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let compactActual = panel.frame
+        presentation.handle(.open)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let expandedActual = panel.frame
+        presentation.handle(.collapse)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let compactAgain = panel.frame
+        panel.orderOut(nil)
+        let stable = compactActual == compactExpected
+            && compactAgain == compactExpected
+            && expandedActual.midX == compactExpected.midX
+            && expandedActual.maxY == compactExpected.maxY
+        print("Ag geometry smoke: compact=\(NSStringFromRect(compactActual)) expanded=\(NSStringFromRect(expandedActual)) compact_again=\(NSStringFromRect(compactAgain)) stable=\(stable)")
+        return stable
     }
 
     func show() {
@@ -171,41 +179,32 @@ private final class AgentRailPanel: NSPanel {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.hidesOnDeactivate = false
-        panel.isMovable = true
-        panel.isMovableByWindowBackground = true
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.collectionBehavior = usesIsolatedQASpace
             ? [.moveToActiveSpace, .fullScreenAuxiliary]
-            : [.canJoinAllSpaces, .fullScreenAuxiliary]
+            : [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isReleasedWhenClosed = false
-        panel.interactionHandler = { [weak self] in self?.presentation.handle(.interacted) }
-        moveObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didMoveNotification,
-            object: panel,
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
             queue: .main
-        ) { [weak self, weak panel] _ in
+        ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let panel, !self.isApplyingPanelPosition else { return }
-                UserDefaults.standard.set(panel.frame.midX, forKey: self.panelAnchorXKey)
-                UserDefaults.standard.set(panel.frame.maxY, forKey: self.panelAnchorYKey)
-            }
-        }
-        focusObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: panel,
-            queue: .main
-        ) { [weak self, weak panel] _ in
-            Task { @MainActor in
-                guard panel?.isProcessingPointerInteraction != true else { return }
-                self?.presentation.handle(.gainedFocus)
+                guard let self, let panel = self.panel else { return }
+                self.position(panel)
             }
         }
         presentationObserver = presentation.$state
             .removeDuplicates()
             .sink { [weak self, weak panel] state in
-                guard let self, let panel else { return }
-                self.resize(panel, expanded: state.isExpanded)
+                Task { @MainActor in
+                    guard let self, let panel else { return }
+                    await Task.yield()
+                    self.resize(panel, expanded: state.isExpanded)
+                }
             }
         self.panel = panel
         return panel
@@ -213,50 +212,48 @@ private final class AgentRailPanel: NSPanel {
 
     private func resize(_ panel: NSPanel, expanded: Bool) {
         let size = expanded ? PanelPresentationMetrics.expandedSize : PanelPresentationMetrics.compactSize
-        guard panel.frame.size != size else { return }
-        let current = panel.frame
-        let origin = NSPoint(x: current.midX - size.width / 2, y: current.maxY - size.height)
-        isApplyingPanelPosition = true
-        panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
-        isApplyingPanelPosition = false
+        if panel.frame.size != size {
+            panel.setFrame(NSRect(origin: panel.frame.origin, size: size), display: true, animate: false)
+        }
+        position(panel)
     }
 
-    private func position(_ panel: NSPanel, preferSaved: Bool = true) {
-        if preferSaved, let saved = savedPanelOrigin(for: panel) {
-            applyPanelOrigin(saved, to: panel)
-            return
+    private func position(_ panel: NSPanel) {
+        let screensByID: [UInt32: NSScreen] = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
+            displayID(for: screen).map { ($0, screen) }
+        })
+        let descriptors = screensByID.map { entry in
+            let (id, screen) = entry
+            return PanelScreenDescriptor(
+                id: id,
+                safeAreaTop: screen.safeAreaInsets.top,
+                isBuiltInDisplay: CGDisplayIsBuiltin(CGDirectDisplayID(id)) != 0
+            )
         }
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
+        let targetID = PanelScreenSelectionPolicy.targetDisplayID(
+            screens: descriptors,
+            mainDisplayID: NSScreen.main.flatMap { displayID(for: $0) }
+        )
+        let screen = targetID.flatMap { screensByID[$0] } ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { panel.center(); return }
-        let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
-            .map { CGDirectDisplayID($0.uint32Value) }
+        let cgDisplayID = displayID(for: screen).map { CGDirectDisplayID($0) }
         let decision = PanelLayoutPolicy.decision(for: PanelLayoutInput(
             screenFrame: screen.frame,
             visibleFrame: screen.visibleFrame,
             panelSize: panel.frame.size,
             safeAreaTop: screen.safeAreaInsets.top,
-            isBuiltInDisplay: displayID.map { CGDisplayIsBuiltin($0) != 0 } ?? false
+            isBuiltInDisplay: cgDisplayID.map { CGDisplayIsBuiltin($0) != 0 } ?? false
         ))
         guard let decision else { panel.center(); return }
         applyPanelOrigin(decision.origin, to: panel)
     }
 
-    private func savedPanelOrigin(for panel: NSPanel) -> NSPoint? {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: panelAnchorXKey) != nil,
-              defaults.object(forKey: panelAnchorYKey) != nil else { return nil }
-        let origin = NSPoint(
-            x: defaults.double(forKey: panelAnchorXKey) - panel.frame.width / 2,
-            y: defaults.double(forKey: panelAnchorYKey) - panel.frame.height
-        )
-        let frame = NSRect(origin: origin, size: panel.frame.size)
-        return NSScreen.screens.contains { $0.visibleFrame.intersects(frame) } ? origin : nil
+    private func displayID(for screen: NSScreen) -> UInt32? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
     private func applyPanelOrigin(_ origin: NSPoint, to panel: NSPanel) {
-        isApplyingPanelPosition = true
         panel.setFrameOrigin(origin)
-        isApplyingPanelPosition = false
     }
 }
 
@@ -324,7 +321,6 @@ struct AgApp: App {
                 .keyboardShortcut(" ", modifiers: .control)
             Button("Dictate literal text") { CommandPanelController.shared.invokeDictation() }
             Button("Agents") { CommandPanelController.shared.invokeAgents() }
-            Button("Reset panel position") { CommandPanelController.shared.resetPanelPosition() }
             SettingsLink { Text("Privacy & Screen Context…") }
             Divider()
             Button("Quit Ag") { NSApp.terminate(nil) }
@@ -336,6 +332,9 @@ struct AgApp: App {
 @main
 enum AgMain {
     static func main() {
+        if CommandLine.arguments.contains("--window-geometry-smoke") {
+            Darwin.exit(CommandPanelController.shared.runGeometrySmoke() ? EXIT_SUCCESS : EXIT_FAILURE)
+        }
         if CommandLine.arguments.contains("--coverage-smoke") {
             _ = AgApp().body
             return

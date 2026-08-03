@@ -151,10 +151,13 @@ create a client-local history database or place the bearer token in a URL.
 
 ### Requirement: Canonical agent projects remain visible beside the Mac surface
 
-The macOS companion SHALL provide a movable Agents workspace and MAY show a
+The macOS companion SHALL provide an explicitly opened Agents workspace and MAY show a
 separate transparent parked-agent rail. Both SHALL project bounded gateway-owned
 run summaries from authenticated `GET /v1/agent/runs`. The Mac SHALL NOT create
-a separate agent-run database or execute returned run text.
+a separate agent-run database or execute returned run text. The command panel
+SHALL remain fixed at the built-in physical notch and pointer hover SHALL NOT
+change its frame or target display. Explicit workspace expansion SHALL preserve
+the same physical top-center anchor.
 
 #### Scenario: The gateway has agent runs
 
@@ -164,11 +167,13 @@ a separate agent-run database or execute returned run text.
 - **AND** at most six newest runs appear as parked avatars on the screen edge
 - **AND** selecting an avatar opens the same Agents workspace
 
-#### Scenario: The user moves the companion
+#### Scenario: The user points at or opens the companion
 
-- **WHEN** the user drags the main panel away from its initial notch placement
-- **THEN** later summons retain that visible user-owned position
-- **AND** an explicit Reset panel position command restores automatic placement
+- **WHEN** the user moves the pointer across the compact panel
+- **THEN** the panel frame and built-in notch anchor remain unchanged
+- **AND** an explicit click or Agents menu action may open the workspace downward
+  from that same top-center anchor
+- **AND** the panel cannot be dragged or redirected to the pointer's display
 
 #### Scenario: The user stops a running agent
 

@@ -72,7 +72,7 @@ private actor SnapshotAgentLoader: GatewayAgentRunLoading {
     )
 
     model.showAgents()
-    let expanded = PanelPresentationModel(state: PanelPresentationState(phase: .pinned))
+    let expanded = PanelPresentationModel(state: PanelPresentationState(phase: .expanded))
     try render(
         CommandPaletteView(model: model, presentation: expanded),
         size: PanelPresentationMetrics.expandedSize,

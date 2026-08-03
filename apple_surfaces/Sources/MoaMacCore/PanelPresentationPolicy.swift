@@ -3,15 +3,11 @@ import Foundation
 
 public enum PanelPresentationPhase: Equatable, Sendable {
     case compact
-    case hoverExpanded
-    case pinned
+    case expanded
 }
 
 public enum PanelPresentationEvent: Equatable, Sendable {
-    case pointerEntered
-    case pointerExited
-    case interacted
-    case gainedFocus
+    case open
     case collapse
 }
 
@@ -26,16 +22,10 @@ public struct PanelPresentationState: Equatable, Sendable {
 
     public mutating func handle(_ event: PanelPresentationEvent) {
         switch event {
-        case .pointerEntered where phase == .compact:
-            phase = .hoverExpanded
-        case .pointerExited where phase == .hoverExpanded:
-            phase = .compact
-        case .interacted, .gainedFocus:
-            phase = .pinned
+        case .open:
+            phase = .expanded
         case .collapse:
             phase = .compact
-        default:
-            break
         }
     }
 }

@@ -38,6 +38,35 @@ public struct PanelLayoutDecision: Equatable, Sendable {
     }
 }
 
+public struct PanelScreenDescriptor: Equatable, Sendable {
+    public let id: UInt32
+    public let safeAreaTop: CGFloat
+    public let isBuiltInDisplay: Bool
+
+    public init(id: UInt32, safeAreaTop: CGFloat, isBuiltInDisplay: Bool) {
+        self.id = id
+        self.safeAreaTop = safeAreaTop
+        self.isBuiltInDisplay = isBuiltInDisplay
+    }
+}
+
+public enum PanelScreenSelectionPolicy {
+    public static func targetDisplayID(
+        screens: [PanelScreenDescriptor],
+        mainDisplayID: UInt32?
+    ) -> UInt32? {
+        if let notchedBuiltIn = screens.first(where: {
+            $0.isBuiltInDisplay && $0.safeAreaTop.isFinite && $0.safeAreaTop > 0
+        }) {
+            return notchedBuiltIn.id
+        }
+        if let mainDisplayID, screens.contains(where: { $0.id == mainDisplayID }) {
+            return mainDisplayID
+        }
+        return screens.first?.id
+    }
+}
+
 public enum PanelLayoutPolicy {
     public static let menuBarGap: CGFloat = 8
 

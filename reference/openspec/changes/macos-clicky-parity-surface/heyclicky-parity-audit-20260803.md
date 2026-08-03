@@ -42,7 +42,11 @@ share one observable agent-session model.
 
 ## Chief Moa adaptation
 
-Ag now uses a movable 820-point native panel with Home and Agents modes. Agents
+The initial Ag adaptation used a movable native panel with Home and Agents
+modes. User QA on 2026-08-03 superseded that placement choice: the command
+panel must remain fixed at the built-in physical notch, hover must not change
+its frame, and any explicitly opened workspace must preserve the same top-center
+anchor. Agents
 mode uses a Clicky-style project sidebar and a selected-run detail workspace.
 It adds:
 
@@ -51,7 +55,7 @@ It adds:
   refresh, and authenticated stop requests.
 - A second transparent all-Spaces parked-agent rail with up to six avatars.
 - Four-second projection refresh while Ag is running.
-- Saved user movement with an explicit Reset panel position command.
+- Fixed physical-notch placement with no saved arbitrary position.
 
 Chief Moa does not create an OpenClicky-style local Codex database. The gateway
 remains authoritative for run state, and the Mac renders returned text as inert

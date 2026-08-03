@@ -582,10 +582,13 @@ explicit app launch, menu-bar Speak, or Control-Space
   -> typed Send remains a bounded authenticated POST /v1/chat
 ```
 
-The main panel is movable after its initial notch placement. It rests as a
-392-by-64-point island, expands to a 720-by-520-point workspace on hover, and
-pins that expansion after any click or key focus until explicit collapse,
-Hide, or Escape. Its expanded Agents workspace is backed by authenticated
+The main panel is fixed to the built-in display's physical top-center notch
+anchor. It rests as a 392-by-64-point island; hover does not change its frame
+or target display. An explicit click or Agents menu action opens a
+720-by-520-point workspace downward from the same invariant anchor until
+explicit collapse, Hide, or Escape. The panel is non-draggable, ignores legacy
+saved positions, and re-resolves its anchor only when display configuration
+changes. Its expanded Agents workspace is backed by authenticated
 bounded reads of `GET /v1/agent/runs`. Compact and expanded visual QA uses
 offscreen bitmap rendering rather than launching a window on the active desktop.
 A separate transparent floating `NSPanel` may show up to six parked run avatars

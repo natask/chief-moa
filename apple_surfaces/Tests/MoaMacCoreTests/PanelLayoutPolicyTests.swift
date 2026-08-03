@@ -126,28 +126,51 @@ func invalidGeometryRequestsAppKitCenterFallback(value: PanelLayoutInput) {
     #expect(PanelLayoutPolicy.decision(for: value) == nil)
 }
 
-@Test func panelHoverExpandsTemporarilyAndExitCollapses() {
+@Test func panelRemainsCompactUntilExplicitlyOpened() {
     var state = PanelPresentationState()
-    state.handle(.pointerEntered)
-    #expect(state.phase == .hoverExpanded)
-    #expect(state.isExpanded)
-    state.handle(.pointerExited)
     #expect(state.phase == .compact)
-}
-
-@Test(arguments: [PanelPresentationEvent.interacted, .gainedFocus])
-func panelInteractionPinsExpansion(event: PanelPresentationEvent) {
-    var state = PanelPresentationState()
-    state.handle(.pointerEntered)
-    state.handle(event)
-    state.handle(.pointerExited)
-    #expect(state.phase == .pinned)
+    #expect(!state.isExpanded)
+    state.handle(.open)
+    #expect(state.phase == .expanded)
     #expect(state.isExpanded)
 }
 
-@Test func explicitCollapseResetsPinnedPanel() {
-    var state = PanelPresentationState(phase: .pinned)
+@Test func explicitCollapseResetsExpandedPanel() {
+    var state = PanelPresentationState(phase: .expanded)
     state.handle(.collapse)
     #expect(state.phase == .compact)
     #expect(!state.isExpanded)
+}
+
+@Test func notchedBuiltInDisplayWinsOverPointerOrExternalDisplay() {
+    let external = PanelScreenDescriptor(id: 11, safeAreaTop: 0, isBuiltInDisplay: false)
+    let builtIn = PanelScreenDescriptor(id: 22, safeAreaTop: 38, isBuiltInDisplay: true)
+    #expect(PanelScreenSelectionPolicy.targetDisplayID(
+        screens: [external, builtIn],
+        mainDisplayID: external.id
+    ) == builtIn.id)
+}
+
+@Test func mainDisplayIsFallbackWithoutAnActiveNotch() {
+    let builtIn = PanelScreenDescriptor(id: 22, safeAreaTop: 0, isBuiltInDisplay: true)
+    let external = PanelScreenDescriptor(id: 11, safeAreaTop: 0, isBuiltInDisplay: false)
+    #expect(PanelScreenSelectionPolicy.targetDisplayID(
+        screens: [builtIn, external],
+        mainDisplayID: external.id
+    ) == external.id)
+}
+
+@Test func compactAndExpandedFramesKeepTheSameHardwareAnchor() throws {
+    let compact = try #require(PanelLayoutPolicy.decision(for: input(
+        panel: PanelPresentationMetrics.compactSize,
+        safeAreaTop: 38
+    )))
+    let expanded = try #require(PanelLayoutPolicy.decision(for: input(
+        panel: PanelPresentationMetrics.expandedSize,
+        safeAreaTop: 38
+    )))
+    #expect(compact.origin.x + PanelPresentationMetrics.compactSize.width / 2 == 756)
+    #expect(expanded.origin.x + PanelPresentationMetrics.expandedSize.width / 2 == 756)
+    #expect(compact.origin.y + PanelPresentationMetrics.compactSize.height == 982)
+    #expect(expanded.origin.y + PanelPresentationMetrics.expandedSize.height == 982)
 }

@@ -54,14 +54,16 @@ public struct CommandPaletteView: View {
             boundaryPulse = true
             withAnimation(.easeOut(duration: 0.42)) { boundaryPulse = false }
         }
-        .onHover { inside in
-            presentation.handle(inside ? .pointerEntered : .pointerExited)
-        }
         .onExitCommand(perform: cancelAndDismiss)
     }
 
     private var compactSurface: some View {
         compactHeader
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !model.voiceState.isActive else { return }
+                presentation.handle(.open)
+            }
     }
 
     private var expandedSurface: some View {
@@ -142,7 +144,7 @@ public struct CommandPaletteView: View {
                 Image(systemName: "chevron.down")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white.opacity(0.38))
-                    .accessibilityLabel("Hover to expand")
+                    .accessibilityLabel("Click to expand")
             }
         }
         .padding(.horizontal, 12)
@@ -153,7 +155,7 @@ public struct CommandPaletteView: View {
         if model.voiceState.isActive { return model.voiceState.message }
         if model.voiceState.phase == .denied { return "Microphone needs attention" }
         if model.runningAgentCount > 0 { return "\(model.runningAgentCount) agents working" }
-        return model.status.isEmpty ? "Hover to open" : model.status
+        return model.status.isEmpty ? "Click to open" : model.status
     }
 
     private var islandHeader: some View {

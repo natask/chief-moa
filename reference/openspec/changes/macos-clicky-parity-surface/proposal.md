@@ -13,8 +13,9 @@ other surfaces.
 
 - Turn `Ag` into a menu-bar application with no persistent Dock presence.
 - Add a global `Control+Space` summon shortcut and one compact floating command
-  panel for voice capture and typed turns. App launch and first summon begin
-  latched capture; the next summon commits it.
+  panel fixed to the built-in Mac's physical notch/Dynamic Island for voice
+  capture and typed turns. Pointer hover never moves or expands the panel. App
+  launch and first summon begin latched capture; the next summon commits it.
 - Render gateway assistant text and play its bounded hosted PCM reply in that
   same panel. Keep capture state obvious with a boundary pulse and native
   haptic feedback, without repetitive interface cue sounds.
