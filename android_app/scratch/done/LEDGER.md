@@ -1,3 +1,4 @@
+- Added a fail-closed voice IME and moved voice-draft Cancel left and Pause/Resume right so transcript lanes stay clear — agent: Codex/GPT-5 — a0ef2481
 - Added capability-gated Android voice-draft Pause/Resume and Discard controls around the mascot, with exact-authority Send and legacy fallback — agent: Codex/GPT-5 — this commit
 - Put an exact Copy action beside every retained user and assistant message in Android History, replacing combined turn copy — agent: Codex/GPT-5 — this commit
 - Added a selectable Minimal Android voice presentation with four touch-through audio-reactive edge windows and a bounded full-app fallback — agent: Codex/GPT-5 — this commit

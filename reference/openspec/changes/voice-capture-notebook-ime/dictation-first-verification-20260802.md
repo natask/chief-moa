@@ -26,6 +26,17 @@
 - Contract and repository: strict OpenSpec validation and
   `node scripts/source-size-policy.js` passed.
 
+## Candidate artifacts
+
+- Android OTA candidate: release `ag.companion-2026080201` in the isolated
+  preview store
+  `gateway/data/android-ota-preview-dictation-first-a0ef2481`, built from commit
+  `a0ef2481` with the continuity debug signer. It was not written to the active
+  OTA store.
+- Native Mac QA archive: `apple_surfaces/dist/Ag-0.1.0-1-arm64.zip` with the
+  adjacent SHA-256 file. The package passed the repository binary scan and
+  ad-hoc signature verification.
+
 ## Promotion blockers and remaining acceptance
 
 - Android still needs physical-phone IME QA in two ordinary apps, password

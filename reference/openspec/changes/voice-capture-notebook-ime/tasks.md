@@ -212,7 +212,7 @@ gain page-action authority because it runs inside the browser extension.
 
 - [x] 6.1 Update accepted OpenSpec capability specs and `ARCHITECTURE.md` only
   when the first architecture-significant implementation lands.
-- [ ] 6.2 Run narrow verification per gateway and Android unit, then commit each
+- [x] 6.2 Run narrow verification per gateway and Android unit, then commit each
   coherent unit with Conventional Commits.
 - [ ] 6.3 Create isolated gateway preview state and an Android OTA artifact.
 - [ ] 6.4 Prove rollback, old/new state compatibility, no interrupted recordings
