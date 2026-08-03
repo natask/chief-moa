@@ -1,3 +1,4 @@
+- Turned explicit browser video captures into editable durable intents with preserved recording, exact transcript provenance, retention controls, and history — Codex / GPT-5 — 70e8ed40
 - Bounded collapsed Android transcript rendering and moved compact Copy/History controls into retained History — agent: Codex/GPT-5 — d8803e29
 - Retained zero-audio failed speech turns for a bounded retry window — agent: Codex/GPT-5 — e803b553
 - Bound partial-speech retries to exact recorded suffixes and preserved ordered audio under concurrent failure — agent: Codex/GPT-5 — c0de8598
