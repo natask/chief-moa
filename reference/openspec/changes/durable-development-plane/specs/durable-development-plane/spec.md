@@ -42,6 +42,12 @@ worker. Terminal worker receipts SHALL advance the next dependency-safe batch.
   task fields
 - **THEN** the system stores no plan and launches no task worker
 
+#### Scenario: Local gateway does not mutate its active checkout
+
+- **WHEN** development work is dispatched while the gateway runs in local mode
+- **THEN** the run remains queued until a registered worker claims it in a
+  worker-owned worktree
+
 ### Requirement: QA precedes final user review
 
 The system SHALL freeze a final candidate only after every planned task

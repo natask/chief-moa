@@ -46,6 +46,10 @@ integration name verification refs. Missing or failed evidence blocks the graph.
 The integration receipt must name a Git commit. Once final QA completes, that
 commit and the accumulated QA refs become the frozen candidate automatically.
 
+Development dispatch writes queued agent runs directly. It never invokes a
+local harness in the gateway's active checkout. Worker-pull owns the durable
+worktree, heartbeat, cancellation, and terminal-result boundary in every mode.
+
 QA is a task kind. A candidate cannot become ready until every planned task has
 completed and at least one QA task exists. User acceptance binds the exact
 candidate digest. The development plane can launch bounded workers. It does not

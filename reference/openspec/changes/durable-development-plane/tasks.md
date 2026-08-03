@@ -20,3 +20,5 @@
 - [x] D12 Fail closed when a worker exits cleanly without structured output and
       verification evidence for its task kind.
 - [x] D13 Freeze the exact integrated Git candidate automatically after final QA.
+- [x] D14 Queue every development task for a worker-owned worktree, including
+      when the gateway itself runs in local mode.

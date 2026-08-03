@@ -765,7 +765,9 @@ developmentPlaneCoordinator = createDevelopmentPlaneCoordinator({
   plane: developmentPlane,
   integrationQueue: developmentIntegrationQueue,
   planIntent: async (intent) => extractPlan(await callModelOrFallback(planningMessages(intent))),
-  createRun: startAgentRun,
+  // Development work always waits for a worker-owned worktree. Never run a
+  // coding or QA task directly inside the gateway's active checkout.
+  createRun: createAgentRun,
   readRun: readAgentRun,
 });
 const { routeDevelopmentPlane } = createDevelopmentPlaneHandlers({
