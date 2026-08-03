@@ -334,6 +334,18 @@ composer before the first transcript event, interim replacements appear in the
 same field without creating a second input, and listening/processing states
 never render a blue companion ring.
 
+- [x] 8.5 Keep the complete companion surface available after extension reload,
+      route double-Command into browser assistant voice, restore a deliberately
+      hidden mascot on explicit summon, and keep Pause/Resume, Cancel, and task
+      Stop reachable beside the mascot without changing the specified compact
+      mascot or ribbon geometry.
+
+Acceptance: dynamic reinjection reads the packaged content-script JS and CSS
+lists instead of a stale duplicate; a real-extension smoke still measures the
+44px desktop/36px narrow mascot and 260-380px one-line ribbons; an explicit
+summon unhides the unit; active draft capture exposes Pause/Resume and Cancel;
+active page work exposes Stop even while the composer panel is closed.
+
 ## 9. Tutorial Workflow
 
 - [ ] 9.1 Define a tutorial as a saved goal, ordered steps, anchor refs,

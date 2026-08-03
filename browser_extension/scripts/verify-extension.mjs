@@ -164,9 +164,11 @@ if (
   mainContentScript.js.indexOf("assistant-audio-replay.js") < 0 ||
   mainContentScript.js.indexOf("assistant-audio-replay.js") > mainContentScript.js.indexOf("content.js") ||
   mainContentScript.js.at(-1) !== "content.js" ||
-  // content.js must be last on the hot-injection path too. Pinning the file
-  // immediately before it made every new runtime a two-file edit for no gain.
-  !/files: \[[^\]]*"content\.js"\]/.test(backgroundSource)
+  // Hot injection reads this exact ordered list from the packaged manifest so
+  // a reload cannot drift behind newly added surface runtimes or styles.
+  !/getManifest\(\)\.content_scripts/.test(backgroundSource) ||
+  !/entry\.js\?\.includes\("content\.js"\)/.test(backgroundSource) ||
+  !/files: surface\.js/.test(backgroundSource)
 ) {
   throw new Error("the manifest and hot-injection paths must load every content runtime before content.js");
 }

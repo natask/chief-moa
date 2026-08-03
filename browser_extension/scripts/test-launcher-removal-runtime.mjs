@@ -6,6 +6,7 @@ import vm from "node:vm";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const source = readFileSync(join(root, "extension", "launcher-removal-runtime.js"), "utf8");
 const contentSource = readFileSync(join(root, "extension", "content.js"), "utf8");
+const surfaceControlsSource = readFileSync(join(root, "extension", "browser-surface-controls.js"), "utf8");
 const context = { globalThis: {} };
 vm.createContext(context);
 vm.runInContext(source, context, { filename: "launcher-removal-runtime.js" });
@@ -39,7 +40,8 @@ assert.equal(runtime.finish(state, { type: "pointerup", pointerId: 7, x: 100, y:
 assert.equal(runtime.finish(state, { type: "pointerup", pointerId: 8, x: 100, y: 200 }, target).action, "ignore");
 assert.equal(runtime.finish(state, { type: "pointerup", pointerId: 7, x: 121, y: 200 }, target).removed, false, "release outside never removes despite prior armed state");
 
-assert.match(contentSource, /restoreLauncherVisibility\(\)/, "a removed launcher stays removed after page reinjection");
-assert.match(contentSource, /if \(launcher\?\.hidden\) \{[\s\S]{0,180}ageeLauncherHidden: false/, "opening by shortcut or toolbar restores the launcher");
+assert.match(surfaceControlsSource, /restoreVisibility/, "a removed launcher stays removed after page reinjection");
+assert.match(surfaceControlsSource, /explicitlyRevealed[\s\S]{0,180}ageeLauncherHidden: false/, "opening by shortcut or toolbar restores the launcher");
+assert.match(contentSource, /surfaceControls\?\.reveal\(\)/, "explicit content-script summons reveal the launcher");
 
 console.log("launcher-removal-runtime ok");

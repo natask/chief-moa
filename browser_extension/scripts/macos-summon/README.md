@@ -1,22 +1,21 @@
-# Summon native Ag from anywhere on macOS
+# Summon the Ag browser companion from anywhere on macOS
 
-This opens the native Ag companion when you tap the left Command key twice from
-any application. It does not raise Chrome, inspect a tab, capture the current
-page, traverse Accessibility, or capture pixels. Double-tap again to commit the
-same native voice turn and hear the gateway-hosted assistant reply.
+This raises Chrome and opens the Ag browser companion when you tap the left
+Command key twice from any application. The first tap pair starts one assistant
+voice turn on an injectable browser page; the next tap pair sends it. The
+extension shows the mascot, the user/reply ribbons, and capture controls.
 
-Two native pieces work together:
+Two pieces work together:
 
-1. `Ag.app` owns the compact panel, microphone, gateway voice socket, reply
-   presentation, and audio playback. Its normal summon path carries no screen or
-   page context.
+1. The Chrome extension owns the compact companion, microphone, gateway voice
+   socket, browser page evidence, reply presentation, and audio playback.
 
 2. A macOS key listener. A double tap of a bare modifier key cannot be an app
    command, so an OS-level listener is required. This helper uses
    Karabiner-Elements, which is already installed and already has input
    monitoring, so no new binary, LaunchAgent, or extra permission grant is
-   needed. The rule runs `open -a "Ag"`; reopening the running app invokes its
-   single native panel.
+   needed. The rule emits Chrome's global `Command+Shift+9` extension command
+   and raises Chrome.
 
 Why Karabiner and not a Swift CGEventTap binary: both can detect a double Command
 tap, but a CGEventTap binary needs its own Accessibility grant and a LaunchAgent
@@ -28,7 +27,7 @@ is the lighter path on this machine. If you later remove Karabiner, the
 
 - Karabiner-Elements installed and running (https://karabiner-elements.pqrs.org/).
 - `jq` on PATH (`brew install jq`).
-- A packaged `Ag.app` installed in `/Applications`.
+- The unpacked or packaged Ag extension loaded in Chrome with its global command enabled.
 
 ## Install
 
@@ -65,12 +64,12 @@ that ever bites.
 
 ## Manual QA (the hotkey cannot be verified headlessly)
 
-1. Install the packaged native app at `/Applications/Ag.app`.
+1. Load the packaged or unpacked Ag extension in Chrome.
 2. Run `./install.sh`. Karabiner-Elements > Complex Modifications should now list
    the enabled AG rule.
 3. Focus a different app (Finder, Notes, a terminal). Double-tap the left Command
-   key. Native Ag should appear without Chrome moving or any page-context grant.
-   Speak, double-tap again, and confirm visible transcript, reply text, and audio.
+   key. Chrome should raise and show the Ag mascot, transcript/reply ribbons,
+   and Cancel/Pause controls. Speak, double-tap again, and confirm the reply.
 4. Confirm normal Command usage still works: Cmd+C, Cmd+V, Cmd+Tab, holding
    Command for menu shortcuts, Cmd+click on a link, and Cmd+drag all behave as
    before.
@@ -88,15 +87,16 @@ It does not alter any independently configured browser-extension shortcut.
 
 - Double tap does nothing: open Karabiner-Elements > Complex Modifications and
   confirm the AG rule is present and enabled. Re-run `install.sh` if not.
-- macOS says it cannot find Ag: package and install the native app at
-  `/Applications/Ag.app`, then retry the gesture.
-- Ag appears but does not listen: configure its gateway origin and sign in,
-  then confirm macOS microphone permission for Ag in System Settings.
+- Chrome raises but Ag does not appear: confirm `open-agee-global` is enabled at
+  `chrome://extensions/shortcuts`, then reload the extension.
+- Ag appears but does not listen: configure its gateway origin and confirm
+  Chrome microphone permission.
 
 ## Fallback: Swift CGEventTap (only if you drop Karabiner)
 
 If Karabiner-Elements is not available, a small Swift binary can watch for the
-double Command tap with a `CGEventTap` and run `open -a "Ag"`. That binary
+double Command tap with a `CGEventTap` and emit the extension's global shortcut.
+That binary
 needs Accessibility permission (System Settings > Privacy & Security >
 Accessibility) and a LaunchAgent under `~/Library/LaunchAgents` to start at
 login. It is heavier than the Karabiner rule, so it is documented here only as

@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Remove the "double-tap Command to summon AG" Karabiner-Elements rule.
+# Remove the "double-tap Command to summon Ag" Karabiner-Elements rule.
 # Backs up karabiner.json before any change. Safe to re-run.
 
 KARABINER_DIR="${KARABINER_CONFIG_DIR:-$HOME/.config/karabiner}"
 KARABINER_JSON="$KARABINER_DIR/karabiner.json"
 ASSETS_DIR="$KARABINER_DIR/assets/complex_modifications"
-DESC_MATCH="native Ag companion"
-LEGACY_MATCH="open the AG overlay"
+DESC_PREFIX="Double-tap Left Command"
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required"; exit 1; }
 
@@ -24,13 +23,12 @@ if [ -f "$KARABINER_JSON" ]; then
   echo "backed up config: $BACKUP"
 
   TMP="$(mktemp)"
-  jq --arg match "$DESC_MATCH" --arg legacy "$LEGACY_MATCH" '
+  jq --arg prefix "$DESC_PREFIX" '
     .profiles |= map(
       .complex_modifications.rules = (
         (.complex_modifications.rules // [])
         | map(select(
-            (((.description // "") | contains($match))
-              or ((.description // "") | contains($legacy))) | not
+            ((.description // "") | startswith($prefix)) | not
           ))
       )
     )

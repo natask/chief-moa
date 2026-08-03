@@ -1,5 +1,5 @@
 (() => {
-  function create({ root, launcher, request, onSend, onDiscarded, onState, onProtocolError }) {
+  function create({ root, launcher, request, onSend, onCancel, onDiscarded, onState, onProtocolError }) {
     const protocol = globalThis.AgeeVoiceDraftProtocol;
     const toolbar = document.createElement("div");
     toolbar.id = "agee-draft-controls";
@@ -17,13 +17,14 @@
     let binding = null;
     let pointer = null;
     let pendingAction = "";
+    let starting = false;
 
     function supported() {
       return protocol.capabilityFresh(capability);
     }
 
     function active() {
-      return Boolean(binding && pointer && !["sent", "discarded"].includes(pointer.state));
+      return Boolean(starting || (binding && !["sent", "discarded"].includes(pointer?.state)));
     }
 
     async function refreshCapability() {
@@ -47,12 +48,12 @@
     }
 
     function render() {
-      const active = Boolean(binding?.draftMode && pointer && !["sent", "discarded"].includes(pointer.state));
+      const active = Boolean(starting || (binding?.draftMode && !["sent", "discarded"].includes(pointer?.state)));
       toolbar.hidden = !active;
       root.classList.toggle("agee-draft-active", active);
       root.classList.toggle("agee-draft-paused", active && pointer?.state === "paused");
-      cancel.disabled = Boolean(pendingAction);
-      pause.disabled = Boolean(pendingAction);
+      cancel.disabled = false;
+      pause.disabled = Boolean(starting || !pointer || pendingAction);
       const paused = pointer?.state === "paused";
       pause.textContent = paused ? "Resume" : "Pause";
       pause.setAttribute("aria-label", paused ? "Resume voice capture" : "Pause voice capture");
@@ -63,6 +64,7 @@
     }
 
     function bind(value) {
+      starting = false;
       binding = value?.draftMode === true ? {
         draftMode: true,
         voiceSessionId: protocol.authorityToken(value.voiceSessionId),
@@ -73,6 +75,11 @@
       } : null;
       pointer = null;
       pendingAction = "";
+      render();
+    }
+
+    function begin(enabled = true) {
+      starting = enabled === true;
       render();
     }
 
@@ -118,13 +125,18 @@
     }
 
     function reset() {
+      starting = false;
       binding = null;
       pointer = null;
       pendingAction = "";
       render();
     }
 
-    cancel.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); control("discard"); });
+    cancel.addEventListener("click", (event) => {
+      event.preventDefault(); event.stopPropagation();
+      if (!pointer || pendingAction) onCancel?.();
+      else control("discard");
+    });
     pause.addEventListener("click", (event) => {
       event.preventDefault(); event.stopPropagation();
       control(pointer?.state === "paused" ? "resume" : "pause");
@@ -137,7 +149,7 @@
     addEventListener("resize", position);
     refreshCapability();
 
-    return Object.freeze({ accept, active, bind, commitMessage, position, refreshCapability, reset, supported });
+    return Object.freeze({ accept, active, begin, bind, commitMessage, position, refreshCapability, reset, supported });
   }
 
   globalThis.AgeeVoiceDraftControls = Object.freeze({ create });

@@ -9,6 +9,7 @@ const sidepanel = readFileSync(new URL("../extension/sidepanel.js", import.meta.
 const sidepanelHtml = readFileSync(new URL("../extension/sidepanel.html", import.meta.url), "utf8");
 const draftControls = readFileSync(new URL("../extension/voice-draft-controls.js", import.meta.url), "utf8");
 const draftCss = readFileSync(new URL("../extension/voice-draft-controls.css", import.meta.url), "utf8");
+const surfaceControls = readFileSync(new URL("../extension/browser-surface-controls.js", import.meta.url), "utf8");
 const background = readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
 
 test("the companion has no circular state ring", () => {
@@ -66,8 +67,26 @@ test("capability-gated capture exposes only Cancel and Pause or Resume beside ma
   assert.match(draftControls, /\["Enter", " "\]\.includes\(event\.key\)/);
   assert.match(draftControls, /cmd: "voiceDraftCapability"/);
   assert.match(draftControls, /toolbar\.hidden = !active/);
+  assert.match(draftControls, /function begin\(enabled = true\)/);
+  assert.match(draftControls, /onCancel\?\.\(\)/);
   assert.match(draftCss, /#agee-draft-controls\s*\{[\s\S]*?pointer-events:\s*none;/);
   assert.match(draftCss, /#agee-draft-controls button\s*\{[\s\S]*?pointer-events:\s*auto;/);
+});
+
+test("dynamic reinjection uses the complete packaged surface and explicit summons restore it", () => {
+  assert.match(background, /getManifest\(\)\.content_scripts\?\.find\(\(entry\) => entry\.js\?\.includes\("content\.js"\)\)/);
+  assert.match(background, /insertCSS\(\{ target: \{ tabId \}, files: surface\.css \}\)/);
+  assert.match(background, /executeScript\(\{ target: \{ tabId \}, files: surface\.js \}\)/);
+  assert.match(surfaceControls, /function reveal\(\)/);
+  for (const command of ["open", "toggleVoice", "toggleDictation", "startDictation"]) {
+    assert.match(content, new RegExp(`case "${command}":[\\s\\S]{0,100}surfaceControls\\?\\.reveal\\(\\)`));
+  }
+});
+
+test("running page work exposes a stop control outside the hidden composer panel", () => {
+  assert.match(content, /<\/div>\s*<button id="agee-stop"/);
+  assert.match(surfaceControls, /function positionStop\(\)/);
+  assert.match(overlay, /#agee-stop\s*\{[^}]*display:\s*none;[^}]*position:\s*fixed;/s);
 });
 
 test("draft capture stays pre-execution until an exact authority-bound SEND", () => {

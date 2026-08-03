@@ -18,6 +18,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-media-runtime.js",
   "extension/browser-observation-anchor-runtime.js",
   "extension/browser-surface-state-runtime.js",
+  "extension/browser-surface-controls.js",
   "extension/browser-tab-runtime.js",
   "extension/browser-cdp-policy.js",
   "extension/browser-context-adapter.js",

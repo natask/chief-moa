@@ -54,7 +54,7 @@
     lastExternalVoiceCommandAt = 0,
     // The AG mark stays where the user drops it and reacts visually to state.
     // audioCtx is created lazily when explicit voice playback needs it.
-    audioCtx = null, voiceDraftControls = null;
+    audioCtx = null, voiceDraftControls = null, surfaceControls = null;
   let tipEl = null,
     tipTimer = null,
     tipTarget = null,
@@ -335,19 +335,20 @@
         <div id="agee-bar">
           <button id="agee-voice" type="button" data-agee-tip="Speak your request" aria-label="Start voice"></button>
           <button id="agee-record" type="button" data-agee-tip="Capture an audio note (⇧click: video note)" aria-label="Record note"></button>
-          <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
         </div>
       </div>
+      <button id="agee-stop" type="button" data-agee-tip="Halt the running task" aria-label="Stop current task">Stop</button>
       <div id="agee-tip" role="tooltip" aria-hidden="true"></div>`;
     document.documentElement.appendChild(root);
     launcher = root.querySelector("#agee-launcher");
     voiceDraftControls = AgeeVoiceDraftControls.create({ root, launcher, request: safeRuntimeSendMessage,
-      onSend: () => commitLiveVoiceTurn(), onState: syncLiveVoiceDraftState,
+      onSend: () => commitLiveVoiceTurn(), onCancel: () => stopLiveVoiceTurn("cancel"), onState: syncLiveVoiceDraftState,
       onProtocolError: (message) => liveVoice && finishLiveVoiceError(liveVoice, message) });
     panel = root.querySelector("#agee-panel");
     voiceButton = root.querySelector("#agee-voice");
     recordButton = root.querySelector("#agee-record");
     stopButton = root.querySelector("#agee-stop");
+    surfaceControls = AgeeBrowserSurfaceControls.create({ launcher, stopButton, storageGet: safeStorageLocalGet, storageSet: safeStorageLocalSet });
     uiSpecSurfaceEl = root.querySelector("#agee-ui-surface");
     log = root.querySelector("#agee-controls");
     tipEl = root.querySelector("#agee-tip");
@@ -355,7 +356,7 @@
     setupOverlayTooltips();
     setupCueLogInteractions();
     restoreLauncherPosition();
-    restoreLauncherVisibility();
+    surfaceControls.restoreVisibility(() => open);
     restoreMascotScale();
     restoreUiChimePreference();
     restoreVoiceRepliesPreference();
@@ -483,6 +484,7 @@
     resizeRaf = requestAnimationFrame(() => {
       resizeRaf = null;
       reclampLauncher();
+      surfaceControls?.positionStop();
       if (open) positionPanel();
     });
   }
@@ -528,12 +530,6 @@
     }).catch(() => {});
   }
 
-  function restoreLauncherVisibility() {
-    safeStorageLocalGet({ ageeLauncherHidden: false }).then(({ ageeLauncherHidden }) => {
-      if (launcher && !open) launcher.hidden = ageeLauncherHidden === true;
-    }).catch(() => {});
-  }
-
   function restoreMascotScale() {
     safeStorageLocalGet({ ageeMascotScale: null }).then(({ ageeMascotScale }) => {
       if (!launcher || !Number.isFinite(ageeMascotScale)) return;
@@ -570,6 +566,7 @@
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
     voiceDraftControls?.position();
+    surfaceControls?.positionStop();
     ribbons?.position(); // the ribbons are anchored to the mark: they move with it
     if (open) positionPanel(); // keep the surface anchored if the mark moves
     if (persist) safeStorageLocalSet({ ageeLauncherPosition: { x: nextX, y: nextY } }).catch(() => {});
@@ -1079,10 +1076,7 @@
 
   function openTextSurface({ fresh = false } = {}) {
     if (!root) build();
-    if (launcher?.hidden) {
-      launcher.hidden = false;
-      safeStorageLocalSet({ ageeLauncherHidden: false }).catch(() => {});
-    }
+    surfaceControls?.reveal();
     toggle(true);
     if (fresh) setSurfacePhase("editing");
   }
@@ -1152,7 +1146,7 @@
   // The launcher dot is "running" while any cue is in flight, otherwise it shows
   // the most recent terminal state. The Stop button is visible only while busy.
   function refreshStatus() {
-    if (stopButton) stopButton.classList.toggle("visible", anyActive());
+    surfaceControls?.syncStop(anyActive() && !voiceDraftControls?.active());
     // The mark glows while it is working so the user can tell it is busy even
     // with the panel closed.
     if (launcher) launcher.classList.toggle("agee-busy", anyActive());
@@ -2560,6 +2554,8 @@
     };
     trackLiveVoiceState(state);
     liveVoice = state;
+    voiceDraftControls?.begin(draftMode);
+    refreshStatus();
 
     try {
       primeAudio();
@@ -3038,7 +3034,7 @@
     if (state.draftMode) voiceDraftControls?.reset();
   }
 
-  function syncLiveVoiceDraftState(state) { setAgentState(state === "capturing" ? "listening" : "idle"); }
+  function syncLiveVoiceDraftState(state) { setAgentState(state === "capturing" ? "listening" : "idle"); refreshStatus(); }
 
   function finishLiveVoiceDraftDiscard(state = liveVoice) {
     if (!state?.draftMode) return;
@@ -4182,11 +4178,13 @@
         return true;
       case "open":
         if (!root) build();
+        surfaceControls?.reveal();
         ribbons?.beginCompose();
         reply({ ok: true });
         return true;
       case "toggleVoice":
         if (!root) build();
+        surfaceControls?.reveal();
         if (msg.source === "command") {
           beginVoiceCommandHotkey();
         } else {
@@ -4196,11 +4194,13 @@
         return true;
       case "toggleDictation":
         if (!root) build();
+        surfaceControls?.reveal();
         toggleDictation();
         reply({ ok: true });
         return true;
       case "startDictation":
         if (!root) build();
+        surfaceControls?.reveal();
         startDictation(msg.dictationLeaseId || null);
         reply({ ok: true });
         return true;

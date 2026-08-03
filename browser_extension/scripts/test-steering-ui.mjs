@@ -52,10 +52,11 @@ assert.match(contentSource, /if \(state\.commitWhenReady\) commitLiveVoiceTurn\(
 assert.match(backgroundSource, /all_branches_context: false/);
 assert.match(contentSource, /contextAction: state\.contextControls\.action/);
 assert.match(backgroundSource, /options\.contextAction \? \{ context_action: options\.contextAction, all_branches_context: false \}/);
-// content.js must be injected last: every other entry is a runtime it reads off
-// globalThis at load. Assert that ordering, not the specific file before it, so
-// adding a runtime does not require editing this assertion.
-assert.match(backgroundSource, /files: \[[^\]]*"content\.js"\]/);
+// Dynamic reinjection must use the manifest's complete ordered content-script
+// list, whose final entry is content.js, rather than maintaining a stale copy.
+assert.match(backgroundSource, /getManifest\(\)\.content_scripts/);
+assert.match(backgroundSource, /entry\.js\?\.includes\("content\.js"\)/);
+assert.match(backgroundSource, /files: surface\.js/);
 assert.match(backgroundSource, /activeThreadBranch\(cfg\)/);
 assert.doesNotMatch(contentSource, /agee-mode-select|data-agent-mode-control/);
 assert.match(contentSource, /state\?\.steeredAtGeneration && state\.steeredAtGeneration <= steeringGeneration/);

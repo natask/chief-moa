@@ -554,7 +554,7 @@
    .agee-ribbon-composing). What remains is the approval/notes control row. */
 #agee-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px 34px 34px;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
   align-items: start;
   gap: 9px;
   min-height: 54px;
@@ -680,6 +680,8 @@
 }
 #agee-stop {
   display: none;
+  position: fixed;
+  z-index: 2147483647;
 }
 #agee-stop.visible {
   display: inline-flex;
@@ -1259,7 +1261,7 @@ button.agee-ui-list-row:hover {
 }
 @media (max-width: 380px) {
   #agee-bar {
-    grid-template-columns: minmax(0, 1fr) 32px 32px 32px;
+    grid-template-columns: minmax(0, 1fr) 32px 32px;
     gap: 7px;
     padding: 9px 9px 9px 12px;
   }

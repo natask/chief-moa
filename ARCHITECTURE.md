@@ -102,8 +102,9 @@ Browser extension
   An explicit desktop-dictation session is a capture-only browser turn. The
   extension requests gateway transcription, copies the final literal transcript
   locally, and starts no reasoning, TTS, browser action, or agent dispatch. The
-  existing macOS global command may summon this browser-owned flow; it does not
-  grant the browser authority to type into another application.
+  macOS double-Command helper summons the browser assistant's voice flow; literal
+  desktop dictation remains a separate explicit command. Neither path grants the
+  browser authority to type into another application.
 
 Native desktop surfaces
   Own: platform UI, Accessibility/UI Automation permission, product observation

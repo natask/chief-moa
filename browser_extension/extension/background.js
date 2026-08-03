@@ -139,7 +139,7 @@ let uiSpecLastRefreshAt = 0;
 const ACTIVE_COMPANION_PET_CACHE_KEY = "ageeActiveCompanionPetCache";
 let activeAgentTabId = null;
 let browserOwnerWriteQueue = Promise.resolve();
-let globalDictationToggleQueue = Promise.resolve();
+let globalAssistantToggleQueue = Promise.resolve();
 let dictationReconcileInFlight = null;
 let creatingOffscreenVoiceDocument = null;
 // Capture mutex: counts voice session starts that are still in their async
@@ -2416,11 +2416,12 @@ async function ensureContent(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, { cmd: "ping" });
   } catch {
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ["overlay.css"] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["ui-spec-runtime.js", "steering-ui.js", "launcher-removal-runtime.js", "browser-command-transcript-runtime.js", "document-context.js", "ribbon-window.js", "ribbon-layout.js", "ribbon-runtime.js", "companion-level.js", "companion-rim.js", "capture-copy-disposition.js", "assistant-audio-replay.js", "overlay-event-trace.js", "content.js"] });
+    const surface = chrome.runtime.getManifest().content_scripts?.find((entry) => entry.js?.includes("content.js"));
+    if (!surface?.js?.length) throw new Error("Packaged Ag browser surface is missing.");
+    if (surface.css?.length) await chrome.scripting.insertCSS({ target: { tabId }, files: surface.css });
+    await chrome.scripting.executeScript({ target: { tabId }, files: surface.js });
   }
 }
-
 async function ensureContentOnOpenTabs() {
   if (!chrome?.tabs || !chrome?.scripting) return;
   const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
@@ -5099,7 +5100,7 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 // `open-agee-global` is a global command (manifest "global": true, suggested
 // Command+Shift+9). Chrome fires it even when Chrome is not the focused app, so
 // a macOS helper — double-tap of the Command key via Karabiner-Elements, see
-// scripts/macos-summon/ — can raise the overlay from any application. Unlike the
+// scripts/macos-summon/ — can raise assistant voice from any application. Unlike the
 // per-tab toggle commands, the tab Chrome hands us may be a page the overlay
 // cannot inject into (chrome://, the Web Store, a PDF viewer). This path resolves
 // an injectable tab in the last-focused window, focuses it, and creates a fresh
@@ -5267,8 +5268,8 @@ function summonOverlay(firedTab, cmd = "open") {
 
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command !== "open-agee-global") return;
-  const pending = globalDictationToggleQueue.catch(() => {}).then(() => toggleGlobalDictation(tab));
-  globalDictationToggleQueue = pending.catch(() => {});
+  const pending = globalAssistantToggleQueue.catch(() => {}).then(() => summonOverlayFromAnywhere(tab, "toggleVoice"));
+  globalAssistantToggleQueue = pending.catch(() => {});
 });
 
 // ---- Side panel agent surface ----------------------------------------------

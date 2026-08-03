@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Install the "double-tap Command to summon AG" Karabiner-Elements rule.
 #
-# What it does: registers a complex-modification rule that opens the native
-# Ag.app when you tap the left Command key twice quickly. Normal Command
+# What it does: registers a complex-modification rule that invokes the browser
+# extension's global voice command when you tap left Command twice. Normal Command
 # shortcuts keep working because the rule only acts on a solo double tap.
 #
 # Idempotent. Backs up karabiner.json before any change. Safe to re-run.
@@ -17,8 +17,7 @@ KARABINER_DIR="${KARABINER_CONFIG_DIR:-$HOME/.config/karabiner}"
 KARABINER_JSON="$KARABINER_DIR/karabiner.json"
 ASSETS_DIR="$KARABINER_DIR/assets/complex_modifications"
 
-DESC="Double-tap Left Command to open the native Ag companion"
-LEGACY_DESC="Double-tap Left Command to raise Chrome and open the AG overlay"
+DESC="Double-tap Left Command to raise Chrome and open the Ag browser companion"
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required (brew install jq)"; exit 1; }
 [ -f "$RULE_FILE" ] || { echo "error: rule file not found: $RULE_FILE"; exit 1; }
@@ -33,7 +32,7 @@ RULE_JSON="$(jq '.rules[0]' "$RULE_FILE")"
 
 # Publish an importable asset copy so the Karabiner UI also lists the rule.
 mkdir -p "$ASSETS_DIR"
-jq -n --argjson rule "$RULE_JSON" '{title: "Ag native Mac companion summon", rules: [$rule]}' \
+jq -n --argjson rule "$RULE_JSON" '{title: "Ag browser companion summon", rules: [$rule]}' \
   > "$ASSETS_DIR/ag-double-command.json"
 echo "wrote asset: $ASSETS_DIR/ag-double-command.json"
 
@@ -52,11 +51,11 @@ echo "backed up config: $BACKUP"
 
 # Replace any earlier copy (match by description) and enable it in every profile.
 TMP="$(mktemp)"
-jq --argjson rule "$RULE_JSON" --arg desc "$DESC" --arg legacy "$LEGACY_DESC" '
+jq --argjson rule "$RULE_JSON" '
   .profiles |= map(
     .complex_modifications.rules = (
       ((.complex_modifications.rules // [])
-        | map(select(.description != $desc and .description != $legacy))) + [$rule]
+        | map(select(((.description // "") | startswith("Double-tap Left Command")) | not))) + [$rule]
     )
   )
 ' "$KARABINER_JSON" > "$TMP"
@@ -66,4 +65,4 @@ mv "$TMP" "$KARABINER_JSON"
 echo "installed and enabled rule in all profiles: $DESC"
 echo
 echo "Karabiner-Elements reloads the config automatically."
-echo "Double-tap the left Command key from any app to summon native Ag.app."
+echo "Double-tap the left Command key from any app to summon the Ag browser companion."
