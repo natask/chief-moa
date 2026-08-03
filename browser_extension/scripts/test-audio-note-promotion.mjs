@@ -9,10 +9,12 @@ import {
   captureBlockRequest,
   captureBlockRetryPath,
   captureBlockSnapshot,
+  confirmedGoalFromText,
   handoffPresentation,
   newPromotionRecord,
   promotionPresentation,
   promotionRecordWithBlock,
+  promotionRecordWithConfirmedGoal,
   promotionRecordWithHandoff,
   promotionStorageKey,
   usablePromotionRecord,
@@ -119,7 +121,7 @@ test("Switchboard handoff is exposed only for an exact terminal transcript", () 
   assert.deepEqual(captureBlockHandoffRequest(terminal), { confirmed: true, authority: "execute" });
   assert.deepEqual(handoffPresentation(terminal), {
     sent: false,
-    label: "Ready for explicit Switchboard handoff",
+    label: "Enter and confirm the outcome and acceptance criteria",
     action: "Send to Switchboard",
   });
   for (const state of ["stored", "queued", "transcribing", "failed"]) {
@@ -128,6 +130,72 @@ test("Switchboard handoff is exposed only for an exact terminal transcript", () 
     assert.equal(handoffPresentation(unfinished), null);
     assert.throws(() => captureBlockHandoffRequest(unfinished), /not ready/);
   }
+});
+
+test("confirmed browser goal produces v2 while unconfirmed compatibility stays v1", () => {
+  const terminal = promotionRecordWithBlock(NOTE, newPromotionRecord(NOTE, () => "request-1"), { capture_block: {
+    id: BLOCK_ID,
+    source: { audio_note_id: "note/1" },
+    processing_state: "transcribed",
+    transcript: {
+      state: "transcribed",
+      literal: "literal source evidence",
+      result_id: "result_1",
+      provider: { id: "chirp", request_id: "provider_1" },
+    },
+  } });
+  assert.deepEqual(captureBlockHandoffRequest(terminal), { confirmed: true, authority: "execute" });
+  const goal = confirmedGoalFromText(
+    "Complete the selected outcome.",
+    "The source stays bound.\nCompletion has evidence.\nThe source stays bound.",
+  );
+  assert.deepEqual(goal.acceptance_criteria, ["The source stays bound.", "Completion has evidence."]);
+  const confirmed = promotionRecordWithConfirmedGoal(terminal, goal);
+  assert.deepEqual(captureBlockHandoffRequest(confirmed), {
+    confirmed: true,
+    authority: "execute",
+    desired_outcome: "Complete the selected outcome.",
+    acceptance_criteria: ["The source stays bound.", "Completion has evidence."],
+  });
+  assert.match(handoffPresentation(confirmed).label, /Confirmed outcome/);
+  assert.throws(() => confirmedGoalFromText("", "criterion"), /Enter and confirm/);
+  assert.throws(() => confirmedGoalFromText("outcome", ""), /Enter and confirm/);
+  assert.throws(() => confirmedGoalFromText("outcome", "x".repeat(1001)), /Enter and confirm/);
+});
+
+test("v2 browser receipt must echo the persisted confirmed goal", () => {
+  const terminal = promotionRecordWithBlock(NOTE, newPromotionRecord(NOTE, () => "request-1"), { capture_block: {
+    id: BLOCK_ID,
+    source: { audio_note_id: "note/1" },
+    processing_state: "transcribed",
+    transcript: {
+      state: "transcribed",
+      literal: "literal source evidence",
+      result_id: "result_1",
+      provider: { id: "chirp", request_id: "provider_1" },
+    },
+  } });
+  const confirmed = promotionRecordWithConfirmedGoal(terminal, {
+    desired_outcome: "Complete the selected outcome.",
+    acceptance_criteria: ["The exact source stays bound."],
+  });
+  const receipt = {
+    source_system: "chief-moa",
+    source_record_id: BLOCK_ID,
+    source_revision: `capture-block-v2:${"b".repeat(64)}`,
+    request_digest: `sha256:${"c".repeat(64)}`,
+    desired_outcome: confirmed.confirmed_goal.desired_outcome,
+    acceptance_criteria: confirmed.confirmed_goal.acceptance_criteria,
+    switchboard: { admission_id: "ext_v2", compiled_intent_ids: ["intent_v2"], state: "queued" },
+  };
+  const sent = promotionRecordWithHandoff(confirmed, { handoff: receipt });
+  assert.deepEqual(usablePromotionRecord(NOTE, sent).confirmed_goal, confirmed.confirmed_goal);
+  assert.deepEqual(usablePromotionRecord(NOTE, sent).handoff.acceptance_criteria, ["The exact source stays bound."]);
+  assert.equal(usablePromotionRecord(NOTE, { ...sent, confirmed_goal: null }).handoff, null);
+  assert.throws(() => promotionRecordWithHandoff(confirmed, { handoff: {
+    ...receipt,
+    desired_outcome: "substituted",
+  } }), /mismatched/);
 });
 
 test("Switchboard receipt is exact, durable, and reset by a transcript revision", () => {

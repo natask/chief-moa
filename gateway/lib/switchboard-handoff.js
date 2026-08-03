@@ -3,11 +3,15 @@
 const crypto = require("node:crypto");
 
 const CONTRACT_VERSION = 1;
+const GOAL_CONTRACT_VERSION = 2;
 const SOURCE_SYSTEM = "chief-moa";
 const RECEIPT_EVENT = "capture.handoff.received";
 const MAX_REFS = 20;
 const MAX_REF_BYTES = 32 * 1024;
 const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_DESIRED_OUTCOME_CHARS = 100_000;
+const MAX_ACCEPTANCE_CRITERIA = 32;
+const MAX_ACCEPTANCE_CRITERION_CHARS = 1_000;
 
 class SwitchboardHandoffError extends Error {
   constructor(message, code = "validation", statusCode = 400) {
@@ -84,7 +88,7 @@ function captureBlockEnvelope(input) {
   const textDigest = digest(exactText);
   const sourceHash = `sha256:${textDigest}`;
   const sourceRevision = `capture-block-v1:${textDigest}`;
-  return {
+  return withConfirmedGoal(input, {
     contract_version: CONTRACT_VERSION,
     source_system: SOURCE_SYSTEM,
     source_record_id: sourceId,
@@ -96,7 +100,7 @@ function captureBlockEnvelope(input) {
     project_hint: optionalText(input.project_hint, 160),
     authority: "execute",
     idempotency_key: `${SOURCE_SYSTEM}:${sourceId}:${textDigest}`,
-  };
+  });
 }
 
 function audioCaptureBlockEnvelope(input, block, sourceId) {
@@ -122,7 +126,7 @@ function audioCaptureBlockEnvelope(input, block, sourceId) {
     result_id: resultId,
   };
   const revisionDigest = digest(canonicalJson(binding));
-  return {
+  return withConfirmedGoal(input, {
     contract_version: CONTRACT_VERSION,
     source_system: SOURCE_SYSTEM,
     source_record_id: sourceId,
@@ -138,7 +142,46 @@ function audioCaptureBlockEnvelope(input, block, sourceId) {
     project_hint: optionalText(input.project_hint, 160),
     authority: "execute",
     idempotency_key: `${SOURCE_SYSTEM}:${sourceId}:${revisionDigest}`,
+  });
+}
+
+function withConfirmedGoal(input, envelope) {
+  const hasOutcome = input.desired_outcome != null;
+  const hasCriteria = input.acceptance_criteria != null;
+  if (!hasOutcome && !hasCriteria) return envelope;
+  if (!hasOutcome || !hasCriteria) throw validation(
+    "desired outcome and acceptance criteria must be confirmed together",
+  );
+  return {
+    ...envelope,
+    contract_version: GOAL_CONTRACT_VERSION,
+    desired_outcome: requireCharacters(
+      input.desired_outcome,
+      "desired outcome",
+      MAX_DESIRED_OUTCOME_CHARS,
+    ),
+    acceptance_criteria: acceptanceCriteria(input.acceptance_criteria),
   };
+}
+
+function acceptanceCriteria(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_ACCEPTANCE_CRITERIA) {
+    throw validation("acceptance criteria must contain 1 to 32 items");
+  }
+  const seen = new Set();
+  const criteria = [];
+  for (const item of value) {
+    const criterion = requireCharacters(
+      item,
+      "acceptance criterion",
+      MAX_ACCEPTANCE_CRITERION_CHARS,
+    );
+    if (seen.has(criterion)) continue;
+    seen.add(criterion);
+    criteria.push(criterion);
+  }
+  if (!criteria.length) throw validation("acceptance criteria must not be empty");
+  return criteria;
 }
 
 function transcriptProviderEvidence(value) {
@@ -212,7 +255,7 @@ async function postEnvelope({ fetchImpl, baseUrl, token, envelope, timeoutMs }) 
 function requireAdmission(response, envelope) {
   const admission = response?.admission;
   if (!admission || typeof admission !== "object") throw upstream("Switchboard returned no admission receipt");
-  if (admission.contractVersion !== CONTRACT_VERSION
+  if (admission.contractVersion !== envelope.contract_version
       || admission.sourceSystem !== SOURCE_SYSTEM
       || admission.sourceRecordId !== envelope.source_record_id
       || admission.sourceRevision !== envelope.source_revision
@@ -222,7 +265,10 @@ function requireAdmission(response, envelope) {
       || admission.exactText !== envelope.exact_text
       || canonicalJson(admission.evidenceRefs) !== canonicalJson(envelope.evidence_refs)
       || canonicalJson(admission.contextRefs) !== canonicalJson(envelope.context_refs)
-      || (admission.projectHint ?? null) !== envelope.project_hint) {
+      || (admission.projectHint ?? null) !== envelope.project_hint
+      || (envelope.contract_version === GOAL_CONTRACT_VERSION
+        && (admission.desiredOutcome !== envelope.desired_outcome
+          || canonicalJson(admission.acceptanceCriteria) !== canonicalJson(envelope.acceptance_criteria)))) {
     throw upstream("Switchboard returned a mismatched admission receipt");
   }
   return admission;
@@ -231,13 +277,22 @@ function requireAdmission(response, envelope) {
 function receiptFromAdmission({ envelope, requestDigest, admission }) {
   if (!Array.isArray(admission.compiledIntents)) throw upstream("Switchboard returned invalid compiled intent identities");
   return {
-    schema_version: 1,
+    schema_version: envelope.contract_version,
+    contract_version: envelope.contract_version,
     source_system: SOURCE_SYSTEM,
     source_record_id: envelope.source_record_id,
     source_revision: envelope.source_revision,
     source_hash: envelope.source_hash,
     request_digest: requestDigest,
     idempotency_key: envelope.idempotency_key,
+    ...(envelope.contract_version === GOAL_CONTRACT_VERSION ? {
+      desired_outcome: requireUpstreamCharacters(
+        admission.desiredOutcome,
+        "desired outcome",
+        MAX_DESIRED_OUTCOME_CHARS,
+      ),
+      acceptance_criteria: requireUpstreamCriteria(admission.acceptanceCriteria),
+    } : {}),
     switchboard: {
       admission_id: requireUpstreamText(admission.id, "admission id", 160),
       raw_intent_id: optionalUpstreamText(admission.rawIntentId, "raw intent id", 160),
@@ -250,6 +305,17 @@ function receiptFromAdmission({ envelope, requestDigest, admission }) {
       state: optionalUpstreamText(admission.state, "admission state", 80),
     },
   };
+}
+
+function requireUpstreamCriteria(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_ACCEPTANCE_CRITERIA) {
+    throw upstream("Switchboard returned invalid acceptance criteria");
+  }
+  return value.map((item) => requireUpstreamCharacters(
+    item,
+    "acceptance criterion",
+    MAX_ACCEPTANCE_CRITERION_CHARS,
+  ));
 }
 
 async function receiptForStream(events, streamId) {
@@ -308,6 +374,13 @@ function requireText(value, field, max, trim = true) {
   return result;
 }
 
+function requireCharacters(value, field, max) {
+  if (typeof value !== "string") throw validation(`${field} is required`);
+  const result = value.trim();
+  if (!result || [...result].length > max) throw validation(`${field} is invalid`);
+  return result;
+}
+
 function optionalText(value, max) {
   if (value == null || value === "") return null;
   return requireText(String(value), "optional text", max);
@@ -325,6 +398,13 @@ function optionalUpstreamText(value, field, max) {
   return requireUpstreamText(value, field, max);
 }
 
+function requireUpstreamCharacters(value, field, max) {
+  if (typeof value !== "string") throw upstream(`Switchboard returned invalid ${field}`);
+  const result = value.trim();
+  if (!result || [...result].length > max) throw upstream(`Switchboard returned invalid ${field}`);
+  return result;
+}
+
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
@@ -340,6 +420,7 @@ function upstream(message) {
 
 module.exports = {
   CONTRACT_VERSION,
+  GOAL_CONTRACT_VERSION,
   RECEIPT_EVENT,
   SwitchboardHandoffError,
   canonicalJson,

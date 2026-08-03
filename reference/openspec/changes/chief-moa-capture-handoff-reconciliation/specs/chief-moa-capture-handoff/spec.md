@@ -77,11 +77,34 @@ request digest, and receipts required to show continuity and progress.
   SHALL be rejected before Switchboard is called
 - **AND** the raw audio SHALL cross only as an opaque evidence identity
 
+#### Scenario: A confirmed goal upgrades the handoff contract
+
+- **WHEN** the user enters and explicitly confirms a nonempty desired outcome
+  plus one or more acceptance criteria for the selected terminal capture
+- **THEN** Chief Moa SHALL submit contract version 2 with the desired outcome
+  and deduplicated acceptance criteria in addition to the exact v1 source
+  evidence and execution authority
+- **AND** the request digest and retained receipt SHALL bind those exact goal
+  fields
+- **AND** a mismatched Switchboard goal echo SHALL be rejected before Chief Moa
+  records a receipt
+- **AND** Chief Moa SHALL NOT infer, summarize, or fabricate the desired outcome
+  or acceptance criteria from the literal transcript
+
+#### Scenario: Unconfirmed source capture remains compatible and inert
+
+- **WHEN** a caller has not explicitly supplied and confirmed both goal fields
+- **THEN** Chief Moa MAY retain the source-only v1 handoff contract for existing
+  callers
+- **AND** capture, transcription, replay, or goal-field editing SHALL create no
+  Switchboard admission or agent run
+
 #### Scenario: Chief retains a minimal audio-backed handoff receipt
 
 - **WHEN** Switchboard accepts a transcribed audio-backed capture block
 - **THEN** Chief Moa SHALL retain only the content-bound source identity,
-  request digest, idempotency identity, and external Switchboard identities
+  request digest, idempotency identity, explicitly confirmed v2 goal fields when
+  present, and external Switchboard identities
 - **AND** the Chief receipt SHALL contain no transcript, transcript-result or
   provider details, audio-note identity, media location, or raw media
 

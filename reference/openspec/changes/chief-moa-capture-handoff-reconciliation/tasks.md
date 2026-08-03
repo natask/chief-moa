@@ -78,6 +78,14 @@ idempotent retry can complete the transcript.
 - [x] Expose explicit browser Hand off only for a terminal immutable transcript,
   retain the stable Switchboard receipt across panel restart, and prove capture
   and transcript preparation make no handoff call or agent run.
+- [x] Add additive contract-v2 goal confirmation. The browser requires the user
+  to enter a desired outcome and newline-separated acceptance criteria, shows
+  those exact fields in the execution confirmation, persists them before the
+  network request for retry continuity, and rejects a mismatched receipt. The
+  gateway keeps v1 source-only compatibility, emits v2 only when both confirmed
+  goal fields are supplied, and binds them into the request digest and retained
+  receipt. Chief and Switchboard share `external-intent-v2.json` as an exact
+  seam fixture.
 
 Acceptance: retrying the same handoff returns the same Switchboard intent, while
 capturing or replaying the source creates no intent or run.

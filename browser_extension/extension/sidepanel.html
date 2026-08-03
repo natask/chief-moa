@@ -234,6 +234,28 @@
         padding: 8px;
         white-space: pre-wrap;
       }
+      .voice-note-goal {
+        display: grid;
+        gap: 8px;
+      }
+      .voice-note-goal label {
+        color: var(--muted);
+        display: grid;
+        font-size: 11px;
+        gap: 4px;
+      }
+      .voice-note-goal textarea {
+        background: #0b0c10;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font: 12px/1.45 inherit;
+        padding: 7px;
+        resize: vertical;
+      }
+      .voice-note-goal textarea:disabled {
+        opacity: 0.75;
+      }
       .voice-note-card audio {
         height: 34px;
         width: 100%;

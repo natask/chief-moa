@@ -26,7 +26,7 @@ test("server wires explicit capture-block handoff without changing capture behav
     response.writeHead(202, { "content-type": "application/json" });
     response.end(JSON.stringify({ admission: {
       id: "ext_integration",
-      contractVersion: 1,
+      contractVersion: envelope.contract_version,
       rawIntentId: "raw_integration",
       messageId: "msg_integration",
       sourceSystem: envelope.source_system,
@@ -39,6 +39,10 @@ test("server wires explicit capture-block handoff without changing capture behav
       projectHint: envelope.project_hint,
       authority: envelope.authority,
       idempotencyKey: envelope.idempotency_key,
+      ...(envelope.contract_version === 2 ? {
+        desiredOutcome: envelope.desired_outcome,
+        acceptanceCriteria: envelope.acceptance_criteria,
+      } : {}),
       state: "queued",
       compiledIntents: [],
     } }));
@@ -96,12 +100,50 @@ test("server wires explicit capture-block handoff without changing capture behav
     assert.deepEqual(retry.body, result.body);
     assert.equal(switchboard.requests.length, 1);
 
+    const goalTurn = await runtime.recordStreamingVoiceTurn({
+      session_id: "session_handoff",
+      conversation_id: "session_handoff",
+      branch_id: "default",
+      turn_id: "turn_handoff_goal",
+      source: "browser-extension",
+      transcript: "Literal source evidence is not the desired outcome.",
+      transcript_source: "stt",
+      provider: "cascaded",
+      model: "chirp_3",
+      transcription_only: true,
+      status: "completed",
+      started_at: "2026-08-03T12:01:00.000Z",
+      completed_at: "2026-08-03T12:01:01.000Z",
+      audio: { bytes: 3200, chunks: 1, encoding: "pcm16" },
+    });
+    const goalId = captureBlockId(goalTurn.session_id, goalTurn.id);
+    const goalRequest = {
+      confirmed: true,
+      authority: "execute",
+      desired_outcome: "Deliver the explicitly confirmed product outcome.",
+      acceptance_criteria: ["The source is bound.", "Completion returns evidence."],
+    };
+    const goalResult = await gatewayRequest(
+      gateway,
+      `/v1/capture-blocks/${encodeURIComponent(goalId)}/handoff`,
+      goalRequest,
+    );
+    assert.equal(goalResult.status, 202);
+    assert.equal(switchboard.requests.length, 2);
+    assert.equal(switchboard.requests[1].contract_version, 2);
+    assert.equal(switchboard.requests[1].desired_outcome, goalRequest.desired_outcome);
+    assert.deepEqual(switchboard.requests[1].acceptance_criteria, goalRequest.acceptance_criteria);
+    assert.equal(goalResult.body.handoff.desired_outcome, goalRequest.desired_outcome);
+    assert.deepEqual(goalResult.body.handoff.acceptance_criteria, goalRequest.acceptance_criteria);
+
     const receiptEvents = fs.readFileSync(path.join(process.env.DATA_DIR, "product-events.jsonl"), "utf8")
       .trim().split("\n").map(JSON.parse)
       .filter((event) => event.event_type === "capture.handoff.received");
-    assert.equal(receiptEvents.length, 1);
+    assert.equal(receiptEvents.length, 2);
     assert.equal("exact_text" in receiptEvents[0].payload, false);
     assert.equal(JSON.stringify(receiptEvents[0].payload).includes(turn.transcript), false);
+    assert.equal(receiptEvents[1].payload.desired_outcome, goalRequest.desired_outcome);
+    assert.deepEqual(receiptEvents[1].payload.acceptance_criteria, goalRequest.acceptance_criteria);
     assert.deepEqual(fs.readdirSync(path.join(process.env.DATA_DIR, "agent-runs")), []);
   } finally {
     if (gateway?.listening) await new Promise((resolve) => gateway.close(resolve));

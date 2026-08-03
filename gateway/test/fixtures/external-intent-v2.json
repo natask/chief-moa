@@ -1,0 +1,74 @@
+{
+  "request": {
+    "contract_version": 2,
+    "source_system": "chief-moa",
+    "source_record_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_revision": "capture-block-v2:2c5f8bec3a28d2aa05965fe74f43ae5a07c0e829ecfd64edebbda6d0737f1477",
+    "source_hash": "sha256:2c5f8bec3a28d2aa05965fe74f43ae5a07c0e829ecfd64edebbda6d0737f1477",
+    "exact_text": "Ship the selected voice-note outcome without replacing its literal source evidence.",
+    "desired_outcome": "Make the selected voice note a canonical Switchboard outcome.",
+    "acceptance_criteria": [
+      "The exact Chief Moa source revision remains bound to the intent.",
+      "Launcher receives the confirmed outcome and acceptance gate unchanged."
+    ],
+    "evidence_refs": [
+      {
+        "type": "capture_block",
+        "id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "type": "audio_note",
+        "id": "note_fixture_1"
+      },
+      {
+        "type": "transcript_result",
+        "id": "result_fixture_1",
+        "provider": {
+          "id": "fixture-stt",
+          "model": "fixture-model",
+          "request_id": "fixture-request-1"
+        }
+      }
+    ],
+    "context_refs": [],
+    "project_hint": "chief-moa",
+    "authority": "execute",
+    "idempotency_key": "chief-moa:cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2c5f8bec3a28d2aa05965fe74f43ae5a07c0e829ecfd64edebbda6d0737f1477"
+  },
+  "admission": {
+    "contractVersion": 2,
+    "sourceSystem": "chief-moa",
+    "sourceRecordId": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceRevision": "capture-block-v2:2c5f8bec3a28d2aa05965fe74f43ae5a07c0e829ecfd64edebbda6d0737f1477",
+    "sourceHash": "sha256:2c5f8bec3a28d2aa05965fe74f43ae5a07c0e829ecfd64edebbda6d0737f1477",
+    "exactText": "Ship the selected voice-note outcome without replacing its literal source evidence.",
+    "desiredOutcome": "Make the selected voice note a canonical Switchboard outcome.",
+    "acceptanceCriteria": [
+      "The exact Chief Moa source revision remains bound to the intent.",
+      "Launcher receives the confirmed outcome and acceptance gate unchanged."
+    ],
+    "evidenceRefs": [
+      {
+        "type": "capture_block",
+        "id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "type": "audio_note",
+        "id": "note_fixture_1"
+      },
+      {
+        "type": "transcript_result",
+        "id": "result_fixture_1",
+        "provider": {
+          "id": "fixture-stt",
+          "model": "fixture-model",
+          "request_id": "fixture-request-1"
+        }
+      }
+    ],
+    "contextRefs": [],
+    "projectHint": "chief-moa",
+    "authority": "execute",
+    "idempotencyKey": "chief-moa:cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2c5f8bec3a28d2aa05965fe74f43ae5a07c0e829ecfd64edebbda6d0737f1477"
+  }
+}

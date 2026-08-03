@@ -2359,10 +2359,15 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
 - `switchboard_handoff_receipt`: a Chief-side continuity projection created
   only after an authenticated caller explicitly confirms `authority=execute`
   for one immutable capture block. Chief derives a content-bound source revision
-  and SHA-256 from the exact stored literal transcript, submits the versioned
-  envelope to Switchboard, then retains only the request digest, external
-  identity, and receipt. Switchboard remains canonical for the admitted intent,
-  routing, execution, progress, and completion.
+  and SHA-256 from the exact stored literal transcript. A v1 envelope preserves
+  source-only compatibility. A v2 envelope is emitted only when a Surface also
+  captures and explicitly confirms a nonempty desired outcome and 1–32 bounded,
+  deduplicated acceptance criteria; Chief never derives those goal fields from
+  the transcript. The request digest binds the complete envelope, Switchboard
+  must echo the v2 goal fields, and Chief retains them with the minimal external
+  identity and receipt needed for continuity. Switchboard remains canonical for
+  the admitted outcome, routing, execution, progress, acceptance, and
+  completion.
 - `video_led_intent`: a user-confirmed intent admitted only after explicit stop
   of a browser screen-and-microphone recording. The original `video_note` bytes,
   SHA-256, retention, provider transcript/provenance, editable objective,

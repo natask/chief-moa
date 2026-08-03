@@ -24,6 +24,15 @@ durable receipt prevents a duplicate Switchboard admission. A changed
 transcript result clears the old client receipt before another handoff can be
 shown.
 
+The terminal note card now captures the execution goal separately from the
+literal transcript. The user must enter a desired outcome and at least one
+newline-separated acceptance criterion. Chief shows those exact fields in the
+execution confirmation, persists the confirmed goal before the outbound request
+so a response-loss retry cannot mutate it, and emits contract v2. The gateway
+requires Switchboard to echo both fields and retains them with the source-bound
+receipt. It never invents a goal from transcript text. Callers without confirmed
+goal fields retain the v1 source-only compatibility path.
+
 Verification now includes 276 browser unit tests and the real headless extension
 smoke. Version `0.1.145` is packaged at
 `browser_extension/dist/Ag-0.1.145.zip`, and the local extension deploy marker

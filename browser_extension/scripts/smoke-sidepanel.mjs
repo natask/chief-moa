@@ -27,6 +27,11 @@ const GATEWAY_TOKEN = "sidepanel-history-smoke-token";
 const SESSION_ID = "shared-sidepanel-history-smoke";
 const LONG_ANDROID_TEXT = `Android product direction ${"kept complete across surfaces ".repeat(40)}`.trim();
 const AUDIO_CAPTURE_BLOCK_ID = `cap_${"a".repeat(64)}`;
+const CONFIRMED_DESIRED_OUTCOME = "Make the selected note a durable Switchboard outcome.";
+const CONFIRMED_ACCEPTANCE_CRITERIA = [
+  "The exact selected source remains bound.",
+  "Completion returns evidence against this gate.",
+];
 const AUDIO_CAPTURE_BLOCK = {
   schema_version: 2,
   id: AUDIO_CAPTURE_BLOCK_ID,
@@ -210,14 +215,20 @@ function startGateway() {
     }
     if (req.method === "POST" && url.pathname === `/v1/capture-blocks/${AUDIO_CAPTURE_BLOCK_ID}/handoff`) {
       handoffCalls += 1;
-      handoffBodies.push(await readRequestJson(req));
+      const handoffBody = await readRequestJson(req);
+      handoffBodies.push(handoffBody);
       res.writeHead(202, { "content-type": "application/json" });
       res.end(JSON.stringify({ handoff: {
-        schema_version: 1,
+        schema_version: handoffBody.desired_outcome ? 2 : 1,
+        contract_version: handoffBody.desired_outcome ? 2 : 1,
         source_system: "chief-moa",
         source_record_id: AUDIO_CAPTURE_BLOCK_ID,
         source_revision: `capture-block-v2:${"b".repeat(64)}`,
         request_digest: `sha256:${"c".repeat(64)}`,
+        ...(handoffBody.desired_outcome ? {
+          desired_outcome: handoffBody.desired_outcome,
+          acceptance_criteria: handoffBody.acceptance_criteria,
+        } : {}),
         switchboard: {
           admission_id: "ext_sidepanel_smoke",
           raw_intent_id: "raw_sidepanel_smoke",
@@ -605,15 +616,21 @@ async function main() {
         : null;
     })()`);
     if (terminalPromotion.label !== "Send to Switchboard"
-        || terminalPromotion.status !== "Ready for explicit Switchboard handoff"
+        || terminalPromotion.status !== "Enter and confirm the outcome and acceptance criteria"
         || gateway.captureBlockCreates() !== 1
         || gateway.captureBodies()[0]?.authority) {
       throw new Error(`transcript preparation crossed the execution boundary: ${JSON.stringify(terminalPromotion)}`);
     }
 
     await evaluate(pageCdp, `(() => {
-      globalThis.confirm = () => false;
+      globalThis.confirm = (message) => {
+        globalThis.__sidepanelConfirmText = message;
+        return false;
+      };
       const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      const fields = card.querySelectorAll(".voice-note-goal textarea");
+      fields[0].value = ${JSON.stringify(CONFIRMED_DESIRED_OUTCOME)};
+      fields[1].value = ${JSON.stringify(CONFIRMED_ACCEPTANCE_CRITERIA.join("\n"))};
       [...card.querySelectorAll(".voice-note-actions button")]
         .find((button) => button.textContent === "Send to Switchboard")?.click();
       return true;
@@ -621,6 +638,11 @@ async function main() {
     await waitForEval(pageCdp, `document.querySelector(
       '.voice-note-card[data-note-id="note_older"] .voice-note-operation'
     )?.textContent.includes("cancelled")`);
+    const confirmationText = await evaluate(pageCdp, "globalThis.__sidepanelConfirmText");
+    if (!confirmationText.includes(CONFIRMED_DESIRED_OUTCOME)
+        || CONFIRMED_ACCEPTANCE_CRITERIA.some((criterion) => !confirmationText.includes(criterion))) {
+      throw new Error("execution confirmation did not show the exact desired outcome and acceptance gate");
+    }
     if (gateway.handoffCalls() !== 0) throw new Error("cancelled handoff reached the gateway");
 
     await evaluate(pageCdp, `(() => {
@@ -638,9 +660,15 @@ async function main() {
           .find((button) => /Switchboard receipt/.test(button.textContent))?.textContent }
         : null;
     })()`);
+    const expectedHandoffBody = {
+      confirmed: true,
+      authority: "execute",
+      desired_outcome: CONFIRMED_DESIRED_OUTCOME,
+      acceptance_criteria: CONFIRMED_ACCEPTANCE_CRITERIA,
+    };
     if (admitted.action !== "Check Switchboard receipt"
         || gateway.handoffCalls() !== 1
-        || JSON.stringify(gateway.handoffBodies()[0]) !== JSON.stringify({ confirmed: true, authority: "execute" })) {
+        || JSON.stringify(gateway.handoffBodies()[0]) !== JSON.stringify(expectedHandoffBody)) {
       throw new Error(`confirmed handoff did not retain an exact receipt: ${JSON.stringify(admitted)}`);
     }
     await evaluate(pageCdp, `(() => {

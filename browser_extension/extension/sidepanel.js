@@ -27,10 +27,12 @@ import {
   captureBlockPath,
   captureBlockRequest,
   captureBlockRetryPath,
+  confirmedGoalFromText,
   handoffPresentation,
   newPromotionRecord,
   promotionPresentation,
   promotionRecordWithBlock,
+  promotionRecordWithConfirmedGoal,
   promotionRecordWithHandoff,
   promotionStorageKey,
   usablePromotionRecord,
@@ -249,6 +251,25 @@ function renderAudioNote(note) {
   handoffStatus.setAttribute("role", "status");
   handoffStatus.hidden = true;
 
+  const goalFields = document.createElement("div");
+  goalFields.className = "voice-note-goal";
+  goalFields.hidden = true;
+  const outcomeLabel = document.createElement("label");
+  outcomeLabel.textContent = "Desired outcome";
+  const outcome = document.createElement("textarea");
+  outcome.rows = 3;
+  outcome.maxLength = 100000;
+  outcome.placeholder = "What durable outcome should Switchboard own?";
+  outcomeLabel.append(outcome);
+  const criteriaLabel = document.createElement("label");
+  criteriaLabel.textContent = "Acceptance criteria · one per line";
+  const criteria = document.createElement("textarea");
+  criteria.rows = 4;
+  criteria.maxLength = 32032;
+  criteria.placeholder = "What observable evidence must be true before this is complete?";
+  criteriaLabel.append(criteria);
+  goalFields.append(outcomeLabel, criteriaLabel);
+
   const actions = document.createElement("div");
   actions.className = "voice-note-actions";
 
@@ -277,6 +298,15 @@ function renderAudioNote(note) {
     handoffStatus.hidden = !handoffView;
     handoff.textContent = handoffView?.action || "";
     handoffStatus.textContent = handoffView?.label || "";
+    goalFields.hidden = !handoffView;
+    const confirmedGoal = record?.confirmed_goal;
+    if (confirmedGoal) {
+      outcome.value = confirmedGoal.desired_outcome;
+      criteria.value = confirmedGoal.acceptance_criteria.join("\n");
+    }
+    const goalLocked = Boolean(confirmedGoal || handoffView?.sent);
+    outcome.disabled = goalLocked;
+    criteria.disabled = goalLocked;
   };
 
   prepare.addEventListener("click", async () => {
@@ -319,12 +349,35 @@ function renderAudioNote(note) {
 
   handoff.addEventListener("click", async () => {
     if (!canHandoffPromotion(promotionRecord)) return;
-    const confirmed = confirm(
-      "Send this exact selected transcript to Agent Switchboard for execution? This can start agent work.",
-    );
-    if (!confirmed) {
-      setVoiceNoteOperation(operation, "Switchboard handoff cancelled. No work was started.");
-      return;
+    if (!promotionRecord.confirmed_goal) {
+      let goal;
+      try {
+        goal = confirmedGoalFromText(outcome.value, criteria.value);
+      } catch (error) {
+        setVoiceNoteOperation(operation, String(error?.message || error), "error");
+        return;
+      }
+      const criteriaPreview = goal.acceptance_criteria.map((item) => `- ${item}`).join("\n");
+      const confirmed = confirm(
+        `Send this exact selected source to Agent Switchboard for execution?\n\nDesired outcome:\n${goal.desired_outcome}\n\nAcceptance criteria:\n${criteriaPreview}\n\nThis can start agent work.`,
+      );
+      if (!confirmed) {
+        setVoiceNoteOperation(operation, "Switchboard handoff cancelled. No work was started.");
+        return;
+      }
+      const confirmedRecord = promotionRecordWithConfirmedGoal(promotionRecord, goal);
+      try {
+        await saveAudioNotePromotion(note, confirmedRecord);
+      } catch (error) {
+        setVoiceNoteOperation(
+          operation,
+          `Could not retain the confirmed goal before handoff: ${String(error?.message || error)}`,
+          "error",
+        );
+        return;
+      }
+      promotionRecord = confirmedRecord;
+      renderPromotion(promotionRecord);
     }
     handoff.disabled = true;
     setVoiceNoteOperation(operation, "Sending the exact transcribed capture block to Switchboard…");
@@ -429,7 +482,7 @@ function renderAudioNote(note) {
   });
 
   actions.append(prepare, handoff, play, download, remove);
-  card.append(title, metadata, state, promotion, transcript, handoffStatus, operation, actions);
+  card.append(title, metadata, state, promotion, transcript, handoffStatus, goalFields, operation, actions);
   return card;
 }
 

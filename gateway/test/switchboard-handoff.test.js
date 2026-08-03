@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const {
   captureBlockEnvelope,
@@ -32,6 +34,10 @@ const AUDIO_BLOCK = {
     provider: { id: "chirp", model: "chirp_3", request_id: "provider_request_1" },
   },
 };
+const V2_FIXTURE = JSON.parse(fs.readFileSync(
+  path.join(__dirname, "fixtures", "external-intent-v2.json"),
+  "utf8",
+));
 
 function eventMemory() {
   const rows = [];
@@ -62,7 +68,7 @@ function switchboardAdmission(envelope) {
   return {
     admission: {
       id: "ext_1",
-      contractVersion: 1,
+      contractVersion: envelope.contract_version,
       rawIntentId: "raw_1",
       messageId: "msg_1",
       sourceSystem: envelope.source_system,
@@ -75,6 +81,10 @@ function switchboardAdmission(envelope) {
       projectHint: envelope.project_hint,
       authority: envelope.authority,
       idempotencyKey: envelope.idempotency_key,
+      ...(envelope.contract_version === 2 ? {
+        desiredOutcome: envelope.desired_outcome,
+        acceptanceCriteria: envelope.acceptance_criteria,
+      } : {}),
       state: "queued",
       compiledIntents: [{ intentId: "intent_1" }],
     },
@@ -124,6 +134,84 @@ test("transcribed audio-backed envelope binds the immutable result and keeps aud
     assert.notEqual(envelope.source_hash, first.source_hash);
     assert.notEqual(envelope.idempotency_key, first.idempotency_key);
   }
+});
+
+test("confirmed goal handoff upgrades to v2 without changing source evidence", () => {
+  const v1 = captureBlockEnvelope({ captureBlock: AUDIO_BLOCK });
+  const v2 = captureBlockEnvelope({
+    captureBlock: AUDIO_BLOCK,
+    desired_outcome: "Ship a durable selected-note handoff.",
+    acceptance_criteria: [
+      "The selected source remains replayable.",
+      "One confirmed handoff creates one canonical intent.",
+      "The selected source remains replayable.",
+    ],
+  });
+  assert.equal(v1.contract_version, 1);
+  assert.equal(v2.contract_version, 2);
+  assert.equal(v2.source_revision, v1.source_revision);
+  assert.equal(v2.source_hash, v1.source_hash);
+  assert.equal(v2.exact_text, v1.exact_text);
+  assert.equal(v2.desired_outcome, "Ship a durable selected-note handoff.");
+  assert.deepEqual(v2.acceptance_criteria, [
+    "The selected source remains replayable.",
+    "One confirmed handoff creates one canonical intent.",
+  ]);
+});
+
+test("cross-product v2 fixture preserves the exact Switchboard seam", async () => {
+  const events = eventMemory();
+  let observed;
+  const service = createSwitchboardHandoffService({
+    events,
+    baseUrl: "http://switchboard.test",
+    fetchImpl: async (_url, init) => {
+      observed = JSON.parse(init.body);
+      return { ok: true, status: 202, json: async () => ({ admission: {
+        ...V2_FIXTURE.admission,
+        id: "admission_fixture_1",
+        rawIntentId: "raw_fixture_1",
+        messageId: "message_fixture_1",
+        state: "queued",
+        compiledIntents: [{ intentId: "intent_fixture_1" }],
+      } }) };
+    },
+  });
+  const fixtureBlock = {
+    ...structuredClone(AUDIO_BLOCK),
+    id: V2_FIXTURE.request.source_record_id,
+    source: { kind: "audio_note", audio_note_id: "note_fixture_1" },
+    audio: { ...AUDIO_BLOCK.audio, audio_note_id: "note_fixture_1" },
+    transcript: {
+      state: "transcribed",
+      literal: V2_FIXTURE.request.exact_text,
+      result_id: "result_fixture_1",
+      provider: { id: "fixture-stt", model: "fixture-model", request_id: "fixture-request-1" },
+    },
+  };
+  const receipt = await service.handoffCaptureBlock({
+    captureBlock: fixtureBlock,
+    confirmed: true,
+    authority: "execute",
+    desired_outcome: V2_FIXTURE.request.desired_outcome,
+    acceptance_criteria: V2_FIXTURE.request.acceptance_criteria,
+    project_hint: V2_FIXTURE.request.project_hint,
+  });
+  assert.deepEqual(observed, V2_FIXTURE.request);
+  assert.equal(receipt.desired_outcome, V2_FIXTURE.admission.desiredOutcome);
+  assert.deepEqual(receipt.acceptance_criteria, V2_FIXTURE.admission.acceptanceCriteria);
+});
+
+test("v2 goal fields are explicit, bounded, and confirmed together", () => {
+  for (const input of [
+    { desired_outcome: "outcome" },
+    { acceptance_criteria: ["criterion"] },
+    { desired_outcome: "", acceptance_criteria: ["criterion"] },
+    { desired_outcome: "x".repeat(100_001), acceptance_criteria: ["criterion"] },
+    { desired_outcome: "outcome", acceptance_criteria: [] },
+    { desired_outcome: "outcome", acceptance_criteria: Array.from({ length: 33 }, (_, index) => `criterion ${index}`) },
+    { desired_outcome: "outcome", acceptance_criteria: ["x".repeat(1_001)] },
+  ]) assert.throws(() => captureBlockEnvelope({ captureBlock: AUDIO_BLOCK, ...input }));
 });
 
 test("audio-backed handoff rejects unfinished or unprovable transcription projections before network", async () => {
@@ -285,6 +373,67 @@ test("audio-backed concurrent retry dispatches once and stores no transcript or 
     AUDIO_BLOCK.audio.audio_note_id,
     AUDIO_BLOCK.audio.href,
   ]) assert.equal(retainedReceipt.includes(forbidden), false);
+});
+
+test("v2 receipt binds and retains the confirmed outcome and acceptance gate", async () => {
+  const events = eventMemory();
+  const requests = [];
+  const service = createSwitchboardHandoffService({
+    events,
+    baseUrl: "http://switchboard.test",
+    fetchImpl: async (_url, init) => {
+      const envelope = JSON.parse(init.body);
+      requests.push(envelope);
+      return { ok: true, status: 202, json: async () => switchboardAdmission(envelope) };
+    },
+  });
+  const input = {
+    captureBlock: AUDIO_BLOCK,
+    confirmed: true,
+    authority: "execute",
+    desired_outcome: "Complete the selected product outcome.",
+    acceptance_criteria: ["The exact selected source is bound.", "Completion has evidence."],
+  };
+  const receipt = await service.handoffCaptureBlock(input);
+  assert.equal(requests[0].contract_version, 2);
+  assert.equal(receipt.schema_version, 2);
+  assert.equal(receipt.contract_version, 2);
+  assert.equal(receipt.desired_outcome, input.desired_outcome);
+  assert.deepEqual(receipt.acceptance_criteria, input.acceptance_criteria);
+  assert.equal(events.rows[0].payload.desired_outcome, input.desired_outcome);
+
+  const changed = { ...input, desired_outcome: "A different outcome." };
+  await assert.rejects(
+    service.handoffCaptureBlock(changed),
+    (error) => error.statusCode === 409 && error.code === "conflict",
+  );
+  assert.equal(requests.length, 1);
+});
+
+test("v2 rejects altered goal admission without retaining a receipt", async () => {
+  for (const mutate of [
+    (admission) => { admission.desiredOutcome = "substituted"; },
+    (admission) => { admission.acceptanceCriteria = ["substituted"]; },
+  ]) {
+    const events = eventMemory();
+    const service = createSwitchboardHandoffService({
+      events,
+      baseUrl: "http://switchboard.test",
+      fetchImpl: async (_url, init) => {
+        const response = switchboardAdmission(JSON.parse(init.body));
+        mutate(response.admission);
+        return { ok: true, status: 202, json: async () => response };
+      },
+    });
+    await assert.rejects(service.handoffCaptureBlock({
+      captureBlock: AUDIO_BLOCK,
+      confirmed: true,
+      authority: "execute",
+      desired_outcome: "Bound outcome",
+      acceptance_criteria: ["Bound criterion"],
+    }), /mismatched admission receipt/);
+    assert.equal(events.rows.length, 0);
+  }
 });
 
 test("audio-backed mismatched Switchboard evidence is rejected without a receipt", async () => {

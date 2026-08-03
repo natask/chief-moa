@@ -1,5 +1,8 @@
 const CAPTURE_BLOCKS_PATH = "/v1/capture-blocks";
 const PROMOTION_STORAGE_PREFIX = "ageeAudioNotePromotion:";
+const MAX_ACCEPTANCE_CRITERIA = 32;
+const MAX_ACCEPTANCE_CRITERION_CHARS = 1000;
+const MAX_DESIRED_OUTCOME_CHARS = 100000;
 
 function cleanText(value, max = 240) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -39,6 +42,7 @@ function newPromotionRecord(note, createId = () => globalThis.crypto.randomUUID(
     idempotency_key: `browser-audio-note:${noteId}:${idempotencyKey}`,
     capture_block_id: null,
     snapshot: null,
+    confirmed_goal: null,
     handoff: null,
   };
 }
@@ -53,22 +57,33 @@ function usablePromotionRecord(note, value) {
     : null;
   const snapshot = usablePromotionSnapshot(noteId, storedBlockId, value.snapshot);
   const captureBlockId = snapshot ? storedBlockId : null;
-  const handoff = value.handoff && typeof value.handoff === "object"
-    && value.handoff.source_record_id === captureBlockId
-    && cleanText(value.handoff.admission_id, 160)
-    && /^capture-block-v2:[a-f0-9]{64}$/.test(value.handoff.source_revision || "")
-    && /^sha256:[a-f0-9]{64}$/.test(value.handoff.request_digest || "")
-    && Array.isArray(value.handoff.compiled_intent_ids)
-    ? value.handoff
-    : null;
+  const confirmedGoal = usableConfirmedGoal(value.confirmed_goal);
+  const handoff = usableStoredHandoff(captureBlockId, confirmedGoal, value.handoff);
   return {
     schema_version: 1,
     audio_note_id: noteId,
     idempotency_key: idempotencyKey,
     capture_block_id: captureBlockId,
     snapshot,
+    confirmed_goal: confirmedGoal,
     handoff,
   };
+}
+
+function usableStoredHandoff(captureBlockId, confirmedGoal, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || value.source_record_id !== captureBlockId
+      || !cleanText(value.admission_id, 160)
+      || !/^capture-block-v2:[a-f0-9]{64}$/.test(value.source_revision || "")
+      || !/^sha256:[a-f0-9]{64}$/.test(value.request_digest || "")
+      || !Array.isArray(value.compiled_intent_ids)) return null;
+  if (!confirmedGoal) return value.schema_version === 2 ? null : value;
+  const handoffGoal = usableConfirmedGoal(value);
+  return handoffGoal
+    && handoffGoal.desired_outcome === confirmedGoal.desired_outcome
+    && JSON.stringify(handoffGoal.acceptance_criteria) === JSON.stringify(confirmedGoal.acceptance_criteria)
+    ? value
+    : null;
 }
 
 function usablePromotionSnapshot(noteId, captureBlockId, value) {
@@ -147,6 +162,7 @@ function promotionRecordWithBlock(note, record, payload) {
     ...record,
     capture_block_id: snapshot.capture_block_id,
     snapshot,
+    confirmed_goal: sameTranscriptRevision ? record.confirmed_goal || null : null,
     handoff: sameTranscriptRevision ? record.handoff || null : null,
   };
 }
@@ -160,9 +176,54 @@ function canHandoffPromotion(record) {
     && snapshot?.transcript_provider_id);
 }
 
-function captureBlockHandoffRequest(record) {
+function captureBlockHandoffRequest(record, goal = record?.confirmed_goal) {
   if (!canHandoffPromotion(record)) throw new Error("This capture block is not ready for handoff.");
-  return { confirmed: true, authority: "execute" };
+  if (!goal) return { confirmed: true, authority: "execute" };
+  const confirmedGoal = requireConfirmedGoal(goal);
+  return {
+    confirmed: true,
+    authority: "execute",
+    desired_outcome: confirmedGoal.desired_outcome,
+    acceptance_criteria: confirmedGoal.acceptance_criteria,
+  };
+}
+
+function requireConfirmedGoal(value) {
+  const goal = usableConfirmedGoal(value);
+  if (!goal) throw new Error("Enter and confirm a desired outcome and at least one acceptance criterion.");
+  return goal;
+}
+
+function usableConfirmedGoal(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const desiredOutcome = String(value.desired_outcome || "").trim();
+  if (!desiredOutcome || [...desiredOutcome].length > MAX_DESIRED_OUTCOME_CHARS) return null;
+  if (!Array.isArray(value.acceptance_criteria)
+      || value.acceptance_criteria.length < 1
+      || value.acceptance_criteria.length > MAX_ACCEPTANCE_CRITERIA) return null;
+  const seen = new Set();
+  const criteria = [];
+  for (const item of value.acceptance_criteria) {
+    const criterion = String(item || "").trim();
+    if (!criterion || [...criterion].length > MAX_ACCEPTANCE_CRITERION_CHARS) return null;
+    if (!seen.has(criterion)) criteria.push(criterion);
+    seen.add(criterion);
+  }
+  if (!criteria.length) return null;
+  return { desired_outcome: desiredOutcome, acceptance_criteria: criteria };
+}
+
+function confirmedGoalFromText(desiredOutcome, criteriaText) {
+  return requireConfirmedGoal({
+    desired_outcome: desiredOutcome,
+    acceptance_criteria: String(criteriaText || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+  });
+}
+
+function promotionRecordWithConfirmedGoal(record, goal) {
+  if (!canHandoffPromotion(record)) throw new Error("This capture block is not ready for handoff.");
+  if (record.handoff) throw new Error("This capture block already has a Switchboard receipt.");
+  return { ...record, confirmed_goal: requireConfirmedGoal(goal) };
 }
 
 function handoffReceiptSnapshot(record, payload) {
@@ -173,18 +234,27 @@ function handoffReceiptSnapshot(record, payload) {
   const requestDigest = cleanText(receipt?.request_digest, 200);
   const switchboard = receipt?.switchboard && typeof receipt.switchboard === "object" ? receipt.switchboard : {};
   const admissionId = cleanText(switchboard.admission_id, 160);
+  const confirmedGoal = record.confirmed_goal;
+  const receiptGoal = usableConfirmedGoal({
+    desired_outcome: receipt?.desired_outcome,
+    acceptance_criteria: receipt?.acceptance_criteria,
+  });
   if (receipt?.source_system !== "chief-moa"
       || sourceRecordId !== record.capture_block_id
       || !/^capture-block-v2:[a-f0-9]{64}$/.test(sourceRevision)
       || !/^sha256:[a-f0-9]{64}$/.test(requestDigest)
-      || !admissionId) {
+      || !admissionId
+      || (confirmedGoal && (!receiptGoal
+        || receiptGoal.desired_outcome !== confirmedGoal.desired_outcome
+        || JSON.stringify(receiptGoal.acceptance_criteria) !== JSON.stringify(confirmedGoal.acceptance_criteria)))) {
     throw new Error("Gateway returned a mismatched Switchboard receipt.");
   }
   return {
-    schema_version: 1,
+    schema_version: receiptGoal ? 2 : 1,
     source_record_id: sourceRecordId,
     source_revision: sourceRevision,
     request_digest: requestDigest,
+    ...(receiptGoal || {}),
     admission_id: admissionId,
     raw_intent_id: cleanText(switchboard.raw_intent_id, 160),
     compiled_intent_ids: Array.isArray(switchboard.compiled_intent_ids)
@@ -201,7 +271,13 @@ function promotionRecordWithHandoff(record, payload) {
 function handoffPresentation(record) {
   if (!canHandoffPromotion(record)) return null;
   const receipt = record.handoff;
-  if (!receipt) return { sent: false, label: "Ready for explicit Switchboard handoff", action: "Send to Switchboard" };
+  if (!receipt) return {
+    sent: false,
+    label: record.confirmed_goal
+      ? "Confirmed outcome ready for Switchboard handoff"
+      : "Enter and confirm the outcome and acceptance criteria",
+    action: "Send to Switchboard",
+  };
   const intentIds = Array.isArray(receipt.compiled_intent_ids) ? receipt.compiled_intent_ids : [];
   const identities = intentIds.length
     ? `intent ${intentIds.join(", ")}`
@@ -244,10 +320,12 @@ export {
   captureBlockRetryPath,
   captureBlockRequest,
   captureBlockSnapshot,
+  confirmedGoalFromText,
   newPromotionRecord,
   handoffPresentation,
   promotionPresentation,
   promotionRecordWithBlock,
+  promotionRecordWithConfirmedGoal,
   promotionRecordWithHandoff,
   promotionStorageKey,
   usablePromotionRecord,
