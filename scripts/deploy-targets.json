@@ -1,6 +1,6 @@
 {
   "production": {
-    "vps_ssh": "root@143.198.226.83",
+    "vps_ssh": "root@10.147.17.179",
     "public_gateway_url": "https://api.agee.app"
   }
 }
