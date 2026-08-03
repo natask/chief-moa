@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import MoaMacShell
 import SwiftUI
 
@@ -8,6 +9,7 @@ public struct CommandPaletteView: View {
     private let shortcutLabel: String
     @FocusState private var promptFocused: Bool
     @State private var editingConnection = false
+    @State private var showingBrowserHandoff = false
     @State private var boundaryPulse = false
 
     public init(model: CommandModel, shortcutLabel: String = "Control-Space", dismiss: @escaping () -> Void = {}) {
@@ -17,141 +19,234 @@ public struct CommandPaletteView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.title2)
-                    .foregroundStyle(.purple)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Ag").font(.headline)
-                    Text(model.status).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { Task { await model.toggleHistory() } } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                }
-                .buttonStyle(.plain)
-                .help("Show this session's durable gateway history")
-                Button { editingConnection.toggle() } label: {
-                    Image(systemName: model.isConfigured ? "network.badge.shield.half.filled" : "network.slash")
-                }
-                .buttonStyle(.plain)
-                .help("Gateway connection")
-                Button(action: cancelAndDismiss) { Image(systemName: "xmark") }
-                    .buttonStyle(.plain)
-                    .help("Hide")
-            }
+        VStack(spacing: 0) {
+            islandHeader
 
-            if editingConnection {
-                connectionEditor
-            }
-
-            if model.isShowingHistory {
-                history
-            }
-
-            browserHandoff
-
-            if !model.reply.isEmpty {
-                ScrollView {
-                    Text(model.reply)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(maxHeight: 100)
-                .padding(12)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-            }
-
-            if !model.voiceState.partial.isEmpty || !model.voiceState.final.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text(transcriptLabel)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if model.voiceActivity == .dictation && !model.voiceState.final.isEmpty {
-                            Button("Copy") { model.copyDictation() }
-                                .buttonStyle(.plain)
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if model.voiceState.phase == .denied {
+                        microphoneRecovery
                     }
-                    Text(model.voiceState.final.isEmpty ? model.voiceState.partial : model.voiceState.final)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    if editingConnection { connectionEditor }
+                    if showingBrowserHandoff { browserHandoff }
+                    conversationContent
+                    if model.voiceState.isActive {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(model.voiceState.message, systemImage: "waveform")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.74))
+                            VoiceWaveform(levels: model.voiceLevels)
+                                .frame(height: 38)
+                                .accessibilityLabel("Live microphone level")
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    } else {
+                        composer
+                    }
+                    Text("\(shortcutLabel) toggles assistant voice · Dictate is literal · screen recording is not required")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.42))
                 }
-                .padding(12)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 16)
             }
-
-            if model.voiceState.isActive {
-                VoiceWaveform(levels: model.voiceLevels)
-                    .frame(height: 34)
-                    .accessibilityLabel("Live microphone level")
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
-            }
-
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("Ask Ag anything…", text: $model.prompt, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .focused($promptFocused)
-                    .onSubmit { send() }
-                Button {
-                    Task { await model.handleSummon() }
-                } label: {
-                    Image(systemName: model.voiceState.isActive ? "stop.circle.fill" : "mic.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(model.voiceState.isActive ? .red : .purple)
-                }
-                .buttonStyle(.plain)
-                .help(model.voiceState.isActive ? "Finish and send" : "Start listening")
-                .accessibilityLabel(model.voiceState.isActive ? "Finish and send" : "Start listening")
-                Button {
-                    Task { await model.handleDictation() }
-                } label: {
-                    Image(systemName: model.voiceState.isActive && model.voiceActivity == .dictation
-                          ? "stop.circle.fill" : "text.cursor")
-                        .font(.title2)
-                        .foregroundStyle(model.voiceActivity == .dictation ? .orange : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help(model.voiceState.isActive && model.voiceActivity == .dictation
-                      ? "Finish literal dictation" : "Start literal dictation")
-                .accessibilityLabel("Literal dictation")
-                Button(action: send) {
-                    if model.isSending { ProgressView().controlSize(.small) }
-                    else { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                }
-                .buttonStyle(.plain)
-                .disabled(model.isSending || model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-
-            Text(model.voiceState.message)
-                .font(.caption2)
-                .foregroundStyle(model.voiceState.phase == .denied || model.voiceState.phase == .failed ? .red : .secondary)
-
-            Text("\(shortcutLabel) toggles assistant voice · Dictate captures literal text · no screen context attached")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
         }
-        .padding(16)
-        .frame(minWidth: 480, maxWidth: 480, minHeight: 300, maxHeight: 420, alignment: .top)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .frame(width: 560, height: 440, alignment: .top)
+        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22)
                 .stroke(boundaryColor, lineWidth: model.voiceState.isActive ? 3 : 1)
                 .opacity(boundaryPulse ? 1 : (model.voiceState.isActive ? 0.9 : 0.34))
         )
         .shadow(color: boundaryColor.opacity(model.voiceState.isActive ? 0.42 : 0), radius: 18)
         .animation(.snappy(duration: 0.22), value: model.voiceState.phase)
-        .onAppear { promptFocused = true }
+        .onAppear {
+            model.refreshMicrophonePermission()
+            promptFocused = !model.voiceState.isActive
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshMicrophonePermission()
+        }
         .onChange(of: model.interactionPulse) {
             boundaryPulse = true
             withAnimation(.easeOut(duration: 0.42)) { boundaryPulse = false }
         }
         .onExitCommand(perform: cancelAndDismiss)
+    }
+
+    private var islandHeader: some View {
+        HStack(spacing: 12) {
+            if model.voiceState.isActive {
+                islandButton("Cancel", systemImage: "xmark", tint: .red) {
+                    Task { await model.cancelVoice() }
+                }
+            } else {
+                Image(systemName: model.voiceActivity == .dictation ? "text.cursor" : "sparkles")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(boundaryColor)
+                    .frame(width: 44, height: 44)
+            }
+
+            VStack(spacing: 2) {
+                Text(islandTitle)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text(model.voiceState.isActive ? model.voiceState.message : model.status)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+
+            if model.voiceState.isActive {
+                islandButton("Finish", systemImage: "checkmark", tint: .orange) {
+                    Task { await model.finishVoice() }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    Button { showingBrowserHandoff.toggle() } label: {
+                        Image(systemName: "safari")
+                    }
+                    .help("Browser handoff")
+                    Button { editingConnection.toggle() } label: {
+                        Image(systemName: model.isConfigured ? "network.badge.shield.half.filled" : "network.slash")
+                    }
+                    .help("Gateway connection")
+                    Button(action: cancelAndDismiss) { Image(systemName: "xmark") }
+                        .help("Hide")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.72))
+                .frame(minWidth: 88, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 64)
+        .background(Color.black)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(boundaryColor.opacity(model.voiceState.isActive ? 0.8 : 0.24)).frame(height: 1)
+        }
+    }
+
+    private var islandTitle: String {
+        if model.voiceState.isActive {
+            return model.voiceActivity == .dictation ? "Ag is dictating" : "Ag is listening"
+        }
+        if model.voiceState.phase == .denied { return "Microphone blocked" }
+        return "Ag"
+    }
+
+    private func islandButton(_ title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(tint.opacity(0.24), in: Circle())
+                .overlay(Circle().stroke(tint.opacity(0.75), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+    }
+
+    private var conversationContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !model.lastSubmittedPrompt.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("You").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.56))
+                    Text(model.lastSubmittedPrompt)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .foregroundStyle(.white)
+                }
+                .padding(12)
+                .background(.purple.opacity(0.20), in: RoundedRectangle(cornerRadius: 12))
+            }
+            if !model.voiceState.partial.isEmpty || !model.voiceState.final.isEmpty {
+                transcriptCard
+            }
+            if !model.reply.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Ag").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.56))
+                    Text(model.reply)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+                .padding(12)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private var transcriptCard: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(transcriptLabel).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.56))
+                Spacer()
+                if model.voiceActivity == .dictation && !model.voiceState.final.isEmpty {
+                    Button("Copy") { model.copyDictation() }.buttonStyle(.plain).foregroundStyle(.orange)
+                }
+            }
+            Text(model.voiceState.final.isEmpty ? model.voiceState.partial : model.voiceState.final)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .foregroundStyle(.white)
+        }
+        .padding(12)
+        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Ask Ag anything…", text: $model.prompt, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...5)
+                .focused($promptFocused)
+                .onSubmit { send() }
+            Button { Task { await model.handleSummon() } } label: {
+                Image(systemName: "mic.circle.fill").font(.title2).foregroundStyle(.purple)
+            }
+            .buttonStyle(.plain).help("Assistant voice").accessibilityLabel("Start assistant voice")
+            Button { Task { await model.handleDictation() } } label: {
+                Image(systemName: "text.cursor").font(.title2).foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain).help("Literal dictation").accessibilityLabel("Start literal dictation")
+            Button(action: send) {
+                if model.isSending { ProgressView().controlSize(.small) }
+                else { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isSending || model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(12)
+        .foregroundStyle(.white)
+        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var microphoneRecovery: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Ag cannot hear you yet", systemImage: "mic.slash.fill")
+                .font(.headline)
+                .foregroundStyle(.red)
+            Text("Enable Ag in Privacy & Security > Microphone. Screen Recording is optional and is not used for dictation.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.68))
+            HStack {
+                Button("Open Microphone Settings") { model.openMicrophoneSettings() }
+                Button("Try again") { Task { await model.handleDictation() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+            }
+        }
+        .padding(12)
+        .background(.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.red.opacity(0.35)))
     }
 
     private var boundaryColor: Color {

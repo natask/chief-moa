@@ -43,14 +43,18 @@
       active boundary/pulse and native haptics but no repetitive cue sounds.
 - [x] 3.5 Route the double-Command macOS helper directly to `Ag.app` without
       raising Chrome or attaching browser, Accessibility, or pixel context.
+- [x] 3.6 Attach the compact panel to the notch/menu-bar edge, keep Cancel left
+      and Finish right of the current-turn content, retain the submitted user
+      text, wrap the full reply, and expose microphone denial recovery without
+      implying Screen Recording is required for dictation.
 - Acceptance: one explicit launch/summon produces one visible capture surface,
   repeating the summon commits the same turn, and no active capture becomes
   hidden.
 
 ## 4. Later parity stages
 
-- [x] 4.1a Add a bounded authenticated recent-session history view backed only
-      by the canonical gateway projection.
+- [x] 4.1a Keep durable history gateway-owned and out of the compact Mac island;
+      the island presents only the current submitted message and reply.
 - [ ] 4.1b Add full shared Aggie thread/run event and retained audio-attachment
       presentation beyond the live assistant reply.
 - [x] 4.1c Add local PCM-derived waveform feedback alongside existing live

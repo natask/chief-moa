@@ -313,6 +313,7 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     model.prompt = "Help with this"
     await model.submit()
     #expect(model.reply == "A bounded reply")
+    #expect(model.lastSubmittedPrompt == "Help with this")
     #expect(model.prompt.isEmpty)
     #expect(model.status == "Reply received")
     let bodies = await sender.bodies

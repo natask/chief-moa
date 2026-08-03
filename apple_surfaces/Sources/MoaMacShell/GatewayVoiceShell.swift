@@ -11,6 +11,12 @@ public enum VoiceCaptureError: Error, Equatable, Sendable {
     case connectionClosed
 }
 
+public enum MicrophoneAuthorizationState: Equatable, Sendable {
+    case notDetermined
+    case granted
+    case denied
+}
+
 public protocol MicrophonePermissionRequesting: Sendable {
     func requestPermission() async -> Bool
 }
@@ -39,6 +45,15 @@ public extension GatewayVoiceTransporting {
 
 public struct SystemMicrophonePermission: MicrophonePermissionRequesting {
     public init() {}
+
+    public static var currentState: MicrophoneAuthorizationState {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: .granted
+        case .notDetermined: .notDetermined
+        case .denied, .restricted: .denied
+        @unknown default: .denied
+        }
+    }
 
     public func requestPermission() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {

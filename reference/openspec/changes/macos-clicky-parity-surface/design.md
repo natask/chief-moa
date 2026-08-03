@@ -4,6 +4,12 @@
 
 `Ag` runs as an `LSUIElement` menu-bar application. `Control+Space` uses
 the public Carbon hot-key registration API and invokes one app-owned `NSPanel`.
+The panel is a top-attached Dynamic Island surface: on a notched built-in
+display it is flush with the physical screen top and centered on the notch; on
+other displays it sits immediately below the menu bar. The implementation uses
+native AppKit/SwiftUI panel geometry informed by the MIT-licensed OpenClicky and
+FreeFlow interaction patterns. It does not copy HeyClicky assets or require a
+screen-capture grant.
 If that system combination is already reserved, registration falls back to
 `Option+Space` and the command panel shows the shortcut that actually won.
 If neither registration succeeds, the menu-bar entry remains available and the
@@ -19,8 +25,18 @@ reply so repeated turns do not become noisy.
 During capture, a short rolling waveform is computed locally from the PCM16
 frames already destined for the gateway. Only bounded normalized levels enter
 SwiftUI state; no second audio buffer or telemetry path is created.
+Cancel is a dedicated control on the island's left and Finish is a dedicated
+control on its right. Transcript and assistant message content lives below that
+control row, wraps without a line limit, and scrolls inside the bounded panel.
+The compact island retains the exact current submitted text and current reply;
+durable gateway history is not rendered in this surface.
 Settings and the existing screen-context grant UI remain in a normal deeper
 window reached only through the menu-bar Settings action.
+
+Microphone denial remains visible in the island. The recovery state names the
+Microphone pane, opens it only after a user action, rechecks permission when Ag
+becomes active again, and offers an explicit retry. Screen Recording is labeled
+as optional screen context and is never presented as a dictation prerequisite.
 
 ## Gateway boundary
 
@@ -41,11 +57,9 @@ an ephemeral URL session with cookies and caches disabled. Input, request, and
 response sizes are bounded. Only the returned `text` field is displayed; no
 response field can directly execute a local action.
 
-The history control uses the same canonical origin and in-memory bearer token
-to read a bounded current-session projection from `GET /v1/history/messages`.
-It presents that projection inside the panel. The token remains an
-Authorization header rather than URL material, and the Mac app creates no
-parallel conversation/history database.
+The compact panel creates no parallel conversation/history database and does
+not present the durable history projection. History remains gateway-owned and
+belongs in a deeper hosted workspace rather than the current-turn island.
 
 The user configures the origin and signs in through the browser-backed device
 flow. The non-secret origin is stored in app preferences. The revocable Ag

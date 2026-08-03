@@ -12,6 +12,7 @@ executable Sources/MoaMacCore/GatewayVoice.swift
 executable Sources/MoaMacCore/MoaMacCore.swift
 executable Sources/MoaMacCore/PanelLayoutPolicy.swift
 executable Sources/MoaMacShell/GatewayChatShell.swift
+executable Sources/MoaMacShell/GatewayDeviceAuth.swift
 executable Sources/MoaMacShell/GatewayHistoryShell.swift
 executable Sources/MoaMacShell/GatewayVoiceShell.swift
 executable Sources/MoaMacShell/MoaMacShell.swift

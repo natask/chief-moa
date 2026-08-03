@@ -19,26 +19,28 @@ private func input(
     )
 }
 
-@Test func builtInNotchAnchorsPanelBelowSafeArea() throws {
+@Test func builtInNotchAttachesPanelToDynamicIsland() throws {
     let value = try #require(PanelLayoutPolicy.decision(for: input(safeAreaTop: 38)))
-    #expect(value.placement == .belowNotch)
-    #expect(value.origin == CGPoint(x: 476, y: 512))
-    #expect(value.origin.y + 420 + PanelLayoutPolicy.notchGap == 944)
+    #expect(value.placement == .dynamicIsland)
+    #expect(value.origin == CGPoint(x: 476, y: 562))
+    #expect(value.origin.y + 420 == 982)
 }
 
-@Test func notchAnchorUsesLowerMenuBarSafeBoundary() throws {
+@Test func notchAnchorUsesPhysicalScreenTopInsteadOfVisibleFrame() throws {
     let value = try #require(PanelLayoutPolicy.decision(for: input(
         visible: CGRect(x: 0, y: 0, width: 1_512, height: 930),
         safeAreaTop: 38
     )))
-    #expect(value.placement == .belowNotch)
-    #expect(value.origin.y == 498)
-    #expect(value.origin.y + 420 + PanelLayoutPolicy.notchGap == 930)
+    #expect(value.placement == .dynamicIsland)
+    #expect(value.origin.y == 562)
+    #expect(value.origin.y + 420 == 982)
 }
 
-@Test func impossibleFiniteSafeAreaRequestsAppKitCenterFallback() {
-    #expect(PanelLayoutPolicy.decision(for: input(safeAreaTop: 10_000)) == nil)
-    #expect(PanelLayoutPolicy.decision(for: input(safeAreaTop: CGFloat.greatestFiniteMagnitude)) == nil)
+@Test func largeFiniteSafeAreaDoesNotMoveIslandOffscreen() throws {
+    let value = try #require(PanelLayoutPolicy.decision(for: input(safeAreaTop: 10_000)))
+    #expect(value.placement == .dynamicIsland)
+    #expect(value.origin.y == 562)
+    #expect(PanelLayoutPolicy.decision(for: input(safeAreaTop: CGFloat.greatestFiniteMagnitude)) != nil)
 }
 
 @Test func safeAreaExactlyAtVisibleBottomRemainsDeterministic() throws {
@@ -47,8 +49,8 @@ private func input(
         visible: CGRect(x: 100, y: 120, width: 1_000, height: 840),
         safeAreaTop: 880
     )))
-    #expect(value.placement == .belowNotch)
-    #expect(value.origin == CGPoint(x: 320, y: 120))
+    #expect(value.placement == .dynamicIsland)
+    #expect(value.origin == CGPoint(x: 320, y: 580))
 }
 
 @Test(arguments: [
@@ -57,7 +59,7 @@ private func input(
     (true, CGFloat(-1)),
     (true, CGFloat.nan),
 ])
-func nonNotchedAndExternalDisplaysUseCenteredVisibleFrameFallback(
+func nonNotchedAndExternalDisplaysAttachBelowMenuBar(
     isBuiltIn: Bool,
     safeAreaTop: CGFloat
 ) throws {
@@ -65,8 +67,8 @@ func nonNotchedAndExternalDisplaysUseCenteredVisibleFrameFallback(
         safeAreaTop: safeAreaTop,
         isBuiltIn: isBuiltIn
     )))
-    #expect(value.placement == .centeredInVisibleFrame)
-    #expect(value.origin == CGPoint(x: 476, y: 342))
+    #expect(value.placement == .belowMenuBar)
+    #expect(value.origin == CGPoint(x: 476, y: 516))
 }
 
 @Test func fallbackHonorsOffsetExternalDisplayCoordinates() throws {
@@ -76,10 +78,10 @@ func nonNotchedAndExternalDisplaysUseCenteredVisibleFrameFallback(
         panel: CGSize(width: 600, height: 400),
         isBuiltIn: false
     )))
-    #expect(value.origin == CGPoint(x: -1_260, y: 280))
+    #expect(value.origin == CGPoint(x: -1_260, y: 512))
 }
 
-@Test func notchAndFallbackClampHorizontallyInsideVisibleFrame() throws {
+@Test func notchAndFallbackClampHorizontallyInsidePhysicalScreen() throws {
     for safeAreaTop in [CGFloat(0), CGFloat(40)] {
         let value = try #require(PanelLayoutPolicy.decision(for: input(
             screen: CGRect(x: 100, y: 0, width: 500, height: 900),
@@ -87,7 +89,7 @@ func nonNotchedAndExternalDisplaysUseCenteredVisibleFrameFallback(
             panel: CGSize(width: 560, height: 420),
             safeAreaTop: safeAreaTop
         )))
-        #expect(value.origin.x == 120)
+        #expect(value.origin.x == 100)
     }
 }
 
@@ -97,8 +99,8 @@ func nonNotchedAndExternalDisplaysUseCenteredVisibleFrameFallback(
         visible: CGRect(x: 0, y: 40, width: 800, height: 520),
         panel: CGSize(width: 560, height: 500)
     )))
-    #expect(value.origin.y == 60)
-    #expect(value.origin.y + 500 == 560)
+    #expect(value.origin.y == 52)
+    #expect(value.origin.y + 500 == 552)
 }
 
 @Test func oversizedPanelUsesDeterministicVisibleFrameOrigin() throws {
@@ -108,8 +110,8 @@ func nonNotchedAndExternalDisplaysUseCenteredVisibleFrameFallback(
         panel: CGSize(width: 400, height: 400),
         safeAreaTop: 30
     )))
-    #expect(value.placement == .belowNotch)
-    #expect(value.origin == CGPoint(x: 20, y: 30))
+    #expect(value.placement == .dynamicIsland)
+    #expect(value.origin == CGPoint(x: 10, y: 20))
 }
 
 @Test(arguments: [

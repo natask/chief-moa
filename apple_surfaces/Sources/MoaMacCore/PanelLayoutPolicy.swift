@@ -2,8 +2,8 @@ import CoreGraphics
 import Foundation
 
 public enum PanelLayoutPlacement: Equatable, Sendable {
-    case belowNotch
-    case centeredInVisibleFrame
+    case dynamicIsland
+    case belowMenuBar
 }
 
 public struct PanelLayoutInput: Equatable, Sendable {
@@ -39,8 +39,7 @@ public struct PanelLayoutDecision: Equatable, Sendable {
 }
 
 public enum PanelLayoutPolicy {
-    public static let notchGap: CGFloat = 12
-    public static let centeredVerticalLift: CGFloat = 80
+    public static let menuBarGap: CGFloat = 8
 
     public static func decision(for input: PanelLayoutInput) -> PanelLayoutDecision? {
         guard isUsable(input.screenFrame), isUsable(input.visibleFrame),
@@ -49,32 +48,31 @@ public enum PanelLayoutPolicy {
             return nil
         }
 
+        let horizontalBounds = input.screenFrame.minX ... input.screenFrame.maxX
         let x = constrainedOrigin(
-            preferred: input.visibleFrame.midX - input.panelSize.width / 2,
+            preferred: input.screenFrame.midX - input.panelSize.width / 2,
             length: input.panelSize.width,
-            within: input.visibleFrame.minX ... input.visibleFrame.maxX
+            within: horizontalBounds
         )
 
         if input.isBuiltInDisplay, input.safeAreaTop.isFinite, input.safeAreaTop > 0 {
-            let safeTop = min(
-                input.visibleFrame.maxY,
-                input.screenFrame.maxY - input.safeAreaTop
-            )
-            guard safeTop.isFinite, safeTop >= input.visibleFrame.minY else { return nil }
+            let top = input.screenFrame.maxY
+            guard top.isFinite else { return nil }
             let y = constrainedOrigin(
-                preferred: safeTop - notchGap - input.panelSize.height,
+                preferred: top - input.panelSize.height,
                 length: input.panelSize.height,
-                within: input.visibleFrame.minY ... safeTop
+                within: input.screenFrame.minY ... top
             )
-            return PanelLayoutDecision(origin: CGPoint(x: x, y: y), placement: .belowNotch)
+            return PanelLayoutDecision(origin: CGPoint(x: x, y: y), placement: .dynamicIsland)
         }
 
+        let top = input.visibleFrame.maxY - menuBarGap
         let y = constrainedOrigin(
-            preferred: input.visibleFrame.midY - input.panelSize.height / 2 + centeredVerticalLift,
+            preferred: top - input.panelSize.height,
             length: input.panelSize.height,
             within: input.visibleFrame.minY ... input.visibleFrame.maxY
         )
-        return PanelLayoutDecision(origin: CGPoint(x: x, y: y), placement: .centeredInVisibleFrame)
+        return PanelLayoutDecision(origin: CGPoint(x: x, y: y), placement: .belowMenuBar)
     }
 
     private static func isUsable(_ rect: CGRect) -> Bool {

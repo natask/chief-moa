@@ -156,6 +156,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public var origin: String
     @Published public var token: String
     @Published public var prompt = ""
+    @Published public private(set) var lastSubmittedPrompt = ""
     @Published public private(set) var reply = ""
     @Published public private(set) var status = "Ready"
     @Published public private(set) var isSending = false
@@ -172,6 +173,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var browserHandoffPhase: BrowserHandoffPhase = .idle
     @Published public private(set) var interactionPulse: UInt64 = 0
     @Published public private(set) var connectionState: ConnectionState = .disconnected
+    @Published public private(set) var microphonePermission = SystemMicrophonePermission.currentState
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
@@ -357,12 +359,14 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
 
     public func submit() async {
         guard !isSending else { return }
+        let submittedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         isSending = true
         status = "Thinking…"
         defer { isSending = false }
         do {
             guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
-            let request = try GatewayChatRequest(origin: url, sessionID: sessionID, prompt: prompt)
+            let request = try GatewayChatRequest(origin: url, sessionID: sessionID, prompt: submittedPrompt)
+            lastSubmittedPrompt = submittedPrompt
             let result = try await sender.send(request, bearerToken: token)
             reply = result.text
             prompt = ""
@@ -384,6 +388,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
 
     public func resetPresentation() {
         prompt = ""
+        lastSubmittedPrompt = ""
         reply = ""
         status = "Ready"
         voiceState.apply(.reset)
@@ -481,11 +486,13 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
                 await voiceController.cancel()
                 return
             }
+            microphonePermission = .granted
             voiceState.apply(.captureStarted)
             if voiceReleaseRequested {
                 try await voiceController.stopAndCommit()
             }
         } catch VoiceCaptureError.microphoneDenied {
+            microphonePermission = .denied
             voiceState.apply(.permissionDenied)
         } catch MoaMacError.missingToken {
             voiceState.apply(.failed("Sign in to Ag first"))
@@ -531,6 +538,26 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             status = "Copied — clipboard replaced"
         } else {
             status = "Could not copy — transcript preserved"
+        }
+    }
+
+    public func refreshMicrophonePermission() {
+        microphonePermission = SystemMicrophonePermission.currentState
+        if microphonePermission == .granted, voiceState.phase == .denied {
+            voiceState.apply(.reset)
+            status = "Microphone ready"
+        }
+    }
+
+    public func openMicrophoneSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else {
+            status = "Could not open Microphone settings"
+            return
+        }
+        if NSWorkspace.shared.open(url) {
+            status = "Enable Ag under Microphone, then return here"
+        } else {
+            status = "Open Privacy & Security > Microphone and enable Ag"
         }
     }
 }

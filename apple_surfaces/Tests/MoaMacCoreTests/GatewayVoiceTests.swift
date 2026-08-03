@@ -4,6 +4,7 @@ import Testing
 
 #if os(macOS)
 import MoaMacShell
+import MoaMacUI
 #endif
 
 @Test func voiceSessionStartTargetsConfiguredGatewayAndDeclaresLiteralPCM() throws {
@@ -258,6 +259,12 @@ private struct VoiceTestConnectionStore: GatewayConnectionStore {
     func saveOrigin(_ origin: String) throws {}
 }
 
+private struct VoiceEmptyDeviceSessionStore: DeviceSessionStoring {
+    func load() -> String { "" }
+    func save(_ token: String) throws {}
+    func clear() throws {}
+}
+
 private struct UnusedChatSender: GatewayChatSending {
     func send(_ request: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply {
         GatewayChatReply(text: "unused")
@@ -312,6 +319,17 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     }
 
     func cancel() async { cancels += 1 }
+}
+
+@MainActor private final class DeniedCaptureController: VoiceCaptureControlling {
+    func start(origin: URL, bearerToken: String, sessionID: String, turnID: String,
+               levelHandler: @escaping @MainActor @Sendable (Double) -> Void,
+               eventHandler: @escaping @MainActor @Sendable (GatewayVoiceServerEvent) -> Void) async throws {
+        throw VoiceCaptureError.microphoneDenied
+    }
+
+    func stopAndCommit() async throws { throw VoiceCaptureError.notActive }
+    func cancel() async {}
 }
 
 @MainActor @Test func voiceControllerRequestsPermissionStreamsPCMAndCommits() async throws {
@@ -374,6 +392,20 @@ private struct StubHistoryLoader: GatewayHistoryLoading {
     #expect(microphone.starts == 0)
     #expect(await transport.starts.isEmpty)
     await #expect(throws: VoiceCaptureError.notActive) { try await controller.stopAndCommit() }
+}
+
+@MainActor @Test func commandModelKeepsMicrophoneDenialVisibleForRecovery() async {
+    let model = CommandModel(
+        store: VoiceTestConnectionStore(),
+        sender: UnusedChatSender(),
+        voiceController: DeniedCaptureController(),
+        deviceSessionStore: VoiceEmptyDeviceSessionStore()
+    )
+    model.token = "gateway-token"
+    await model.handleDictation()
+    #expect(model.voiceState.phase == .denied)
+    #expect(model.microphonePermission == .denied)
+    _ = CommandPaletteView(model: model).body
 }
 
 @MainActor @Test func voiceControllerDictationFinalizesWithoutAssistantCommit() async throws {

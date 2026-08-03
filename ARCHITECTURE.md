@@ -115,6 +115,15 @@ Native desktop surfaces
   independently enabled focused-window screenshot only to the user's configured
   Ag gateway during an explicit visible grant.
 
+  The native Mac current-turn surface is a top-attached Dynamic Island panel.
+  Its dedicated left Cancel and right Finish controls remain outside the user
+  transcript and assistant reply lanes. It retains and wraps the exact current
+  submitted text and reply, while durable history stays in the gateway-owned
+  deeper workspace. Literal dictation requires Microphone access only; a denied
+  grant remains visible with an explicit Microphone Settings and retry path.
+  Accessibility and Screen Recording remain separately labeled optional context
+  grants and never gate the dictation pipeline.
+
 Website
   Owns: the public marketing surface and static account/customization tools
   such as the companion pet studio. It may call same-origin Pages Functions that
