@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | Intent/history reconciliation | `/root/owner_chief_moa` | This OpenSpec change only | complete |
 | Gateway raw-note deletion | `/root/owner_chief_moa/audio_note_delete` | `gateway/lib/audio-notes.js`, `gateway/lib/media-note-handlers.js`, focused audio/media-note tests and blob smoke | committed as `1856f104`; focused tests and blob smoke green; unpromoted |
-| Browser raw-note library | `/root/owner_chief_moa/browser_voice_note_library` | `browser_extension/extension/sidepanel.html`, `sidepanel.js`, bounded audio-note modules, verification/smoke | implemented in this integration unit; list/replay/download/delete plus promotion/retry/handoff are covered by 276 unit tests and the real headless extension smoke; unpackaged/unpromoted |
+| Browser raw-note library | `/root/owner_chief_moa/browser_voice_note_library` | `browser_extension/extension/sidepanel.html`, `sidepanel.js`, bounded audio-note modules, verification/smoke | implemented in this integration unit; list/replay/download/delete plus promotion/retry/handoff are covered by 276 unit tests and the real headless extension smoke; version `0.1.145` is packaged and has a deploy marker, but loaded-browser reload confirmation and installed-loop proof remain unverified |
 | Chief-to-Switchboard external contract | coordinator's `/root/switchboard_external_handoff` lane plus `/root/chief_switchboard_handoff` | Switchboard contract outside this repo; bounded Chief gateway client, handler, tests, browser action, and this OpenSpec task | schema-v1 and terminal audio-backed schema-v2 handoff plus explicit browser confirmation implemented in this integration unit; focused coverage and full checks green; no real-Switchboard preview or promotion yet |
 | Browser failed-upload persistence | unassigned | future bounded browser outbox module; avoid oversized `background.js` growth | blocked behind a non-overlapping extraction/ownership plan |
 | Android and macOS note libraries | unassigned | future Surface-specific clients | blocked on installed source-first proof and dedicated Surface implementation tickets |
@@ -31,7 +31,8 @@ only to record the clarified portfolio boundary and execution order.
 - [x] Expose newest-first list, replay/download, failure, and explicit delete in
   the browser full side panel without invoking reasoning or dispatch. Browser
   verify (276 tests), real headless side-panel smoke, and the full browser smoke
-  pass; version bump, packaging, loaded-browser QA, and deploy remain open.
+  pass. Version `0.1.145` is packaged and has a deploy marker; loaded-browser
+  reload confirmation and installed-loop QA remain open.
 
 Acceptance: a stored note survives client restart, replays byte-for-byte, and
 an explicit deletion either completes across storage or remains visibly
@@ -84,7 +85,10 @@ capturing or replaying the source creates no intent or run.
 ## 5. Installed-Product Proof And Release
 
 - [ ] Verify the complete slice on one installed Surface.
-- [ ] Create the exact preview/release artifact for every changed deployable
-  Surface.
+- [x] Create an exact isolated gateway preview artifact and prove inert capture,
+  restart recovery, predecessor compatibility, rollback, and drain safety in
+  `gateway-preview-evidence-20260803.md`.
+- [x] Create the versioned browser extension `0.1.145` package. Its local deploy
+  marker does not independently prove a confirmed loaded-browser reload.
 - [ ] Promote only after rollback, predecessor compatibility, no interruption,
   state safety, and smoke evidence pass; otherwise record the blocker.

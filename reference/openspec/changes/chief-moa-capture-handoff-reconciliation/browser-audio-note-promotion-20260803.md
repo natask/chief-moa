@@ -25,4 +25,9 @@ transcript result clears the old client receipt before another handoff can be
 shown.
 
 Verification now includes 276 browser unit tests and the real headless extension
-smoke. The integration unit remains unpackaged, unpreviewed, and unpromoted.
+smoke. Version `0.1.145` is packaged at
+`browser_extension/dist/Ag-0.1.145.zip`, and the local extension deploy marker
+binds it to commit `53c02597f1e169a89805db46670020fe99fbc096`. That marker does
+not independently distinguish a confirmed loaded-browser reload from an
+unverified reload signal. Installed-browser proof and active promotion remain
+open.
