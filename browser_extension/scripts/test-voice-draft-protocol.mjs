@@ -66,6 +66,17 @@ const commit = protocol.commitRequest(capturing);
 assert(commit?.type === "commit_turn" && commit.draft_id === "draft-1", "SEND carries exact draft authority");
 assert(protocol.validateClientRequest(commit, capturing), "exact SEND accepted");
 const sendReady = protocol.validateState(event("voice_draft_state", 4, "send_ready", "send"), { pointer: capturing, action: "send" });
+const handoffReady = {
+  type: "session_ready",
+  session_id: authority.sessionId,
+  branch_id: authority.branchId,
+  turn_id: authority.turnId,
+  capabilities: { voice_drafts_v1: capability },
+};
+assert(protocol.validateCommittedTurnReady(handoffReady, sendReady), "ordinary turn readiness accepts the exact committed draft authority");
+assert(!protocol.validateCommittedTurnReady({ ...handoffReady, branch_id: "other" }, sendReady), "ordinary turn readiness rejects a different authority");
+assert(!protocol.validateCommittedTurnReady(handoffReady, capturing), "ordinary turn readiness requires send_ready state");
+assert(!protocol.validateCommittedTurnReady({ ...handoffReady, voice_draft: ready.voice_draft }, sendReady), "ordinary turn readiness cannot masquerade as another draft start");
 const sent = protocol.validateState(event("voice_draft_state", 5, "sent", "send"), { pointer: sendReady, action: "send" });
 assert(sent?.state === "sent", "SEND terminates only as sent");
 

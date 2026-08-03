@@ -2632,6 +2632,21 @@ function handleOffscreenVoiceError(id, error, code = error?.code) {
   closeVoiceSession(id, "microphone capture failed");
 }
 
+function handleVoiceProtocolError(id, error) {
+  const session = voiceSessions.get(id);
+  if (!session) return;
+  const message = String(error?.message || error || "Voice protocol authority mismatch.");
+  deliverVoiceSessionEvent(session, {
+    event: {
+      type: "error",
+      code: "voice_protocol_mismatch",
+      recoverable: false,
+      message,
+    },
+  });
+  closeVoiceSession(id, "voice protocol mismatch");
+}
+
 function claimActiveAgentTab(tabId, reason = "another page became active", patch = {}) {
   if (tabId == null) return;
   const revokedTabs = new Map();
@@ -3147,13 +3162,19 @@ async function forwardVoiceSessionEvent(session, event) {
   } catch {}
   if (parsed?.type === "session_ready") {
     AgeeTranscriptRevisionProtocol.acceptReady(session.transcriptRevision, parsed); if (session.draftMode) {
-      const pointer = AgeeVoiceDraftProtocol.validateReady(parsed, { operation: "create",
-        sessionId: session.sessionId, branchId: session.branchId, turnId: session.turnId });
-      if (!pointer) {
-        handleOffscreenVoiceError(session.id, new Error("Gateway returned mismatched voice-draft start authority."));
+      if (!session.voiceDraft) {
+        const pointer = AgeeVoiceDraftProtocol.validateReady(parsed, { operation: "create",
+          sessionId: session.sessionId, branchId: session.branchId, turnId: session.turnId });
+        if (!pointer) {
+          handleVoiceProtocolError(session.id, new Error("Gateway returned mismatched voice-draft start authority."));
+          return;
+        }
+        session.voiceDraft = pointer;
+      } else if (!session.committed
+        || !AgeeVoiceDraftProtocol.validateCommittedTurnReady(parsed, session.voiceDraft)) {
+        handleVoiceProtocolError(session.id, new Error("Gateway returned mismatched voice-draft handoff authority."));
         return;
       }
-      session.voiceDraft = pointer;
     }
     session.gatewayReady = true;
     if (session.sampleText) {
@@ -3182,7 +3203,7 @@ async function forwardVoiceSessionEvent(session, event) {
     const pointer = AgeeVoiceDraftProtocol.validateState(parsed, { pointer: session.voiceDraft,
       action: session.pendingDraftAction || parsed.voice_draft?.action });
     if (!pointer) {
-      handleOffscreenVoiceError(session.id, new Error("Gateway returned stale or mismatched voice-draft authority."));
+      handleVoiceProtocolError(session.id, new Error("Gateway returned stale or mismatched voice-draft authority."));
       return;
     }
     session.voiceDraft = pointer;

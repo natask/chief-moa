@@ -81,6 +81,14 @@
     return pointer;
   }
 
+  function validateCommittedTurnReady(message, pointerValue) {
+    if (message?.type !== "session_ready" || !normalizeCapability(message?.capabilities?.voice_drafts_v1)) return false;
+    if (message.voice_draft !== undefined) return false;
+    const pointer = normalizeStoredPointer(pointerValue);
+    if (!pointer || pointer.state !== "send_ready") return false;
+    return sameAuthority(message, pointer, { includeDraft: false });
+  }
+
   function validateState(message, expected = {}) {
     if (message?.type !== "voice_draft_state" || !normalizeCapability(message?.capabilities?.voice_drafts_v1)) return null;
     const prior = normalizeStoredPointer(expected.pointer);
@@ -169,6 +177,7 @@
     sameAuthority,
     startDescriptor,
     validateClientRequest,
+    validateCommittedTurnReady,
     validateReady,
     validateState,
   });
