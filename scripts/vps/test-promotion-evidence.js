@@ -16,11 +16,15 @@ const base = {
   preview_deployment_id: "preview-deployment-1", preview_verification_id: "preview-verification-1",
   apply_claim_id: "apply-claim-1", apply_worker_id: "apply-worker-1", apply_effect_id: "apply-effect-1",
   preview_url: "https://preview.example.test",
-  isolated_database_ref: "database://preview-1", isolated_queue_ref: "queue://preview-1",
-  isolated_storage_ref: "storage://preview-1", isolated_worker_pool_ref: "workers://preview-1",
-  drain_resume_ref: "evidence://drain-resume", compatibility_ref: "evidence://compatibility",
-  backup_restore_ref: "state://persistent-volumes-preserved", rollback_ref: "evidence://rollback",
-  post_apply_smoke_ref: "evidence://post-smoke",
+  isolated_database_ref: "verification://database/preview-1",
+  isolated_queue_ref: "verification://queue/preview-1",
+  isolated_storage_ref: "verification://storage/preview-1",
+  isolated_worker_pool_ref: "verification://workers/preview-1",
+  drain_resume_ref: "verification://drain-resume/preview-1",
+  compatibility_ref: "verification://compatibility/additive-state-contract",
+  backup_restore_ref: "verification://state-preservation/persistent-volumes-preserved",
+  rollback_ref: "rollback://git/previous",
+  post_apply_smoke_ref: "smoke://active/health",
 };
 function run(value) {
   const file = path.join(os.tmpdir(), `moa-promotion-${process.pid}.json`);
