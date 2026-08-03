@@ -213,6 +213,14 @@ Moa Gateway
   are not yet projected into capture blocks; that reconciliation remains a
   separate additive change.
 
+  An authenticated stored-audio-first intake may create the same canonical
+  block type through `POST /v1/capture-blocks`. It references an already-stored
+  `audio_note_id`, preserves the note's source surface/session identity, and
+  appends only a queued processing transition. The request is explicitly
+  idempotent and has no STT, reasoning, assistant, tool, or agent authority.
+  Transcription is later derived work claimed through a separate append-only
+  processing transition; provider failure cannot erase or replace source audio.
+
   Browser video-led capture is a separate explicit-stop intake path. The
   extension first stores the original screen-and-microphone WebM as a
   user-kept `video_note`; only then may the gateway derive a provider-attributed
@@ -1464,6 +1472,27 @@ listable (`GET /v1/audio-notes`) and playable
 only captures and stores. Contract:
 `reference/openspec/changes/record-mode-audio-notes/proposal.md`.
 
+An explicit schema-v2 capture-block creation is a separate, durable derivation
+request over an already-retained audio note. Creation appends `queued` state and
+returns without calling a provider. When `CAPTURE_TRANSCRIPTION_ENABLED=1`, one
+bounded gateway host scans queued and expired-leased blocks, claims each under
+the event substrate's cross-process stream lock, and invokes only the registered
+batch STT adapter. The initial production adapter accepts bounded PCM16
+`audio/L16` and calls Chirp's existing `transcribePcmBuffer`; it never constructs
+a reasoner, TTS stage, assistant turn, tool loop, or agent run. Unsupported media
+and missing provider configuration remain visible without deleting source audio.
+
+The host rotates through bounded result pages so completed history cannot starve
+queued work. It uses one shared claim/health worker identity, bounded concurrency
+and polling, per-process in-flight deduplication, retry backoff, an awaited
+bounded signal-time shutdown drain, and a lease sized for the five-minute capture
+ceiling. Retained PCM longer than 55 seconds is split on frame boundaries before
+the synchronous Chirp path. A replacement process may recover only an expired
+lease. `/health.capture_transcription` distinguishes
+explicit enablement, registry configuration, queued observations, active leases,
+in-flight work, expired leases, and sanitized runtime failure. Live-provider
+tests are opt-in because they incur cost.
+
 ### Voice delivery modes
 
 Ask, Note, and Coach are canonical versioned selections scoped by `device_id`
@@ -2327,6 +2356,13 @@ new accounts, emails, or subscriptions) is deliberately out of scope.
   `executable=false` and `model_used=false`; later reflection, topic, or intent
   derivation remains proposal data until the user explicitly accepts a separate
   action.
+- `switchboard_handoff_receipt`: a Chief-side continuity projection created
+  only after an authenticated caller explicitly confirms `authority=execute`
+  for one immutable capture block. Chief derives a content-bound source revision
+  and SHA-256 from the exact stored literal transcript, submits the versioned
+  envelope to Switchboard, then retains only the request digest, external
+  identity, and receipt. Switchboard remains canonical for the admitted intent,
+  routing, execution, progress, and completion.
 - `video_led_intent`: a user-confirmed intent admitted only after explicit stop
   of a browser screen-and-microphone recording. The original `video_note` bytes,
   SHA-256, retention, provider transcript/provenance, editable objective,

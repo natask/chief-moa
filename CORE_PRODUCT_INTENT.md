@@ -24,6 +24,20 @@ gateway owns durable sessions, model routing, account data, agent runs, and
 stored artifacts. Each Surface owns its UI, local context, permissions, local
 actions, and receipts.
 
+Chief Moa is the any-Surface companion and capture client in a larger intent
+portfolio. It keeps its existing responding assistant and literal-dictation
+paths, and adds a separate explicit intent-capture thread. That thread can bind
+what the user says to the application, page, screen evidence, or selection they
+are looking at and hand the confirmed source record to Agent Switchboard for
+durable intent ownership and execution progress.
+
+Chief Moa is not the canonical project/intent kernel, the branching notebook,
+or the native agent-process manager. Branch Continue owns branching thought
+and note capture. Agent Switchboard owns durable projects, intents, routing,
+progress, and completion. Agent Launcher owns attachable execution sessions.
+The products integrate through stable identities and evidence references rather
+than merging their storage or user interfaces.
+
 Conversation continuity should come from gateway-owned durable threads,
 bounded recent turns, rolling summaries, standing facts, and query-relevant
 recall. Provider KV caches may improve speed or cost, but they are not product
@@ -264,22 +278,29 @@ Do not delete uncertain user knowledge.
 
 ## Current order of work
 
-1. Complete the literal dictation pipeline across gateway, browser, Android,
-   and runnable native desktop surfaces. Finish capture durability, transcript
-   editing/copy, safe platform insertion, recording visibility, and real-device
-   acceptance before treating assistant expansion as the lead milestone.
-2. Prove and finish the browser read, act, anchored-UI, and delegated-task loop.
-3. Replace copied gateway tokens with account sign-in and user-bound device
+1. Finish the low-latency voice and literal dictation path across gateway,
+   browser, Android, and runnable native desktop surfaces. Complete capture
+   durability, transcript editing/copy, safe platform insertion, recording
+   visibility, endpoint-observed latency, and real-device acceptance.
+2. Add a separate situated intent-capture thread without removing or changing
+   the responding assistant and literal-dictation threads. Preserve exact
+   speech and optional bounded Surface evidence before interpretation.
+3. Hand a user-confirmed capture to Agent Switchboard with stable source,
+   project, intent, and evidence identities. Chief Moa renders Switchboard
+   status but does not create another canonical intent store.
+4. Prove and finish browser read, action, anchored UI, and delegated work.
+5. Add the native Mac Look-and-Ask bridge and then a bounded opt-in local
+   rolling context buffer. Keep microphone, Accessibility, Screen Recording,
+   action, intent admission, and execution authority separate and visible.
+6. Replace copied gateway tokens with account sign-in and user-bound device
    registration. Enforce user ownership through database and object storage.
-4. Fix and physically verify the Android install and core UI, including the
+7. Fix and physically verify the Android install and core UI, including the
    duplicate-app report.
-5. Measure and reduce end-to-end voice latency on browser and Android. Add the
-   correction-based voice-quality loop.
-6. Finish the shared workspace, session controls, Settings, History, and visual
+8. Finish the shared workspace, session controls, Settings, History, and visual
    system across surfaces.
-7. Prove agent-assisted self-hosting with isolated preview, backup, restore,
+9. Prove agent-assisted self-hosting with isolated preview, backup, restore,
    device registration, and rollback evidence.
-8. Consolidate documentation and adopt one remote-capable QA and release plane.
+10. Consolidate documentation and adopt one remote-capable QA and release plane.
 
 ## Open decisions
 

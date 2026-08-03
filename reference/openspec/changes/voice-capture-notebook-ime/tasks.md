@@ -134,12 +134,36 @@ gain page-action authority because it runs inside the browser extension.
 - Scope note: section 0C is only an additive projection from already-completed
   browser dictation turns. The tasks below remain open for stored-audio-first
   create, asynchronous STT lifecycle, retry, revision, retention, and deletion.
-- [ ] 1.1 Define bounded capture-block, transcript-revision, processing-event,
-  retention, and dispatch schemas.
-- [ ] 1.2 Create a block idempotently from a stored audio note without invoking
-  STT in the audio upload transaction.
-- [ ] 1.3 Add async transcription claim/result/failure/retry behavior using the
-  existing provider registry and explicit input-language profile.
+- [x] 1.1 Define bounded capture-block, transcript-revision, processing-event,
+  retention, and dispatch schemas. The stored-audio-first schema is implemented
+  in `gateway/lib/audio-capture-blocks.js`: a versioned block has bounded source
+  identity, retained-audio metadata, queued transcript state, empty bounded
+  revision/dispatch collections, explicit retention, and append-only processing
+  events. Later transitions must preserve these fields rather than replacing the
+  source block.
+- [x] 1.2 Create a block idempotently from a stored audio note without invoking
+  STT in the audio upload transaction. Authenticated `POST /v1/capture-blocks`
+  accepts `audio_note_id`, `idempotency_key`, and bounded source metadata; it
+  resolves an existing stored note and appends only `capture.block.created` plus
+  `capture.processing.changed` (`queued`, attempt 0, execution `none`). Focused
+  tests prove unchanged raw bytes, stable `audio_note_id`, exact retries, conflict
+  rejection, and the absence of agent/run/provider work.
+- [x] 1.3 Add async transcription claim/result/failure/retry behavior using the
+  existing provider registry and explicit input-language profile. The gateway
+  now has a worker-owned, provider-injected lifecycle in
+  `gateway/lib/audio-capture-transcription.js`: a per-block event-stream lock
+  guards idempotent claims and terminal writes; the lease binds block, retained
+  audio, language profile, provider, worker and attempt; retained audio is read
+  only after claim; and immutable literal success or bounded retryable failure
+  folds into the schema-v2 block without replacing source evidence. Expired
+  leases recover on the next bounded attempt. Authenticated retry is exposed at
+  `POST /v1/capture-blocks/:id/retry`; claim and provider work are not exposed
+  through upload or create requests. An explicitly enabled bounded production
+  host now scans queued and expired-leased blocks and invokes the registered
+  Chirp batch adapter over bounded PCM16. Unique worker leases, in-flight
+  deduplication, bounded concurrency/backoff/shutdown, restart recovery, and
+  separate queued/active health evidence are covered by deterministic fake-
+  provider tests. Live provider evaluation remains opt-in and cost-aware.
 - [ ] 1.4 Add token-protected create/list/detail/retry/revision/delete-or-tombstone
   routes and product events.
 - [ ] 1.5 Add deterministic smoke coverage for byte retention, successful STT,

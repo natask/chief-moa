@@ -101,6 +101,45 @@ dispatches[]
 failure_phase, retry_count
 ```
 
+For an audio-note-backed block, schema version 2 applies these bounds before an
+event is admitted: ids are token-shaped and at most 160 characters (the stored
+`audio_note_id` remains at most 120); surface is at most 80 characters; content
+type is at most 160; byte count is a positive safe integer capped at 1 GiB;
+duration is nullable and capped at 24 hours; and the explicit idempotency key is
+at most 200 non-control characters. Source surface and session must agree with
+the stored audio note when both are supplied. Initial transcript revisions and
+dispatches are empty. Retention is explicit (`audio: retained`, derived text
+retained with the block, explicit deletion), and the first processing event is
+an append-only `queued` transition at attempt zero. Creation grants no execution
+authority and contains no provider selection.
+
+The next asynchronous transcription contract is deliberately outside block
+creation. A worker must claim a queued block by appending an idempotent
+`queued -> transcribing` processing event bound to block id, audio-note id,
+input-language profile, worker lease, and attempt. It reads the existing retained
+audio only after the claim. It then appends either an immutable literal result
+plus `transcribing -> transcribed`, or a bounded failure plus
+`transcribing -> failed`; retry appends `failed -> queued` with the next attempt.
+No worker may replace the audio reference, source identity, prior processing
+events, literal results, or revisions. Provider execution therefore remains
+observable, retryable derived work and never joins the upload or create request.
+
+The production host is explicitly enabled and bounded. It scans at most one
+configured page per poll, schedules no more than the configured concurrency,
+deduplicates in-flight block ids, and backs off scheduling failures. Stream
+locks and unique worker leases prevent two gateway processes from claiming the
+same block. Shutdown stops new claims and drains current calls only up to a
+bounded deadline; unfinished claims recover after lease expiry on restart.
+
+The first retained-audio adapter resolves only a registered and configured
+batch STT provider from the existing voice registry. It accepts bounded PCM16
+`audio/L16`, pins the effective input-language profile and version into the
+claim, and invokes Chirp transcription directly with reasoning and TTS absent.
+Unsupported formats fail visibly without changing retained source. Health
+reports enablement, provider availability, queued blocks, active leases, and
+in-flight processing separately and never reports credentials or raw provider
+errors. Live provider evaluation remains opt-in and cost-aware.
+
 Revisions are append-only records with `kind` (`user_edit`, `writing_skill`,
 `summary`, `coach_feedback`), parent revision, profile/skill version, model
 metadata, and text. The literal transcript is immutable provider output; a user

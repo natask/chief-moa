@@ -7,6 +7,7 @@ const SYNTAX_CHECK_FILES = [
   "lib/account-connections.js",
   "lib/billing-runtime-handlers.js",
   "lib/audio-notes.js",
+  "lib/audio-capture-blocks.js",
   "lib/blob-store.js",
   "lib/google-auth.js",
   "lib/voice-turn-audio.js",

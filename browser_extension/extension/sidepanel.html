@@ -148,7 +148,15 @@
         justify-content: space-between;
         margin-top: 4px;
       }
+      .voice-notes-head {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        margin-top: 4px;
+      }
+      .voice-notes-head button,
       .captured-intents-head button,
+      .voice-note-actions button,
       .video-intent-actions button {
         background: #1b1d22;
         border: 1px solid var(--border);
@@ -157,6 +165,78 @@
         cursor: pointer;
         font: inherit;
         padding: 5px 8px;
+      }
+      #voiceNotes {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      #voiceNotes[data-stale="true"] {
+        opacity: 0.72;
+      }
+      #voiceNotesStatus {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+        margin-bottom: 8px;
+      }
+      #voiceNotesStatus[data-state="error"],
+      .voice-note-state[data-state="error"],
+      .voice-note-promotion[data-state="error"],
+      .voice-note-handoff[data-state="error"],
+      .voice-note-operation[data-state="error"] {
+        color: var(--error);
+      }
+      .voice-note-card {
+        background: #121318;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+      }
+      .voice-note-title {
+        font-size: 13px;
+        font-weight: 650;
+        overflow-wrap: anywhere;
+      }
+      .voice-note-meta,
+      .voice-note-state,
+      .voice-note-promotion,
+      .voice-note-handoff,
+      .voice-note-operation {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .voice-note-state {
+        color: var(--accent);
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .voice-note-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .voice-note-actions .delete {
+        color: var(--error);
+      }
+      .voice-note-transcript {
+        background: #0b0c10;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        margin: 0;
+        max-height: 160px;
+        overflow: auto;
+        padding: 8px;
+        white-space: pre-wrap;
+      }
+      .voice-note-card audio {
+        height: 34px;
+        width: 100%;
       }
       #capturedIntents {
         display: grid;
@@ -693,6 +773,12 @@
     <main>
       <h2 class="section-title" id="nowTitle">Now</h2>
       <section id="log" aria-labelledby="nowTitle"></section>
+      <div class="voice-notes-head">
+        <h2 class="section-title" id="voiceNotesTitle">Voice notes</h2>
+        <button id="voiceNotesRefresh" type="button">Refresh</button>
+      </div>
+      <div id="voiceNotesStatus" role="status"></div>
+      <section id="voiceNotes" aria-labelledby="voiceNotesTitle"></section>
       <div class="captured-intents-head">
         <h2 class="section-title" id="capturedIntentsTitle">Captured intents</h2>
         <button id="capturedIntentsRefresh" type="button">Refresh</button>

@@ -12,7 +12,7 @@ function createGatewayHealthHandlers(deps) {
     harnessWorkdir, defaultHarness, harnessStatus, allowAgentWithoutToken,
     workerPullAgentRuns, workerPull, browserAgentLoop, accountConnections,
     accountHealthIntervalMs, brain, brainRecallLimit, nativeWebSearchEnabled,
-    exaApiKey, releaseControlStatus, transcriptReconcileStatus,
+    exaApiKey, releaseControlStatus, transcriptReconcileStatus, captureTranscriptionStatus,
   } = deps;
 
   async function healthPayload() {
@@ -44,6 +44,9 @@ function createGatewayHealthHandlers(deps) {
         transport: "transcript_http",
       },
       audio_notes: audioNotes.status(),
+      capture_transcription: typeof captureTranscriptionStatus === "function"
+        ? captureTranscriptionStatus()
+        : { enabled: false, running: false },
       video_notes: videoNotes.status(),
       blob_store: blobStore.status(),
       voice_stream: {

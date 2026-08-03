@@ -8,6 +8,33 @@
 import { getEffectiveGatewayConfig } from "./config.js";
 import { createDeviceCredentialRuntime } from "./device-credential-runtime.js";
 import { createBrowserToolCatalogView } from "./browser-tool-catalog-view.js";
+import {
+  AUDIO_NOTES_PATH,
+  audioNoteAudioPath,
+  audioNoteFilename,
+  audioNoteItems,
+  audioNotePath,
+  audioNotePlaybackBlob,
+  audioNoteState,
+  formatBytes,
+  formatDuration,
+} from "./audio-note-library.js";
+import {
+  CAPTURE_BLOCKS_PATH,
+  canHandoffPromotion,
+  captureBlockHandoffPath,
+  captureBlockHandoffRequest,
+  captureBlockPath,
+  captureBlockRequest,
+  captureBlockRetryPath,
+  handoffPresentation,
+  newPromotionRecord,
+  promotionPresentation,
+  promotionRecordWithBlock,
+  promotionRecordWithHandoff,
+  promotionStorageKey,
+  usablePromotionRecord,
+} from "./audio-note-promotion.js";
 import "./transcript-revision-protocol.js";
 import {
   buildAssignmentRequest,
@@ -40,6 +67,9 @@ const companionIdentityNameEl = document.getElementById("companionIdentityName")
 const capturedIntentsEl = document.getElementById("capturedIntents");
 const capturedIntentsStatusEl = document.getElementById("capturedIntentsStatus");
 const capturedIntentsRefreshBtn = document.getElementById("capturedIntentsRefresh");
+const voiceNotesEl = document.getElementById("voiceNotes");
+const voiceNotesStatusEl = document.getElementById("voiceNotesStatus");
+const voiceNotesRefreshBtn = document.getElementById("voiceNotesRefresh");
 
 const TURN_WATCHDOG_MS = 90000;
 const ACTIVE_COMPANION_CACHE_KEY = "ageeActiveCompanionPetCache";
@@ -53,6 +83,8 @@ let historyRefresh = null;
 let historyRefreshGeneration = 0;
 const historyRevisionLedger = new Map();
 const videoObjectUrls = new Set();
+const audioNotePlaybackUrls = new Set();
+const audioNoteBlobCache = new Map();
 
 let audioCtx = null;
 let playbackTime = 0;
@@ -114,7 +146,313 @@ async function capturedIntentGateway(path, { method = "GET", body, responseType 
     const detail = (await response.text()).slice(0, 300);
     throw new Error(`Gateway returned ${response.status}${detail ? `: ${detail}` : ""}`);
   }
-  return responseType === "blob" ? response.blob() : response.json();
+  if (responseType === "blob") return response.blob();
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Gateway returned an unreadable response.");
+  }
+}
+
+function setVoiceNotesStatus(message, state = "ready") {
+  voiceNotesStatusEl.textContent = String(message || "");
+  voiceNotesStatusEl.dataset.state = state;
+}
+
+function revokeAudioNotePlaybackUrls() {
+  for (const url of audioNotePlaybackUrls) URL.revokeObjectURL(url);
+  audioNotePlaybackUrls.clear();
+  audioNoteBlobCache.clear();
+}
+
+async function audioNoteBlob(note) {
+  const id = String(note?.id || "");
+  if (audioNoteBlobCache.has(id)) return audioNoteBlobCache.get(id);
+  const loading = capturedIntentGateway(audioNoteAudioPath(note), { responseType: "blob" });
+  audioNoteBlobCache.set(id, loading);
+  try {
+    return await loading;
+  } catch (error) {
+    audioNoteBlobCache.delete(id);
+    throw error;
+  }
+}
+
+function voiceNoteTimestamp(value) {
+  const date = new Date(value || "");
+  return Number.isNaN(date.getTime()) ? "time unavailable" : date.toLocaleString();
+}
+
+function setVoiceNoteOperation(element, message, state = "ready") {
+  element.textContent = String(message || "");
+  element.dataset.state = state;
+}
+
+async function savedAudioNotePromotion(note) {
+  const key = promotionStorageKey(note);
+  const stored = await chrome.storage.local.get({ [key]: null });
+  return usablePromotionRecord(note, stored[key]);
+}
+
+async function saveAudioNotePromotion(note, record) {
+  await chrome.storage.local.set({ [promotionStorageKey(note)]: record });
+  return record;
+}
+
+function renderAudioNote(note) {
+  const card = document.createElement("article");
+  card.className = "voice-note-card";
+  card.dataset.noteId = String(note.id || "");
+
+  const title = document.createElement("div");
+  title.className = "voice-note-title";
+  title.textContent = String(note.label || "").trim() || "Untitled voice note";
+
+  const metadata = document.createElement("div");
+  metadata.className = "voice-note-meta";
+  metadata.textContent = [
+    voiceNoteTimestamp(note.created_at),
+    formatDuration(note.duration_ms),
+    formatBytes(note.bytes ?? note.audio?.bytes),
+    String(note.content_type || note.audio?.content_type || "audio").slice(0, 100),
+    String(note.surface || "surface unavailable").slice(0, 80),
+  ].join(" · ");
+
+  const processing = audioNoteState(note);
+  const state = document.createElement("div");
+  state.className = "voice-note-state";
+  state.dataset.state = processing.failed ? "error" : "ready";
+  state.textContent = processing.failed
+    ? `${processing.state} · ${processing.error || "The recording is still stored. Retry when processing is available."}`
+    : processing.state === "stored"
+      ? "Stored raw audio · no reasoning or agent work"
+      : processing.state;
+
+  const operation = document.createElement("div");
+  operation.className = "voice-note-operation";
+  operation.setAttribute("role", "status");
+  if (processing.retryable) operation.textContent = "Processing is retryable; refresh after retrying from a capture-block surface.";
+
+  const promotion = document.createElement("div");
+  promotion.className = "voice-note-promotion";
+  promotion.setAttribute("role", "status");
+
+  const transcript = document.createElement("pre");
+  transcript.className = "voice-note-transcript";
+  transcript.setAttribute("aria-label", "Transcript preview");
+  transcript.hidden = true;
+
+  const handoffStatus = document.createElement("div");
+  handoffStatus.className = "voice-note-handoff";
+  handoffStatus.setAttribute("role", "status");
+  handoffStatus.hidden = true;
+
+  const actions = document.createElement("div");
+  actions.className = "voice-note-actions";
+
+  let promotionRecord = null;
+  const prepare = document.createElement("button");
+  prepare.type = "button";
+  prepare.disabled = true;
+  prepare.textContent = "Prepare transcript";
+
+  const handoff = document.createElement("button");
+  handoff.type = "button";
+  handoff.hidden = true;
+  handoff.disabled = true;
+
+  const renderPromotion = (record) => {
+    const view = promotionPresentation(record);
+    promotion.textContent = view.label;
+    promotion.dataset.state = view.error ? "error" : view.state;
+    prepare.textContent = view.action;
+    const literal = record?.snapshot?.literal_transcript || "";
+    transcript.textContent = literal;
+    transcript.hidden = !literal;
+    const handoffView = handoffPresentation(record);
+    handoff.hidden = !handoffView;
+    handoff.disabled = !handoffView;
+    handoffStatus.hidden = !handoffView;
+    handoff.textContent = handoffView?.action || "";
+    handoffStatus.textContent = handoffView?.label || "";
+  };
+
+  prepare.addEventListener("click", async () => {
+    prepare.disabled = true;
+    const retrying = promotionRecord?.capture_block_id
+      && promotionRecord.snapshot?.processing_state === "failed"
+      && promotionRecord.snapshot?.retryable === true;
+    setVoiceNoteOperation(operation, retrying
+      ? "Queuing a retry for this note's retained audio…"
+      : promotionRecord?.capture_block_id
+        ? "Refreshing this note's capture block…"
+        : "Persisting a retry identity and queuing this note for transcription…");
+    try {
+      if (!promotionRecord) {
+        promotionRecord = newPromotionRecord(note);
+        await saveAudioNotePromotion(note, promotionRecord);
+      }
+      const payload = promotionRecord.capture_block_id
+        ? await capturedIntentGateway(
+          retrying
+            ? captureBlockRetryPath(promotionRecord.capture_block_id)
+            : captureBlockPath(promotionRecord.capture_block_id),
+          retrying ? { method: "POST" } : {},
+        )
+        : await capturedIntentGateway(CAPTURE_BLOCKS_PATH, {
+          method: "POST",
+          body: captureBlockRequest(note, promotionRecord),
+        });
+      promotionRecord = promotionRecordWithBlock(note, promotionRecord, payload);
+      await saveAudioNotePromotion(note, promotionRecord);
+      renderPromotion(promotionRecord);
+      setVoiceNoteOperation(operation, "Capture state refreshed. No assistant or agent work was started.");
+    } catch (error) {
+      setVoiceNoteOperation(operation, `Could not prepare transcript: ${String(error?.message || error)} Select Retry.`, "error");
+      prepare.textContent = "Retry prepare transcript";
+    } finally {
+      prepare.disabled = false;
+    }
+  });
+
+  handoff.addEventListener("click", async () => {
+    if (!canHandoffPromotion(promotionRecord)) return;
+    const confirmed = confirm(
+      "Send this exact selected transcript to Agent Switchboard for execution? This can start agent work.",
+    );
+    if (!confirmed) {
+      setVoiceNoteOperation(operation, "Switchboard handoff cancelled. No work was started.");
+      return;
+    }
+    handoff.disabled = true;
+    setVoiceNoteOperation(operation, "Sending the exact transcribed capture block to Switchboard…");
+    try {
+      const payload = await capturedIntentGateway(
+        captureBlockHandoffPath(promotionRecord.capture_block_id),
+        { method: "POST", body: captureBlockHandoffRequest(promotionRecord) },
+      );
+      promotionRecord = promotionRecordWithHandoff(promotionRecord, payload);
+      await saveAudioNotePromotion(note, promotionRecord);
+      renderPromotion(promotionRecord);
+      setVoiceNoteOperation(operation, "Switchboard receipt retained. Retry returns the same server-side admission.");
+    } catch (error) {
+      setVoiceNoteOperation(operation, `Could not send to Switchboard: ${String(error?.message || error)} Select Retry.`, "error");
+      handoff.textContent = "Retry Send to Switchboard";
+      handoff.disabled = false;
+    }
+  });
+
+  savedAudioNotePromotion(note).then((record) => {
+    promotionRecord = record;
+    renderPromotion(record);
+    prepare.disabled = false;
+  }).catch((error) => {
+    promotion.textContent = `Saved transcription state unavailable: ${String(error?.message || error)}`;
+    promotion.dataset.state = "error";
+  });
+
+  const play = document.createElement("button");
+  play.type = "button";
+  play.textContent = "Play";
+  play.addEventListener("click", async () => {
+    play.disabled = true;
+    setVoiceNoteOperation(operation, "Loading the authenticated recording…");
+    try {
+      const source = await audioNoteBlob(note);
+      const playable = await audioNotePlaybackBlob(note, source);
+      const url = URL.createObjectURL(playable);
+      audioNotePlaybackUrls.add(url);
+      const player = document.createElement("audio");
+      player.controls = true;
+      player.autoplay = true;
+      player.preload = "metadata";
+      player.src = url;
+      const previous = card.querySelector("audio");
+      if (previous) previous.replaceWith(player);
+      else card.appendChild(player);
+      setVoiceNoteOperation(operation, "Recording loaded from the authenticated gateway.");
+      play.textContent = "Replay";
+    } catch (error) {
+      setVoiceNoteOperation(operation, `Could not play: ${String(error?.message || error)} Select Retry play.`, "error");
+      play.textContent = "Retry play";
+    } finally {
+      play.disabled = false;
+    }
+  });
+
+  const download = document.createElement("button");
+  download.type = "button";
+  download.textContent = "Download";
+  download.addEventListener("click", async () => {
+    download.disabled = true;
+    setVoiceNoteOperation(operation, "Downloading from the authenticated gateway…");
+    try {
+      const source = await audioNoteBlob(note);
+      const url = URL.createObjectURL(source);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = audioNoteFilename(note);
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setVoiceNoteOperation(operation, "Download started.");
+      download.textContent = "Download";
+    } catch (error) {
+      setVoiceNoteOperation(operation, `Could not download: ${String(error?.message || error)} Select Retry download.`, "error");
+      download.textContent = "Retry download";
+    } finally {
+      download.disabled = false;
+    }
+  });
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "delete";
+  remove.textContent = "Delete";
+  remove.addEventListener("click", async () => {
+    if (!confirm("Delete this voice note and its retained audio? This cannot be undone.")) return;
+    remove.disabled = true;
+    setVoiceNoteOperation(operation, "Deleting the authenticated recording…");
+    try {
+      await capturedIntentGateway(audioNotePath(note), { method: "DELETE" });
+      card.remove();
+      audioNoteBlobCache.delete(String(note.id || ""));
+      setVoiceNotesStatus(voiceNotesEl.children.length
+        ? "Voice note deleted. Remaining notes are newest first."
+        : "Voice note deleted. No saved voice notes remain.");
+    } catch (error) {
+      setVoiceNoteOperation(operation, `Could not delete: ${String(error?.message || error)} Select Retry delete.`, "error");
+      remove.textContent = "Retry delete";
+      remove.disabled = false;
+    }
+  });
+
+  actions.append(prepare, handoff, play, download, remove);
+  card.append(title, metadata, state, promotion, transcript, handoffStatus, operation, actions);
+  return card;
+}
+
+async function refreshAudioNotes() {
+  voiceNotesRefreshBtn.disabled = true;
+  setVoiceNotesStatus("Loading saved voice notes…");
+  try {
+    const payload = await capturedIntentGateway(`${AUDIO_NOTES_PATH}?limit=100`);
+    const notes = audioNoteItems(payload);
+    revokeAudioNotePlaybackUrls();
+    voiceNotesEl.replaceChildren(...notes.map(renderAudioNote));
+    voiceNotesEl.dataset.stale = "false";
+    voiceNotesRefreshBtn.textContent = "Refresh";
+    setVoiceNotesStatus(notes.length
+      ? `${notes.length} saved voice note${notes.length === 1 ? "" : "s"}, newest first.`
+      : "No saved voice notes yet. Record mode stores audio here without asking the assistant or launching work.");
+  } catch (error) {
+    voiceNotesEl.dataset.stale = voiceNotesEl.children.length ? "true" : "false";
+    setVoiceNotesStatus(`Voice notes unavailable: ${String(error?.message || error)} Select Retry.`, "error");
+    voiceNotesRefreshBtn.textContent = "Retry";
+  } finally {
+    voiceNotesRefreshBtn.disabled = false;
+  }
 }
 
 function videoIntentHistory(history) {
@@ -1535,7 +1873,9 @@ form.addEventListener("submit", async (e) => {
 ensurePort();
 hydrateCompanionIdentity().catch(() => renderCompanionIdentity(null));
 historyRetryBtn.addEventListener("click", () => refreshHistory({ reason: "manual retry" }));
+voiceNotesRefreshBtn.addEventListener("click", refreshAudioNotes);
 capturedIntentsRefreshBtn.addEventListener("click", refreshCapturedIntents);
+refreshAudioNotes();
 refreshCapturedIntents();
 refreshHistory({ reason: "initial" });
 refreshReleaseCockpit();
@@ -1545,6 +1885,10 @@ createBrowserToolCatalogView({
   status: document.getElementById("browserToolStatus"),
   refreshButton: document.getElementById("browserToolRefresh"),
 }).refresh();
+
+addEventListener("pagehide", () => {
+  revokeAudioNotePlaybackUrls();
+});
 
 // Keep the small diagnostic surface used by the browser smoke harness. These
 // functions were document globals before sidepanel.js became an ES module.

@@ -26,6 +26,43 @@ const profilePath = join(runDir, "chrome-profile");
 const GATEWAY_TOKEN = "sidepanel-history-smoke-token";
 const SESSION_ID = "shared-sidepanel-history-smoke";
 const LONG_ANDROID_TEXT = `Android product direction ${"kept complete across surfaces ".repeat(40)}`.trim();
+const AUDIO_CAPTURE_BLOCK_ID = `cap_${"a".repeat(64)}`;
+const AUDIO_CAPTURE_BLOCK = {
+  schema_version: 2,
+  id: AUDIO_CAPTURE_BLOCK_ID,
+  processing_state: "transcribed",
+  source: { kind: "audio_note", audio_note_id: "note_older", surface: "agee-extension" },
+  audio: { audio_note_id: "note_older", content_type: "audio/L16; rate=16000; channels=1" },
+  transcript: {
+    state: "transcribed",
+    literal: "Exact retained voice-note transcript.",
+    result_id: "result_sidepanel_smoke",
+    provider: { id: "chirp", model: "chirp_3", request_id: "provider_sidepanel_smoke" },
+  },
+};
+const SEEDED_AUDIO_NOTES = [
+  {
+    id: "note_older",
+    created_at: "2026-07-30T07:00:00.000Z",
+    surface: "agee-extension",
+    content_type: "audio/L16; rate=16000; channels=1",
+    bytes: 4,
+    duration_ms: 125,
+    label: "Older note",
+    audio: { href: "/v1/audio-notes/note_older/audio", bytes: 4 },
+  },
+  {
+    id: "note_newer",
+    created_at: "2026-07-30T10:00:00.000Z",
+    surface: "agee-extension",
+    content_type: "audio/L16; rate=16000; channels=1",
+    bytes: 4,
+    duration_ms: 125,
+    label: "Newer note",
+    transcription: { state: "failed", error: "provider unavailable", retryable: true },
+    audio: { href: "/v1/audio-notes/note_newer/audio", bytes: 4 },
+  },
+];
 
 const SEEDED_MESSAGES = [
   {
@@ -108,11 +145,86 @@ function startGateway() {
   let retranscribeFailure = false;
   let canonicalAvailable = true;
   let historyFailure = false;
-  const server = createServer((req, res) => {
+  let audioNotes = SEEDED_AUDIO_NOTES.map((note) => structuredClone(note));
+  let audioNoteReads = 0;
+  let audioNoteDeletes = 0;
+  let audioNotesFailure = false;
+  let captureBlockCreates = 0;
+  let handoffCalls = 0;
+  const captureBodies = [];
+  const handoffBodies = [];
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (req.headers.authorization !== `Bearer ${GATEWAY_TOKEN}`) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/v1/audio-notes") {
+      audioNoteReads += 1;
+      if (audioNotesFailure) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "temporary audio-note outage" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ notes: audioNotes }));
+      return;
+    }
+    if (req.method === "GET" && /^\/v1\/audio-notes\/[^/]+\/audio$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.split("/")[3]);
+      if (!audioNotes.some((note) => note.id === id)) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "audio/L16; rate=16000; channels=1" });
+      res.end(Buffer.from([1, 2, 3, 4]));
+      return;
+    }
+    if (req.method === "DELETE" && /^\/v1\/audio-notes\/[^/]+$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.split("/")[3]);
+      const before = audioNotes.length;
+      audioNotes = audioNotes.filter((note) => note.id !== id);
+      if (audioNotes.length === before) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+      audioNoteDeletes += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ deleted: true, note_id: id }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/capture-blocks") {
+      captureBlockCreates += 1;
+      captureBodies.push(await readRequestJson(req));
+      res.writeHead(201, { "content-type": "application/json" });
+      res.end(JSON.stringify({ capture_block: AUDIO_CAPTURE_BLOCK }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === `/v1/capture-blocks/${AUDIO_CAPTURE_BLOCK_ID}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ capture_block: AUDIO_CAPTURE_BLOCK }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === `/v1/capture-blocks/${AUDIO_CAPTURE_BLOCK_ID}/handoff`) {
+      handoffCalls += 1;
+      handoffBodies.push(await readRequestJson(req));
+      res.writeHead(202, { "content-type": "application/json" });
+      res.end(JSON.stringify({ handoff: {
+        schema_version: 1,
+        source_system: "chief-moa",
+        source_record_id: AUDIO_CAPTURE_BLOCK_ID,
+        source_revision: `capture-block-v2:${"b".repeat(64)}`,
+        request_digest: `sha256:${"c".repeat(64)}`,
+        switchboard: {
+          admission_id: "ext_sidepanel_smoke",
+          raw_intent_id: "raw_sidepanel_smoke",
+          compiled_intent_ids: ["intent_sidepanel_smoke"],
+          state: "queued",
+        },
+      } }));
       return;
     }
     if (url.pathname === "/v1/sessions/default") {
@@ -220,11 +332,24 @@ function startGateway() {
       messageReads: () => messageReads,
       legacyReads: () => legacyReads,
       retranscribeCalls: () => retranscribeCalls,
+      audioNoteReads: () => audioNoteReads,
+      audioNoteDeletes: () => audioNoteDeletes,
+      captureBlockCreates: () => captureBlockCreates,
+      captureBodies: () => captureBodies,
+      handoffCalls: () => handoffCalls,
+      handoffBodies: () => handoffBodies,
       setCanonicalAvailable: (available) => { canonicalAvailable = available === true; },
+      setAudioNotesFailure: (failed) => { audioNotesFailure = failed === true; },
       setHistoryFailure: (failed) => { historyFailure = failed === true; },
       setRetranscribeFailure: (failed) => { retranscribeFailure = failed === true; },
     }));
   });
+}
+
+async function readRequestJson(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
 function delay(ms) {
@@ -453,6 +578,82 @@ async function main() {
     await assertHydratedHistory(pageCdp, "initial open");
     await assertCompanionIdentity(pageCdp, "initial open");
 
+    const storedPromotion = await waitForEval(pageCdp, `(() => {
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      const buttons = [...(card?.querySelectorAll(".voice-note-actions button") || [])];
+      const prepare = buttons.find((button) => button.textContent === "Prepare transcript");
+      const handoff = buttons.find((button) => /Switchboard/.test(button.textContent));
+      return card && prepare?.disabled === false
+        ? { prepare: prepare.textContent, handoffVisible: Boolean(handoff && !handoff.hidden) }
+        : null;
+    })()`);
+    if (storedPromotion.handoffVisible) {
+      throw new Error(`stored note exposed execution before transcription: ${JSON.stringify(storedPromotion)}`);
+    }
+    await evaluate(pageCdp, `(() => {
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      [...card.querySelectorAll(".voice-note-actions button")]
+        .find((button) => button.textContent === "Prepare transcript")?.click();
+      return true;
+    })()`);
+    const terminalPromotion = await waitForEval(pageCdp, `(() => {
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      const handoff = [...(card?.querySelectorAll(".voice-note-actions button") || [])]
+        .find((button) => /Switchboard/.test(button.textContent));
+      return handoff && !handoff.hidden && handoff.disabled === false
+        ? { label: handoff.textContent, status: card.querySelector(".voice-note-handoff")?.textContent }
+        : null;
+    })()`);
+    if (terminalPromotion.label !== "Send to Switchboard"
+        || terminalPromotion.status !== "Ready for explicit Switchboard handoff"
+        || gateway.captureBlockCreates() !== 1
+        || gateway.captureBodies()[0]?.authority) {
+      throw new Error(`transcript preparation crossed the execution boundary: ${JSON.stringify(terminalPromotion)}`);
+    }
+
+    await evaluate(pageCdp, `(() => {
+      globalThis.confirm = () => false;
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      [...card.querySelectorAll(".voice-note-actions button")]
+        .find((button) => button.textContent === "Send to Switchboard")?.click();
+      return true;
+    })()`);
+    await waitForEval(pageCdp, `document.querySelector(
+      '.voice-note-card[data-note-id="note_older"] .voice-note-operation'
+    )?.textContent.includes("cancelled")`);
+    if (gateway.handoffCalls() !== 0) throw new Error("cancelled handoff reached the gateway");
+
+    await evaluate(pageCdp, `(() => {
+      globalThis.confirm = () => true;
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      [...card.querySelectorAll(".voice-note-actions button")]
+        .find((button) => button.textContent === "Send to Switchboard")?.click();
+      return true;
+    })()`);
+    const admitted = await waitForEval(pageCdp, `(() => {
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      const status = card?.querySelector(".voice-note-handoff")?.textContent || "";
+      return status.includes("intent_sidepanel_smoke")
+        ? { status, action: [...card.querySelectorAll(".voice-note-actions button")]
+          .find((button) => /Switchboard receipt/.test(button.textContent))?.textContent }
+        : null;
+    })()`);
+    if (admitted.action !== "Check Switchboard receipt"
+        || gateway.handoffCalls() !== 1
+        || JSON.stringify(gateway.handoffBodies()[0]) !== JSON.stringify({ confirmed: true, authority: "execute" })) {
+      throw new Error(`confirmed handoff did not retain an exact receipt: ${JSON.stringify(admitted)}`);
+    }
+    await evaluate(pageCdp, `(() => {
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      [...card.querySelectorAll(".voice-note-actions button")]
+        .find((button) => button.textContent === "Check Switchboard receipt")?.click();
+      return true;
+    })()`);
+    await waitForEval(pageCdp, `document.querySelector(
+      '.voice-note-card[data-note-id="note_older"] .voice-note-operation'
+    )?.textContent.includes("same server-side admission")`);
+    if (gateway.handoffCalls() !== 2) throw new Error("receipt replay did not use server continuity");
+
     const copied = await evaluate(pageCdp, `(() => {
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
@@ -586,6 +787,18 @@ async function main() {
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "panel reopen", { retranscriptionAdvertised: false });
     await assertCompanionIdentity(pageCdp, "panel reopen");
+    const persistedHandoff = await waitForEval(pageCdp, `(() => {
+      const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
+      const status = card?.querySelector(".voice-note-handoff")?.textContent || "";
+      const action = [...(card?.querySelectorAll(".voice-note-actions button") || [])]
+        .find((button) => /Switchboard receipt/.test(button.textContent));
+      return status.includes("intent_sidepanel_smoke") && action && !action.hidden
+        ? { status, action: action.textContent, disabled: action.disabled }
+        : null;
+    })()`);
+    if (persistedHandoff.action !== "Check Switchboard receipt" || persistedHandoff.disabled) {
+      throw new Error(`Switchboard receipt did not survive panel reopen: ${JSON.stringify(persistedHandoff)}`);
+    }
     if (gateway.legacyReads() < 1) throw new Error("panel reopen did not exercise the legacy /turns fallback");
 
     // Stop the isolated service-worker target while leaving the panel document
@@ -692,6 +905,7 @@ async function main() {
         "canonical mixed-surface history hydrated as newest-first outer turn cards with nested user/assistant content on first open, panel reopen, and extension/background restart; " +
         "the active companion identity survived fallback/reopen; newest turns rendered first with speaker order intact, exact user and assistant copy feedback worked, final voice transcript reconciled from storage; " +
         "the retained-audio proxy failed safely, then re-transcribed twice into chronological revisions 0/1/2 with latest selected and older versions copyable; " +
+        "a selected voice note prepared a terminal transcript without execution, required explicit confirmation for Switchboard, retained the exact intent receipt across retry and panel reopen; " +
         "agee-panel port round-tripped, conversational roles had no selector, Delegate confirmation cancelled safely, " +
         "open-agee-panel and chrome.sidePanel.open remained available.",
     );

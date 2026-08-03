@@ -5,6 +5,7 @@ const test = require("node:test");
 const {
   createCaptureBlockHandlers,
   captureBlockIdFromPath,
+  captureBlockActionIdFromPath,
   decodeCaptureBlockId,
   sendCaptureError,
 } = require("../lib/capture-block-handlers");
@@ -34,6 +35,14 @@ function harness(overrides = {}) {
     authorized: () => true,
     sendJson: (response, status, payload) => Object.assign(response, { status, payload }),
     store,
+    audioCapture: { create: async (input) => { calls.push(["create", input]); return BLOCK; } },
+    audioTranscription: { retry: async (input) => { calls.push(["retry", input]); return BLOCK; } },
+    readJsonBody: async () => ({
+      audio_note_id: "note_1",
+      idempotency_key: "request_1",
+      source: { surface: "browser-extension" },
+    }),
+    principal: () => "usr_owner",
     ...overrides,
   });
   return { handlers, calls };
@@ -47,10 +56,11 @@ function url(pathname) {
   return new URL(pathname, "https://gateway.test");
 }
 
-test("recognizes only GET collection, search, and bounded item routes", async () => {
+test("recognizes only collection, search, bounded item, and retry routes", async () => {
   const state = harness();
   for (const [method, pathname] of [
-    ["POST", "/v1/capture-blocks"],
+    ["PUT", "/v1/capture-blocks"],
+    ["POST", "/v1/capture-blocks/search"],
     ["GET", "/v1/capture-blocks/a/b"],
     ["GET", "/v1/other"],
   ]) {
@@ -60,13 +70,41 @@ test("recognizes only GET collection, search, and bounded item routes", async ()
   assert.equal(captureBlockIdFromPath(`/v1/capture-blocks/${ID}`), ID);
   assert.equal(captureBlockIdFromPath("/v1/capture-blocks/search"), null);
   assert.equal(captureBlockIdFromPath("/v1/capture-blocks/"), null);
+  assert.equal(captureBlockActionIdFromPath(`/v1/capture-blocks/${ID}/retry`, "retry"), ID);
+  assert.equal(captureBlockActionIdFromPath(`/v1/capture-blocks/${ID}/claim`, "retry"), null);
+});
+
+test("creates an authenticated queued block from a stored audio note", async () => {
+  const state = harness();
+  const response = {};
+  assert.equal(await state.handlers.routeCaptureBlocks(request("POST"), response, url("/v1/capture-blocks")), true);
+  assert.deepEqual(state.calls, [["create", {
+    audio_note_id: "note_1",
+    idempotency_key: "request_1",
+    source: { surface: "browser-extension" },
+    owner_id: "usr_owner",
+  }]]);
+  assert.deepEqual(response, { status: 201, payload: { capture_block: BLOCK } });
+});
+
+test("retries failed transcription without exposing a provider request route", async () => {
+  const state = harness();
+  const response = {};
+  assert.equal(await state.handlers.routeCaptureBlocks(
+    request("POST"), response, url(`/v1/capture-blocks/${ID}/retry`),
+  ), true);
+  assert.deepEqual(state.calls, [["retry", { capture_block_id: ID }]]);
+  assert.deepEqual(response, { status: 200, payload: { capture_block: BLOCK } });
+  assert.equal(await state.handlers.routeCaptureBlocks(
+    request("POST"), {}, url(`/v1/capture-blocks/${ID}/claim`),
+  ), false);
 });
 
 test("authenticates before reads and applies no-store to accepted routes", async () => {
   const denied = harness({ authorized: () => false });
-  for (const pathname of ["/v1/capture-blocks", "/v1/capture-blocks/search?q=x", `/v1/capture-blocks/${ID}`]) {
+  for (const [method, pathname] of [["GET", "/v1/capture-blocks"], ["POST", "/v1/capture-blocks"], ["POST", `/v1/capture-blocks/${ID}/retry`], ["GET", "/v1/capture-blocks/search?q=x"], ["GET", `/v1/capture-blocks/${ID}`]]) {
     const response = {};
-    assert.equal(await denied.handlers.routeCaptureBlocks(request("GET"), response, url(pathname)), true);
+    assert.equal(await denied.handlers.routeCaptureBlocks(request(method), response, url(pathname)), true);
     assert.deepEqual(response, { status: 401, payload: { error: "missing or invalid gateway token" } });
   }
   assert.deepEqual(denied.calls, []);

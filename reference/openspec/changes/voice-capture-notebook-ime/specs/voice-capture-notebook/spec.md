@@ -12,10 +12,35 @@ delete or make a stored recording unavailable.
 - **AND** the block reports a retryable transcription failure
 - **AND** the product does not report the spoken content as lost
 
+#### Scenario: Admit a stored audio note without provider or agent work
+
+- **GIVEN** an authenticated caller names an existing retained audio note
+- **WHEN** it posts the note id, an explicit idempotency key, and bounded source
+  metadata to `/v1/capture-blocks`
+- **THEN** the gateway creates one stable capture block in `queued` processing
+  state and preserves the exact `audio_note_id`
+- **AND** an exact retry returns the same block without duplicate creation or
+  processing events
+- **AND** conflicting reuse of the idempotency key fails closed
+- **AND** the request invokes no STT, reasoning, TTS, tool, assistant, or agent
+  provider
+
 #### Scenario: Consecutive holds create distinct blocks
 - **WHEN** the user completes three press-and-hold captures in sequence
 - **THEN** the system creates three independently addressable capture blocks
 - **AND** no agent run starts solely because any capture ended
+
+#### Scenario: Background transcription survives gateway restart
+
+- **GIVEN** provider-backed capture transcription is explicitly enabled
+- **WHEN** the gateway starts with queued blocks or a prior worker's expired lease
+- **THEN** one bounded scheduler claims eligible blocks outside every upload,
+  create, and retry request handler
+- **AND** cross-process stream locking, unique worker leases, and local in-flight
+  deduplication prevent duplicate provider calls
+- **AND** health distinguishes queued work, active leases, in-flight processing,
+  provider availability, and sanitized failure evidence
+- **AND** unavailable providers or unsupported media never delete retained audio
 
 ### Requirement: Literal transcripts remain distinct from derived text
 The system SHALL preserve the provider-produced literal transcript separately

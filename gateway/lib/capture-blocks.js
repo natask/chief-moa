@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { CAPTURE_CREATED_EVENT, PROCESSING_EVENT } = require("./audio-capture-blocks");
 
 const CAPTURE_EVENT = "capture.block.completed";
 const ROUTING_EVENT = "capture.routing.proposed";
@@ -204,29 +205,72 @@ function routingEvent(block, proposal) {
 }
 
 function rehydrateCaptureBlock(rows, expectedId) {
-  const completed = rows.find((event) =>
-    event.event_type === CAPTURE_EVENT && event.payload?.id === expectedId);
-  if (!completed) return null;
+  const source = rows.find((event) =>
+    [CAPTURE_EVENT, CAPTURE_CREATED_EVENT].includes(event.event_type)
+      && event.payload?.id === expectedId);
+  if (!source) return null;
   const proposals = rows
     .filter((event) =>
       event.event_type === ROUTING_EVENT
       && event.payload?.capture_block_id === expectedId)
     .map((event) => ({ ...event.payload, event_id: event.event_id }))
     .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
-  return { ...completed.payload, routing_proposals: proposals };
+  const processingEvents = rows
+    .filter((event) => event.event_type === PROCESSING_EVENT && event.payload?.capture_block_id === expectedId)
+    .map((event) => ({ ...event.payload, event_id: event.event_id }));
+  const block = { ...source.payload, routing_proposals: proposals };
+  if (source.event_type === CAPTURE_CREATED_EVENT) {
+    block.processing_events = processingEvents;
+    applyAudioProcessingProjection(block, processingEvents);
+  }
+  return block;
+}
+
+function applyAudioProcessingProjection(block, processingEvents) {
+  for (const event of processingEvents) {
+    block.processing_state = event.to_state;
+    block.retry_count = event.attempt;
+    if (event.to_state === "transcribing") {
+      block.processing_claim = event.claim || block.processing_claim || null;
+      block.failure = null;
+    } else if (event.to_state === "queued") {
+      block.processing_claim = null;
+      block.failure = null;
+      block.transcript = { ...block.transcript, state: "queued" };
+    } else if (event.to_state === "failed") {
+      block.last_claim_id = event.claim_id || block.processing_claim?.id || "";
+      block.processing_claim = null;
+      block.failure = { ...event.failure, retryable: event.retryable === true };
+      block.transcript = { ...block.transcript, state: "failed" };
+    } else if (event.to_state === "transcribed") {
+      block.last_claim_id = event.claim_id || block.processing_claim?.id || "";
+      block.processing_claim = null;
+      block.failure = null;
+      block.completed_at = event.created_at;
+      block.transcript = {
+        state: "transcribed",
+        literal: event.result?.literal ?? block.transcript?.literal ?? null,
+        language_evidence: event.result?.language_evidence || [],
+        provider: event.result?.provider || null,
+        result_id: event.result?.id || "",
+      };
+    }
+  }
 }
 
 async function listAllCaptureEvents(events) {
   const output = [];
-  for (let offset = 0; offset < MAX_EVENT_SCAN; offset += EVENT_PAGE_SIZE) {
-    const page = await events.listEvents({
-      event_type: CAPTURE_EVENT,
-      order: "desc",
-      offset,
-      limit: EVENT_PAGE_SIZE,
-    });
-    output.push(...page);
-    if (page.length < EVENT_PAGE_SIZE) break;
+  for (const eventType of [CAPTURE_EVENT, CAPTURE_CREATED_EVENT]) {
+    for (let offset = 0; offset < MAX_EVENT_SCAN; offset += EVENT_PAGE_SIZE) {
+      const page = await events.listEvents({
+        event_type: eventType,
+        order: "desc",
+        offset,
+        limit: EVENT_PAGE_SIZE,
+      });
+      output.push(...page);
+      if (page.length < EVENT_PAGE_SIZE) break;
+    }
   }
   return output;
 }

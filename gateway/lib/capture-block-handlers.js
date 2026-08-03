@@ -1,26 +1,60 @@
 "use strict";
 
 function createCaptureBlockHandlers(deps = {}) {
-  const { authorized, sendJson, store } = deps;
+  const { authorized, sendJson, store, audioCapture, audioTranscription, readJsonBody, principal } = deps;
   if (typeof authorized !== "function" || typeof sendJson !== "function" || !store) {
     throw new Error("capture block handlers require authorized, sendJson, and store");
   }
 
   async function routeCaptureBlocks(request, response, url) {
-    if (request.method !== "GET") return false;
     const pathname = url.pathname;
-    const collection = pathname === "/v1/capture-blocks";
-    const search = pathname === "/v1/capture-blocks/search";
-    const itemId = captureBlockIdFromPath(pathname);
-    if (!collection && !search && itemId === null) return false;
+    const collection = pathname === "/v1/capture-blocks" && ["GET", "POST"].includes(request.method);
+    const search = request.method === "GET" && pathname === "/v1/capture-blocks/search";
+    const itemId = request.method === "GET" ? captureBlockIdFromPath(pathname) : null;
+    const retryId = request.method === "POST" ? captureBlockActionIdFromPath(pathname, "retry") : null;
+    if (!collection && !search && itemId === null && retryId === null) return false;
     if (!authorized(request)) {
       sendJson(response, 401, { error: "missing or invalid gateway token" });
       return true;
     }
     if (typeof response.setHeader === "function") response.setHeader("cache-control", "no-store");
-    if (itemId !== null) await readItem(response, itemId);
+    if (retryId !== null) await retryItem(response, retryId);
+    else if (request.method === "POST") await createItem(request, response);
+    else if (itemId !== null) await readItem(response, itemId);
     else await readCollection(response, url, search);
     return true;
+  }
+
+  async function retryItem(response, encodedId) {
+    if (!audioTranscription?.retry) {
+      sendJson(response, 501, { error: "capture transcription retry unavailable" });
+      return;
+    }
+    try {
+      const item = await audioTranscription.retry({ capture_block_id: decodeCaptureBlockId(encodedId) });
+      sendJson(response, 200, { capture_block: item });
+    } catch (error) {
+      sendCaptureError(response, error, sendJson);
+    }
+  }
+
+  async function createItem(request, response) {
+    if (!audioCapture?.create || typeof readJsonBody !== "function" || typeof principal !== "function") {
+      sendJson(response, 501, { error: "audio capture block creation unavailable" });
+      return;
+    }
+    try {
+      const body = await readJsonBody(request);
+      const item = await audioCapture.create({
+        audio_note_id: body.audio_note_id,
+        idempotency_key: body.idempotency_key,
+        source: body.source,
+        owner_id: principal(),
+      });
+      sendJson(response, 201, { capture_block: item });
+    } catch (error) {
+      sendCaptureError(response, error, sendJson);
+    }
   }
 
   async function readCollection(response, url, forceSearch = false) {
@@ -66,7 +100,7 @@ function createCaptureBlockHandlers(deps = {}) {
     sendJson(response, 200, { capture_block: item });
   }
 
-  return Object.freeze({ routeCaptureBlocks, readCollection, readItem });
+  return Object.freeze({ routeCaptureBlocks, createItem, retryItem, readCollection, readItem });
 }
 
 function captureBlockIdFromPath(pathname) {
@@ -74,6 +108,15 @@ function captureBlockIdFromPath(pathname) {
   const path = String(pathname || "");
   if (!path.startsWith(prefix) || path === `${prefix}search`) return null;
   const rest = path.slice(prefix.length);
+  return rest && !rest.includes("/") ? rest : null;
+}
+
+function captureBlockActionIdFromPath(pathname, action) {
+  const prefix = "/v1/capture-blocks/";
+  const suffix = `/${action}`;
+  const path = String(pathname || "");
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
+  const rest = path.slice(prefix.length, -suffix.length);
   return rest && !rest.includes("/") ? rest : null;
 }
 
@@ -93,6 +136,10 @@ function sendCaptureError(response, error, sendJson) {
     sendJson(response, 400, { error: error.message });
     return;
   }
+  if (error?.code === "not_found" || error?.code === "conflict") {
+    sendJson(response, Number(error.statusCode) || 400, { error: error.message });
+    return;
+  }
   sendJson(response, 500, { error: "capture block storage unavailable" });
 }
 
@@ -103,6 +150,7 @@ function validationError(message) {
 module.exports = {
   createCaptureBlockHandlers,
   captureBlockIdFromPath,
+  captureBlockActionIdFromPath,
   decodeCaptureBlockId,
   sendCaptureError,
 };

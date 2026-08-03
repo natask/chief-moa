@@ -61,6 +61,14 @@ function harness(overrides = {}) {
       storage: "postgres",
       endpoint: "/v1/release-control/apps/{application_id}/view",
     }),
+    captureTranscriptionStatus: () => ({
+      enabled: true,
+      running: true,
+      queued_observed: 3,
+      actively_leased_observed: 2,
+      in_flight: 1,
+      provider: { provider_id: "chirp", available: true },
+    }),
     brain: {
       available: () => true,
       mode: () => "gbrain",
@@ -108,6 +116,14 @@ test("health projection reports configured runtime dependencies", async () => {
     storage: "postgres",
     endpoint: "/v1/release-control/apps/{application_id}/view",
   });
+  assert.deepEqual(payload.capture_transcription, {
+    enabled: true,
+    running: true,
+    queued_observed: 3,
+    actively_leased_observed: 2,
+    in_flight: 1,
+    provider: { provider_id: "chirp", available: true },
+  });
   assert.equal(payload.brain.available, true);
   assert.equal(payload.brain.gbrain_home, "/gbrain");
 });
@@ -117,6 +133,7 @@ test("health projection preserves safe fallbacks for optional configuration", as
     provider: "openai",
     publicGatewayUrl: "",
     exaApiKey: "",
+    captureTranscriptionStatus: null,
     allowAgentWithoutToken: true,
     voiceSessionServer: {
       sessionsDir: "/sessions",
@@ -138,6 +155,7 @@ test("health projection preserves safe fallbacks for optional configuration", as
   assert.deepEqual(payload.voice_stream.assistant_audio_format, {
     encoding: "pcm16", sample_rate: 16000, channels: 1,
   });
+  assert.deepEqual(payload.capture_transcription, { enabled: false, running: false });
   assert.equal(payload.agent_loop.token_required, false);
   assert.equal(payload.web_search.exa_fallback_configured, false);
   assert.equal(payload.brain.available, true);

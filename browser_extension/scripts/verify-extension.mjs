@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 const requiredFiles = [
   "package.json",
   "extension/manifest.json",
+  "extension/audio-note-library.js",
+  "extension/audio-note-promotion.js",
   "extension/background.js",
   "extension/browser-automation-contract.js",
   "extension/browser-automation-runtime.js",

@@ -102,6 +102,18 @@ const {
   isCompletedTranscriptionOnly,
 } = require("./lib/capture-blocks");
 const { createCaptureBlockHandlers } = require("./lib/capture-block-handlers");
+const { createAudioCaptureBlockService } = require("./lib/audio-capture-blocks");
+const {
+  createAudioCaptureTranscriptionService,
+  createAudioCaptureTranscriptionWorker,
+} = require("./lib/audio-capture-transcription");
+const {
+  createAudioCaptureTranscriptionHost,
+  defaultAudioCaptureWorkerId,
+} = require("./lib/audio-capture-transcription-host");
+const { createAudioCaptureSttProvider } = require("./lib/audio-capture-stt-provider");
+const { createSwitchboardHandoffService } = require("./lib/switchboard-handoff");
+const { createSwitchboardHandoffHandlers } = require("./lib/switchboard-handoff-handlers");
 const { createReminderStore } = require("./lib/reminders");
 const { createReminderHandlers } = require("./lib/reminder-handlers");
 const { createReminderDeliveryCoordinator } = require("./lib/reminder-delivery");
@@ -699,10 +711,72 @@ const { routeReminders } = createReminderHandlers({
   userId: accountUserId,
 });
 const captureBlocks = createCaptureBlockStore({ events: eventSubstrate });
+const audioCaptureBlocks = createAudioCaptureBlockService({
+  events: eventSubstrate,
+  audioNotes,
+  captureBlocks,
+});
+const audioCaptureTranscription = createAudioCaptureTranscriptionService({
+  events: eventSubstrate,
+  captureBlocks,
+  leaseMs: Number(process.env.CAPTURE_TRANSCRIPTION_LEASE_MS || 15 * 60_000),
+  maxAttempts: Number(process.env.CAPTURE_TRANSCRIPTION_MAX_ATTEMPTS || 3),
+});
+const audioCaptureSttProvider = createAudioCaptureSttProvider({ env: process.env });
+const captureTranscriptionWorkerId = process.env.CAPTURE_TRANSCRIPTION_WORKER_ID
+  || defaultAudioCaptureWorkerId();
+const audioCaptureTranscriptionWorker = createAudioCaptureTranscriptionWorker({
+  service: audioCaptureTranscription,
+  audioNotes,
+  providerIdForBlock: () => audioCaptureSttProvider.requireProviderId(),
+  transcriberForClaim: audioCaptureSttProvider.transcriberForClaim,
+  languageProfileForBlock: async (captureBlockId) => {
+    const block = await captureBlocks.get(captureBlockId);
+    const deviceId = block?.source?.device_id || "";
+    const profile = agentProfile.effective({ deviceId });
+    const languages = String(profile.input_languages || profile.input_language_primary || "en-US")
+      .split(",").map((value) => value.trim()).filter(Boolean).slice(0, 8);
+    const primary = String(profile.input_language_primary || languages[0] || "en-US").trim();
+    return {
+      version: agentProfile.currentVersion({ deviceId }),
+      languages: languages.includes(primary) ? languages : [primary, ...languages].slice(0, 8),
+      primary,
+    };
+  },
+  workerId: captureTranscriptionWorkerId,
+});
+const audioCaptureTranscriptionHost = createAudioCaptureTranscriptionHost({
+  captureBlocks,
+  processBlock: audioCaptureTranscriptionWorker.processBlock,
+  enabled: process.env.CAPTURE_TRANSCRIPTION_ENABLED === "1",
+  workerId: captureTranscriptionWorkerId,
+  pollIntervalMs: Number(process.env.CAPTURE_TRANSCRIPTION_POLL_MS || 5_000),
+  concurrency: Number(process.env.CAPTURE_TRANSCRIPTION_CONCURRENCY || 2),
+  scanLimit: Number(process.env.CAPTURE_TRANSCRIPTION_SCAN_LIMIT || 50),
+  backoffMs: Number(process.env.CAPTURE_TRANSCRIPTION_BACKOFF_MS || 5_000),
+  shutdownTimeoutMs: Number(process.env.CAPTURE_TRANSCRIPTION_SHUTDOWN_TIMEOUT_MS || 10_000),
+});
 const { routeCaptureBlocks } = createCaptureBlockHandlers({
   authorized,
   sendJson,
   store: captureBlocks,
+  audioCapture: audioCaptureBlocks,
+  audioTranscription: audioCaptureTranscription,
+  readJsonBody,
+  principal: accountUserId,
+});
+const switchboardHandoffs = createSwitchboardHandoffService({
+  events: eventSubstrate,
+  baseUrl: process.env.AGENT_SWITCHBOARD_BASE_URL || "",
+  token: process.env.AGENT_SWITCHBOARD_TOKEN || "",
+  timeoutMs: Number(process.env.AGENT_SWITCHBOARD_TIMEOUT_MS || 10_000),
+});
+const { routeSwitchboardHandoffs } = createSwitchboardHandoffHandlers({
+  authorized,
+  sendJson,
+  readJsonBody,
+  captureBlocks,
+  handoffs: switchboardHandoffs,
 });
 const { routeEventProjects, eventStatus } = createEventProjectHandlers({
   eventSubstrate, normalizeEventType, authorized, authorizedAgent, agentAuthError,
@@ -996,6 +1070,12 @@ const { routeHealth } = createGatewayHealthHandlers({
       ? "/v1/release-control/apps/{application_id}/view"
       : undefined,
   }),
+  captureTranscriptionStatus: () => ({
+    ...audioCaptureTranscriptionHost.status(),
+    provider: audioCaptureSttProvider.status(),
+    lease_ms: Number(process.env.CAPTURE_TRANSCRIPTION_LEASE_MS || 15 * 60_000),
+    max_attempts: audioCaptureTranscription.max_attempts,
+  }),
 });
 
 const server = http.createServer(async (request, response) => {
@@ -1132,6 +1212,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeEventProjects(request, response, url)) {
+      return;
+    }
+
+    if (await routeSwitchboardHandoffs(request, response, url)) {
       return;
     }
 
@@ -1320,15 +1404,48 @@ async function startServer() {
         console.warn(`Intent runtime rehydration warm failed (will rebuild on demand): ${cleanError(error)}`);
       });
     scheduleCaptureBlockReconciliation();
+    audioCaptureTranscriptionHost.start();
     });
   });
 }
 
+server.on("close", () => {
+  audioCaptureTranscriptionHost.stop().catch((error) => {
+    console.warn(`capture transcription shutdown failed: ${cleanError(error)}`);
+  });
+});
+
 if (require.main === module) {
+  installShutdownHandlers();
   startServer().catch((error) => {
     console.error(`Gateway startup failed: ${cleanError(error)}`);
     process.exitCode = 1;
   });
+}
+
+let shutdownPromise = null;
+
+function stopServer() {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    await audioCaptureTranscriptionHost.stop();
+    if (!server.listening) return;
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  })();
+  return shutdownPromise;
+}
+
+function installShutdownHandlers() {
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.once(signal, () => {
+      stopServer().catch((error) => {
+        console.error(`Gateway ${signal} shutdown failed: ${cleanError(error)}`);
+        process.exitCode = 1;
+      });
+    });
+  }
 }
 
 async function initializeReleaseControl() {
