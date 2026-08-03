@@ -96,7 +96,9 @@ capturing or replaying the source creates no intent or run.
 - [x] Create an exact isolated gateway preview artifact and prove inert capture,
   restart recovery, predecessor compatibility, rollback, and drain safety in
   `gateway-preview-evidence-20260803.md`.
-- [x] Create the versioned browser extension `0.1.145` package. Its local deploy
-  marker does not independently prove a confirmed loaded-browser reload.
+- [x] Create the versioned browser extension `0.1.146` v2 package. It has no
+  deploy marker or loaded-browser reload claim because production Chief remains
+  on the incompatible predecessor. The earlier `0.1.145` marker does not prove
+  the v2 candidate is installed.
 - [ ] Promote only after rollback, predecessor compatibility, no interruption,
   state safety, and smoke evidence pass; otherwise record the blocker.

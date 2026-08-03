@@ -33,10 +33,10 @@ requires Switchboard to echo both fields and retains them with the source-bound
 receipt. It never invents a goal from transcript text. Callers without confirmed
 goal fields retain the v1 source-only compatibility path.
 
-Verification now includes 276 browser unit tests and the real headless extension
-smoke. Version `0.1.145` is packaged at
-`browser_extension/dist/Ag-0.1.145.zip`, and the local extension deploy marker
-binds it to commit `53c02597f1e169a89805db46670020fe99fbc096`. That marker does
-not independently distinguish a confirmed loaded-browser reload from an
-unverified reload signal. Installed-browser proof and active promotion remain
+Verification now includes 278 browser unit tests and the real headless extension
+and side-panel smokes. Confirmed-goal contract v2 is packaged as version
+`0.1.146` at `browser_extension/dist/Ag-0.1.146.zip`. It was deliberately not
+sent a reload signal because production Chief remains on the incompatible
+gateway predecessor. The earlier `0.1.145` deploy marker does not prove that
+this v2 candidate is loaded. Installed-browser proof and active promotion remain
 open.
