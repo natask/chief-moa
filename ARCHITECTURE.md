@@ -1225,9 +1225,11 @@ refreshes its existing Google token source. This work carries no transcript or
 audio, never delays `session_ready`, and failures are diagnostic only. It does
 not move reasoning or synthesis before `commit_turn`, and it makes no measured
 latency claim. The separate `voice-latency-prewarm` clause-boundary measurement
-remains unfinished evidence work. Streaming cascaded voice overlaps committed
-generation with TTS, while the interruption ledger replaces an in-flight turn
-when a new utterance starts; neither is same-utterance speculative reasoning.
+is gated by `VOICE_LATENCY_MEASURE=1`. It records only the count of provider-
+final clauses and milliseconds from the first such clause to commit, never
+transcript content. Streaming cascaded voice overlaps committed generation
+with TTS, while the interruption ledger replaces an in-flight turn when a new
+utterance starts; neither is same-utterance speculative reasoning.
 
 Clients that negotiate `voice_drafts_v1` use a separate, bounded gateway draft
 store before a canonical voice turn exists. PCM remains in that store through

@@ -1,8 +1,13 @@
 "use strict";
 
-function createVoiceTranscriptReconcileBridge(connection, runtime, webSocketOpen) {
+function createVoiceTranscriptReconcileBridge(connection, runtime, webSocketOpen, options = {}) {
+  const measureLatency = String(options?.env?.VOICE_LATENCY_MEASURE || "") === "1";
+  const now = typeof options?.now === "function" ? options.now : Date.now;
   return {
     configure(turn, input) {
+      if (measureLatency && !input.incognito) {
+        turn.voiceLatencyMeasurement = { clauseCount: 0, firstClauseAtMs: null, committed: false };
+      }
       if (!runtime || !input.enabled || input.incognito || typeof input.provider?.transcribePcmWindowed !== "function") return;
       turn.transcriptReconciler = runtime.createTurn({
         sessionId: turn.sessionId, branchId: turn.branchId, turnId: turn.turnId,
@@ -11,7 +16,18 @@ function createVoiceTranscriptReconcileBridge(connection, runtime, webSocketOpen
       });
     },
     push(turn, chunk) { turn?.transcriptReconciler?.push(chunk); },
-    seal(turn, segment) { turn?.transcriptReconciler?.seal(segment); },
+    seal(turn, segment) {
+      noteLatencyClause(turn?.voiceLatencyMeasurement, now());
+      turn?.transcriptReconciler?.seal(segment);
+    },
+    commit(turn) {
+      const measurement = finishLatencyMeasurement(turn?.voiceLatencyMeasurement, now());
+      if (!measurement) return;
+      void connection.recordProviderEvent(
+        turn, turn.providerEvents || connection.createProviderEvents(turn),
+        "voice_latency_clause_boundaries", measurement,
+      ).catch(() => {});
+    },
     finish(turn) { turn?.transcriptReconciler?.finish({ pcmPath: turn.pcmPath }); },
     abandon(turn) { turn?.transcriptReconciler?.abandon(); },
     capability(turn) { return { supported: Boolean(turn?.transcriptReconciler), version: 1,
@@ -34,6 +50,22 @@ function createVoiceTranscriptReconcileBridge(connection, runtime, webSocketOpen
       });
       return sequence;
     },
+  };
+}
+
+function noteLatencyClause(measurement, occurredAtMs) {
+  if (!measurement || measurement.committed) return;
+  measurement.clauseCount += 1;
+  if (measurement.firstClauseAtMs == null) measurement.firstClauseAtMs = occurredAtMs;
+}
+
+function finishLatencyMeasurement(measurement, committedAtMs) {
+  if (!measurement || measurement.committed) return null;
+  measurement.committed = true;
+  return {
+    clause_count: measurement.clauseCount,
+    first_clause_to_commit_ms: measurement.firstClauseAtMs == null
+      ? null : Math.max(0, Math.round(committedAtMs - measurement.firstClauseAtMs)),
   };
 }
 

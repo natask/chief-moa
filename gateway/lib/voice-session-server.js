@@ -85,6 +85,7 @@ function createVoiceSessionServer(options) {
       blobStore: options?.blobStore || null,
       voiceDraftRuntime,
       transcriptReconcileRuntime: options?.transcriptReconcileRuntime || null,
+      env: options?.env || process.env, voiceLatencyNow: options?.voiceLatencyNow,
     });
     connections.add(connection);
     ws.once("close", () => {
@@ -144,8 +145,7 @@ class VoiceSessionConnection {
     this.voiceDraft = new VoiceDraftSessionBridge(
       this, options.voiceDraftRuntime || disabledVoiceDraftSessionRuntime(),
     );
-    this.transcriptReconcile = createVoiceTranscriptReconcileBridge(
-      this, options.transcriptReconcileRuntime, WebSocket.OPEN);
+    this.transcriptReconcile = createVoiceTranscriptReconcileBridge(this, options.transcriptReconcileRuntime, WebSocket.OPEN, { env: options.env, now: options.voiceLatencyNow });
     this.sessionIdentity = null;
   }
   startTurnProgress(turn, stage) {
@@ -553,6 +553,7 @@ class VoiceSessionConnection {
     turn.providerEvents = providerEvents;
     const providerHooks = this.providerHooks(turn, providerEvents);
     try {
+      this.transcriptReconcile.commit(turn);
       await this.phraseAssist.stop(turn);
       turn.status = "committed";
       turn.captureSummary = captureSummaryForTurn(turn, { inputKind: "audio" });
@@ -1215,7 +1216,6 @@ class VoiceSessionConnection {
       ...(unplayedText ? { unspoken_text: unplayedText } : {}),
     };
   }
-
   async recordIncompleteTurn(turn, status, errorMessage = "") {
     if (!turn || turn.recordedCanonical || !this.onTurnCompleted) {
       return;

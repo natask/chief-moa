@@ -11,17 +11,17 @@
 
 ## 1. Clause-Boundary Measurement (ship first; decides whether more is worth building)
 
-- [ ] 1.1 In `gateway/lib/voice-stt-streaming.js`, add an optional
-  `onFinalSegment(text, occurredAtMs)` hook invoked from `handleData` each
-  time an `isFinal` result is appended to `committedText`, additive and
-  off by default so no existing caller behavior changes.
-- [ ] 1.2 In `gateway/lib/voice-session-server.js`, wire that hook (only in
+- [x] 1.1 In `gateway/lib/voice-stt-streaming.js`, expose the optional
+  `onFinalSegment(info)` hook invoked from `handleData` for each accepted
+  provider-final segment, additive and off by default so no existing caller
+  behavior changes.
+- [x] 1.2 In `gateway/lib/voice-session-server.js`, wire that hook (only in
   a debug/measurement mode gated by an env flag, e.g.
   `VOICE_LATENCY_MEASURE=1`) to log, per turn, the count of `isFinal`
   clause boundaries reached and the elapsed ms from the first one to
   `commit_turn`. Log to the existing provider-events trail
   (`recordProviderEvent`) as an additive event type, not a new store.
-- [ ] 1.3 Add a smoke that drives a multi-clause fixture through the fake
+- [x] 1.3 Add a smoke that drives a multi-clause fixture through the fake
   streaming STT double and asserts the logged clause count and timing
   match the fixture's known `isFinal` sequence.
 - [ ] 1.4 Run this in fixtures-mode CI only (no live cost) and, separately,
