@@ -705,7 +705,8 @@ audio is recognized once by streaming STT and once again by batch STT, roughly
 doubling STT audio-processing volume for those turns while leaving reasoning
 and TTS spend unchanged. Natural spans may increase request count, and durable
 metadata plus audio reads add storage traffic. Deployments therefore expose an
-independent enqueue switch and content-free backlog, attempt, and audio-byte
+independent, default-off enqueue switch (`VOICE_TRANSCRIPT_RECONCILE_ENABLED=1`
+enables a measured cohort) and content-free backlog, attempt, and audio-byte
 counters through gateway health. Natural finals accumulate to a 20-second
 minimum batch except for the exact terminal tail. The complete contract is
 `reference/openspec/changes/rolling-transcript-reconciliation`.

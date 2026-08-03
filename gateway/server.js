@@ -896,7 +896,7 @@ if (REMINDER_SWEEP_INTERVAL_MS > 0) {
 
 const transcriptReconcileRuntime = createRollingTranscriptReconcileRuntime({
   dataDir: DATA_DIR,
-  enqueueEnabled: process.env.VOICE_TRANSCRIPT_RECONCILE_ENABLED !== "0",
+  enqueueEnabled: process.env.VOICE_TRANSCRIPT_RECONCILE_ENABLED === "1",
   providerForJob: internalTtsProvider,
   authorizeJob: voiceReconcileJobAuthorized,
   canonicalReadyForJob: (identity) => Boolean(exactVoiceReconcileRecord(identity)?.response),

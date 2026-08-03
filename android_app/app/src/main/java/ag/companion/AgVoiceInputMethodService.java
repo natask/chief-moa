@@ -283,8 +283,12 @@ public final class AgVoiceInputMethodService extends InputMethodService {
         @Override public void onRecordingStarted() { }
         @Override public void onAudioCaptured() { }
         @Override public void onRecordingStopped() { setStatus("Transcribing…"); }
-        @Override public void onTranscriptPartial(String turnId, String text) { acceptTranscript(text, false); }
-        @Override public void onTranscriptFinal(String turnId, String text) { acceptTranscript(text, true); }
+        @Override public void onTranscriptPartial(String turnId, String text, long transcriptSequence) {
+            acceptTranscript(text, false);
+        }
+        @Override public void onTranscriptFinal(String turnId, String text, long transcriptSequence) {
+            acceptTranscript(text, true);
+        }
         @Override public void onAssistantText(String turnId, String text) { }
         @Override public void onAssistantAudioStarted(String turnId) { }
         @Override public void onAssistantAudioChunk(String turnId) { }

@@ -25,6 +25,10 @@
 - Native Mac: `swift test && swift build --product Ag` passed with 80 tests.
 - Contract and repository: strict OpenSpec validation and
   `node scripts/source-size-policy.js` passed.
+- The combined dictation and rolling-transcript candidate was reverified after
+  resolving its shared Android callback and identity-gating seams. Rolling
+  reconciliation remains default-off and requires the explicit gateway switch
+  `VOICE_TRANSCRIPT_RECONCILE_ENABLED=1` for a measured cohort.
 
 ## Candidate artifacts
 

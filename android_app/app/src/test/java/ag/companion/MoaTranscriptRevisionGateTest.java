@@ -10,7 +10,7 @@ import static org.junit.Assert.assertNotNull;
 public final class MoaTranscriptRevisionGateTest {
     @Test
     public void correctedPrefixUsesAuthoritativeWholeSnapshotAndKeepsGatewayTail() throws Exception {
-        MoaTranscriptRevisionGate gate = new MoaTranscriptRevisionGate("session-1", "branch-1", "turn-1");
+        MoaTranscriptRevisionGate gate = gate();
         assertNotNull(gate.acceptProviderSnapshot("turn-1", "old words live tail", 4L, false));
 
         MoaTranscriptRevisionGate.Snapshot corrected = gate.acceptPrefixRevision(prefix(5L, 1L)
@@ -25,7 +25,7 @@ public final class MoaTranscriptRevisionGateTest {
 
     @Test
     public void staleOutOfOrderAndDuplicateRollingRevisionsAreIgnored() throws Exception {
-        MoaTranscriptRevisionGate gate = new MoaTranscriptRevisionGate("session-1", "branch-1", "turn-1");
+        MoaTranscriptRevisionGate gate = gate();
         assertNotNull(gate.acceptPrefixRevision(prefix(8L, 2L)));
         assertNull(gate.acceptPrefixRevision(prefix(8L, 3L)));
         assertNull(gate.acceptPrefixRevision(prefix(9L, 2L)));
@@ -35,16 +35,18 @@ public final class MoaTranscriptRevisionGateTest {
 
     @Test
     public void wrongSessionBranchTurnOrSpeakerCannotChangeLiveText() throws Exception {
-        MoaTranscriptRevisionGate gate = new MoaTranscriptRevisionGate("session-1", "branch-1", "turn-1");
+        MoaTranscriptRevisionGate gate = gate();
         assertNull(gate.acceptPrefixRevision(prefix(1L, 1L).put("session_id", "session-2")));
         assertNull(gate.acceptPrefixRevision(prefix(1L, 1L).put("branch_id", "branch-2")));
         assertNull(gate.acceptPrefixRevision(prefix(1L, 1L).put("turn_id", "turn-2")));
         assertNull(gate.acceptPrefixRevision(prefix(1L, 1L).put("speaker", "assistant")));
+        assertNull(gate.acceptPrefixRevision(prefix(1L, 1L).put("owner_id", "device-2")));
+        assertNull(gate.acceptPrefixRevision(prefix(1L, 1L).put("message_id", "wrong")));
     }
 
     @Test
     public void prefixRevisionRequiresExplicitTailAndNeverInfersOverlap() throws Exception {
-        MoaTranscriptRevisionGate gate = new MoaTranscriptRevisionGate("session-1", "branch-1", "turn-1");
+        MoaTranscriptRevisionGate gate = gate();
         JSONObject noTail = prefix(1L, 1L);
         noTail.remove("unsealed_text");
         JSONObject noPrefix = prefix(1L, 1L);
@@ -62,26 +64,30 @@ public final class MoaTranscriptRevisionGateTest {
         JSONObject event = completed(2L);
 
         MoaTranscriptRevisionGate.Snapshot accepted =
-                MoaTranscriptRevisionGate.acceptCompletedMessage(event, target, "session-1", "branch-1", "");
+                MoaTranscriptRevisionGate.acceptCompletedMessage(
+                        event, target, "session-1", "branch-1", "", "device-1");
         assertNotNull(accepted);
         assertEquals("corrected final", accepted.text);
         assertNull(MoaTranscriptRevisionGate.acceptCompletedMessage(completed(1L), target,
-                "session-1", "branch-1", ""));
+                "session-1", "branch-1", "", "device-1"));
         assertNull(MoaTranscriptRevisionGate.acceptCompletedMessage(event, target,
-                "session-1", "branch-1", "turn-1"));
+                "session-1", "branch-1", "turn-1", "device-1"));
         assertNull(MoaTranscriptRevisionGate.acceptCompletedMessage(
                 new JSONObject(event.toString()).put("turn_id", "turn-2"), target,
-                "session-1", "branch-1", ""));
+                "session-1", "branch-1", "", "device-1"));
         assertNull(MoaTranscriptRevisionGate.acceptCompletedMessage(
                 new JSONObject(event.toString()).put("message_id", "wrong"), target,
-                "session-1", "branch-1", ""));
+                "session-1", "branch-1", "", "device-1"));
+        assertNull(MoaTranscriptRevisionGate.acceptCompletedMessage(
+                new JSONObject(event.toString()).put("owner_id", "device-2"), target,
+                "session-1", "branch-1", "", "device-1"));
         assertNull(MoaTranscriptRevisionGate.acceptCompletedMessage(event,
-                new ChatMessage(true, "assistant"), "session-1", "branch-1", ""));
+                new ChatMessage(true, "assistant"), "session-1", "branch-1", "", "device-1"));
     }
 
     @Test
     public void finalSnapshotSealsLiveStateAgainstLaterPrefixCorrection() throws Exception {
-        MoaTranscriptRevisionGate gate = new MoaTranscriptRevisionGate("session-1", "branch-1", "turn-1");
+        MoaTranscriptRevisionGate gate = gate();
         assertNotNull(gate.acceptProviderSnapshot("turn-1", "final words", 10L, true));
         assertNull(gate.acceptPrefixRevision(prefix(11L, 1L)));
     }
@@ -92,13 +98,19 @@ public final class MoaTranscriptRevisionGateTest {
                 .put("session_id", "session-1")
                 .put("branch_id", "branch-1")
                 .put("turn_id", "turn-1")
+                .put("message_id", "turn:session-1:branch-1:turn-1:user")
+                .put("owner_id", "device-1")
                 .put("speaker", "user")
                 .put("transcript_sequence", sequence)
                 .put("revision", revision)
                 .put("finalized_text", "better words")
                 .put("unsealed_text", " live tail")
                 .put("text", "better words live tail")
-                .put("sealed_through_audio_byte", 32000L);
+                .put("sealed_through_audio_byte", 32000L)
+                .put("audio_format", new JSONObject()
+                        .put("encoding", "pcm16")
+                        .put("sample_rate", 16000)
+                        .put("channels", 1));
     }
 
     private static JSONObject completed(long revision) throws Exception {
@@ -109,8 +121,13 @@ public final class MoaTranscriptRevisionGateTest {
                 .put("turn_id", "turn-1")
                 .put("speaker", "user")
                 .put("message_id", "turn:session-1:branch-1:turn-1:user")
+                .put("owner_id", "device-1")
                 .put("revision", revision)
                 .put("text", "corrected final");
+    }
+
+    private static MoaTranscriptRevisionGate gate() {
+        return new MoaTranscriptRevisionGate("session-1", "branch-1", "turn-1", "device-1");
     }
 
     private static ChatMessage finalized(String session, String branch, String turn, long revision) {

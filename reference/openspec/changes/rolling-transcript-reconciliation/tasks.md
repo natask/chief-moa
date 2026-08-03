@@ -28,10 +28,10 @@
   additive and capability-advertised.
 - [x] 3.3 Add content-free queue, cost, retry, skip, and correction-latency
   metrics plus an operator control that stops new enqueue independently.
-- [ ] 3.4 Capability-gate Android rolling events and bind them to exact
+- [x] 3.4 Capability-gate Android rolling events and bind them to exact
   owner/user, session, branch, turn, message, transcript sequence, and batch
   revision identity.
-- [ ] 3.5 Apply prefix events from their authoritative whole text without
+- [x] 3.5 Apply prefix events from their authoritative whole text without
   overlap inference. Apply complete corrections only to the exact retained
   finalized user message, never assistant text or the current capture, and
   announce the update without moving accessibility focus.
@@ -49,13 +49,13 @@
 - [x] 4.2 Prove exact span coverage, non-overlap, out-of-order worker completion,
   monotonic publication, empty-result protection, crash recovery, and privacy
   deletion with deterministic gateway tests.
-- [ ] 4.2a Add Android tests for stale, wrong-identity, out-of-order, duplicate,
+- [x] 4.2a Add Android tests for stale, wrong-identity, out-of-order, duplicate,
   and missing-tail events, plus exact finalized-user-message targeting and
   focus-preserving accessibility behavior.
 - [x] 4.2b Add deterministic browser tests for a corrected rolling prefix plus
   live tail, out-of-order delivery, wrong authority, immutable same-revision
   History, and Copy's corrected-text source.
-- [ ] 4.3 Run `cd gateway && npm run check`, the repo-wide source-size policy,
+- [x] 4.3 Run `cd gateway && npm run check`, the repo-wide source-size policy,
   and strict OpenSpec validation.
 - [ ] 4.4 Create an isolated preview with rollback evidence, then enable a
   duration-limited cohort and record measured quality benefit and provider cost

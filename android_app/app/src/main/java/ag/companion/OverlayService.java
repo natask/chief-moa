@@ -3190,7 +3190,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 updateConversationId(sessionId);
-                currentTranscriptRevisionGate = new MoaTranscriptRevisionGate(sessionId, sessionBranch, turnId);
+                currentTranscriptRevisionGate = new MoaTranscriptRevisionGate(sessionId, sessionBranch, turnId, androidDeviceId());
                 liveConversation.begin(turnId);
                 showTranscriptOverlay("");
                 renderVoiceTranscriptRows();
@@ -3322,7 +3322,9 @@ public final class OverlayService extends Service {
                 if (!isCurrentStreamingGeneration(generation)) return;
                 String activeTurn = streamingVoiceController != null && streamingVoiceController.isActive() ? streamingVoiceController.turnId() : "";
                 if (MoaOverlayMessageHistory.replaceFinalizedUser(messages, event, stableSessionId,
-                        sessionBranch, activeTurn, OverlayService.this::renderMessages) && orbView != null) orbView.announceForAccessibility("Transcript corrected");
+                        sessionBranch, activeTurn, androidDeviceId(), OverlayService.this::renderMessages) && orbView != null) {
+                    orbView.announceForAccessibility("Transcript corrected");
+                }
             }
             @Override
             public void onAssistantText(String turnId, String text) {

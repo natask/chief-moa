@@ -15,11 +15,12 @@ final class MoaOverlayMessageHistory {
     }
 
     static boolean replaceFinalizedUser(List<ChatMessage> messages, JSONObject event,
-            String activeSessionId, String activeBranchId, String activeTurnId, Runnable render) {
+            String activeSessionId, String activeBranchId, String activeTurnId,
+            String expectedOwnerId, Runnable render) {
         for (int index = messages.size() - 1; index >= 0; index--) {
             ChatMessage message = messages.get(index);
             MoaTranscriptRevisionGate.Snapshot accepted = MoaTranscriptRevisionGate.acceptCompletedMessage(
-                    event, message, activeSessionId, activeBranchId, activeTurnId);
+                    event, message, activeSessionId, activeBranchId, activeTurnId, expectedOwnerId);
             if (accepted == null) continue;
             messages.set(index, message.correctedTranscript(accepted.text.trim(), accepted.correctionRevision));
             render.run();

@@ -7,14 +7,16 @@ final class MoaTranscriptRevisionGate {
     private final String sessionId;
     private final String branchId;
     private final String turnId;
+    private final String ownerId;
     private long transcriptSequence;
     private long correctionRevision;
     private boolean capturing = true;
 
-    MoaTranscriptRevisionGate(String sessionId, String branchId, String turnId) {
+    MoaTranscriptRevisionGate(String sessionId, String branchId, String turnId, String ownerId) {
         this.sessionId = safe(sessionId);
         this.branchId = normalizedBranch(branchId);
         this.turnId = safe(turnId);
+        this.ownerId = safe(ownerId);
     }
 
     Snapshot acceptProviderSnapshot(String eventTurnId, String text, long sequence, boolean isFinal) {
@@ -38,8 +40,13 @@ final class MoaTranscriptRevisionGate {
         long revision = integralPositive(event, "revision");
         long sealedAudioByte = integralNonNegative(event, "sealed_through_audio_byte");
         String text = event.optString("text", "");
+        JSONObject format = event.optJSONObject("audio_format");
         if (sequence <= transcriptSequence || revision <= correctionRevision
-                || sealedAudioByte < 0L || safe(text).isEmpty()) return null;
+                || sealedAudioByte < 0L || safe(text).isEmpty()
+                || !expectedMessageId().equals(safe(event.optString("message_id", "")))
+                || format == null || !"pcm16".equals(format.optString("encoding", ""))
+                || format.optInt("sample_rate", -1) != 16_000
+                || format.optInt("channels", -1) != 1) return null;
         transcriptSequence = sequence;
         correctionRevision = revision;
         return new Snapshot(text, sequence, revision, false, true);
@@ -55,7 +62,8 @@ final class MoaTranscriptRevisionGate {
     }
 
     static Snapshot acceptCompletedMessage(JSONObject event, ChatMessage message,
-            String activeSessionId, String activeBranchId, String activeTurnId) {
+            String activeSessionId, String activeBranchId, String activeTurnId,
+            String expectedOwnerId) {
         if (event == null || message == null || message.assistant || message.notice
                 || !message.finalizedUserTranscript
                 || !"transcript_revision".equals(safe(event.optString("type", "")))
@@ -72,6 +80,7 @@ final class MoaTranscriptRevisionGate {
         if (targetsActiveCapture || !message.sessionId.equals(eventSession)
                 || !message.branchId.equals(eventBranch) || !message.turnId.equals(eventTurn)
                 || !expectedMessageId.equals(safe(event.optString("message_id", "")))
+                || !safe(expectedOwnerId).equals(safe(event.optString("owner_id", "")))
                 || revision <= message.transcriptRevision || safe(text).isEmpty()) return null;
         return new Snapshot(text, -1L, revision, true, true);
     }
@@ -82,7 +91,12 @@ final class MoaTranscriptRevisionGate {
                 && "user".equals(safe(event.optString("speaker", "")))
                 && sessionId.equals(safe(event.optString("session_id", "")))
                 && branchId.equals(normalizedBranch(event.optString("branch_id", "")))
-                && turnId.equals(safe(event.optString("turn_id", "")));
+                && turnId.equals(safe(event.optString("turn_id", "")))
+                && ownerId.equals(safe(event.optString("owner_id", "")));
+    }
+
+    private String expectedMessageId() {
+        return "turn:" + sessionId + ":" + branchId + ":" + turnId + ":user";
     }
 
     private static long integralPositive(JSONObject event, String key) {
