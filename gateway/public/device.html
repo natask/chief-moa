@@ -3,19 +3,30 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Connect Ag</title>
 <style>
-  :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f4f5f7}.card{width:min(430px,calc(100% - 40px));padding:28px;border:1px solid #343842;border-radius:22px;background:#1b1e25}h1{margin:0 0 8px}p{color:#aeb4c0}.code{font:700 28px ui-monospace,monospace;letter-spacing:3px;color:#fff}button{font:inherit;padding:12px 18px;border-radius:12px;border:1px solid #444b58;cursor:pointer;font-weight:650}.approve{background:#eef0ff;color:#171922}.deny{background:transparent;color:#eef0ff}#status{min-height:22px;color:#f3aaae}
+  :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f4f5f7}.card{width:min(430px,calc(100% - 40px));padding:28px;border:1px solid #343842;border-radius:22px;background:#1b1e25}h1{margin:0 0 8px}p{color:#aeb4c0}.code{font:700 28px ui-monospace,monospace;letter-spacing:3px;color:#fff}.actions{display:flex;gap:8px}button{font:inherit;padding:12px 18px;border-radius:12px;border:1px solid #444b58;cursor:pointer;font-weight:650}.approve{background:#eef0ff;color:#171922}.deny{background:transparent;color:#eef0ff}#status{min-height:44px;margin-top:18px;padding:12px;border-radius:12px;background:#252a34;color:#d6dae3}.card[data-state="connected"]{border-color:#498b5b}.card[data-state="connected"] #status{background:#183321;color:#b9f5c8}.card[data-state="failed"]{border-color:#9b4a50}.card[data-state="failed"] #status{background:#381d20;color:#ffc5ca}
 </style>
-<main class="card">
-  <h1>Connect Ag</h1><p>Approve this only if you just started sign-in from your Ag app.</p>
+<main class="card" id="card" data-state="checking">
+  <h1 id="heading">Connect Ag</h1><p id="detail">Approve this only if you just started sign-in from your Ag app.</p>
   <p class="code" id="code"></p>
-  <button class="approve" id="approve">Connect device</button>
-  <button class="deny" id="deny">Deny</button>
-  <p id="status" role="status"></p>
+  <div class="actions" id="actions"><button class="approve" id="approve">Connect device</button>
+  <button class="deny" id="deny">Deny</button></div>
+  <p id="status" role="status" aria-live="polite">Checking your Ag account…</p>
 </main>
 <script>
   const params = new URLSearchParams(location.search);
   const userCode = (params.get('user_code') || '').replace(/-/g,'').toUpperCase();
+  const card = document.querySelector('#card');
+  const heading = document.querySelector('#heading');
+  const detail = document.querySelector('#detail');
+  const code = document.querySelector('#code');
+  const actions = document.querySelector('#actions');
+  const approve = document.querySelector('#approve');
+  const deny = document.querySelector('#deny');
+  const status = document.querySelector('#status');
   code.textContent = userCode || 'Missing code';
+  function show(state, title, message) {
+    card.dataset.state = state; heading.textContent = title; status.textContent = message;
+  }
   async function session() { return fetch('/api/auth/get-session',{credentials:'include'}).then(r=>r.json()).catch(()=>null); }
   async function prepare() {
     const current = await session();
@@ -23,14 +34,43 @@
       const back = '/device?user_code=' + encodeURIComponent(userCode);
       location.replace('/sign-in?return=' + encodeURIComponent(back)); return;
     }
-    const response = await fetch('/api/auth/device?user_code=' + encodeURIComponent(userCode), {credentials:'include'});
-    if (!response.ok) status.textContent = 'This code is invalid or expired.';
+    const response = await verify();
+    if (!response.ok) { actions.hidden = true; show('failed','Connection unavailable','This code is invalid or expired. Return to Ag and try again.'); return; }
+    show('ready','Ready to connect','Code verified. Press Connect device to approve this Ag app.');
+  }
+  function verify() { return fetch('/api/auth/device?user_code=' + encodeURIComponent(userCode), {credentials:'include'}); }
+  const delay = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
+  async function waitForAg() {
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      await delay(750);
+      const response = await verify();
+      if (response.status === 400) {
+        actions.hidden = code.hidden = detail.hidden = true;
+        show('connected','Ag is connected','The Ag app received the session. You can close this window.');
+        return;
+      }
+      if (!response.ok) {
+        show('failed','Connection check failed','Return to Ag to confirm the connection or try again.');
+        return;
+      }
+    }
+    show('approved','Approved','Return to the Ag app. It is still waiting to finish the connection.');
   }
   async function decide(action) {
     approve.disabled = deny.disabled = true;
+    show('checking',action === 'approve' ? 'Approving Ag…' : 'Denying request…','Waiting for the gateway to confirm your choice.');
     const response = await fetch('/api/auth/device/' + action, {method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({userCode})});
-    if (response.ok) { status.style.color='#9de3b0'; status.textContent = action === 'approve' ? 'Ag is connected. You can close this window.' : 'Request denied.'; }
-    else { approve.disabled = deny.disabled = false; status.textContent = 'Could not update this request.'; }
+    if (response.ok && action === 'approve') {
+      actions.hidden = true;
+      show('approved','Approved','Waiting for the Ag app to receive the session…');
+      await waitForAg();
+    } else if (response.ok) {
+      actions.hidden = true; show('failed','Request denied','Ag was not connected. You can close this window.');
+    } else {
+      approve.disabled = deny.disabled = false;
+      show('failed','Could not connect Ag','The gateway could not update this request. Return to Ag and try again.');
+    }
   }
   approve.addEventListener('click',()=>decide('approve')); deny.addEventListener('click',()=>decide('deny')); prepare();
 </script>

@@ -140,6 +140,14 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
 }
 
 @MainActor public final class CommandModel: ObservableObject {
+    public enum ConnectionState: Equatable, Sendable {
+        case disconnected
+        case openingBrowser
+        case waitingForApproval(code: String)
+        case connected
+        case failed(String)
+    }
+
     public enum VoiceActivity: Equatable, Sendable {
         case assistant
         case dictation
@@ -163,6 +171,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     @Published public private(set) var isDelegatingBrowser = false
     @Published public private(set) var browserHandoffPhase: BrowserHandoffPhase = .idle
     @Published public private(set) var interactionPulse: UInt64 = 0
+    @Published public private(set) var connectionState: ConnectionState = .disconnected
 
     private let store: any GatewayConnectionStore
     private let sender: any GatewayChatSending
@@ -171,6 +180,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
     private let browserSender: any BrowserDelegationSending
     private let deviceAuthorizer: any DeviceAuthorizing
     private let deviceSessionStore: any DeviceSessionStoring
+    private let deviceVerificationOpener: any DeviceVerificationOpening
     private let sessionID: String
     private var voiceGeneration: UInt64 = 0
     private var voiceReleaseRequested = false
@@ -182,7 +192,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
             voiceController: VoiceCaptureController(),
             historyLoader: URLSessionGatewayHistoryLoader(),
             browserSender: URLSessionBrowserDelegationSender()
-            , deviceAuthorizer: URLSessionDeviceAuthorizer(), deviceSessionStore: FileDeviceSessionStore()
+            , deviceAuthorizer: URLSessionDeviceAuthorizer(), deviceSessionStore: FileDeviceSessionStore(),
+            deviceVerificationOpener: SystemDeviceVerificationOpener()
         )
     }
 
@@ -193,7 +204,8 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         historyLoader: (any GatewayHistoryLoading)? = nil,
         browserSender: (any BrowserDelegationSending)? = nil,
         deviceAuthorizer: (any DeviceAuthorizing)? = nil,
-        deviceSessionStore: (any DeviceSessionStoring)? = nil
+        deviceSessionStore: (any DeviceSessionStoring)? = nil,
+        deviceVerificationOpener: (any DeviceVerificationOpening)? = nil
     ) {
         self.store = store
         self.sender = sender
@@ -202,32 +214,49 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         self.browserSender = browserSender ?? URLSessionBrowserDelegationSender()
         self.deviceAuthorizer = deviceAuthorizer ?? URLSessionDeviceAuthorizer()
         self.deviceSessionStore = deviceSessionStore ?? FileDeviceSessionStore()
+        self.deviceVerificationOpener = deviceVerificationOpener ?? SystemDeviceVerificationOpener()
         let savedOrigin = store.loadOrigin()
         origin = savedOrigin.isEmpty ? "https://api.agee.app" : savedOrigin
-        token = self.deviceSessionStore.load()
+        let savedToken = self.deviceSessionStore.load()
+        token = savedToken
         sessionID = store.loadSessionID()
+        connectionState = savedToken.isEmpty ? .disconnected : .connected
     }
 
     public var isConfigured: Bool { !origin.isEmpty && !token.isEmpty }
+    public var isSigningIn: Bool {
+        if case .openingBrowser = connectionState { return true }
+        if case .waitingForApproval = connectionState { return true }
+        return false
+    }
 
     public func signIn() async {
+        guard !isSigningIn else { return }
         do {
             guard let url = URL(string: origin) else { throw MoaMacError.invalidDestination }
             try store.saveOrigin(origin)
+            connectionState = .openingBrowser
             status = "Opening Ag sign in…"
             let authorization = try await deviceAuthorizer.begin(origin: url)
-            guard NSWorkspace.shared.open(authorization.verificationURL) else { throw DeviceAuthorizationError.invalidResponse }
-            status = "Finish signing in in your browser…"
+            connectionState = .waitingForApproval(code: authorization.userCode)
+            guard deviceVerificationOpener.open(authorization.verificationURL) else {
+                throw DeviceAuthorizationError.invalidResponse
+            }
+            status = "Waiting for browser approval — code \(authorization.userCode)"
             let deviceToken = try await deviceAuthorizer.poll(origin: url, authorization: authorization)
             try deviceSessionStore.save(deviceToken)
             token = deviceToken
-            status = "Signed in to Ag"
+            connectionState = .connected
+            status = "Connected to Ag"
         } catch DeviceAuthorizationError.denied {
-            status = "Sign in was denied"
+            connectionState = .failed("The browser denied this connection.")
+            status = "Connection denied"
         } catch DeviceAuthorizationError.expired {
-            status = "Sign in expired — try again"
+            connectionState = .failed("The browser code expired. Try again.")
+            status = "Connection expired"
         } catch {
-            status = "Could not sign in to Ag"
+            connectionState = .failed("Ag could not finish connecting. Try again.")
+            status = "Could not connect to Ag"
         }
     }
 
@@ -249,6 +278,7 @@ public struct URLSessionGatewayChatSender: GatewayChatSending {
         await voiceController.cancel()
         token = ""
         try? deviceSessionStore.clear()
+        connectionState = .disconnected
         resetPresentation()
         status = "Disconnected — session credential cleared"
     }

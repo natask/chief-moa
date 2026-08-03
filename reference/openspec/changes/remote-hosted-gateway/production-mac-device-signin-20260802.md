@@ -41,6 +41,12 @@ atomic, owner-only password-equivalent cache. Explicit disconnect removes it.
 This preserves browser/device sign-in while making the session-store contract
 portable to future non-Mac native clients.
 
+The browser and Mac feedback contract is explicit: approval is an intermediate
+state, not proof of connection. The browser waits until the app consumes the
+device authorization before it says “Ag is connected,” while the native card
+shows the code and waiting state and then changes to connected or a specific
+terminal failure.
+
 Developer ID signing, notarization, universal packaging, and installation/TCC
 promotion remain separate Mac distribution gates; they do not block proving the
 account and device-session path.

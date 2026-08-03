@@ -94,6 +94,9 @@ SHALL NOT extract OAuth material from local vendor CLIs.
 - **WHEN** the user signs in through the browser-backed device flow
 - **THEN** the origin may be stored in app preferences and the revocable Ag
   device session is stored in the portable owner-only Ag auth file
+- **AND** the Mac shows that it is waiting for browser approval with the bound code
+- **AND** the browser reports approval before reporting completed app connection
+- **AND** both surfaces visibly confirm when the Mac consumes the approved session
 - **AND** no provider key or vendor CLI OAuth token is requested or persisted
 
 ### Requirement: Apple clients narrowly persist the Ag device session

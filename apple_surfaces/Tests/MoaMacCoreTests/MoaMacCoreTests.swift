@@ -261,6 +261,23 @@ private struct EmptyDeviceSessionStore: DeviceSessionStoring {
     func clear() throws {}
 }
 
+private struct DelayedDeviceAuthorizer: DeviceAuthorizing {
+    func begin(origin: URL) async throws -> DeviceAuthorization {
+        DeviceAuthorization(deviceCode: "device-code", userCode: "ABCD-EFGH",
+                            verificationURL: URL(string: "https://moa.example/device?user_code=ABCDEFGH")!,
+                            expiresIn: 900, interval: 1)
+    }
+    func poll(origin: URL, authorization: DeviceAuthorization) async throws -> String {
+        try await Task.sleep(for: .milliseconds(500))
+        return "approved-device-session"
+    }
+}
+
+@MainActor private final class RecordingDeviceVerificationOpener: DeviceVerificationOpening, @unchecked Sendable {
+    private(set) var opened: [URL] = []
+    func open(_ url: URL) -> Bool { opened.append(url); return true }
+}
+
 private actor FakeChatSender: GatewayChatSending {
     private(set) var bodies: [Data] = []
     func send(_ request: GatewayChatRequest, bearerToken: String) async throws -> GatewayChatReply {
@@ -304,6 +321,28 @@ private actor FakeBrowserSender: BrowserDelegationSending {
     #expect(!bodyText.contains("screen"))
     #expect(!bodyText.contains("gateway-token"))
     _ = CommandPaletteView(model: model).body
+}
+
+@MainActor @Test func deviceSignInShowsWaitingCodeThenConnectedConfirmation() async throws {
+    let opener = RecordingDeviceVerificationOpener()
+    let model = CommandModel(store: StaticConnectionStore(origin: "https://moa.example"), sender: FakeChatSender(),
+                             deviceAuthorizer: DelayedDeviceAuthorizer(),
+                             deviceSessionStore: EmptyDeviceSessionStore(), deviceVerificationOpener: opener)
+    #expect(model.connectionState == .disconnected)
+    let signIn = Task { await model.signIn() }
+    for _ in 0..<50 {
+        if model.connectionState == .waitingForApproval(code: "ABCD-EFGH") { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.connectionState == .waitingForApproval(code: "ABCD-EFGH"))
+    #expect(model.status == "Waiting for browser approval — code ABCD-EFGH")
+    #expect(model.isSigningIn)
+    #expect(opener.opened.count == 1)
+    await signIn.value
+    #expect(model.connectionState == .connected)
+    #expect(model.status == "Connected to Ag")
+    #expect(model.token == "approved-device-session")
+    #expect(!model.isSigningIn)
 }
 
 @MainActor @Test func commandModelDelegatesExplicitURLToSelectedBrowserProduct() async throws {

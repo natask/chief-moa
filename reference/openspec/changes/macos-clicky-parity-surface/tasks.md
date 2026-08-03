@@ -13,6 +13,9 @@
 - [x] 1.6 Replace the pasted gateway token with browser-backed Ag device sign-in
       and one narrowly scoped portable Ag auth file (`AG_HOME/auth.json`,
       default `~/.ag/auth.json`) with owner-only permissions.
+      Both the Mac connection card and browser approval page must visibly
+      distinguish waiting, approved, connected, denied, expired, and failed
+      states; browser approval alone is not a completed Mac connection.
       Source acceptance requires the production image to include the Better
       Auth runtime and migrations, Compose to pass its bounded configuration,
       and an isolated device-flow smoke. Active acceptance additionally requires

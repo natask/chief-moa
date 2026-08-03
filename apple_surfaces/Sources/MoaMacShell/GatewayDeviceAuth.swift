@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import MoaMacCore
 
@@ -20,6 +21,15 @@ public enum DeviceAuthorizationError: Error, Equatable, Sendable {
 public protocol DeviceAuthorizing: Sendable {
     func begin(origin: URL) async throws -> DeviceAuthorization
     func poll(origin: URL, authorization: DeviceAuthorization) async throws -> String
+}
+
+@MainActor public protocol DeviceVerificationOpening: Sendable {
+    func open(_ url: URL) -> Bool
+}
+
+public struct SystemDeviceVerificationOpener: DeviceVerificationOpening {
+    public init() {}
+    @MainActor public func open(_ url: URL) -> Bool { NSWorkspace.shared.open(url) }
 }
 
 public protocol DeviceSessionStoring: Sendable {

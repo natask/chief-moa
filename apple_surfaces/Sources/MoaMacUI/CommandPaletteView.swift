@@ -173,17 +173,50 @@ public struct CommandPaletteView: View {
     private var connectionEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Your Ag account").font(.subheadline.weight(.semibold))
-            Text(model.isConfigured ? "Signed in on this Mac" : "Sign in once. Ag keeps this Mac connected securely.")
-                .font(.caption).foregroundStyle(.secondary)
+            connectionFeedback
             HStack {
                 Spacer()
                 if model.isConfigured { Button("Sign out") {
                     Task { await model.disconnect() }
-                } } else { Button("Sign in") { Task { await model.signIn() } } }
+                } } else { Button(model.connectionState.isFailure ? "Try again" : "Sign in") {
+                    Task { await model.signIn() }
+                }
+                .disabled(model.isSigningIn) }
             }
         }
         .padding(12)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder private var connectionFeedback: some View {
+        switch model.connectionState {
+        case .disconnected:
+            Label("Not connected", systemImage: "network.slash")
+                .foregroundStyle(.secondary)
+            Text("Sign in once. Ag will confirm each step here.")
+                .font(.caption).foregroundStyle(.secondary)
+        case .openingBrowser:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Opening secure browser sign-in…")
+            }
+        case .waitingForApproval(let code):
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Waiting for browser approval")
+            }
+            Text("Code \(code) · Ag will update automatically after approval.")
+                .font(.caption).foregroundStyle(.secondary)
+        case .connected:
+            Label("Connected to Ag", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text("Your portable Ag session is ready for chat and voice.")
+                .font(.caption).foregroundStyle(.secondary)
+        case .failed(let message):
+            Label("Connection failed", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            Text(message).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private var history: some View {
@@ -305,6 +338,13 @@ private struct VoiceWaveform: View {
         .padding(.horizontal, 12)
         .background(.purple.opacity(0.08), in: Capsule())
         .animation(.linear(duration: 0.08), value: levels)
+    }
+}
+
+private extension CommandModel.ConnectionState {
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
     }
 }
 #endif

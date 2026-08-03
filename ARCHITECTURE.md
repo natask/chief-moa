@@ -2586,7 +2586,11 @@ queues.
   and owner-only permissions. This follows Codex's portable file-cache model
   rather than binding account access to a platform credential store. The file
   is a password-equivalent secret; provider and integration credentials remain
-  gateway-owned.
+  gateway-owned. Device sign-in exposes opening-browser, waiting-for-approval,
+  connected, denied, expired, and failed states in the native connection card.
+  The browser approval page distinguishes server approval from completed Mac
+  token exchange and reports connected only after the device-code record is
+  consumed by the app.
 - `apple_surfaces/Sources/MoaMacShell/GatewayVoiceShell.swift`: explicit
   microphone capture and authenticated voice WebSocket adapter.
 - `apple_surfaces/Sources/MoaMacUI/CommandPaletteView.swift`: compact
