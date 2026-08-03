@@ -11,6 +11,7 @@ const activeBrandFiles = [
   "browser_extension/extension/sidepanel.html",
   "gateway/.env.example",
   "gateway/public/console.html",
+  "gateway/public/development.html",
   "gateway/public/credential-panel.html",
   "gateway/public/gateway-ui.html",
   "gateway/lib/ui-spec.js",

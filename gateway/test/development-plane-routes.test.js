@@ -66,6 +66,8 @@ test("riff, graph, runnable work, QA, candidate, and acceptance are one API reco
   assert.equal(fetched.status, 200);
   assert.equal(fetched.json.intent.riff, "Build what I described and keep the intent durable.");
   assert.equal(fetched.json.intent.status, "accepted");
+  assert.equal(fetched.json.intent.release_handoff.candidate_digest, "digest-1");
+  assert.equal(fetched.json.intent.release_handoff.policy, "active-promotion");
 });
 
 test("dispatch launches bounded agent runs and reports their state", async () => {
@@ -85,4 +87,16 @@ test("dispatch launches bounded agent runs and reports their state", async () =>
   assert.equal(workers.status, 200, JSON.stringify(workers.json));
   assert.equal(workers.json.workers.length, 1);
   assert.equal(workers.json.workers[0].task_id, "first");
+});
+
+test("the separate development and QA page exposes capture and exact review controls", async () => {
+  for (const path of ["/development", "/qa"]) {
+    const response = await fetch(`${baseUrl}${path}`);
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Capture the riff/);
+    assert.match(html, /Record screen/);
+    assert.match(html, /Final QA candidate/);
+    assert.match(html, /candidate_digest:current\.candidate\.candidate_digest/);
+  }
 });

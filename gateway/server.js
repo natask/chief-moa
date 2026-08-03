@@ -119,6 +119,7 @@ const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
 const { createDevelopmentPlane } = require("./lib/development-plane");
 const { createDevelopmentPlaneHandlers } = require("./lib/development-plane-handlers");
 const { createDevelopmentPlaneCoordinator } = require("./lib/development-plane-coordinator");
+const { createDevelopmentIntegrationQueue } = require("./lib/development-integration-queue");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
 const { createAccountConnectionStore } = require("./lib/account-connections");
 const androidOta = require("./lib/android-ota");
@@ -250,6 +251,7 @@ const GATEWAY_UI_PATH = path.join(GATEWAY_DIR, "public", "gateway-ui.html");
 // sessions per project. Served by this same gateway service -- one surface,
 // no second app to maintain.
 const GATEWAY_CONSOLE_PATH = path.join(GATEWAY_DIR, "public", "console.html");
+const DEVELOPMENT_QA_PATH = path.join(GATEWAY_DIR, "public", "development.html");
 // Credential autopilot panel: gateway-served, read-and-fix view of account
 // connections, credential health, expiry, and pending device notifications.
 // Reads the /v1/account-connections endpoints with the gateway token; it never
@@ -756,8 +758,10 @@ const { routeIntentPlane } = createIntentPlaneHandlers({
   plane: intentPlane, readJsonBody, sendJson, cleanError,
 });
 const developmentPlane = createDevelopmentPlane({ events: eventSubstrate });
+const developmentIntegrationQueue = createDevelopmentIntegrationQueue({ events: eventSubstrate });
 const developmentPlaneCoordinator = createDevelopmentPlaneCoordinator({
   plane: developmentPlane,
+  integrationQueue: developmentIntegrationQueue,
   createRun: startAgentRun,
   readRun: readAgentRun,
 });
@@ -998,6 +1002,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && (url.pathname === "/development" || url.pathname === "/qa")) {
+      sendStaticHtml(response, DEVELOPMENT_QA_PATH);
+      return;
+    }
+
     if (request.method === "GET" && (url.pathname === "/credentials" || url.pathname === "/credential-panel")) {
       sendStaticHtml(response, CREDENTIAL_PANEL_PATH);
       return;
@@ -1172,8 +1181,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     // One durable record from the user's raw riff through dependency-aware
-    // work, QA, the frozen candidate, and the user's exact decision. This
-    // surface records authority and schedule state. It executes no work.
+    // work, QA, the frozen candidate, and the user's exact decision. Dispatch
+    // creates bounded agent runs; worker leases remain the execution authority.
     if (url.pathname.startsWith("/v1/development/")) {
       if (!authorized(request)) {
         sendJson(response, 401, { error: "missing or invalid gateway token" });

@@ -39,6 +39,19 @@ completes and at least one completed task is a QA task.
 - **WHEN** implementation completes without a completed QA task
 - **THEN** the system refuses to freeze the candidate
 
+### Requirement: Integration is serial across intents
+
+The system SHALL allow at most one active integration task across all durable
+development intents. It SHALL preserve queued integration work across restart
+and recover an abandoned lease after its bounded expiry.
+
+#### Scenario: A second integration waits
+
+- **WHEN** one intent owns the active integration lease and another intent has
+  runnable integration work
+- **THEN** the second integration remains queued and no agent run launches for
+  it
+
 ### Requirement: User decisions bind exact candidate bytes
 
 The system SHALL accept or reject only the candidate digest currently frozen
@@ -48,3 +61,16 @@ for review.
 
 - **WHEN** a decision names a digest other than the frozen candidate digest
 - **THEN** the system records no decision
+
+### Requirement: Acceptance preserves the release input
+
+The system SHALL create a release-policy handoff in the same durable event as
+user acceptance. The handoff SHALL contain the frozen candidate ref, digest,
+and verification references. It SHALL remain a proposal governed by the active
+promotion policy.
+
+#### Scenario: Release does not re-derive intent
+
+- **WHEN** the user accepts the frozen candidate
+- **THEN** the release handoff names the exact candidate and QA evidence that
+  the user reviewed

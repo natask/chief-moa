@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ag Development</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f4ee; --panel:#fff; --ink:#181814; --muted:#69685f; --line:#d8d6ca; --blue:#2851c5; --green:#147a4d; --red:#b3261e; --amber:#936200; --mono:"SFMono-Regular",Consolas,monospace; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button,input,textarea { font:inherit; }
+    button { min-height:38px; padding:0 14px; border:1px solid var(--ink); border-radius:7px; background:var(--ink); color:#fff; cursor:pointer; }
+    button.secondary { background:var(--panel); color:var(--ink); border-color:var(--line); }
+    button.good { background:var(--green); border-color:var(--green); }
+    button.bad { background:var(--red); border-color:var(--red); }
+    button:disabled { opacity:.5; cursor:default; }
+    input,textarea { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); }
+    textarea { min-height:160px; resize:vertical; }
+    label { display:block; margin:0 0 6px; color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+    header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:center; gap:16px; padding:13px 20px; border-bottom:1px solid var(--line); background:rgba(255,255,255,.95); }
+    h1,h2,h3,p { margin-top:0; }
+    h1 { margin-bottom:0; font-size:18px; }
+    h2 { font-size:17px; }
+    h3 { font-size:14px; }
+    main { width:min(1120px,calc(100% - 32px)); margin:20px auto 60px; }
+    .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,.75fr); gap:16px; align-items:start; }
+    .panel { padding:18px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+    .panel + .panel { margin-top:16px; }
+    .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+    .row > .grow { flex:1 1 220px; }
+    .field + .field { margin-top:13px; }
+    .hint,.meta { color:var(--muted); font-size:12px; }
+    .status { min-height:20px; margin-top:10px; color:var(--muted); }
+    .status.error { color:var(--red); }
+    .evidence { display:flex; flex-wrap:wrap; gap:7px; margin:10px 0 0; padding:0; list-style:none; }
+    .evidence li,.badge { border:1px solid var(--line); border-radius:999px; padding:4px 9px; background:var(--bg); font:12px var(--mono); word-break:break-all; }
+    .intent-head { display:flex; align-items:start; justify-content:space-between; gap:12px; }
+    .state { border-radius:999px; padding:4px 9px; background:#ecebe3; font-size:12px; }
+    .state.completed,.state.accepted { color:var(--green); background:#e2f2e9; }
+    .state.failed,.state.blocked,.state.rejected { color:var(--red); background:#f7e5e3; }
+    .state.running,.state.active,.state.needs_user { color:var(--blue); background:#e7ecfb; }
+    .tasks { display:grid; gap:9px; margin-top:12px; }
+    .task { padding:12px; border:1px solid var(--line); border-radius:8px; background:#fafaf7; }
+    .task-top { display:flex; justify-content:space-between; gap:10px; }
+    .task code,.candidate code { font-family:var(--mono); font-size:12px; }
+    .task .meta { margin-top:6px; }
+    .candidate { border-left:4px solid var(--blue); }
+    .decision { margin-top:13px; padding-top:13px; border-top:1px solid var(--line); }
+    .empty { color:var(--muted); text-align:center; padding:34px 10px; }
+    @media (max-width:800px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; flex-direction:column; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ag Development</h1>
+    <div class="row">
+      <input id="token" type="password" autocomplete="off" placeholder="Gateway token" aria-label="Gateway token" />
+      <button id="saveToken" class="secondary">Save token</button>
+    </div>
+  </header>
+  <main>
+    <div class="grid">
+      <section>
+        <div class="panel">
+          <h2>Capture the riff</h2>
+          <p class="hint">Save the raw intent first. A screen recording becomes evidence attached to the same record.</p>
+          <div class="field"><label for="riff">What you want</label><textarea id="riff" placeholder="Describe the product, behavior, constraints, and what good looks like."></textarea></div>
+          <div class="field"><label for="criteria">Acceptance checks, one per line</label><textarea id="criteria" style="min-height:90px" placeholder="I can complete the core flow without leaving the app."></textarea></div>
+          <div class="row field">
+            <button id="record" class="secondary">Record screen</button>
+            <button id="stop" class="secondary" disabled>Stop recording</button>
+            <span id="recordingState" class="hint">No recording attached.</span>
+          </div>
+          <ul id="evidence" class="evidence"></ul>
+          <div class="row field"><button id="capture">Save durable intent</button><span id="captureStatus" class="status"></span></div>
+        </div>
+        <div id="intentPanel" class="panel" hidden>
+          <div class="intent-head"><div><h2 id="intentTitle"></h2><div id="intentMeta" class="meta"></div></div><span id="intentState" class="state"></span></div>
+          <p id="objective"></p>
+          <h3>Work and QA</h3>
+          <div id="tasks" class="tasks"></div>
+        </div>
+      </section>
+      <aside>
+        <div class="panel">
+          <h2>Open durable intent</h2>
+          <div class="row"><input id="intentId" class="grow" placeholder="Intent ID" /><button id="load" class="secondary">Open</button></div>
+          <div class="row field"><button id="dispatch" class="secondary">Run ready work</button><button id="refresh" class="secondary">Refresh</button></div>
+          <div id="loadStatus" class="status"></div>
+        </div>
+        <div id="candidatePanel" class="panel candidate" hidden>
+          <h2>Final QA candidate</h2>
+          <p id="candidateSummary"></p>
+          <div id="candidateRef" class="meta"></div>
+          <ul id="verification" class="evidence"></ul>
+          <div class="decision">
+            <div class="field"><label for="decisionNote">Review note</label><textarea id="decisionNote" style="min-height:76px"></textarea></div>
+            <div class="row"><button id="accept" class="good">Accept exact candidate</button><button id="reject" class="bad">Reject</button></div>
+          </div>
+        </div>
+        <div id="noCandidate" class="panel empty">No final candidate is ready.</div>
+      </aside>
+    </div>
+  </main>
+  <script>
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    const TOKEN_KEY = "moa.gateway.token";
+    const INTENT_KEY = "ag.development.intent";
+    let evidenceRefs = [];
+    let recorder = null;
+    let recordingStarted = 0;
+    let current = null;
+    $("token").value = localStorage.getItem(TOKEN_KEY) || "";
+    $("intentId").value = localStorage.getItem(INTENT_KEY) || new URLSearchParams(location.search).get("intent") || "";
+
+    async function api(path, options = {}) {
+      const headers = new Headers(options.headers || {});
+      const token = $("token").value.trim();
+      if (token) headers.set("authorization", `Bearer ${token}`);
+      if (options.body && !(options.body instanceof Blob) && !headers.has("content-type")) headers.set("content-type", "application/json");
+      const response = await fetch(path, { ...options, headers });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+      return payload;
+    }
+
+    function setStatus(id, message, error = false) { const el = $(id); el.textContent = message; el.className = `status${error ? " error" : ""}`; }
+    function renderRefs(id, refs) { const root = $(id); root.replaceChildren(...refs.map((ref) => { const li=document.createElement("li"); li.textContent=ref; return li; })); }
+    function rememberIntent(id) { $("intentId").value=id; localStorage.setItem(INTENT_KEY,id); history.replaceState(null,"",`/development?intent=${encodeURIComponent(id)}`); }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:true });
+        const chunks = [];
+        recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm" });
+        recordingStarted = Date.now();
+        recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+        recorder.onstop = async () => {
+          stream.getTracks().forEach((track) => track.stop());
+          $("record").disabled=false; $("stop").disabled=true;
+          const duration = Date.now() - recordingStarted;
+          const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+          $("recordingState").textContent = `Uploading ${(blob.size / 1048576).toFixed(1)} MB…`;
+          try {
+            const saved = await api("/v1/video-notes", { method:"POST", body:blob, headers:{ "content-type":blob.type, "x-moa-surface":"development", "x-moa-duration-ms":String(duration), "x-moa-label":"Development riff" } });
+            evidenceRefs.push(saved.note.evidence_ref);
+            evidenceRefs = [...new Set(evidenceRefs)];
+            renderRefs("evidence", evidenceRefs);
+            $("recordingState").textContent = `Attached ${saved.note.evidence_ref}`;
+          } catch (error) { $("recordingState").textContent = `Upload failed: ${error.message}`; }
+        };
+        stream.getVideoTracks()[0].addEventListener("ended", () => { if (recorder?.state === "recording") recorder.stop(); });
+        recorder.start(1000); $("record").disabled=true; $("stop").disabled=false; $("recordingState").textContent="Recording screen and narration…";
+      } catch (error) { $("recordingState").textContent=`Recording did not start: ${error.message}`; }
+    }
+
+    async function capture() {
+      const riff=$("riff").value.trim(); if (!riff) return setStatus("captureStatus","Describe what you want first.",true);
+      setStatus("captureStatus","Saving…");
+      try {
+        const payload=await api("/v1/development/intents",{method:"POST",body:JSON.stringify({riff,evidence_refs:evidenceRefs,acceptance_criteria:$("criteria").value.split("\n").map(x=>x.trim()).filter(Boolean)})});
+        rememberIntent(payload.intent.intent_id); current=payload.intent; render(); setStatus("captureStatus","Intent saved. It will survive restart.");
+      } catch(error) { setStatus("captureStatus",error.message,true); }
+    }
+
+    async function load({ quiet=false }={}) {
+      const id=$("intentId").value.trim(); if (!id) return setStatus("loadStatus","Enter an intent ID.",true);
+      if (!quiet) setStatus("loadStatus","Loading…");
+      try { const payload=await api(`/v1/development/intents/${encodeURIComponent(id)}/workers`); current=payload.intent; rememberIntent(id); render(payload.workers||[],payload.integration_queue); setStatus("loadStatus",`Updated ${new Date().toLocaleTimeString()}`); }
+      catch(error) { setStatus("loadStatus",error.message,true); }
+    }
+
+    async function dispatch() {
+      const id=$("intentId").value.trim(); if (!id) return setStatus("loadStatus","Open an intent first.",true);
+      setStatus("loadStatus","Scheduling safe work…");
+      try { const payload=await api(`/v1/development/intents/${encodeURIComponent(id)}/dispatch`,{method:"POST",body:JSON.stringify({max_parallel:4,memory_budget_mb:8192})}); current=payload.intent; render(payload.workers||[],payload.integration_queue); setStatus("loadStatus",payload.launched.length?`Launched ${payload.launched.length} task${payload.launched.length===1?"":"s"}.`:"No task is runnable yet."); }
+      catch(error) { setStatus("loadStatus",error.message,true); }
+    }
+
+    function render(workers=[],integrationQueue=null) {
+      if (!current) return;
+      $("intentPanel").hidden=false; $("intentTitle").textContent=current.intent_id; $("intentState").textContent=current.status; $("intentState").className=`state ${current.status}`;
+      $("intentMeta").textContent=`Version ${current.version} · ${current.evidence_refs.length} evidence item${current.evidence_refs.length===1?"":"s"}`;
+      $("objective").textContent=current.objective||current.riff;
+      const workerByTask=new Map(workers.map((worker)=>[worker.task_id,worker]));
+      $("tasks").replaceChildren(...current.tasks.map((task)=>{ const el=document.createElement("div"); el.className="task"; const worker=workerByTask.get(task.task_id); const top=document.createElement("div"); top.className="task-top"; const name=document.createElement("strong"); name.textContent=task.title; const state=document.createElement("span"); state.className=`state ${task.state}`; state.textContent=task.state; top.append(name,state); const check=document.createElement("div"); check.className="meta"; check.textContent=`${task.kind} · ${task.acceptance_check}`; el.append(top,check); if(worker){const live=document.createElement("div");live.className="meta";live.textContent=`Run ${worker.run_id} · ${worker.status}${worker.last_heartbeat_at?` · heartbeat ${new Date(worker.last_heartbeat_at).toLocaleTimeString()}`:""}`;el.append(live);} const refs=[...(task.output_refs||[]),...(task.verification_refs||[])]; if(refs.length){const evidence=document.createElement("div");evidence.className="meta";evidence.textContent=`Evidence: ${refs.join(" · ")}`;el.append(evidence);} if(task.failure){const failure=document.createElement("div");failure.className="status error";failure.textContent=task.failure;el.append(failure);} return el; }));
+      const candidate=current.candidate; $("candidatePanel").hidden=!candidate; $("noCandidate").hidden=Boolean(candidate);
+      if(candidate){ $("candidateSummary").textContent=candidate.summary; $("candidateRef").textContent=`${candidate.candidate_ref} · ${candidate.candidate_digest}`; renderRefs("verification",candidate.verification_refs||[]); const decided=Boolean(current.user_decision); $("accept").disabled=decided; $("reject").disabled=decided; if(decided) setStatus("loadStatus",`Candidate ${current.user_decision.decision} by ${current.user_decision.reviewer}.`); }
+      if(current.release_handoff) $("candidateRef").textContent += ` · release ${current.release_handoff.state}`;
+      if(integrationQueue?.active) setStatus("loadStatus",`Integration queue active: ${integrationQueue.active.intent_id}/${integrationQueue.active.task_id}`);
+    }
+
+    async function decide(decision) {
+      if(!current?.candidate) return;
+      try { const payload=await api(`/v1/development/intents/${encodeURIComponent(current.intent_id)}/decision`,{method:"POST",body:JSON.stringify({decision,candidate_digest:current.candidate.candidate_digest,note:$("decisionNote").value,reviewer:"user"})}); current=payload.intent; render(); setStatus("loadStatus",`Candidate ${decision}.`); }
+      catch(error){ setStatus("loadStatus",error.message,true); }
+    }
+
+    $("saveToken").onclick=()=>{localStorage.setItem(TOKEN_KEY,$("token").value.trim());setStatus("loadStatus","Token saved in this browser.");};
+    $("record").onclick=startRecording; $("stop").onclick=()=>recorder?.state==="recording"&&recorder.stop(); $("capture").onclick=capture; $("load").onclick=()=>load(); $("refresh").onclick=()=>load(); $("dispatch").onclick=dispatch; $("accept").onclick=()=>decide("accepted"); $("reject").onclick=()=>decide("rejected");
+    if($("intentId").value) load({quiet:true});
+  </script>
+</body>
+</html>

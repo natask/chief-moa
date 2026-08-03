@@ -10,8 +10,8 @@
 - [x] D6.1 Preserve an isolated preview's port, root, and provider project when
       launchd starts the background process. Remove failed launch services.
 - [x] D7 Launch bounded workers from runnable tasks and report heartbeats.
-- [ ] D8 Integrate completed candidates through one serial master queue.
-- [ ] D9 Render the intent, graph, QA evidence, and final candidate in the
-      separate QA page.
-- [ ] D10 Let an accepted candidate enter release policy without re-deriving
+- [x] D8 Integrate completed candidates through one serial master queue.
+- [x] D9 Render the intent, graph, QA evidence, and final candidate in the
+      separate QA page. Capture the raw riff and screen recording there too.
+- [x] D10 Let an accepted candidate enter release policy without re-deriving
       the user's intent.

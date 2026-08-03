@@ -52,6 +52,11 @@ test("a riff, plan, progress, candidate, and user decision survive restart", asy
   assert.equal(state.status, "accepted");
   assert.equal(state.tasks.every((task) => task.state === "completed"), true);
   assert.equal(state.user_decision.reviewer, "nat");
+  assert.equal(state.release_handoff.state, "requested");
+  assert.equal(state.release_handoff.candidate_digest, "abc123");
+  assert.equal(state.release_handoff.candidate_ref, "git://candidate");
+  assert.equal(state.release_handoff.policy, "active-promotion");
+  await assert.rejects(() => restarted.decide("intent_one", { decision: "rejected", candidate_digest: "abc123", reviewer: "nat" }), /different user decision/);
 });
 
 test("dependency, path, parallel, and memory rules choose safe work", async (t) => {
@@ -65,6 +70,18 @@ test("dependency, path, parallel, and memory rules choose safe work", async (t) 
   assert.deepEqual((await plane.runnable("intent_schedule", { max_parallel: 3, memory_budget_mb: 1_000 })).map((task) => task.task_id), ["a"]);
   await plane.claimTask("intent_schedule", "a", { worker_id: "w", run_id: "r" });
   assert.deepEqual((await plane.runnable("intent_schedule", { max_parallel: 3, memory_budget_mb: 1_200 })).map((task) => task.task_id), ["c"]);
+});
+
+test("non-parallel work excludes every other task regardless of graph order", async (t) => {
+  const { plane } = harness(t);
+  await plane.capture({ intent_id: "intent_serial", riff: "serialize integration" });
+  await plane.definePlan("intent_serial", { tasks: [
+    { task_id: "integrate", title: "Integrate", kind: "integration", acceptance_check: "integrated", parallel_safe: false },
+    { task_id: "other", title: "Other", acceptance_check: "done" },
+  ] });
+  assert.deepEqual((await plane.runnable("intent_serial", { max_parallel: 2 })).map((task) => task.task_id), ["integrate"]);
+  await plane.claimTask("intent_serial", "integrate", { worker_id: "w", run_id: "r" });
+  assert.deepEqual(await plane.runnable("intent_serial", { max_parallel: 2 }), []);
 });
 
 test("invalid graphs, premature candidates, failed QA, and wrong decisions fail closed", async (t) => {

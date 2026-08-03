@@ -110,6 +110,7 @@ function initialState(intentId) {
     tasks: [],
     candidate: null,
     user_decision: null,
+    release_handoff: null,
     created_at: "",
     updated_at: "",
   };
@@ -149,7 +150,14 @@ function reduce(intentId, events) {
       state.candidate = payload;
       state.status = "needs_user";
     } else if (event.event_type === "development.user.accepted" || event.event_type === "development.user.rejected") {
-      state.user_decision = payload;
+      state.user_decision = {
+        intent_id: payload.intent_id,
+        decision: payload.decision,
+        candidate_digest: payload.candidate_digest,
+        note: payload.note,
+        reviewer: payload.reviewer,
+      };
+      state.release_handoff = payload.release_handoff ? { ...payload.release_handoff, requested_at: event.occurred_at } : null;
       state.status = payload.decision;
     }
     state.version = Number(event.stream_version || state.version);
@@ -174,11 +182,13 @@ function runnableTasks(state, limits = {}) {
   const memoryBudgetMb = Math.max(1, Math.min(Number(limits.memory_budget_mb || limits.memoryBudgetMb) || 8_192, 1_048_576));
   const completed = new Set(state.tasks.filter((task) => task.state === "completed").map((task) => task.task_id));
   const running = state.tasks.filter((task) => task.state === "running");
+  if (running.some((task) => !task.parallel_safe)) return [];
   const selected = [];
   let memoryUsed = running.reduce((sum, task) => sum + task.estimated_memory_mb, 0);
   for (const task of state.tasks) {
     if (selected.length + running.length >= maxParallel) break;
     if (task.state !== "pending" || !task.depends_on.every((dependency) => completed.has(dependency))) continue;
+    if (selected.some((other) => !other.parallel_safe)) break;
     if (!task.parallel_safe && (running.length || selected.length)) continue;
     if (running.some((other) => tasksOverlap(task, other)) || selected.some((other) => tasksOverlap(task, other))) continue;
     if (memoryUsed + task.estimated_memory_mb > memoryBudgetMb) continue;
@@ -333,7 +343,6 @@ function createDevelopmentPlane({ events, now = () => new Date().toISOString(), 
   async function decide(intentId, input = {}) {
     return mutate(intentId, async (state, safeId) => {
       if (!state.candidate) throw new Error("candidate is not ready");
-      if (state.user_decision) return state;
       const decision = required(input.decision, "decision", 40);
       if (!DECISIONS.has(decision)) throw new Error("decision must be accepted or rejected");
       const digest = required(input.candidate_digest || input.candidateDigest, "candidate_digest", 160);
@@ -349,8 +358,17 @@ function createDevelopmentPlane({ events, now = () => new Date().toISOString(), 
         if (!same(existing, payload)) throw new Error("candidate already has a different user decision");
         return state;
       }
+      const releaseHandoff = decision === "accepted" ? {
+        handoff_id: deterministicId("release", { intent_id: safeId, candidate_digest: digest }),
+        state: "requested",
+        policy: "active-promotion",
+        candidate_ref: state.candidate.candidate_ref,
+        candidate_digest: digest,
+        verification_refs: state.candidate.verification_refs,
+      } : null;
       await append(safeId, `development.user.${decision}`, {
         ...payload,
+        release_handoff: releaseHandoff,
       }, input.idempotency_key || input.idempotencyKey || `decision:${decision}`, state.version);
       return get(safeId);
     });

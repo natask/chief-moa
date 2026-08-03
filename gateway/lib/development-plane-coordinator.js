@@ -67,7 +67,7 @@ function runStatus(task, readRun) {
   }
 }
 
-function createDevelopmentPlaneCoordinator({ plane, createRun, readRun, startRun = () => {} } = {}) {
+function createDevelopmentPlaneCoordinator({ plane, integrationQueue = null, createRun, readRun, startRun = () => {} } = {}) {
   if (!plane?.get || !plane?.runnable || !plane?.claimTask || !plane?.finishTask) {
     throw new Error("development coordinator requires a development plane");
   }
@@ -82,6 +82,9 @@ function createDevelopmentPlaneCoordinator({ plane, createRun, readRun, startRun
       try { run = readRun(task.run_id); } catch { continue; }
       if (!TERMINAL.has(run.status)) continue;
       intent = await plane.finishTask(intentId, task.task_id, runReceipt(run));
+      if (task.kind === "integration" && integrationQueue) {
+        await integrationQueue.release(intentId, task.task_id, run.status);
+      }
     }
     return intent;
   }
@@ -96,30 +99,42 @@ function createDevelopmentPlaneCoordinator({ plane, createRun, readRun, startRun
     const runnable = await plane.runnable(intentId, limits);
     const launched = [];
     for (const task of runnable) {
-      const run = createRun({
-        prompt: taskPrompt(intent, task),
-        harness: options.harness,
-        working_dir: options.working_dir || options.workingDir,
-        project_id: options.project_id || options.projectId,
-        source: "development-plane",
-        intent_id: intent.intent_id,
-        stable_launch_key: `development:${intent.intent_id}:${intent.plan_id}:${task.task_id}`,
-      });
-      intent = await plane.claimTask(intentId, task.task_id, {
-        worker_id: `agent-run:${run.id}`,
-        run_id: run.id,
-        idempotency_key: `dispatch:${intent.plan_id}:${task.task_id}`,
-      });
-      startRun(run.id);
-      launched.push({ task_id: task.task_id, run_id: run.id, status: readRun(run.id).status });
+      let integrationLease = null;
+      if (task.kind === "integration" && integrationQueue) {
+        await integrationQueue.enqueue(intentId, task.task_id);
+        integrationLease = await integrationQueue.claim(intentId, task.task_id);
+        if (!integrationLease.acquired) continue;
+      }
+      try {
+        const run = createRun({
+          prompt: taskPrompt(intent, task),
+          harness: options.harness,
+          working_dir: options.working_dir || options.workingDir,
+          project_id: options.project_id || options.projectId,
+          source: "development-plane",
+          intent_id: intent.intent_id,
+          stable_launch_key: `development:${intent.intent_id}:${intent.plan_id}:${task.task_id}`,
+        });
+        if (integrationLease) await integrationQueue.bindRun(intentId, task.task_id, run.id);
+        intent = await plane.claimTask(intentId, task.task_id, {
+          worker_id: `agent-run:${run.id}`,
+          run_id: run.id,
+          idempotency_key: `dispatch:${intent.plan_id}:${task.task_id}`,
+        });
+        startRun(run.id);
+        launched.push({ task_id: task.task_id, run_id: run.id, status: readRun(run.id).status });
+      } catch (error) {
+        if (integrationLease) await integrationQueue.release(intentId, task.task_id, "dispatch-failed");
+        throw error;
+      }
     }
-    return { intent, limits, launched, workers: intent.tasks.map((task) => runStatus(task, readRun)).filter(Boolean) };
+    return { intent, limits, launched, workers: intent.tasks.map((task) => runStatus(task, readRun)).filter(Boolean), integration_queue: integrationQueue ? await integrationQueue.read() : null };
   }
 
   async function status(intentId, { reconcile_runs = true } = {}) {
     const intent = reconcile_runs ? await reconcile(intentId) : await plane.get(intentId);
     if (!intent.exists) throw new Error("intent not found");
-    return { intent, workers: intent.tasks.map((task) => runStatus(task, readRun)).filter(Boolean) };
+    return { intent, workers: intent.tasks.map((task) => runStatus(task, readRun)).filter(Boolean), integration_queue: integrationQueue ? await integrationQueue.read() : null };
   }
 
   return { dispatch, reconcile, status };

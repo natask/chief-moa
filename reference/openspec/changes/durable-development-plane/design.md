@@ -22,6 +22,19 @@ worker-pull leases and heartbeats remain the execution authority. The
 coordinator reports that live state beside each task and folds terminal run
 receipts back into the graph before it schedules more work.
 
+Integration tasks also enter one global event-backed queue. One expiring lease
+may own integration authority across all intents. A terminal run releases that
+lease before the next queued integration task may start.
+
+The gateway serves a separate development and QA page. It captures the raw riff
+and can launch browser screen recording without taking over the user's active
+work surface. It shows task, worker heartbeat, integration, QA, and exact
+candidate evidence. Accept and reject actions bind the displayed digest.
+
+Acceptance atomically creates a release-policy handoff containing the frozen
+candidate ref, digest, and QA evidence. The handoff is a proposal for the
+existing active-promotion policy. It does not grant direct deployment authority.
+
 QA is a task kind. A candidate cannot become ready until every planned task has
 completed and at least one QA task exists. User acceptance binds the exact
 candidate digest. The development plane can launch bounded workers. It does not
