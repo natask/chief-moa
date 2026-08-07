@@ -1164,16 +1164,16 @@ class VoiceSessionConnection {
         : {}),
       ...(providerResult?.streaming ? { streaming: true } : {}),
       ...(Number.isFinite(firstAudioMs) ? { first_audio_ms: firstAudioMs } : {}),
+      stage_timings: sanitizeStageTimings(providerEvents.stageTimings),
+      ...(Number.isFinite(providerResult?.reasoner_first_delta_ms) ? { reasoner_first_delta_ms: Math.max(0, Math.round(providerResult.reasoner_first_delta_ms)) } : {}),
     });
-    // the session so a barge-in during that tail can report its checkpoint.
-    // Text-only turns still close immediately for old-client compatibility.
+    // Keep the playback tail for barge-in checkpoints; close text-only turns immediately.
     if (turn.ttsRecovery) retainTtsRecoveryTurn(this, turn);
     if (!hasPlaybackTail && !turn.ttsRecovery && this.turn === turn) {
       this.turn = null;
     }
   }
-  // Persist an interrupted/canceled/closed live turn into the SAME canonical
-  // conversation record path as a completed turn, so whatever transcript or
+  // Persist interrupted live turns into the same canonical path as completed turns, so whatever transcript or
   // assistant text the provider produced before the cutoff still carries
   // forward to the next turn and to the other device. Without this, an
   // interrupted Gemini Live turn only lands in observability logs and is lost

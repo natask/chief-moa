@@ -29,6 +29,7 @@ final class MoaVoiceLifecycleTrace {
     private boolean assistantAudioReceived;
     private boolean devicePlaybackCompleted;
     private long captureStartedElapsedMs = -1L;
+    private long firstSocketReadyElapsedMs = -1L;
     private long commitElapsedMs = -1L;
     private long firstResultElapsedMs = -1L;
     private long firstPartialElapsedMs = -1L;
@@ -36,6 +37,11 @@ final class MoaVoiceLifecycleTrace {
     private long firstAssistantTextElapsedMs = -1L;
     private long firstAudioReceiptElapsedMs = -1L;
     private long firstPlayoutElapsedMs = -1L;
+    private long gatewaySttMs = -1L;
+    private long gatewayReasoningMs = -1L;
+    private long gatewayTtsMs = -1L;
+    private long gatewayFirstAudioMs = -1L;
+    private long gatewayReasonerFirstDeltaMs = -1L;
 
     MoaVoiceLifecycleTrace(Clock clock, Sink sink, String traceId) {
         this.clock = clock;
@@ -50,6 +56,7 @@ final class MoaVoiceLifecycleTrace {
     }
 
     void sessionReady() {
+        firstSocketReadyElapsedMs = first(firstSocketReadyElapsedMs, elapsedMs());
         emit("socket_ready", "", false, false);
     }
 
@@ -83,6 +90,7 @@ final class MoaVoiceLifecycleTrace {
     }
 
     void playbackStarted() {
+        if (firstPlayoutElapsedMs >= 0L) return;
         firstPlayoutElapsedMs = first(firstPlayoutElapsedMs, elapsedMs());
         emit("playback_start", "", false, false);
     }
@@ -90,6 +98,19 @@ final class MoaVoiceLifecycleTrace {
     void playbackCompleted() {
         devicePlaybackCompleted = true;
         emit("playback_complete", "", false, false);
+    }
+
+    void gatewayTimings(JSONObject terminalEvent) {
+        if (terminalEvent == null) return;
+        JSONObject stages = terminalEvent.optJSONObject("stage_timings");
+        if (stages != null) {
+            gatewaySttMs = boundedTiming(stages.optLong("stt_ms", -1L));
+            gatewayReasoningMs = boundedTiming(stages.optLong("reasoning_ms", -1L));
+            gatewayTtsMs = boundedTiming(stages.optLong("tts_ms", -1L));
+            gatewayFirstAudioMs = boundedTiming(stages.optLong("first_audio_ms", -1L));
+        }
+        gatewayReasonerFirstDeltaMs = boundedTiming(
+                terminalEvent.optLong("reasoner_first_delta_ms", -1L));
     }
 
     void completed(String status, boolean ttsExpected, boolean audioReceived) {
@@ -140,6 +161,9 @@ final class MoaVoiceLifecycleTrace {
             }
             if (isTerminalStage(stage)) {
                 event.put("capture_to_terminal_ms", delta(captureStartedElapsedMs, elapsedMs()));
+                event.put("capture_to_commit_ms", delta(captureStartedElapsedMs, commitElapsedMs));
+                event.put("capture_to_socket_ready_ms", delta(captureStartedElapsedMs,
+                        firstSocketReadyElapsedMs));
                 event.put("commit_to_result_ms", delta(commitElapsedMs, firstResultElapsedMs));
                 event.put("commit_to_terminal_ms", delta(commitElapsedMs, elapsedMs()));
                 event.put("capture_to_first_feedback_ms", delta(
@@ -162,6 +186,11 @@ final class MoaVoiceLifecycleTrace {
                         delta(commitElapsedMs, firstPlayoutElapsedMs));
                 event.put("audio_receipt_to_playout_ms",
                         delta(firstAudioReceiptElapsedMs, firstPlayoutElapsedMs));
+                event.put("gateway_stt_ms", gatewaySttMs);
+                event.put("gateway_reasoning_ms", gatewayReasoningMs);
+                event.put("gateway_tts_ms", gatewayTtsMs);
+                event.put("gateway_first_audio_ms", gatewayFirstAudioMs);
+                event.put("gateway_reasoner_first_delta_ms", gatewayReasonerFirstDeltaMs);
             }
             sink.write(event.toString());
         } catch (Exception ignored) {
@@ -195,6 +224,10 @@ final class MoaVoiceLifecycleTrace {
 
     private static long delta(long start, long end) {
         return start < 0L || end < start ? -1L : end - start;
+    }
+
+    private static long boundedTiming(long value) {
+        return value < 0L ? -1L : Math.min(value, 600000L);
     }
 
     private static long first(long current, long candidate) {

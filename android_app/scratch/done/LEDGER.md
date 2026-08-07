@@ -1,3 +1,4 @@
+- Exposed capture, socket, gateway STT/model/TTS, and real Android playout latency for completed phone voice turns — agent: Codex/GPT-5.6 — this commit
 - Added a fail-closed voice IME and moved voice-draft Cancel left and Pause/Resume right so transcript lanes stay clear — agent: Codex/GPT-5 — a0ef2481
 - Added capability-gated Android voice-draft Pause/Resume and Discard controls around the mascot, with exact-authority Send and legacy fallback — agent: Codex/GPT-5 — this commit
 - Put an exact Copy action beside every retained user and assistant message in Android History, replacing combined turn copy — agent: Codex/GPT-5 — this commit

@@ -169,6 +169,7 @@ final class MoaStreamingVoiceSessionController {
         String currentTurnId;
         String text;
         int chars;
+        long playedPcmFrames;
         boolean keepGoing;
         synchronized (lock) {
             playbackFrameScheduled = false;
@@ -176,8 +177,12 @@ final class MoaStreamingVoiceSessionController {
             currentTurnId = turnId;
             keepGoing = assistantAudioStarted
                     && playbackEnabled && playback != null && callback != null;
+            playedPcmFrames = playback == null ? 0L : playback.playedPcmFrames();
+            if (playedPcmFrames > 0L && lifecycleTrace != null) {
+                lifecycleTrace.playbackStarted();
+            }
             MoaAssistantAudioProgressTracker.PlaybackProgress progress =
-                    assistantAudioProgress.snapshot(playback == null ? 0L : playback.playedPcmFrames());
+                    assistantAudioProgress.snapshot(playedPcmFrames);
             text = assistantAudioProgress.streamedText();
             chars = progress.assistantTextChars;
         }
@@ -865,6 +870,7 @@ final class MoaStreamingVoiceSessionController {
         boolean shouldStopPlayback;
         synchronized (lock) {
             if (lifecycleTrace != null) {
+                lifecycleTrace.gatewayTimings(terminalEvent);
                 if ("error".equals(status)) {
                     lifecycleTrace.failed("gateway");
                 } else if ("completed".equals(status)
@@ -1133,9 +1139,6 @@ final class MoaStreamingVoiceSessionController {
         public void onPlaybackStarted() {
             synchronized (lock) {
                 playbackDrainGate.onPlaybackStarted();
-                if (lifecycleTrace != null) {
-                    lifecycleTrace.playbackStarted();
-                }
             }
         }
 

@@ -31,7 +31,12 @@ test("records final-clause count and dead time only when latency measurement is 
   nowMs = 1700;
   client.audio(Buffer.alloc(320));
   client.send({ type: "commit_turn", turn_id: "latency-turn" });
-  await client.next("turn_done");
+  const done = await client.next("turn_done");
+
+  assert.equal(done.stage_timings.stt_ms, 125);
+  assert.equal(done.stage_timings.reasoning_ms, 250);
+  assert.equal(done.stage_timings.tts_ms, 375);
+  assert.equal(done.reasoner_first_delta_ms, 225);
 
   const events = providerEvents(service.dataDir)
     .filter((event) => event.type === "voice_latency_clause_boundaries");
@@ -70,10 +75,16 @@ function fakeStreamingProvider() {
       return { push() {}, abort() {} };
     },
     emitFinal: (segment) => hooks.onTranscriptFinalSegment(segment),
-    async processTurn() {
+    async processTurn(_turn, providerHooks) {
+      await providerHooks.onStageStart("stt");
+      await providerHooks.onStageDone("stt", { duration_ms: 125 });
+      await providerHooks.onStageStart("reasoning");
+      await providerHooks.onStageDone("reasoning", { duration_ms: 250 });
+      await providerHooks.onStageStart("tts");
+      await providerHooks.onStageDone("tts", { duration_ms: 375 });
       return {
         provider: "latency-fixture", model: "fixture", transcript: "fixture transcript",
-        assistant_text: "", transcription_only: true,
+        assistant_text: "", transcription_only: true, reasoner_first_delta_ms: 225,
       };
     },
   };

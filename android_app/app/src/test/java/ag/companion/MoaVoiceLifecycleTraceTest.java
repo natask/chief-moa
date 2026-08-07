@@ -31,6 +31,7 @@ public final class MoaVoiceLifecycleTraceTest {
         trace.resultReceived("assistant_text");
         clock.now = 150;
         trace.resultReceived("assistant_audio");
+        clock.now = 165;
         trace.playbackStarted();
         clock.now = 240;
         trace.playbackCompleted();
@@ -47,11 +48,13 @@ public final class MoaVoiceLifecycleTraceTest {
         assertTrue(terminal.getBoolean("audible_success"));
         assertEquals(30L, terminal.getLong("capture_to_first_feedback_ms"));
         assertEquals(30L, terminal.getLong("capture_to_first_partial_ms"));
+        assertEquals(45L, terminal.getLong("capture_to_commit_ms"));
+        assertEquals(20L, terminal.getLong("capture_to_socket_ready_ms"));
         assertEquals(80L, terminal.getLong("capture_to_final_transcript_ms"));
         assertEquals(75L, terminal.getLong("commit_to_first_assistant_text_ms"));
         assertEquals(105L, terminal.getLong("commit_to_first_audio_receipt_ms"));
-        assertEquals(105L, terminal.getLong("commit_to_first_playout_ms"));
-        assertEquals(0L, terminal.getLong("audio_receipt_to_playout_ms"));
+        assertEquals(120L, terminal.getLong("commit_to_first_playout_ms"));
+        assertEquals(15L, terminal.getLong("audio_receipt_to_playout_ms"));
         String joined = String.join("\n", events);
         assertFalse(joined.contains("transcript_text"));
         assertFalse(joined.contains("token"));
@@ -170,6 +173,33 @@ public final class MoaVoiceLifecycleTraceTest {
         assertEquals(65L, terminal.getLong("commit_to_first_audio_receipt_ms"));
         assertEquals(80L, terminal.getLong("commit_to_first_playout_ms"));
         assertEquals(15L, terminal.getLong("audio_receipt_to_playout_ms"));
+    }
+
+    @Test
+    public void includesBoundedGatewayStageTimingsWithoutProviderContent() throws Exception {
+        FakeClock clock = new FakeClock();
+        List<String> events = new ArrayList<>();
+        MoaVoiceLifecycleTrace trace =
+                new MoaVoiceLifecycleTrace(clock, events::add, "local-trace");
+
+        trace.captureStarted();
+        trace.gatewayTimings(new JSONObject()
+                .put("stage_timings", new JSONObject()
+                        .put("stt_ms", 120)
+                        .put("reasoning_ms", 240)
+                        .put("tts_ms", 360)
+                        .put("first_audio_ms", 480))
+                .put("reasoner_first_delta_ms", 220)
+                .put("provider_secret", "must-not-leak"));
+        trace.completed("completed", false, false);
+
+        JSONObject terminal = new JSONObject(events.get(events.size() - 1));
+        assertEquals(120L, terminal.getLong("gateway_stt_ms"));
+        assertEquals(240L, terminal.getLong("gateway_reasoning_ms"));
+        assertEquals(360L, terminal.getLong("gateway_tts_ms"));
+        assertEquals(480L, terminal.getLong("gateway_first_audio_ms"));
+        assertEquals(220L, terminal.getLong("gateway_reasoner_first_delta_ms"));
+        assertFalse(terminal.toString().contains("must-not-leak"));
     }
 
     private static final class FakeClock implements MoaVoiceLifecycleTrace.Clock {

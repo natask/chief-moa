@@ -26,6 +26,10 @@ final class MoaVoiceE2eMetricsStore {
                     .put("stage", stage)
                     .put("outcome", event.optString("outcome", "other"))
                     .put("capture_to_terminal_ms", boundedDuration(event.optLong("capture_to_terminal_ms", -1L)))
+                    .put("capture_to_commit_ms", boundedDuration(
+                            event.optLong("capture_to_commit_ms", -1L)))
+                    .put("capture_to_socket_ready_ms", boundedDuration(
+                            event.optLong("capture_to_socket_ready_ms", -1L)))
                     .put("commit_to_result_ms", boundedDuration(event.optLong("commit_to_result_ms", -1L)))
                     .put("commit_to_terminal_ms", boundedDuration(event.optLong("commit_to_terminal_ms", -1L)))
                     .put("capture_to_first_feedback_ms", boundedDuration(
@@ -42,6 +46,14 @@ final class MoaVoiceE2eMetricsStore {
                             event.optLong("commit_to_first_playout_ms", -1L)))
                     .put("audio_receipt_to_playout_ms", boundedDuration(
                             event.optLong("audio_receipt_to_playout_ms", -1L)))
+                    .put("gateway_stt_ms", boundedDuration(event.optLong("gateway_stt_ms", -1L)))
+                    .put("gateway_reasoning_ms", boundedDuration(
+                            event.optLong("gateway_reasoning_ms", -1L)))
+                    .put("gateway_tts_ms", boundedDuration(event.optLong("gateway_tts_ms", -1L)))
+                    .put("gateway_first_audio_ms", boundedDuration(
+                            event.optLong("gateway_first_audio_ms", -1L)))
+                    .put("gateway_reasoner_first_delta_ms", boundedDuration(
+                            event.optLong("gateway_reasoner_first_delta_ms", -1L)))
                     .put("audible_success", "completed".equals(stage)
                             && event.optBoolean("audible_success", false));
             SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -65,6 +77,11 @@ final class MoaVoiceE2eMetricsStore {
         int audible = 0;
         List<Long> latencies = new ArrayList<>();
         List<Long> firstFeedbackLatencies = new ArrayList<>();
+        List<Long> socketReadyLatencies = new ArrayList<>();
+        List<Long> sttLatencies = new ArrayList<>();
+        List<Long> reasoningLatencies = new ArrayList<>();
+        List<Long> ttsLatencies = new ArrayList<>();
+        List<Long> playoutLatencies = new ArrayList<>();
         for (int i = 0; i < samples.length(); i++) {
             JSONObject sample = samples.optJSONObject(i);
             if (sample == null) continue;
@@ -77,15 +94,25 @@ final class MoaVoiceE2eMetricsStore {
             if (latency >= 0L) latencies.add(latency);
             long firstFeedback = sample.optLong("capture_to_first_feedback_ms", -1L);
             if (firstFeedback >= 0L) firstFeedbackLatencies.add(firstFeedback);
+            collect(sample, "capture_to_socket_ready_ms", socketReadyLatencies);
+            collect(sample, "gateway_stt_ms", sttLatencies);
+            collect(sample, "gateway_reasoning_ms", reasoningLatencies);
+            collect(sample, "gateway_tts_ms", ttsLatencies);
+            collect(sample, "audio_receipt_to_playout_ms", playoutLatencies);
         }
         int total = completed + failed + teardown;
         if (total == 0) return "No mobile voice samples yet";
         Collections.sort(latencies);
-        return total + " turns · " + completed + " completed · " + failed + " failed · "
+        String summary = total + " turns · " + completed + " completed · " + failed + " failed · "
                 + teardown + " canceled · audible " + audible + " · p50 "
                 + percentile(latencies, 0.50) + " ms · p95 " + percentile(latencies, 0.95) + " ms"
                 + " · first feedback p50 " + percentile(firstFeedbackLatencies, 0.50)
                 + " ms · p95 " + percentile(firstFeedbackLatencies, 0.95) + " ms";
+        return appendP50(summary, "ready", socketReadyLatencies)
+                + appendP50("", "STT", sttLatencies)
+                + appendP50("", "model", reasoningLatencies)
+                + appendP50("", "TTS", ttsLatencies)
+                + appendP50("", "playout", playoutLatencies);
     }
 
     private static JSONArray load(SharedPreferences prefs) {
@@ -105,6 +132,17 @@ final class MoaVoiceE2eMetricsStore {
 
     private static long boundedDuration(long value) {
         return value < 0L ? -1L : Math.min(value, 600000L);
+    }
+
+    private static void collect(JSONObject sample, String key, List<Long> values) {
+        long value = sample.optLong(key, -1L);
+        if (value >= 0L) values.add(value);
+    }
+
+    private static String appendP50(String prefix, String label, List<Long> values) {
+        if (values.isEmpty()) return prefix;
+        Collections.sort(values);
+        return prefix + " · " + label + " p50 " + percentile(values, 0.50) + " ms";
     }
 
     private static long percentile(List<Long> values, double percentile) {

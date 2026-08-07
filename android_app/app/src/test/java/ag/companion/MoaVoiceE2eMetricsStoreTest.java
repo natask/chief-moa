@@ -31,6 +31,11 @@ public final class MoaVoiceE2eMetricsStoreTest {
         assertTrue(summary.contains("p95 400 ms"));
         assertTrue(summary.contains("first feedback p50 20 ms"));
         assertTrue(summary.contains("p95 40 ms"));
+        assertTrue(summary.contains("ready p50 12 ms"));
+        assertTrue(summary.contains("STT p50 24 ms"));
+        assertTrue(summary.contains("model p50 36 ms"));
+        assertTrue(summary.contains("TTS p50 48 ms"));
+        assertTrue(summary.contains("playout p50 60 ms"));
         assertFalse(summary.contains("transcript"));
     }
 
@@ -69,6 +74,11 @@ public final class MoaVoiceE2eMetricsStoreTest {
                 .put("stage", stage)
                 .put("audible_success", audible)
                 .put("capture_to_first_feedback_ms", latency / 10)
+                .put("capture_to_socket_ready_ms", latency * 3 / 50)
+                .put("gateway_stt_ms", latency * 6 / 50)
+                .put("gateway_reasoning_ms", latency * 9 / 50)
+                .put("gateway_tts_ms", latency * 12 / 50)
+                .put("audio_receipt_to_playout_ms", latency * 15 / 50)
                 .put("commit_to_terminal_ms", latency);
     }
 }
