@@ -8,7 +8,7 @@
 | Gateway raw-note deletion | `/root/owner_chief_moa/audio_note_delete` | `gateway/lib/audio-notes.js`, `gateway/lib/media-note-handlers.js`, focused audio/media-note tests and blob smoke | committed as `1856f104`; focused tests and blob smoke green; unpromoted |
 | Browser raw-note library | `/root/owner_chief_moa/browser_voice_note_library` | `browser_extension/extension/sidepanel.html`, `sidepanel.js`, bounded audio-note modules, verification/smoke | implemented in this integration unit; list/replay/download/delete plus promotion/retry/handoff are covered by 276 unit tests and the real headless extension smoke; version `0.1.145` is packaged and has a deploy marker, but loaded-browser reload confirmation and installed-loop proof remain unverified |
 | Chief-to-Switchboard external contract | coordinator's `/root/switchboard_external_handoff` lane plus `/root/chief_switchboard_handoff` | Switchboard contract outside this repo; bounded Chief gateway client, handler, tests, browser action, and this OpenSpec task | schema-v1 and terminal audio-backed schema-v2 handoff plus explicit browser confirmation implemented in this integration unit; focused coverage and full checks green; no real-Switchboard preview or promotion yet |
-| Browser failed-upload persistence | unassigned | future bounded browser outbox module; avoid oversized `background.js` growth | blocked behind a non-overlapping extraction/ownership plan |
+| Browser failed-upload persistence | `/root` | bounded IndexedDB audio-note outbox, side-panel recovery controls, focused tests and real-extension smoke | implemented in this integration unit; exact PCM survives failed upload plus panel/background restart and retries only into `/v1/audio-notes` |
 | Android and macOS note libraries | unassigned | future Surface-specific clients | blocked on installed source-first proof and dedicated Surface implementation tickets |
 
 Worker-runtime, worktree-registry, and `macos-look-and-ask-intent-capture` were
@@ -27,7 +27,12 @@ only to record the clarified portfolio boundary and execution order.
 - [x] Add honest idempotent audio-note deletion across metadata, local spool,
   and configured remote blob storage. Focused store/router tests and fake-GCS
   smoke pass. The unit is committed as `1856f104` and remains unpromoted.
-- [ ] Preserve browser raw bytes across upload failure and restart.
+- [x] Preserve browser raw bytes across upload failure and restart. The stopped
+  PCM is written to a bounded IndexedDB outbox before upload, remains locally
+  playable/downloadable/deletable after failure, and retries only through the
+  existing gateway audio-note path. Focused restart tests and the real Chrome
+  side-panel smoke prove byte equality and no assistant, capture-block, or
+  Switchboard dispatch during recovery.
 - [x] Expose newest-first list, replay/download, failure, and explicit delete in
   the browser full side panel without invoking reasoning or dispatch. Browser
   verify (276 tests), real headless side-panel smoke, and the full browser smoke

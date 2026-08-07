@@ -5,6 +5,8 @@ const requiredFiles = [
   "package.json",
   "extension/manifest.json",
   "extension/audio-note-library.js",
+  "extension/audio-note-outbox.js",
+  "extension/audio-note-outbox-view.js",
   "extension/audio-note-promotion.js",
   "extension/background.js",
   "extension/browser-automation-contract.js",
@@ -93,6 +95,8 @@ for (const file of requiredFiles) {
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const backgroundSource = readFileSync("extension/background.js", "utf8");
+const audioNoteOutboxSource = readFileSync("extension/audio-note-outbox.js", "utf8");
+const audioNoteOutboxViewSource = readFileSync("extension/audio-note-outbox-view.js", "utf8");
 const browserAutomationContractSource = readFileSync("extension/browser-automation-contract.js", "utf8");
 const browserMediaSource = readFileSync("extension/browser-media-runtime.js", "utf8");
 const mediaConfirmHtmlSource = readFileSync("extension/media-confirm.html", "utf8");
@@ -908,9 +912,10 @@ if (
   !/RECORD_MAX_AUDIO_BYTES/.test(backgroundSource) ||
   !/function appendRecordSessionAudio/.test(backgroundSource) ||
   !/isRecordSessionId\(msg\.voiceSessionId\)/.test(backgroundSource) ||
-  !/\/v1\/audio-notes/.test(backgroundSource)
+  !/createAudioNoteOutbox/.test(backgroundSource) ||
+  !/\/v1\/audio-notes/.test(audioNoteOutboxSource)
 ) {
-  throw new Error("background.js must expose recordSessionStart/Stop handlers that buffer capped PCM and post to /v1/audio-notes");
+  throw new Error("record mode must buffer capped PCM and route it through the audio-note outbox");
 }
 const recordModeBody = sourceBetween(
   backgroundSource,
@@ -922,13 +927,18 @@ if (/\/v1\/voice\/sessions|session_start|startVoiceSessionProxy|createVoiceSessi
   throw new Error("record mode must not open voice sessions, voice sockets, or send session_start");
 }
 if (
-  !/audio\/L16; rate=16000; channels=1/.test(recordModeBody) ||
-  !/x-moa-surface/.test(recordModeBody) ||
-  !/x-moa-session-id/.test(recordModeBody) ||
-  !/x-moa-duration-ms/.test(recordModeBody) ||
-  !/getStableSessionId\(\)/.test(recordModeBody)
+  !/audio\/L16; rate=16000; channels=1/.test(audioNoteOutboxSource) ||
+  !/x-moa-surface/.test(audioNoteOutboxSource) ||
+  !/x-moa-session-id/.test(audioNoteOutboxSource) ||
+  !/x-moa-duration-ms/.test(audioNoteOutboxSource) ||
+  !/getStableSessionId\(\)/.test(recordModeBody) ||
+  !/audioNoteOutbox\.retain\([\s\S]{0,500}audioNoteOutbox\.upload/.test(recordModeBody) ||
+  !/indexedDb\.open/.test(audioNoteOutboxSource) ||
+  !/Retry upload/.test(audioNoteOutboxViewSource) ||
+  !/Play local/.test(audioNoteOutboxViewSource) ||
+  !/Delete local/.test(audioNoteOutboxViewSource)
 ) {
-  throw new Error("audio-note upload must carry L16 content type plus surface/session/duration metadata headers");
+  throw new Error("audio-note upload must preserve PCM before upload and expose local recovery controls");
 }
 if (
   !/voiceSessions\.size > 0/.test(recordModeBody) ||

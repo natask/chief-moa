@@ -4,6 +4,7 @@
 // owns model routing and credentials.
 
 import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig } from "./config.js";
+import { createAudioNoteOutbox } from "./audio-note-outbox.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
@@ -75,6 +76,7 @@ async function browserLocalToolManifest() {
 }
 
 const mediaConfirmation = createMediaConfirmationRuntime({ chromeApi: chrome }), browserMedia = createBrowserMediaRuntime({ ask, callGateway, confirmMedia: mediaConfirmation.confirm, getConfig, storage: chrome.storage.local, tabs: chrome.tabs });
+const audioNoteOutbox = createAudioNoteOutbox();
 const browserTabs = createBrowserTabRuntime({ chromeApi: chrome, storage: chrome.storage.session });
 const injectedBrowserTools = createBrowserInjectedToolRuntime({ chromeApi: chrome });
 const toolReceipts = createToolReceiptRuntime({ callGateway, execute: executeBrowserToolRequest, storage: chrome.storage.local });
@@ -3633,12 +3635,23 @@ async function stopRecordSession() {
     return { stored: false, error: "No audio was captured." };
   }
   const durationMs = Math.round((pcm.byteLength / 2 / 16000) * 1000);
+  let retained;
   try {
+    retained = await audioNoteOutbox.retain({
+      bytes: pcm,
+      durationMs,
+      sessionId: await getStableSessionId(),
+      surface: "agee-extension",
+    });
+    session.chunks = [];
     const cfg = await getConfig();
-    const payload = await uploadAudioNote(cfg, pcm, durationMs);
+    const payload = await audioNoteOutbox.upload(retained.id, cfg);
     return { stored: true, note: payload?.note || payload || null, durationMs };
   } catch (error) {
-    return { stored: false, error: String(error?.message || error), durationMs };
+    const detail = String(error?.message || error);
+    return retained
+      ? { stored: false, retained: true, outboxId: retained.id, error: `Saved locally. Open Voice notes to retry upload. ${detail}`, durationMs }
+      : { stored: false, retained: false, error: `Could not preserve this recording locally: ${detail}`, durationMs };
   }
 }
 
@@ -3649,42 +3662,7 @@ function concatRecordSessionAudio(session) {
     out.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  session.chunks = [];
   return out;
-}
-
-// Raw-body upload. callGateway always JSON-encodes its body, so audio notes
-// post through their own fetch with the same auth and error shaping.
-async function uploadAudioNote(cfg, pcmBytes, durationMs) {
-  if (!cfg.gatewayUrl) {
-    throw new Error("No gateway URL set. Open AG Options and set the Agent gateway URL.");
-  }
-  const path = "/v1/audio-notes";
-  const sessionId = await getStableSessionId();
-  const headers = {
-    "content-type": "audio/L16; rate=16000; channels=1",
-    "x-moa-surface": "agee-extension",
-    "x-moa-session-id": sessionId,
-    "x-moa-duration-ms": String(durationMs),
-  };
-  if (cfg.gatewayToken) headers.authorization = `Bearer ${cfg.gatewayToken}`;
-  let resp;
-  try {
-    resp = await fetch(`${cfg.gatewayUrl}${path}`, { method: "POST", headers, body: pcmBytes });
-  } catch (error) {
-    throw new Error(formatGatewayNetworkError(cfg.gatewayUrl, path, error));
-  }
-  const text = await resp.text();
-  if (!resp.ok) {
-    throw new Error(formatGatewayHttpError(cfg, path, resp, text));
-  }
-  if (!text.trim()) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    // Any 2xx counts as stored even if the gateway envelope is not JSON.
-    return null;
-  }
 }
 // ---- End record mode -------------------------------------------------------
 

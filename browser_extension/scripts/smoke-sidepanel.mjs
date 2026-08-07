@@ -153,6 +153,7 @@ function startGateway() {
   let audioNotes = SEEDED_AUDIO_NOTES.map((note) => structuredClone(note));
   let audioNoteReads = 0;
   let audioNoteDeletes = 0;
+  const audioNoteUploads = [];
   let audioNotesFailure = false;
   let captureBlockCreates = 0;
   let handoffCalls = 0;
@@ -174,6 +175,26 @@ function startGateway() {
       }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ notes: audioNotes }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/audio-notes") {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const bytes = Buffer.concat(chunks);
+      const note = {
+        id: `note_uploaded_${audioNoteUploads.length + 1}`,
+        created_at: new Date().toISOString(),
+        surface: req.headers["x-moa-surface"],
+        session_id: req.headers["x-moa-session-id"],
+        content_type: req.headers["content-type"],
+        duration_ms: Number(req.headers["x-moa-duration-ms"]),
+        bytes: bytes.length,
+        audio: { href: `/v1/audio-notes/note_uploaded_${audioNoteUploads.length + 1}/audio`, bytes: bytes.length },
+      };
+      audioNoteUploads.push([...bytes]);
+      audioNotes.unshift(note);
+      res.writeHead(201, { "content-type": "application/json" });
+      res.end(JSON.stringify({ note }));
       return;
     }
     if (req.method === "GET" && /^\/v1\/audio-notes\/[^/]+\/audio$/.test(url.pathname)) {
@@ -345,6 +366,7 @@ function startGateway() {
       retranscribeCalls: () => retranscribeCalls,
       audioNoteReads: () => audioNoteReads,
       audioNoteDeletes: () => audioNoteDeletes,
+      audioNoteUploads: () => audioNoteUploads,
       captureBlockCreates: () => captureBlockCreates,
       captureBodies: () => captureBodies,
       handoffCalls: () => handoffCalls,
@@ -797,6 +819,32 @@ async function main() {
       throw new Error(`Delegate submission did not start immediately: ${JSON.stringify(submittedDelegate)}`);
     }
 
+    // Preserve exact stopped-capture bytes before a forced network failure,
+    // then prove the real IndexedDB-backed card is visible before restart.
+    const pendingOutboxId = await evaluate(pageCdp, `(async () => {
+      const { createAudioNoteOutbox } = await import(chrome.runtime.getURL("audio-note-outbox.js"));
+      const outbox = createAudioNoteOutbox();
+      const retained = await outbox.retain({
+        bytes: new Uint8Array([11, 22, 33, 44]),
+        durationMs: 125,
+        sessionId: ${JSON.stringify(SESSION_ID)},
+        surface: "agee-extension",
+      });
+      try { await outbox.upload(retained.id, { gatewayUrl: "http://127.0.0.1:1" }); } catch {}
+      return retained.id;
+    })()`);
+    await evaluate(pageCdp, 'document.getElementById("voiceNotesRefresh").click(); true');
+    const pendingBeforeRestart = await waitForEval(pageCdp, `(() => {
+      const card = document.querySelector('[data-outbox-id=${JSON.stringify(pendingOutboxId)}]');
+      return card?.querySelector(".voice-note-state")?.textContent.includes("Saved locally")
+        && card?.textContent.includes("Retry upload") ? card.textContent : null;
+    })()`);
+    if (!pendingBeforeRestart.includes("upload failed")
+        || gateway.captureBlockCreates() !== 1
+        || gateway.handoffCalls() !== 2) {
+      throw new Error("failed audio upload did not remain locally visible and inert");
+    }
+
     // Round-trip the existing panel bridge: an unsupported command must come back with
     // its reqId and a readable error, proving onConnect -> handlePanelRequest
     // -> reqId correlation against the REAL background worker.
@@ -815,6 +863,7 @@ async function main() {
     ({ targetId: pageTargetId, pageCdp } = await openPanel(browserCdp, devToolsPort, panelUrl));
     await assertHydratedHistory(pageCdp, "panel reopen", { retranscriptionAdvertised: false });
     await assertCompanionIdentity(pageCdp, "panel reopen");
+    await waitForEval(pageCdp, `Boolean(document.querySelector('[data-outbox-id=${JSON.stringify(pendingOutboxId)}]'))`);
     const persistedHandoff = await waitForEval(pageCdp, `(() => {
       const card = document.querySelector('.voice-note-card[data-note-id="note_older"]');
       const status = card?.querySelector(".voice-note-handoff")?.textContent || "";
@@ -843,6 +892,19 @@ async function main() {
     workerCdp = new Cdp(restartedWorker.webSocketDebuggerUrl);
     await workerCdp.send("Runtime.enable");
     await assertHydratedHistory(pageCdp, "extension/background restart");
+    await waitForEval(pageCdp, `Boolean(document.querySelector('[data-outbox-id=${JSON.stringify(pendingOutboxId)}]'))`);
+    await evaluate(pageCdp, `(() => {
+      const card = document.querySelector('[data-outbox-id=${JSON.stringify(pendingOutboxId)}]');
+      [...card.querySelectorAll("button")].find((button) => button.textContent === "Retry upload")?.click();
+      return true;
+    })()`);
+    await waitForEval(pageCdp, `!document.querySelector('[data-outbox-id=${JSON.stringify(pendingOutboxId)}]')
+      && Boolean(document.querySelector('.voice-note-card[data-note-id="note_uploaded_1"]'))`);
+    if (JSON.stringify(gateway.audioNoteUploads()) !== JSON.stringify([[11, 22, 33, 44]])
+        || gateway.captureBlockCreates() !== 1
+        || gateway.handoffCalls() !== 2) {
+      throw new Error(`audio-note restart retry changed bytes or crossed execution boundaries: ${JSON.stringify(gateway.audioNoteUploads())}`);
+    }
     if (gateway.messageReads() < 3) {
       throw new Error(`expected canonical history to be re-read for each document/restart, got ${gateway.messageReads()}`);
     }
@@ -933,6 +995,7 @@ async function main() {
         "canonical mixed-surface history hydrated as newest-first outer turn cards with nested user/assistant content on first open, panel reopen, and extension/background restart; " +
         "the active companion identity survived fallback/reopen; newest turns rendered first with speaker order intact, exact user and assistant copy feedback worked, final voice transcript reconciled from storage; " +
         "the retained-audio proxy failed safely, then re-transcribed twice into chronological revisions 0/1/2 with latest selected and older versions copyable; " +
+        "a failed raw voice-note upload survived panel and extension/background restart byte-for-byte and retried without assistant or Switchboard dispatch; " +
         "a selected voice note prepared a terminal transcript without execution, required explicit confirmation for Switchboard, retained the exact intent receipt across retry and panel reopen; " +
         "agee-panel port round-tripped, conversational roles had no selector, Delegate confirmation cancelled safely, " +
         "open-agee-panel and chrome.sidePanel.open remained available.",

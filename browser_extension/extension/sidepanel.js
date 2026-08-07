@@ -6,6 +6,8 @@
 // getUserMedia permission prompt).
 
 import { getEffectiveGatewayConfig } from "./config.js";
+import { createAudioNoteOutbox } from "./audio-note-outbox.js";
+import { renderAudioNoteOutbox } from "./audio-note-outbox-view.js";
 import { createDeviceCredentialRuntime } from "./device-credential-runtime.js";
 import { createBrowserToolCatalogView } from "./browser-tool-catalog-view.js";
 import {
@@ -87,6 +89,7 @@ const historyRevisionLedger = new Map();
 const videoObjectUrls = new Set();
 const audioNotePlaybackUrls = new Set();
 const audioNoteBlobCache = new Map();
+const audioNoteOutbox = createAudioNoteOutbox();
 
 let audioCtx = null;
 let playbackTime = 0;
@@ -489,19 +492,35 @@ function renderAudioNote(note) {
 async function refreshAudioNotes() {
   voiceNotesRefreshBtn.disabled = true;
   setVoiceNotesStatus("Loading saved voice notes…");
+  let pending = [];
+  let pendingError = "";
+  try {
+    pending = await audioNoteOutbox.list();
+  } catch (error) {
+    pendingError = String(error?.message || error);
+  }
+  const pendingCards = () => pending.map((record) => renderAudioNoteOutbox(record, {
+    outbox: audioNoteOutbox,
+    getConfig: getEffectiveGatewayConfig,
+    onChanged: refreshAudioNotes,
+  }));
   try {
     const payload = await capturedIntentGateway(`${AUDIO_NOTES_PATH}?limit=100`);
     const notes = audioNoteItems(payload);
     revokeAudioNotePlaybackUrls();
-    voiceNotesEl.replaceChildren(...notes.map(renderAudioNote));
+    voiceNotesEl.replaceChildren(...pendingCards(), ...notes.map(renderAudioNote));
     voiceNotesEl.dataset.stale = "false";
     voiceNotesRefreshBtn.textContent = "Refresh";
-    setVoiceNotesStatus(notes.length
-      ? `${notes.length} saved voice note${notes.length === 1 ? "" : "s"}, newest first.`
-      : "No saved voice notes yet. Record mode stores audio here without asking the assistant or launching work.");
+    const localStatus = pendingError
+      ? `Local recovery unavailable: ${pendingError}`
+      : pending.length ? `${pending.length} voice note${pending.length === 1 ? "" : "s"} saved locally for retry. ` : "";
+    setVoiceNotesStatus(`${localStatus}${notes.length
+      ? `${notes.length} gateway voice note${notes.length === 1 ? "" : "s"}, newest first.`
+      : "No gateway voice notes yet. Capture and recovery do not ask the assistant or launch work."}`, pendingError ? "error" : "ready");
   } catch (error) {
-    voiceNotesEl.dataset.stale = voiceNotesEl.children.length ? "true" : "false";
-    setVoiceNotesStatus(`Voice notes unavailable: ${String(error?.message || error)} Select Retry.`, "error");
+    voiceNotesEl.replaceChildren(...pendingCards());
+    voiceNotesEl.dataset.stale = "true";
+    setVoiceNotesStatus(`${pending.length ? `${pending.length} original recording${pending.length === 1 ? " is" : "s are"} saved locally. ` : ""}Gateway voice notes unavailable: ${String(error?.message || error)} Select Retry.`, "error");
     voiceNotesRefreshBtn.textContent = "Retry";
   } finally {
     voiceNotesRefreshBtn.disabled = false;

@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/aggie-protocol-adapter.js",
   "extension/audio-note-library.js",
+  "extension/audio-note-outbox.js",
+  "extension/audio-note-outbox-view.js",
   "extension/audio-note-promotion.js",
   "extension/background.js",
   "extension/browser-action-checkpoint-policy.js",

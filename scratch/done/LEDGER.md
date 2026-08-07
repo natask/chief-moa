@@ -1,3 +1,4 @@
+- Preserved stopped browser audio byte-for-byte across failed upload and extension restart with explicit local recovery — Codex / GPT-5 — browser-audio-outbox-20260807
 - Accepted the exact voice-draft-to-turn handoff without misreporting it as a microphone failure — Codex / GPT-5 — 3b8f7992
 - Made every Ag toolbar click restore the removed mascot while opening the workspace — Codex / GPT-5 — aefd0bb4
 - Turned explicit browser video captures into editable durable intents with preserved recording, exact transcript provenance, retention controls, and history — Codex / GPT-5 — 70e8ed40
