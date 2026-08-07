@@ -131,3 +131,34 @@ test("valid legacy active state and list bounds remain deterministic", (t) => {
   assert.equal(store.list({ limit: -4 }).length, 1);
   assert.equal(store.list({ limit: 9999 }).length, 1);
 });
+
+test("runtime bundles extend the existing artifact boundary", (t) => {
+  const calls = [];
+  const bundle = {
+    id: "runtime-bundle", type: "runtime_bundle", status: "staged",
+    created_at: "2026-08-07T00:00:00.000Z",
+  };
+  const runtimeBundles = {
+    list: (filter) => { calls.push(["list", filter]); return [bundle]; },
+    get: (id) => { calls.push(["get", id]); return id === bundle.id ? bundle : null; },
+    publish: (manifest) => { calls.push(["publish", manifest]); return bundle; },
+    activate: (id, context) => { calls.push(["activate", id, context]); return { ...bundle, status: "applied" }; },
+    runtime: (protocol) => { calls.push(["runtime", protocol]); return { active: bundle }; },
+    known: () => ({ schema: "ag.runtime-config-bundle.v1" }),
+  };
+  const store = createSelfExtensionArtifactStore({ dataDir: tempDir(t), runtimeBundles });
+
+  assert.equal(store.createCandidate({ type: "runtime_bundle", manifest: { signed: true } }).id, bundle.id);
+  assert.equal(store.createCandidate({ type: "runtime_bundle", spec: { signed: "fallback" } }).id, bundle.id);
+  assert.equal(store.get(bundle.id).id, bundle.id);
+  assert.equal(store.get("missing"), null);
+  assert.equal(store.list({ type: "runtime_bundle", status: "staged" })[0].id, bundle.id);
+  assert.equal(store.list()[0].id, bundle.id);
+  assert.equal(store.list({ type: "avatar_behavior" }).length, 0);
+  assert.equal(store.apply(bundle.id, { actor: "test" }).status, "applied");
+  assert.equal(store.runtime("1.0.0").active.runtime_bundle.id, bundle.id);
+  assert.deepEqual(store.known().artifact_types, ["avatar_behavior", "runtime_bundle"]);
+  assert.equal(store.known().runtime_bundle.schema, "ag.runtime-config-bundle.v1");
+  assert.ok(calls.some((entry) => entry[0] === "publish"));
+  assert.ok(calls.some((entry) => entry[0] === "activate"));
+});

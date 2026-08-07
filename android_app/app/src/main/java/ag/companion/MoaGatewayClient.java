@@ -229,6 +229,13 @@ final class MoaGatewayClient {
         return new JSONObject(responseText);
     }
 
+    JSONObject runtimeExtensions(String shellProtocol) throws Exception {
+        String protocol = safe(shellProtocol);
+        String responseText = getText(apiEndpoint(
+                "/v1/self-extension/runtime?shell_protocol=" + urlEncode(protocol)), 10000);
+        return new JSONObject(responseText);
+    }
+
     JSONObject selectProvider(JSONObject body) throws Exception {
         String responseText = writeJson("PUT", apiEndpoint("/v1/agent/provider-selection"),
                 body.toString(), 15000);

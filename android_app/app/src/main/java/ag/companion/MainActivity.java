@@ -77,6 +77,7 @@ public final class MainActivity extends Activity {
     private TextView receiptsStatus;
     private TextView settingsStatus;
     private TextView companionStatus;
+    private TextView runtimeBundleStatus;
     private TextView voiceE2eStatus;
     private TextView orbScaleValue;
     private Button overlayButton;
@@ -374,14 +375,13 @@ public final class MainActivity extends Activity {
     private View diagnosticsCard() {
         LinearLayout card = card();
         addCardTitle(card, "Developer diagnostics");
-
         sessionsStatus = statRow(card, "Shared session", "Checking...");
         runsStatus = statRow(card, "Runs", "Checking...");
         receiptsStatus = statRow(card, "Receipts", "Checking...");
         settingsStatus = statRow(card, "Settings", settingsSummaryText());
         companionStatus = statRow(card, "Companion", MoaPrefs.companionStatus(this));
+        runtimeBundleStatus = statRow(card, "Runtime updates", "Checking...");
         voiceE2eStatus = statRow(card, "Mobile voice E2E", MoaVoiceE2eMetricsStore.summary(this));
-
         Button refresh = secondaryButton("Refresh diagnostics");
         refresh.setOnClickListener(v -> refreshControlCenter());
         card.addView(refresh);
@@ -1062,6 +1062,7 @@ public final class MainActivity extends Activity {
             companionStatus.setText(MoaPrefs.companionStatus(this));
             companionStatus.setTextColor(MoaColors.OK);
         }
+        MoaRuntimeBundleStatus.showChecking(runtimeBundleStatus);
         if (voiceE2eStatus != null) {
             voiceE2eStatus.setText(MoaVoiceE2eMetricsStore.summary(this));
             voiceE2eStatus.setTextColor(MoaColors.OK);
@@ -1097,6 +1098,7 @@ public final class MainActivity extends Activity {
             MoaThreadControls.Snapshot threadSnapshot;
             String fetchedProfileJson = "";
             String fetchedCompanionJson = "";
+            MoaRuntimeBundleStatus fetchedRuntimeBundle;
             int sessionsColor = MoaColors.GOLD;
             int runsColor = MoaColors.GOLD;
             int companionColor = MoaColors.GOLD;
@@ -1158,6 +1160,7 @@ public final class MainActivity extends Activity {
                 }
             } catch (Exception ignored) {
             }
+            fetchedRuntimeBundle = MoaRuntimeBundleStatus.load(client);
 
             final String nextSharedSessionId = sharedSessionId;
             final String nextSessions = sessionsLabel;
@@ -1170,6 +1173,7 @@ public final class MainActivity extends Activity {
             final int nextSessionsColor = sessionsColor;
             final int nextRunsColor = runsColor;
             final int nextCompanionColor = companionColor;
+            final MoaRuntimeBundleStatus nextRuntimeBundle = fetchedRuntimeBundle;
             mainHandler.post(() -> {
                 if (generation != controlCenterGeneration) {
                     return;
@@ -1200,6 +1204,7 @@ public final class MainActivity extends Activity {
                     companionStatus.setText(MoaPrefs.companionStatus(this));
                     companionStatus.setTextColor(nextCompanionJson.isEmpty() ? MoaColors.GOLD : nextCompanionColor);
                 }
+                nextRuntimeBundle.render(runtimeBundleStatus);
             });
         }, "moa-control-center").start();
     }
@@ -1225,6 +1230,7 @@ public final class MainActivity extends Activity {
             companionStatus.setText(MoaPrefs.companionStatus(this));
             companionStatus.setTextColor(MoaColors.GOLD);
         }
+        MoaRuntimeBundleStatus.showGatewayUnavailable(runtimeBundleStatus);
         if (threadControls != null) threadControls.setGatewayRequired();
         renderSessionHistory(null, "Connect the gateway to load shared history.");
     }

@@ -145,3 +145,24 @@
 - [ ] 8.6 Commit each coherent section with a Conventional Commit and follow
       the repository's Finish Order (verify, commit, preview/artifact,
       active-promotion gate, smoke) for every deployable surface touched.
+
+## 9. Signed Runtime-Bundle Safety Slice
+
+- [x] 9.1 Extend the existing self-extension store with an exact-schema,
+      Ed25519-verified runtime manifest, public-key trust configuration,
+      provenance, stable/nightly channels, allowlisted profile data, and an
+      Android shell compatibility gate.
+- [x] 9.2 Persist staging and pending activation atomically, project the patch
+      through append-only agent-profile versions, require a profile health
+      check, preserve last-known-good, recover interrupted activation, reject
+      normal downgrade/replay, and support explicit previous-good rollback.
+- [x] 9.3 Expose bounded authenticated runtime status through the existing
+      self-extension endpoint and show it read-only in Android Setup &
+      developer while preserving offline/basic shell launch.
+- [x] 9.4 Add deterministic fixtures for invalid signature/secret fields,
+      incompatible shell, successful staged activation, failed-health
+      rollback, explicit rollback, and downgrade/replay rejection.
+- [ ] 9.5 Provision the production runtime release public key and external
+      signer/publisher identity, then publish the first signed stable bundle.
+      This is an external release-authority decision; no private signing key is
+      stored in Android or the gateway.

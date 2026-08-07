@@ -54,6 +54,7 @@ const { createUiSpecStore } = require("./lib/ui-spec");
 const { createUiSpecHandlers } = require("./lib/ui-spec-handlers");
 const { createSelfExtensionArtifactStore } = require("./lib/self-extension-artifacts");
 const { createSelfExtensionHandlers } = require("./lib/self-extension-handlers");
+const { createRuntimeConfigBundleStore, runtimeBundleTrustStore } = require("./lib/runtime-config-bundles");
 const { createBrain } = require("./lib/brain");
 const { createThreadStore, isIncognitoBranch, newBranchId } = require("./lib/thread-store");
 const { buildContextArtifact, contextArtifactReceipt } = require("./lib/context-artifact");
@@ -632,7 +633,34 @@ const { routeBillingRuntime } = createBillingRuntimeHandlers({
 // surfaces from this; a "deployment" is a spec change here, not new extension
 // code. The client live-refreshes on change (storage.onChanged pattern).
 const uiSpecStores = new Map();
-const selfExtensionArtifacts = createSelfExtensionArtifactStore({ dataDir: DATA_DIR });
+const runtimeConfigBundles = createRuntimeConfigBundleStore({
+  dataDir: DATA_DIR,
+  trustStore: runtimeBundleTrustStore(process.env.MOA_RUNTIME_BUNDLE_PUBLIC_KEYS),
+  currentProfileVersion: () => agentProfile.currentVersion(),
+  applyProfile: (patch, metadata) => {
+    const beforeProfileVersion = agentProfile.currentVersion();
+    const profile = agentProfile.patch(patch, metadata);
+    const mismatchedFields = Object.entries(patch)
+      .filter(([key, value]) => JSON.stringify(profile[key]) !== JSON.stringify(value))
+      .map(([key]) => key);
+    return {
+      before_profile_version: beforeProfileVersion,
+      after_profile_version: agentProfile.currentVersion(),
+      mismatched_fields: mismatchedFields,
+    };
+  },
+  rollbackProfile: (version, metadata) => agentProfile.rollback(version, metadata),
+  healthCheck: ({ activation }) => ({
+    ok: String(activation?.after_profile_version || "") === agentProfile.currentVersion()
+      && Array.isArray(activation?.mismatched_fields)
+      && activation.mismatched_fields.length === 0,
+    checks: ["profile_projection"],
+  }),
+});
+const selfExtensionArtifacts = createSelfExtensionArtifactStore({
+  dataDir: DATA_DIR,
+  runtimeBundles: runtimeConfigBundles,
+});
 const { routeUiSpec } = createUiSpecHandlers({
   authorizedAgent,
   agentAuthError,

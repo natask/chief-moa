@@ -2022,6 +2022,47 @@ command. The deterministic `echo` harness lets this loop run with no model key.
 
 ### Android OTA Update
 
+AG uses two update authorities. Tier 1 is signed declarative runtime data;
+Tier 2 is the Android package. Routine model routing, provider selection,
+response policy, voice settings, tool policy, and other allowlisted profile
+changes belong to Tier 1 when the installed gateway already implements the
+behavior. Native code, permissions, storage migrations, and new platform
+capabilities remain Tier 2.
+
+Tier 1 extends the existing self-extension artifact boundary with
+`ag.runtime-config-bundle.v1`. A release publisher signs the exact canonical
+manifest with Ed25519. The gateway holds only the configured public trust keys,
+rejects unknown fields, secret-bearing or non-scalar profile data, unknown
+capabilities, incompatible shell protocol ranges, invalid signatures, and
+normal activation sequences that do not advance monotonically. `stable` is the
+normal channel and `nightly` is the opt-in fast channel. Capability names are
+declarations for behavior already shipped in the gateway; they confer no code
+execution or Android authority.
+
+```text
+authenticated publisher stages signed runtime manifest
+  -> gateway verifies signature, provenance, schema, bounds, and shell range
+  -> pending activation and pre-change profile version are persisted atomically
+  -> allowlisted patch appends a new agent-profile version
+  -> profile projection health check runs
+  -> healthy bundle becomes current + last-known-good
+  -> failure restores the pre-change profile and keeps the prior bundle current
+```
+
+The append-only audit retains staging, activation, health, and rollback
+provenance. Startup recovery sees an interrupted pending activation and restores
+the recorded pre-change profile version before accepting more work. Provider
+credentials stay in the gateway's credential store; a bundle can select only a
+provider/profile value, never carry a key. Android reads
+`GET /v1/self-extension/runtime?shell_protocol=1.0.0` only to show bounded
+runtime health and compatibility in Setup & developer. It does not execute the
+manifest, and failure or gateway absence leaves the compiled base shell usable.
+The trust set is configured by `MOA_RUNTIME_BUNDLE_PUBLIC_KEYS`; an empty set
+keeps Tier 1 publication disabled.
+
+Tier 1 activation is an authenticated, receipted data move and does not open
+Android's installer. Tier 2 remains the only way to replace the APK:
+
 ```text
 commit or manual build
   -> CI/local script builds a versioned signed APK
@@ -2602,6 +2643,10 @@ queues.
 - `gateway/lib/self-extension-artifacts.js`: self-extension artifact store,
   validators, active pointers, and runtime projection for conversational
   customization.
+- `gateway/lib/runtime-config-bundles.js`: Ed25519-verified Tier 1 runtime
+  manifests, shell compatibility and monotonic sequence gates, atomic staged
+  activation, profile-projection health checks, last-known-good rollback, and
+  bounded audit/provenance.
 - `gateway/lib/ui-spec.js`: engine-served tier-A UI spec store and validator
   for declarative overlay surfaces, including bounded controls plus
   `card`/`list`/`stat`/schematic-`map` components. Smoke:

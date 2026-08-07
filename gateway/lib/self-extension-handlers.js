@@ -39,7 +39,9 @@ function createSelfExtensionHandlers(deps) {
       return true;
     }
     if (isRuntime && request.method === "GET") {
-      sendJson(response, 200, { runtime: artifacts.runtime() });
+      sendJson(response, 200, {
+        runtime: artifacts.runtime(url.searchParams.get("shell_protocol") || ""),
+      });
       return true;
     }
     if (applyMatch && request.method === "POST") {

@@ -14,7 +14,10 @@ function harness(overrides = {}) {
   const events = [];
   const artifacts = {
     list: (filter) => { calls.push(["list", filter]); return [{ id: "art_1" }]; },
-    runtime: () => ({ active: { avatar_behavior: { artifact_id: "art_1" } } }),
+    runtime: (protocol) => {
+      calls.push(["runtime", protocol]);
+      return { active: { avatar_behavior: { artifact_id: "art_1" } } };
+    },
     known: () => ({ artifact_types: ["avatar_behavior"] }),
     createCandidate: (input) => ({
       id: "art_1", type: "avatar_behavior", title: input.title || "title", status: "draft",
@@ -69,9 +72,10 @@ test("list and runtime routes return filtered safe projections", async () => {
   assert.equal(response.payload.active.avatar_behavior.artifact_id, "art_1");
   assert.deepEqual(response.payload.known.artifact_types, ["avatar_behavior"]);
 
-  response = await route(h, "GET", "/v1/self-extension/runtime");
+  response = await route(h, "GET", "/v1/self-extension/runtime?shell_protocol=1.0.0");
   assert.equal(response.status, 200);
   assert.equal(response.payload.runtime.active.avatar_behavior.artifact_id, "art_1");
+  assert.deepEqual(h.calls.at(-1), ["runtime", "1.0.0"]);
 });
 
 test("create accepts wrappers, records product evidence, and sanitizes failures", async () => {

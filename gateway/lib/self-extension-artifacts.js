@@ -26,6 +26,7 @@ const AVATAR_DURATIONS = ["while_active"];
 function createSelfExtensionArtifactStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || "./data");
   const storePath = path.join(dataDir, STORE_FILENAME);
+  const runtimeBundles = options.runtimeBundles || null;
   fs.mkdirSync(dataDir, { recursive: true });
 
   let state = loadState(storePath);
@@ -34,21 +35,27 @@ function createSelfExtensionArtifactStore(options = {}) {
     const type = cleanText(filter.type, 80);
     const status = cleanText(filter.status, 40);
     const limit = clampLimit(filter.limit, 100);
-    return Object.values(state.artifacts)
+    const artifacts = Object.values(state.artifacts)
       .filter((artifact) => (type ? artifact.type === type : true))
       .filter((artifact) => (status ? artifact.status === status : true))
       .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
-      .slice(0, limit)
       .map(clone);
+    if (runtimeBundles && (!type || type === "runtime_bundle")) {
+      artifacts.push(...runtimeBundles.list({ status, limit }));
+    }
+    return artifacts.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).slice(0, limit);
   }
 
   function get(id) {
-    const safeId = cleanToken(id, 80);
+    const safeId = cleanToken(id, 100);
     const artifact = safeId ? state.artifacts[safeId] : null;
-    return artifact ? clone(artifact) : null;
+    return artifact ? clone(artifact) : runtimeBundles?.get(safeId) || null;
   }
 
   function createCandidate(input = {}) {
+    if (input.type === "runtime_bundle" && runtimeBundles) {
+      return runtimeBundles.publish(input.manifest || input.spec);
+    }
     const type = normalizeType(input.type);
     const validation = validateSpec(input.spec);
     if (!validation.ok) {
@@ -81,7 +88,10 @@ function createSelfExtensionArtifactStore(options = {}) {
   }
 
   function apply(id, applyContext = {}) {
-    const safeId = cleanToken(id, 80);
+    const safeId = cleanToken(id, 100);
+    if (runtimeBundles?.get(safeId)) {
+      return runtimeBundles.activate(safeId, applyContext);
+    }
     const artifact = safeId ? state.artifacts[safeId] : null;
     if (!artifact) {
       return null;
@@ -105,7 +115,7 @@ function createSelfExtensionArtifactStore(options = {}) {
     return clone(artifact);
   }
 
-  function runtime() {
+  function runtime(clientProtocol = "") {
     const active = {};
     for (const type of ARTIFACT_TYPES) {
       const artifact = state.artifacts[state.active[type]];
@@ -113,10 +123,13 @@ function createSelfExtensionArtifactStore(options = {}) {
         ? runtimeArtifact(artifact)
         : null;
     }
+    const runtimeBundle = runtimeBundles?.runtime(clientProtocol) || null;
+    if (runtimeBundle) active.runtime_bundle = runtimeBundle.active;
     return {
       version: STORE_VERSION,
       generated_at: new Date().toISOString(),
       active,
+      runtime_bundle: runtimeBundle,
     };
   }
 
@@ -129,13 +142,14 @@ function createSelfExtensionArtifactStore(options = {}) {
     runtime,
     validate: validateArtifactInput,
     known: () => ({
-      artifact_types: ARTIFACT_TYPES.slice(),
+      artifact_types: ARTIFACT_TYPES.concat(runtimeBundles ? ["runtime_bundle"] : []),
       avatar_behavior: {
         triggers: AVATAR_TRIGGERS.slice(),
         motions: AVATAR_MOTIONS.slice(),
         intensities: AVATAR_INTENSITIES.slice(),
         durations: AVATAR_DURATIONS.slice(),
       },
+      ...(runtimeBundles ? { runtime_bundle: runtimeBundles.known() } : {}),
     }),
   };
 }
