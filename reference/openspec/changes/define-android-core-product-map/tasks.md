@@ -224,9 +224,11 @@ signal completed without a client acknowledgement.
       product feedback showed that History-only copy is too difficult to reach.
       Copy during capture commits, waits for the authoritative final transcript,
       and copies the complete message; History remains in the full app.
-- [ ] 13.11 Wire the existing durable voice-draft capability into Android pause
+- [x] 13.11 Wire the existing durable voice-draft capability into Android pause
       and resume controls. Pause must stop microphone capture without sending,
       discarding, or terminating the draft; resume must append to the same draft.
+      Source and automated gate evidence:
+      [2026-08-07 cross-surface launch verification](../voice-capture-notebook-ime/cross-surface-dictation-launch-verification-20260807.md).
 - [x] 13.12 Keep current-turn streaming inside one fixed line and open exactly
       three scrollable lines only after the user taps the bubble; mirror the
       contract in the browser compact surface.

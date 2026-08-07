@@ -122,8 +122,9 @@ gain page-action authority because it runs inside the browser extension.
 - [ ] 0.1 Build a claims ledger for raw audio notes, streaming transcription,
   language handling, voice-first gestures, Android history, and agent dispatch;
   mark each `verified`, `implemented-unverified`, `specified`, or `missing`.
-- [ ] 0.2 Reconcile stale task checkboxes whose implementation is already in
+- [x] 0.2 Reconcile stale task checkboxes whose implementation is already in
   source and link exact verification evidence instead of reimplementing them.
+  Evidence: [2026-08-07 cross-surface launch verification](cross-surface-dictation-launch-verification-20260807.md).
 - [ ] 0.3 Isolate or resolve the current unrelated dirty browser documentation
   before any capture implementation commit.
 - Acceptance: one page names the real first missing behavior and no shipped

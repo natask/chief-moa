@@ -1,4 +1,5 @@
 - Added signed runtime configuration bundles with compatibility gates, health-checked activation, automatic rollback, audit status, and Android visibility — agent: Codex/GPT-5 — runtime-bundle-safety-20260807
+- Reconciled and verified the provider-neutral gateway, Android voice-draft controls, browser dictation/recovery, and native Mac literal-dictation launch candidate — agent: Codex/GPT-5 — cross-surface-dictation-launch-verification-20260807
 - Preserved stopped browser audio byte-for-byte across failed upload and extension restart with explicit local recovery — Codex / GPT-5 — browser-audio-outbox-20260807
 - Accepted the exact voice-draft-to-turn handoff without misreporting it as a microphone failure — Codex / GPT-5 — 3b8f7992
 - Made every Ag toolbar click restore the removed mascot while opening the workspace — Codex / GPT-5 — aefd0bb4

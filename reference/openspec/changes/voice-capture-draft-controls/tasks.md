@@ -24,7 +24,8 @@
 
 - [x] 4.1 Prove pause/park/resume/discard invoke zero provider/model/tool calls.
 - [x] 4.2 Prove park -> restart -> resume -> send preserves audio order.
-- [ ] 4.3 Run gateway, Android unit/build, and browser verify/smoke gates.
+- [x] 4.3 Run gateway, Android unit/build, and browser verify/smoke gates.
+  Evidence: [2026-08-07 cross-surface launch verification](../voice-capture-notebook-ime/cross-surface-dictation-launch-verification-20260807.md).
 - [ ] 4.4 Run correctness, privacy, resource, compatibility, and no-gaming
   auditors; repair every BLOCK.
 - [ ] 4.5 Create isolated preview/artifacts and apply the active promotion gate.
