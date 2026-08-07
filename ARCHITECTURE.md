@@ -124,6 +124,26 @@ Native desktop surfaces
   Accessibility and Screen Recording remain separately labeled optional context
   grants and never gate the dictation pipeline.
 
+  The unsigned Windows WinUI candidate exposes literal dictation as its own
+  activity rather than an assistant-voice mode. It accepts a user-configured
+  HTTPS gateway origin and memory-only gateway session credential, waits for an
+  exact `voice_drafts_v1` `session_ready` authority, and only then opens a
+  Windows-owned mono 16 kHz PCM16 microphone capture. Pause closes the local
+  microphone before sending the exact draft/revision control; Resume reopens it
+  only after a newer same-draft `capturing` acknowledgement. Cancel discards
+  without provider work, and Finish sends the only commit that can admit
+  transcription. Assistant text or audio on this activity fails closed.
+
+  Windows persists only the bounded draft id, revision, session, branch, turn,
+  and state under the user's local application-data directory. It does not
+  persist microphone bytes, transcript text, gateway credentials, or provider
+  data. A retained pointer blocks silent replacement by a new capture; restart
+  recovery beyond this preserved identity remains staged. The editable final
+  text and clipboard copy stay Windows-owned. The current artifact is an
+  unsigned source QA bundle with a compiled portable Windows authority core,
+  not a WinUI binary, MSIX, signed package, installation, or physical-Windows
+  acceptance result.
+
 Website
   Owns: the public marketing surface and static account/customization tools
   such as the companion pet studio. It may call same-origin Pages Functions that

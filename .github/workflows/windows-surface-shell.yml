@@ -26,8 +26,12 @@ jobs:
       - name: Lint authority core
         working-directory: windows_app/core
         run: cargo clippy --all-targets -- -D warnings
+      - name: Verify Windows dictation source contract
+        run: node windows_app/scripts/verify-dictation-source.mjs
+      - name: Test provider-neutral dictation protocol
+        run: dotnet test windows_app/Aggie.Windows.Tests/Aggie.Windows.Tests.csproj --configuration Release
       - uses: microsoft/setup-msbuild@v2
       # dotnet build cannot load the WindowsAppSDK 1.6 PRI packaging tasks
       # (microsoft/WindowsAppSDK#3548); build with Visual Studio MSBuild.
-      - name: Build unsigned WinUI scaffold
+      - name: Build unsigned WinUI dictation candidate
         run: msbuild windows_app/Aggie.Windows/Aggie.Windows.csproj /restore /p:Platform=x64 /p:AppxPackageSigningEnabled=false

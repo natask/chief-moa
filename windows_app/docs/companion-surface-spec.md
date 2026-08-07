@@ -26,6 +26,22 @@ form is replaceable. Its authority and interaction behavior are not.
   default; a user expansion gets exactly three visible lines with scrolling for
   the rest.
 
+## Literal dictation
+
+- Dictation is a separate explicit activity and never aliases assistant voice.
+- Open the microphone only after the configured gateway acknowledges the exact
+  durable `voice_drafts_v1` identity for this session and turn.
+- Pause closes the local microphone before the authority-bound pause request;
+  Resume reopens it only after a newer capturing acknowledgement for the same
+  draft. Cancel discards without transcription. Finish is the only path that
+  admits transcription.
+- Accept literal partial/final transcript events only. Assistant text or audio
+  on this activity is a visible protocol failure, never presentation data.
+- Preserve only the bounded draft pointer locally so a restart cannot silently
+  overwrite an unfinished gateway draft. Do not retain raw audio, transcript
+  text, or gateway credentials in that pointer store.
+- Keep the final transcript editable and copyable through Windows-owned UI.
+
 ## Authority
 
 - The Windows process owns microphone permission, local approvals, local action

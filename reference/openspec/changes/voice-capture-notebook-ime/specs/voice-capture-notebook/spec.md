@@ -179,6 +179,36 @@ active dictation rather than creating a second recorder.
 - **THEN** it reads the current worker-owned state
 - **AND** it does not claim microphone or session ownership solely by loading
 
+### Requirement: Native Windows dictation preserves exact draft authority
+The native Windows surface SHALL expose literal dictation as a separate explicit
+activity from assistant voice. It SHALL open the microphone only after the
+configured gateway acknowledges an exact `voice_drafts_v1` identity and SHALL
+send mono 16 kHz PCM16 only while that identity is in `capturing` state.
+
+Pause SHALL close the local microphone before sending the exact authority-bound
+pause request. Resume SHALL reopen it only after a newer `capturing`
+acknowledgement for the same draft. Cancel SHALL discard the draft without
+transcription, reasoning, TTS, action, or agent work. Finish SHALL be the only
+path that commits the draft for literal transcription. Assistant text or audio
+on the dictation activity SHALL fail closed.
+
+The Windows surface MAY persist the bounded draft pointer so unfinished source
+identity is not silently replaced after restart. That pointer SHALL contain no
+audio, transcript text, gateway credential, or provider data. The final literal
+text SHALL remain editable and copyable through Windows-owned UI.
+
+#### Scenario: Windows pause and resume preserve one draft
+- **WHEN** the user starts Windows dictation, pauses, and resumes
+- **THEN** microphone capture stops before the pause request
+- **AND** resumes only after a newer acknowledgement for the same draft id
+- **AND** no provider or assistant work begins before Finish
+
+#### Scenario: Windows gateway handoff fails closed
+- **WHEN** the gateway returns a stale revision, different session/turn/draft,
+  unsupported capability, assistant text, or assistant audio
+- **THEN** Windows stops capture and shows a bounded failure
+- **AND** preserves any retained draft pointer rather than creating a new draft
+
 ### Requirement: Completed browser dictation becomes a literal capture
 The gateway SHALL asynchronously project each stored, completed
 transcription-only browser voice turn into one deterministic queryable capture

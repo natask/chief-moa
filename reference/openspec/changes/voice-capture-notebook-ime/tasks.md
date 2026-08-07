@@ -230,9 +230,11 @@ gain page-action authority because it runs inside the browser extension.
   the exact final transcript with a platform-owned Copy action.
 - [x] 4A.3 Keep native capture visibility, cancel, failure, and clipboard
   receipts distinct from assistant reply state.
-- [ ] 4A.4 Mark Windows dictation `missing` until the native Windows shell can
-  capture and complete the same contract; the portable authority scaffold is
-  not product acceptance.
+- [ ] 4A.4 Windows now has an unsigned native source candidate for explicit
+  capture, durable draft authority, visible Cancel/Pause/Resume/Finish,
+  transcription-only finalization, editable text, and local copy. Keep it
+  `implemented-unverified` until a Windows-hosted .NET test and WinUI build pass;
+  the portable authority build and source artifact are not product acceptance.
 - Acceptance: native Mac assistant voice and literal dictation can each be
   invoked deliberately, and a dictation turn creates no assistant/model work.
 - Verification: Swift tests/build plus real-Mac microphone and clipboard QA.

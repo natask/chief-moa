@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Aggie.Windows/DictationController.cs" Link="DictationController.cs" />
+    <Compile Include="../Aggie.Windows/DictationState.cs" Link="DictationState.cs" />
+    <Compile Include="../Aggie.Windows/DraftPointerStore.cs" Link="DraftPointerStore.cs" />
+    <Compile Include="../Aggie.Windows/GatewayVoiceDraftTransport.cs" Link="GatewayVoiceDraftTransport.cs" />
+    <Compile Include="../Aggie.Windows/Pcm16MicrophoneCapture.cs" Link="Pcm16MicrophoneCapture.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

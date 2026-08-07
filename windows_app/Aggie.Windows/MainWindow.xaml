@@ -2,26 +2,76 @@
     x:Class="Aggie.Windows.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Aggie local approval">
-  <Grid Padding="32" MaxWidth="720">
-    <StackPanel Spacing="18">
-      <TextBlock Text="Aggie local approval" Style="{StaticResource TitleTextBlockStyle}"
-                 AutomationProperties.AutomationId="aggie.approval.heading" />
-      <TextBlock x:Name="Status" Text="Review this action" Style="{StaticResource SubtitleTextBlockStyle}"
-                 AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="aggie.approval.status" />
-      <TextBlock Text="Opening https://example.com was proposed. Confirm only if you recognize it."
-                 TextWrapping="Wrap" AutomationProperties.AutomationId="aggie.approval.detail" />
-      <StackPanel Orientation="Horizontal" Spacing="12">
-        <Button Content="Deny" Click="Deny_Click" AccessKey="D"
-                AutomationProperties.HelpText="Rejects the proposal without running a local action"
-                AutomationProperties.AutomationId="aggie.approval.deny" />
-        <Button Content="Approve locally" Click="Approve_Click" AccessKey="A"
-                AutomationProperties.HelpText="Approves only for final local checks and does not bypass permissions"
-                AutomationProperties.AutomationId="aggie.approval.approve" />
-      </StackPanel>
-      <InfoBar IsOpen="True" Severity="Informational" Title="Safe scaffold"
-               Message="No network, OS action, signing, install, or provider credential authority is present."
-               AutomationProperties.AutomationId="aggie.approval.boundary" />
+    Title="Ag literal dictation">
+  <Grid Padding="28" MaxWidth="760" RowSpacing="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <StackPanel Grid.Row="0" Spacing="6">
+      <TextBlock Text="Ag literal dictation" Style="{StaticResource TitleTextBlockStyle}"
+                 AutomationProperties.AutomationId="ag.dictation.heading" />
+      <TextBlock Text="Voice is input only. Finish produces editable text and never requests an assistant reply."
+                 TextWrapping="Wrap" AutomationProperties.AutomationId="ag.dictation.boundary" />
     </StackPanel>
+    <Grid Grid.Row="1" ColumnSpacing="12">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" /></Grid.ColumnDefinitions>
+      <TextBox x:Name="GatewayOrigin" Header="Gateway origin" PlaceholderText="https://api.example.com"
+               AutomationProperties.AutomationId="ag.dictation.gateway" />
+      <PasswordBox x:Name="GatewayCredential" Grid.Column="1" Header="Session credential (memory only)"
+                   PlaceholderText="Not saved by this Windows candidate"
+                   AutomationProperties.AutomationId="ag.dictation.credential" />
+    </Grid>
+    <StackPanel Grid.Row="2" Spacing="6">
+      <TextBlock x:Name="Status" Text="Ready for literal dictation." Style="{StaticResource SubtitleTextBlockStyle}"
+                 AutomationProperties.LiveSetting="Assertive" AutomationProperties.AutomationId="ag.dictation.status" />
+      <TextBlock x:Name="DraftIdentity" Text="No retained draft" TextWrapping="Wrap"
+                 AutomationProperties.AutomationId="ag.dictation.draft" />
+    </StackPanel>
+    <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="10">
+      <Button x:Name="StartButton" Content="Start dictation" Click="Start_Click" AccessKey="S"
+              AutomationProperties.HelpText="Starts explicit microphone capture after durable gateway authority is acknowledged"
+              AutomationProperties.AutomationId="ag.dictation.start" />
+      <Button x:Name="CancelButton" Content="Cancel" Click="Cancel_Click" AccessKey="C"
+              AutomationProperties.HelpText="Discards the draft without transcription or assistant work"
+              AutomationProperties.AutomationId="ag.dictation.cancel" />
+      <Button x:Name="PauseButton" Content="Pause" Click="Pause_Click" AccessKey="P"
+              AutomationProperties.HelpText="Closes the microphone while keeping the same durable draft"
+              AutomationProperties.AutomationId="ag.dictation.pause" />
+      <Button x:Name="ResumeButton" Content="Resume" Click="Resume_Click" AccessKey="R"
+              AutomationProperties.HelpText="Resumes microphone capture into the same durable draft"
+              AutomationProperties.AutomationId="ag.dictation.resume" />
+      <Button x:Name="FinishButton" Content="Finish" Click="Finish_Click" AccessKey="F"
+              AutomationProperties.HelpText="Finalizes literal transcription without assistant delivery"
+              AutomationProperties.AutomationId="ag.dictation.finish" />
+    </StackPanel>
+    <TextBox x:Name="Transcript" Grid.Row="4" Header="Editable literal transcript" AcceptsReturn="True"
+             TextWrapping="Wrap" MinHeight="180" VerticalAlignment="Stretch"
+             AutomationProperties.AutomationId="ag.dictation.transcript" />
+    <StackPanel Grid.Row="5" Spacing="10">
+      <Button x:Name="CopyButton" Content="Copy edited text" Click="Copy_Click" AccessKey="O"
+              HorizontalAlignment="Left" AutomationProperties.AutomationId="ag.dictation.copy" />
+      <InfoBar IsOpen="True" Severity="Informational" Title="Candidate boundary"
+               Message="The gateway owns audio and draft durability. This app stores only a bounded draft pointer; it stores no audio, transcript, provider key, or gateway credential."
+               AutomationProperties.AutomationId="ag.dictation.safety" />
+    </StackPanel>
+    <Expander Grid.Row="6" Header="Local proposal approval scaffold" Margin="0,12,0,0"
+              AutomationProperties.AutomationId="aggie.approval.scaffold">
+      <StackPanel Spacing="10" Padding="0,8,0,0">
+        <TextBlock x:Name="ApprovalStatus" Text="No action proposal is connected in this candidate."
+                   AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="aggie.approval.status" />
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <Button Content="Deny" Click="Deny_Click" AccessKey="D"
+                  AutomationProperties.AutomationId="aggie.approval.deny" />
+          <Button Content="Approve locally" Click="Approve_Click" AccessKey="A"
+                  AutomationProperties.AutomationId="aggie.approval.approve" />
+        </StackPanel>
+      </StackPanel>
+    </Expander>
   </Grid>
 </Window>
