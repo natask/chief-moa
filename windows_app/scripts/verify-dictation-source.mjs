@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (path) => readFileSync(resolve(root, path), "utf8");
 const protocol = read("Aggie.Windows/DictationState.cs");
 const controller = read("Aggie.Windows/DictationController.cs");
