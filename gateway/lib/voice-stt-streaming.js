@@ -123,6 +123,11 @@ function createStreamingSttSession(options) {
     pendingChunks: [],
     // Serializes rotations so overlapping timer/error triggers don't race.
     rotating: false,
+    rotationPromise: null,
+    finalizing: false,
+    finalizePromise: null,
+    streamedAudioBytes: 0,
+    coverageIncomplete: false,
     languageCode: "",
     streamGeneration: 0,
     // Google may redeliver the same finalized result during gRPC retry. A
@@ -283,7 +288,7 @@ function createStreamingSttSession(options) {
       return;
     }
     logger("stt_stream_error", { error: String(error?.message || error) });
-    if (state.aborted || state.finalized) {
+    if (state.aborted || state.finalized || state.finalizing) {
       return;
     }
     state.consecutiveErrors += 1;
@@ -301,7 +306,7 @@ function createStreamingSttSession(options) {
     // The server closed the stream on us (e.g. hit its own time limit) while we
     // are still capturing. Rotate to a fresh stream unless we are already
     // tearing down or rotating.
-    if (state.aborted || state.finalized || state.rotating || state.fatal) {
+    if (state.aborted || state.finalized || state.finalizing || state.rotating || state.fatal) {
       return;
     }
     void rotate("server_end");
@@ -335,10 +340,24 @@ function createStreamingSttSession(options) {
     });
   }
 
-  async function rotate(reason) {
-    if (state.rotating || state.aborted || state.finalized || state.fatal) {
-      return;
+  function rotate(reason) {
+    if (state.rotationPromise) return state.rotationPromise;
+    if (state.aborted || state.finalized || state.finalizing || state.fatal) {
+      return Promise.resolve();
     }
+    const operation = rotateOnce(reason).catch((error) => {
+      state.fatal = true;
+      state.fatalReason = `rotation failed: ${String(error?.message || error)}`;
+      logger("stt_stream_rotate_error", { error: state.fatalReason });
+    });
+    state.rotationPromise = operation;
+    operation.finally(() => {
+      if (state.rotationPromise === operation) state.rotationPromise = null;
+    });
+    return operation;
+  }
+
+  async function rotateOnce(reason) {
     state.rotating = true;
     if (state.rotateTimer) {
       clearTimeout(state.rotateTimer);
@@ -376,9 +395,13 @@ function createStreamingSttSession(options) {
     const pending = state.pendingChunks;
     state.pendingChunks = [];
     for (const entry of pending) {
-      writeToStream(next, audioMessage(entry.chunk));
+      if (writeToStream(next, audioMessage(entry.chunk))) {
+        state.streamedAudioBytes += entry.chunk.length;
+      } else {
+        state.coverageIncomplete = true;
+      }
     }
-    armRotateTimer();
+    if (!state.finalizing) armRotateTimer();
     state.rotating = false;
   }
 
@@ -402,7 +425,7 @@ function createStreamingSttSession(options) {
   return {
     // Feed one PCM16 frame. Buffered during a rotation; dropped after fatal/abort.
     push(chunk) {
-      if (state.aborted || state.finalized || state.fatal) return;
+      if (state.aborted || state.finalized || state.finalizing || state.fatal) return;
       if (!chunk || chunk.length === 0) return;
       const startAudioByteOffset = state.totalAudioBytes;
       state.totalAudioBytes += chunk.length;
@@ -410,38 +433,70 @@ function createStreamingSttSession(options) {
         state.pendingChunks.push({ chunk, startAudioByteOffset });
         return;
       }
-      writeToStream(state.stream, audioMessage(chunk));
+      if (writeToStream(state.stream, audioMessage(chunk))) {
+        state.streamedAudioBytes += chunk.length;
+      } else {
+        state.coverageIncomplete = true;
+      }
     },
 
     // Close the session and return the accumulated transcript.
     // { text, ok, error, rotations, languageCode }. ok:false => the provider
     // should fall back to the stored-PCM batch path for this turn.
     async finalize() {
-      if (state.finalized) {
-        return this._result();
-      }
-      state.finalized = true;
-      if (state.rotateTimer) {
-        clearTimeout(state.rotateTimer);
-        state.rotateTimer = null;
-      }
-      // Flush any audio still buffered from an in-flight rotation.
-      const stream = state.stream;
-      if (stream) {
-        const pending = state.pendingChunks;
-        state.pendingChunks = [];
-        for (const entry of pending) {
-          writeToStream(stream, audioMessage(entry.chunk));
+      if (state.finalizePromise) return state.finalizePromise;
+      state.finalizePromise = (async () => {
+        state.finalizing = true;
+        if (state.rotateTimer) {
+          clearTimeout(state.rotateTimer);
+          state.rotateTimer = null;
         }
-        await drainStream(stream);
-        detachStream(stream);
-      }
-      if (state.interim) {
-        state.committedText = joinTranscript(state.committedText, state.interim);
-        state.interim = "";
-      }
-      state.stream = null;
-      return this._result();
+
+        // A commit may race an error/time-limit rotation while that rotation has
+        // detached the old stream and is buffering new PCM. Wait only for the
+        // rotation's already-bounded drain; if it still cannot finish, force the
+        // retained-audio batch path rather than accepting a partial hypothesis.
+        const rotation = state.rotationPromise;
+        if (rotation) {
+          const completed = await waitBounded(rotation, drainTimeoutMs + 200);
+          if (!completed || state.rotating) {
+            state.coverageIncomplete = true;
+            state.fatal = true;
+            state.fatalReason = "stream rotation did not finish before finalize";
+          }
+        }
+
+        const stream = state.stream;
+        if (stream) {
+          const pending = state.pendingChunks;
+          state.pendingChunks = [];
+          for (const entry of pending) {
+            if (writeToStream(stream, audioMessage(entry.chunk))) {
+              state.streamedAudioBytes += entry.chunk.length;
+            } else {
+              state.coverageIncomplete = true;
+            }
+          }
+          await drainStream(stream);
+          detachStream(stream);
+        }
+        if (state.pendingChunks.length > 0 || state.streamedAudioBytes !== state.totalAudioBytes) {
+          state.coverageIncomplete = true;
+        }
+        if (state.coverageIncomplete && !state.fatal) {
+          state.fatal = true;
+          state.fatalReason = "streamed audio coverage incomplete";
+        }
+        if (state.interim) {
+          state.committedText = joinTranscript(state.committedText, state.interim);
+          state.interim = "";
+        }
+        state.stream = null;
+        state.finalizing = false;
+        state.finalized = true;
+        return this._result();
+      })();
+      return state.finalizePromise;
     },
 
     abort() {
@@ -491,6 +546,21 @@ function createStreamingSttSession(options) {
 function normalizedBytesPerSecond(value) {
   const bytes = Number(value);
   return Number.isFinite(bytes) && bytes > 0 ? bytes : 32000;
+}
+
+function waitBounded(promise, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (completed) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(completed);
+    };
+    const timer = setTimeout(() => finish(false), Math.max(1, Number(timeoutMs) || 1));
+    timer.unref?.();
+    Promise.resolve(promise).then(() => finish(true), () => finish(true));
+  });
 }
 
 function resultEndOffsetBytes(value, bytesPerSecond, frameBytesValue) {

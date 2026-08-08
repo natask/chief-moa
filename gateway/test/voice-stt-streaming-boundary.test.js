@@ -63,3 +63,66 @@ test("rejects malformed, future, and regressing final offsets", async () => {
   assert.equal(boundaries[0].absolute_audio_byte_offset % 4, 0);
   stream.abort();
 });
+
+test("finalize waits for an in-flight rotation and includes buffered PCM", async () => {
+  const streams = [];
+  const stream = createStreamingSttSession({
+    openStream() {
+      const value = new EventEmitter();
+      value.write = (message) => {
+        if (streams.length === 2 && message.audio) {
+          setImmediate(() => value.emit("data", {
+            results: [{ transcript: "world", isFinal: true }],
+          }));
+        }
+        return true;
+      };
+      value.end = () => setImmediate(() => value.emit("end"));
+      streams.push(value);
+      return value;
+    },
+    configMessage: {},
+    parseResults: (data) => data.results,
+    drainTimeoutMs: 200,
+    rotateAfterMs: 60000,
+  });
+  stream.push(Buffer.alloc(320));
+  streams[0].emit("data", { results: [{ transcript: "hello", isFinal: true }] });
+  streams[0].emit("error", new Error("transient stream failure"));
+  stream.push(Buffer.alloc(320));
+
+  const result = await stream.finalize();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "hello world");
+  assert.equal(result.rotations, 1);
+  assert.equal(stream._state.pendingChunks.length, 0);
+  assert.equal(stream._state.streamedAudioBytes, stream._state.totalAudioBytes);
+});
+
+test("finalize rejects a streaming candidate when PCM coverage is incomplete", async () => {
+  const providerStream = new EventEmitter();
+  let writes = 0;
+  providerStream.write = () => {
+    writes += 1;
+    if (writes > 1) throw new Error("audio write failed");
+    return true;
+  };
+  providerStream.end = () => setImmediate(() => providerStream.emit("end"));
+  const stream = createStreamingSttSession({
+    openStream: () => providerStream,
+    configMessage: {},
+    parseResults: (data) => data.results,
+    drainTimeoutMs: 200,
+    rotateAfterMs: 60000,
+  });
+  stream.push(Buffer.alloc(320));
+  providerStream.emit("data", { results: [{ transcript: "partial candidate", isFinal: true }] });
+
+  const result = await stream.finalize();
+
+  assert.equal(result.ok, false, "the provider must choose retained-audio batch fallback");
+  assert.match(result.error, /coverage incomplete/);
+  assert.equal(stream._state.streamedAudioBytes, 0);
+  assert.equal(stream._state.totalAudioBytes, 320);
+});
