@@ -12,8 +12,11 @@ const { WebSocket } = require("ws");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const FIXTURE_DIR = path.join(GATEWAY_DIR, "test", "fixtures", "voice");
+const STREAMING_STT_PRELOAD = path.join(__dirname, "fixtures", "fake-streaming-speech-preload.js");
 const TOKEN = "voice-e2e-token";
 const AUDIO_FORMAT = { encoding: "pcm16", sample_rate: 16000, channels: 1 };
+const COMBINED_TRANSCRIPT = "streamed combined input";
+const COMBINED_REPLY = "The middle reasoner produced this unique first sentence. Chunked Gemini speech proves the second sentence arrived.";
 
 main().catch((error) => {
   console.error(error.stack || error.message || String(error));
@@ -50,8 +53,18 @@ async function main() {
     reasonerStallMs: 600,
     wallClockBoundMs: 2500,
   });
+  const combined = await runDeterministicScenario({
+    name: "cascaded-streaming-stt-reasoner-gemini-tts",
+    sttTranscript: COMBINED_TRANSCRIPT,
+    sttLanguage: "en-US",
+    modelReply: COMBINED_REPLY,
+    streamingStt: true,
+    geminiTts: true,
+    modelFetchTimeoutMs: 2000,
+    wallClockBoundMs: 6000,
+  });
 
-  const results = [complete, stalled];
+  const results = [complete, stalled, combined];
   console.log(JSON.stringify({
     ok: results.every((result) => result.ok),
     mode: "deterministic",
@@ -63,6 +76,8 @@ async function main() {
       "turn_done arrives for completed and injected-stall turns within the wall-clock bound",
       "completed cascaded turn_done carries tts_spoke and reply_language",
       "stored user PCM fetched from /v1/voice/audio matches the streamed PCM byte-for-byte",
+      "one combined turn uses fake streaming STT, the real gateway reasoner over model HTTP/SSE, and chunked fake Gemini TTS",
+      "the combined turn returns the unique model reply and cannot pass through the canned missing-model fallback",
     ],
   }, null, 2));
 
@@ -75,6 +90,8 @@ async function runDeterministicScenario(options) {
   const fakeGoogle = await startFakeGoogle({
     transcript: options.sttTranscript,
     languageCode: options.sttLanguage,
+    modelReply: options.modelReply,
+    rejectBatchStt: options.streamingStt,
   });
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -88,19 +105,34 @@ async function runDeterministicScenario(options) {
         MOA_MODE: "local",
         MOA_GATEWAY_TOKEN: TOKEN,
         MODEL_PROVIDER: "openai-compatible",
-        MODEL_API_KEY: "",
+        MODEL_API_KEY: options.modelReply ? "test-model-key" : "",
+        MODEL_BASE_URL: options.modelReply ? `${fakeGoogle.baseUrl}/v1` : "https://api.openai.com/v1",
+        MODEL_ID: options.modelReply ? "test-streaming-reasoner" : "gpt-4o-mini",
         MODEL_FETCH_TIMEOUT_MS: String(options.modelFetchTimeoutMs),
         MOA_TEST_REASONER_STALL_MS: String(options.reasonerStallMs || 0),
         VOICE_PROVIDER: "chirp",
-        VOICE_TTS_PROVIDER: "cloud-tts",
+        VOICE_TTS_PROVIDER: options.geminiTts ? "gemini-tts" : "cloud-tts",
         VOICE_REASONING_PROVIDER: "gateway",
         GCP_PROJECT_ID: "test-project",
         CHIRP_ACCESS_TOKEN: "test-token",
+        ...(options.streamingStt ? {
+          CHIRP_SERVICE_ACCOUNT_KEY: JSON.stringify({ client_email: "fake@example.test", private_key: "fake" }),
+          MOA_TEST_STREAMING_STT_TRANSCRIPT: options.sttTranscript,
+          MOA_TEST_STREAMING_STT_LANGUAGE: options.sttLanguage,
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --require=${STREAMING_STT_PRELOAD}`.trim(),
+        } : {}),
         CHIRP_MODEL: "chirp_3",
         CHIRP_LANGUAGE_CODES: "en-US,am-ET",
         CLOUD_TTS_TIMEOUT_MS: "1000",
         MOA_TEST_CHIRP_ENDPOINT: `${fakeGoogle.baseUrl}/v2/projects/test/locations/us/recognizers/_:recognize`,
         MOA_TEST_CLOUD_TTS_ENDPOINT: `${fakeGoogle.baseUrl}/v1/text:synthesize`,
+        ...(options.geminiTts ? {
+          GEMINI_TTS_MODEL: "gemini-2.5-flash-tts-test",
+          GEMINI_TTS_VOICE: "Kore",
+          VOICE_CHUNK_MIN_CHARS: "20",
+          VOICE_CHUNK_FIRST_MAX_CHARS: "80",
+          VOICE_CHUNK_MAX_CHARS: "120",
+        } : {}),
       },
     });
 
@@ -127,6 +159,30 @@ async function runDeterministicScenario(options) {
       assert.ok(turn.events.some((event) => event.type === "assistant_text") || turn.assistantAudioBytes > 0, `${options.name}: no assistant output`);
     }
 
+    if (options.modelReply) {
+      const assistantText = turn.events
+        .filter((event) => event.type === "assistant_text")
+        .map((event) => event.text || "")
+        .join("");
+      assert.equal(turn.events.find((event) => event.type === "transcript_final")?.text, options.sttTranscript,
+        `${options.name}: streaming STT final transcript mismatch`);
+      assert.ok(turn.events.some((event) => event.type === "transcript_partial" && event.text === options.sttTranscript),
+        `${options.name}: fake streaming STT partial was not observed`);
+      assert.equal(assistantText, options.modelReply, `${options.name}: assistant reply did not come from the fake model`);
+      assert.doesNotMatch(assistantText, /need you to give me access to a configured model provider/i,
+        `${options.name}: canned missing-model fallback must fail the combined E2E`);
+      assert.ok(fakeGoogle.calls.some((call) => call.kind === "model-stream"),
+        `${options.name}: gateway did not use model HTTP/SSE`);
+      assert.equal(fakeGoogle.calls.some((call) => call.kind === "stt"), false,
+        `${options.name}: streaming STT unexpectedly fell back to batch recognition`);
+      const ttsCalls = fakeGoogle.calls.filter((call) => call.kind === "tts");
+      assert.ok(ttsCalls.length >= 2, `${options.name}: expected chunked Gemini TTS, got ${ttsCalls.length} request(s)`);
+      assert.ok(ttsCalls.every((call) => call.voice?.modelName === "gemini-2.5-flash-tts-test"),
+        `${options.name}: TTS requests did not use the configured Gemini model`);
+      assert.ok(turn.assistantAudioFrames >= 2, `${options.name}: expected multiple binary assistant audio frames`);
+      assert.ok(Number(turn.turnDone.tts_segments) >= 2, `${options.name}: terminal receipt did not report multiple TTS segments`);
+    }
+
     const storedPcm = await fetchStoredPcm(baseUrl, turn.sessionId, turn.turnId);
     assert.deepEqual(storedPcm, pcm, `${options.name}: stored PCM differs from streamed PCM`);
 
@@ -138,6 +194,7 @@ async function runDeterministicScenario(options) {
       elapsed_ms: turn.elapsedMs,
       transcript_final: turn.events.find((event) => event.type === "transcript_final")?.text || "",
       assistant_audio_bytes: turn.assistantAudioBytes,
+      assistant_audio_frames: turn.assistantAudioFrames,
       tts_spoke: typeof turn.turnDone.tts_spoke === "boolean" ? turn.turnDone.tts_spoke : null,
       reply_language: turn.turnDone.reply_language || "",
       stored_pcm_bytes: storedPcm.length,
@@ -260,6 +317,7 @@ async function driveTurn({ baseUrl, sessionId, turnId, pcm, rate = 16000, wallCl
     turnDone: events.find((event) => event.type === "turn_done") || null,
     elapsedMs: Date.now() - start,
     assistantAudioBytes: binaryFrames.reduce((sum, frame) => sum + frame.length, 0),
+    assistantAudioFrames: binaryFrames.length,
   };
 }
 
@@ -309,7 +367,7 @@ async function startGateway({ port, dataDir, env }) {
   return server;
 }
 
-async function startFakeGoogle({ transcript, languageCode }) {
+async function startFakeGoogle({ transcript, languageCode, modelReply = "", rejectBatchStt = false }) {
   const calls = [];
   const server = http.createServer(async (request, response) => {
     const chunks = [];
@@ -321,6 +379,10 @@ async function startFakeGoogle({ transcript, languageCode }) {
     } catch {}
     if (request.url.includes(":recognize")) {
       calls.push({ kind: "stt", language_codes: body?.config?.languageCodes || [] });
+      if (rejectBatchStt) {
+        sendJson(response, 500, { error: "batch STT must not run in the combined streaming scenario" });
+        return;
+      }
       sendJson(response, 200, {
         results: [{
           languageCode,
@@ -334,6 +396,16 @@ async function startFakeGoogle({ transcript, languageCode }) {
       sendJson(response, 200, { audioContent: wavBase64() });
       return;
     }
+    if (request.url.includes("/chat/completions")) {
+      if (body?.stream === true) {
+        calls.push({ kind: "model-stream", model: body?.model || "" });
+        sendOpenAiSse(response, modelReply);
+      } else {
+        calls.push({ kind: "model", model: body?.model || "" });
+        sendJson(response, 200, { choices: [{ message: { role: "assistant", content: modelReply } }] });
+      }
+      return;
+    }
     sendJson(response, 404, { error: "not found" });
   });
   const port = await listen(server);
@@ -342,6 +414,19 @@ async function startFakeGoogle({ transcript, languageCode }) {
     calls,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
+}
+
+function sendOpenAiSse(response, value) {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  const midpoint = Math.max(1, Math.floor(value.length / 2));
+  for (const content of [value.slice(0, midpoint), value.slice(midpoint)]) {
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+  }
+  response.end("data: [DONE]\n\n");
 }
 
 function sendJson(response, status, payload) {
