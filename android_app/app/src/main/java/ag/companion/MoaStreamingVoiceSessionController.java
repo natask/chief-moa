@@ -9,7 +9,6 @@ import android.view.Choreographer;
 
 import org.json.JSONObject;
 
-import java.util.ArrayDeque;
 import java.util.UUID;
 
 final class MoaStreamingVoiceSessionController {
@@ -38,9 +37,17 @@ final class MoaStreamingVoiceSessionController {
     // connect is not killed by the client's own impatience. The socket connect
     // already starts at double-press-start (startSession), so it overlaps the
     // hold; this only bounds the tail wait after an early release.
-    private static final long PENDING_COMMIT_TIMEOUT_MS = 6000;
+    // A release may happen before the socket opens. Preserve the full 10s draft
+    // authority window after the 3.5s connect bound instead of making those two
+    // setup stages consume one shared deadline.
+    static final long PENDING_COMMIT_TIMEOUT_MS = DRAFT_READY_TIMEOUT_MS + 4000;
     private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 450;
-    private static final int MAX_PENDING_AUDIO_BYTES = MoaAudioCaptureController.SAMPLE_RATE_HZ * 2 * 5;
+    // Covers the 3.5s socket-connect bound plus the 10s draft-authority window
+    // with margin. Unlike the old rolling five-second queue, overflow is terminal:
+    // a voice turn must never execute after silently losing its spoken prefix.
+    static final int PRE_READY_AUDIO_CAPACITY_MS = 15000;
+    static final int MAX_PENDING_AUDIO_BYTES = MoaAudioCaptureController.SAMPLE_RATE_HZ * 2
+            * PRE_READY_AUDIO_CAPACITY_MS / 1000;
 
     interface Callback {
         void onSessionStarted(String sessionId, String turnId);
@@ -134,11 +141,12 @@ final class MoaStreamingVoiceSessionController {
     private boolean loggedVoiceActivity;
     private boolean sessionReady;
     private boolean pendingCommitAfterSessionReady;
-    private final ArrayDeque<byte[]> pendingAudioChunks = new ArrayDeque<>();
+    private final MoaDeferredVoiceCaptureBuffer pendingAudio =
+            new MoaDeferredVoiceCaptureBuffer(MAX_PENDING_AUDIO_BYTES, MAX_PENDING_AUDIO_BYTES);
+    private final MoaVoiceTerminalGate terminalGate = new MoaVoiceTerminalGate();
     private final MoaAssistantAudioProgressTracker assistantAudioProgress = new MoaAssistantAudioProgressTracker();
     private final MoaAssistantOutputState assistantOutputState = new MoaAssistantOutputState();
     private final MoaVoicePlaybackDrainGate playbackDrainGate = new MoaVoicePlaybackDrainGate();
-    private int pendingAudioBytes;
     private long capturedAudioBytes;
     private long recordingStartedAtMs;
     private long lastVoiceActivityAtMs;
@@ -304,7 +312,7 @@ final class MoaStreamingVoiceSessionController {
 
     void startSession() {
         synchronized (lock) {
-            if (active) {
+            if (active || !terminalGate.allowsEvents()) {
                 return;
             }
             active = true;
@@ -323,6 +331,7 @@ final class MoaStreamingVoiceSessionController {
             transcriptRevisionsEnabled = false;
             assistantAudioProgress.reset();
             clearPendingAudioLocked();
+            pendingAudio.beginDeferredCapture();
             capturedAudioBytes = 0;
             recordingStartedAtMs = 0;
             lastVoiceActivityAtMs = 0;
@@ -766,13 +775,12 @@ final class MoaStreamingVoiceSessionController {
         while (true) {
             byte[] chunk;
             synchronized (lock) {
-                chunk = pendingAudioChunks.pollFirst();
+                chunk = pendingAudio.pollFirst();
                 if (chunk == null) {
-                    pendingAudioBytes = 0;
+                    pendingAudio.continueLive();
                     sessionReady = true;
                     return true;
                 }
-                pendingAudioBytes = Math.max(0, pendingAudioBytes - chunk.length);
             }
             if (socket != null && !socket.sendAudio(chunk)) {
                 reportError("Could not send buffered audio frame to voice gateway.", null);
@@ -938,13 +946,47 @@ final class MoaStreamingVoiceSessionController {
     }
 
     private void reportError(String message, Throwable error) {
+        MoaAudioCaptureController capture;
+        MoaAudioPlaybackController playback;
+        MoaVoiceGatewaySocket socket;
+        synchronized (lock) {
+            if (!terminalGate.beginTermination()) {
+                return;
+            }
+            capture = captureController;
+            playback = playbackController;
+            socket = gatewaySocket;
+            captureController = null;
+            playbackController = null;
+            gatewaySocket = null;
+            active = false;
+            playbackDrainGeneration++;
+            assistantOutputState.suppressSpeech();
+            committed = false;
+            commitRequested = false;
+            assistantAudioStarted = false;
+            loggedVoiceActivity = false;
+            sessionReady = false;
+            pendingCommitAfterSessionReady = false;
+            transcriptRevisionsEnabled = false;
+            clearPendingAudioLocked();
+            capturedAudioBytes = 0;
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
+        }
+        mainHandler.removeCallbacks(autoCommitCheck);
         mainHandler.removeCallbacks(pendingCommitTimeout);
+        mainHandler.removeCallbacks(draftReadyTimeout);
+        mainHandler.removeCallbacks(draftControlTimeout);
         synchronized (lock) {
             if (lifecycleTrace != null) {
                 lifecycleTrace.failed(message);
             }
         }
-        post(() -> callback.onError(message, error));
+        if (capture != null) capture.stop();
+        if (playback != null) playback.stop();
+        if (socket != null) socket.destroy();
+        postTerminal(() -> callback.onError(message, error));
     }
 
     private void maybeSendFinalPlaybackProgress(MoaVoiceGatewaySocket socket, String currentTurnId, MoaAssistantAudioProgressTracker.PlaybackProgress progress, String reason) {
@@ -1019,21 +1061,15 @@ final class MoaStreamingVoiceSessionController {
         }
     }
 
-    private void bufferAudioLocked(byte[] pcm) {
+    private MoaDeferredVoiceCaptureBuffer.AppendResult bufferAudioLocked(byte[] pcm) {
         if (pcm == null || pcm.length == 0) {
-            return;
+            return MoaDeferredVoiceCaptureBuffer.AppendResult.ACCEPTED;
         }
-        pendingAudioChunks.addLast(pcm);
-        pendingAudioBytes += pcm.length;
-        while (pendingAudioBytes > MAX_PENDING_AUDIO_BYTES && !pendingAudioChunks.isEmpty()) {
-            byte[] dropped = pendingAudioChunks.removeFirst();
-            pendingAudioBytes = Math.max(0, pendingAudioBytes - dropped.length);
-        }
+        return pendingAudio.append(pcm);
     }
 
     private void clearPendingAudioLocked() {
-        pendingAudioChunks.clear();
-        pendingAudioBytes = 0;
+        pendingAudio.reset();
     }
 
     private static boolean hasVoiceActivity(byte[] pcm) {
@@ -1053,11 +1089,27 @@ final class MoaStreamingVoiceSessionController {
         if (callback == null || runnable == null) {
             return;
         }
+        Runnable guarded = () -> {
+            if (terminalGate.allowsEvents()) runnable.run();
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            guarded.run();
+        } else {
+            mainHandler.post(guarded);
+        }
+    }
+
+    private void postTerminal(Runnable runnable) {
+        if (callback == null || runnable == null) return;
         if (Looper.myLooper() == Looper.getMainLooper()) {
             runnable.run();
         } else {
             mainHandler.post(runnable);
         }
+    }
+
+    private boolean transportEventsAllowed() {
+        return terminalGate.allowsEvents();
     }
 
     private static String safe(String value) {
@@ -1076,7 +1128,9 @@ final class MoaStreamingVoiceSessionController {
             boolean shouldSend;
             boolean shouldBuffer;
             boolean firstAudio;
+            boolean overflowed = false;
             synchronized (lock) {
+                if (!terminalGate.allowsEvents()) return;
                 socket = gatewaySocket;
                 shouldSend = active && !committed && sessionReady;
                 shouldBuffer = active && !committed && !sessionReady;
@@ -1085,12 +1139,17 @@ final class MoaStreamingVoiceSessionController {
                         && capturedAudioBytes == 0
                         && pcm != null
                         && pcm.length > 0;
-                if (active && !committed && pcm != null) {
+                if (shouldBuffer) {
+                    MoaDeferredVoiceCaptureBuffer.AppendResult result = bufferAudioLocked(pcm);
+                    overflowed = result != MoaDeferredVoiceCaptureBuffer.AppendResult.ACCEPTED;
+                }
+                if (active && !committed && !overflowed && pcm != null) {
                     capturedAudioBytes += pcm.length;
                 }
-                if (shouldBuffer) {
-                    bufferAudioLocked(pcm);
-                }
+            }
+            if (overflowed) {
+                reportError("Voice gateway was not ready before the complete recording buffer filled.", null);
+                return;
             }
             if (firstAudio) {
                 post(callback::onAudioCaptured);
@@ -1108,6 +1167,7 @@ final class MoaStreamingVoiceSessionController {
         public void onCaptureStarted() {
             Log.i(TAG, "recordingStarted");
             synchronized (lock) {
+                if (!terminalGate.allowsEvents()) return;
                 if (lifecycleTrace != null) {
                     lifecycleTrace.captureStarted();
                 }
@@ -1120,6 +1180,7 @@ final class MoaStreamingVoiceSessionController {
         public void onCaptureStopped() {
             Log.i(TAG, "recordingStopped");
             synchronized (lock) {
+                if (!terminalGate.allowsEvents()) return;
                 if (suppressDraftCaptureStopped) {
                     suppressDraftCaptureStopped = false;
                     return;
@@ -1138,6 +1199,7 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onPlaybackStarted() {
             synchronized (lock) {
+                if (!terminalGate.allowsEvents()) return;
                 playbackDrainGate.onPlaybackStarted();
             }
         }
@@ -1146,6 +1208,7 @@ final class MoaStreamingVoiceSessionController {
         public void onPlaybackStopped(boolean drained) {
             String drainedTurnId = "";
             synchronized (lock) {
+                if (!terminalGate.allowsEvents()) return;
                 boolean deliverDeviceCompletion = playbackDrainGate.onPlaybackStopped(drained);
                 if (deliverDeviceCompletion) {
                     drainedTurnId = pendingDeviceAudioDoneTurnId;
@@ -1187,6 +1250,7 @@ final class MoaStreamingVoiceSessionController {
     private final class SocketCallback implements MoaVoiceGatewaySocket.Callback {
         @Override
         public void onSocketOpen() {
+            if (!transportEventsAllowed()) return;
             startSessionAfterSocketOpen();
         }
 
@@ -1194,65 +1258,23 @@ final class MoaStreamingVoiceSessionController {
         public void onSocketClosed(int code, String reason) {
             boolean wasActive;
             synchronized (lock) {
+                if (!terminalGate.allowsEvents()) return;
                 wasActive = active;
-                if (wasActive && lifecycleTrace != null) {
-                    lifecycleTrace.failed("socket closed");
-                }
-                active = false;
-                assistantOutputState.suppressSpeech();
-                committed = false;
-                loggedVoiceActivity = false;
-                sessionReady = false;
-                pendingCommitAfterSessionReady = false;
-                assistantAudioProgress.reset();
-                clearPendingAudioLocked();
-                capturedAudioBytes = 0;
-                recordingStartedAtMs = 0;
-                lastVoiceActivityAtMs = 0;
             }
-            mainHandler.removeCallbacks(autoCommitCheck);
-            mainHandler.removeCallbacks(pendingCommitTimeout);
-            mainHandler.removeCallbacks(draftReadyTimeout);
-            mainHandler.removeCallbacks(draftControlTimeout);
             if (wasActive) {
-                post(() -> callback.onSessionClosed());
+                reportError("Voice connection closed before the turn completed.", null);
             }
         }
 
         @Override
         public void onSocketFailure(String message, Throwable error) {
-            MoaAudioCaptureController capture;
-            MoaAudioPlaybackController playback;
-            synchronized (lock) {
-                capture = captureController;
-                playback = playbackController;
-                active = false;
-                playbackDrainGeneration++;
-                assistantOutputState.suppressSpeech();
-                committed = false;
-                assistantAudioStarted = false;
-                loggedVoiceActivity = false;
-                sessionReady = false;
-                pendingCommitAfterSessionReady = false;
-                assistantAudioProgress.reset();
-                clearPendingAudioLocked();
-                capturedAudioBytes = 0;
-                recordingStartedAtMs = 0;
-                lastVoiceActivityAtMs = 0;
-            }
-            mainHandler.removeCallbacks(autoCommitCheck);
-            mainHandler.removeCallbacks(pendingCommitTimeout);
-            if (capture != null) {
-                capture.stop();
-            }
-            if (playback != null) {
-                playback.stop();
-            }
+            if (!transportEventsAllowed()) return;
             reportError(message, error);
         }
 
         @Override
         public void onJsonEvent(JSONObject event) {
+            if (!transportEventsAllowed()) return;
             handleVoiceDraftEvent(event);
             if (event != null && "session_ready".equals(event.optString("type", ""))) {
                 JSONObject capabilities = event.optJSONObject("capabilities");
@@ -1268,6 +1290,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onSessionReady(String readySessionId) {
+            if (!transportEventsAllowed()) return;
             MoaVoiceGatewaySocket socket;
             String currentTurnId;
             boolean shouldFinishCommit;
@@ -1302,6 +1325,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTranscriptPartial(String transcriptTurnId, String text) {
+            if (!transportEventsAllowed()) return;
             Log.i(TAG, "transcriptPartial chars=" + safe(text).length());
             synchronized (lock) {
                 if (lifecycleTrace != null) {
@@ -1313,6 +1337,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTranscriptPartial(String transcriptTurnId, String text, long transcriptSequence) {
+            if (!transportEventsAllowed()) return;
             Log.i(TAG, "transcriptPartial chars=" + safe(text).length());
             synchronized (lock) {
                 if (lifecycleTrace != null) lifecycleTrace.transcriptPartialReceived();
@@ -1322,6 +1347,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTranscriptFinal(String transcriptTurnId, String text) {
+            if (!transportEventsAllowed()) return;
             Log.i(TAG, "transcriptFinal chars=" + safe(text).length());
             synchronized (lock) {
                 if (lifecycleTrace != null) {
@@ -1333,6 +1359,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTranscriptFinal(String transcriptTurnId, String text, long transcriptSequence) {
+            if (!transportEventsAllowed()) return;
             Log.i(TAG, "transcriptFinal chars=" + safe(text).length());
             synchronized (lock) {
                 if (lifecycleTrace != null) lifecycleTrace.resultReceived("transcript");
@@ -1342,6 +1369,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTranscriptPrefixRevision(JSONObject event) {
+            if (!transportEventsAllowed()) return;
             synchronized (lock) {
                 if (!transcriptRevisionsEnabled) return;
             }
@@ -1350,6 +1378,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTranscriptRevision(JSONObject event) {
+            if (!transportEventsAllowed()) return;
             synchronized (lock) {
                 if (!transcriptRevisionsEnabled) return;
             }
@@ -1358,6 +1387,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantText(String assistantTurnId, String text) {
+            if (!transportEventsAllowed()) return;
             synchronized (lock) {
                 if (!assistantOutputState.allowsText(assistantTurnId)) {
                     return;
@@ -1374,6 +1404,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantAudioStart(String audioTurnId, JSONObject format, double playbackRate) {
+            if (!transportEventsAllowed()) return;
             MoaAudioPlaybackController playback;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
@@ -1392,6 +1423,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantAudioSegment(String audioTurnId, JSONObject segment) {
+            if (!transportEventsAllowed()) return;
             synchronized (lock) {
                 if (!assistantOutputState.allowsSpeech(audioTurnId)) {
                     return;
@@ -1404,6 +1436,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantAudio(byte[] pcm) {
+            if (!transportEventsAllowed()) return;
             MoaAudioPlaybackController playback;
             String currentTurnId;
             long currentPlaybackGeneration;
@@ -1448,6 +1481,7 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onAssistantAudioDone(String audioTurnId) {
+            if (!transportEventsAllowed()) return;
             MoaAudioPlaybackController playbackToDrain;
             boolean deliverImmediately;
             long currentPlaybackGeneration;
@@ -1479,12 +1513,14 @@ final class MoaStreamingVoiceSessionController {
 
         @Override
         public void onTurnProgress(String progressTurnId) {
+            if (!transportEventsAllowed()) return;
             post(() -> callback.onTurnProgress(progressTurnId));
         }
 
         @Override
         public void onTurnDone(String completedTurnId, String status, boolean transcriptionOnly,
                 boolean ttsSpoke, String replyLanguage, JSONObject terminalEvent) {
+            if (!transportEventsAllowed()) return;
             Log.i(TAG, "turnDone status=" + status + " transcriptionOnly=" + transcriptionOnly + " ttsSpoke=" + ttsSpoke);
             handleTurnDone(completedTurnId, status, transcriptionOnly, ttsSpoke, replyLanguage, terminalEvent);
         }
@@ -1492,11 +1528,13 @@ final class MoaStreamingVoiceSessionController {
         @Override
         public void onTtsRetryDone(String completedTurnId, String retryId, String status,
                 int fromTextChar, String error) {
+            if (!transportEventsAllowed()) return;
             post(() -> callback.onTtsRetryDone(completedTurnId, retryId, status, fromTextChar, error));
         }
 
         @Override
         public void onGatewayError(String message) {
+            if (!transportEventsAllowed()) return;
             reportError(message, null);
         }
     }

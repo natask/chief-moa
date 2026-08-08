@@ -95,6 +95,14 @@ final class MoaDeferredVoiceCaptureBuffer {
         return byteCount;
     }
 
+    byte[] pollFirst() {
+        byte[] chunk = chunks.pollFirst();
+        if (chunk != null) {
+            byteCount = Math.max(0, byteCount - chunk.length);
+        }
+        return chunk;
+    }
+
     List<byte[]> drainAndReset() {
         List<byte[]> drained = new ArrayList<>(chunks);
         reset();
