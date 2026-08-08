@@ -68,4 +68,3 @@
 - The production gateway is healthy and already serves the required draft
   contract, but it is not built from the current master candidate.
 - Windows literal dictation remains missing.
-
