@@ -33,10 +33,9 @@ const { createVoiceTranscriptReconcileBridge, publishTranscriptRevision }
 const { bindBrowserVoiceInvocationContext } = require("./browser-invocation-context");
 const { completeNoSpeech, completeTranscriptFinalization, handleTranscriptFinalize }
   = require("./voice-transcript-finalize");
+const { createEarlyAudioBuffer } = require("./voice-early-audio");
 const VOICE_SESSION_ENDPOINT = "/v1/voice/sessions";
 const ASSISTANT_AUDIO_FORMAT = CLIENT_AUDIO_FORMAT;
-const EARLY_AUDIO_MAX_BYTES = 16000 * 2 * 5;
-const EARLY_AUDIO_MAX_AGE_MS = 3000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "canceled", "error", "closed", "interrupted", "replaced", "no_speech"]);
 const ACTIVE_PLAYBACK_PROGRESS_STATUSES = new Set(["committed", "playback"]);
 const DEFAULT_TURN_PROGRESS_INTERVAL_MS = 5000;
@@ -135,8 +134,7 @@ class VoiceSessionConnection {
       { connections: options.peerConnections || new Set(), pending: options.pendingReplacements || new Map() });
     this.turn = null;
     this.responding = false;
-    this.earlyAudio = [];
-    this.earlyAudioBytes = 0;
+    this.earlyAudio = createEarlyAudioBuffer();
     this.turnProgressTimer = null;
     this.turnProgressStage = "";
     this.ttsRetryReceipts = new Map();
@@ -279,7 +277,7 @@ class VoiceSessionConnection {
     }
     if (this.voiceDraft.append(chunk)) return;
     if (!this.turn) {
-      this.bufferEarlyAudio(chunk);
+      this.earlyAudio.append(chunk);
       return;
     }
     if (this.turn.status !== "recording") {
@@ -303,24 +301,17 @@ class VoiceSessionConnection {
       turn.sttStream.push(chunk);
     }
   }
-  bufferEarlyAudio(chunk) {
-    this.earlyAudio.push({ at: Date.now(), chunk });
-    this.earlyAudioBytes += chunk.length;
-    while (this.earlyAudioBytes > EARLY_AUDIO_MAX_BYTES && this.earlyAudio.length > 0) {
-      const dropped = this.earlyAudio.shift();
-      this.earlyAudioBytes -= dropped.chunk.length;
+  async flushEarlyAudio(turn) {
+    const { chunks, error } = this.earlyAudio.drain();
+    if (error) {
+      await this.failCommittedTurn(turn, turn.providerEvents || this.createProviderEvents(turn), error);
+      return false;
     }
-  }
-  flushEarlyAudio(turn) {
-    const buffered = this.earlyAudio;
-    this.earlyAudio = [];
-    this.earlyAudioBytes = 0;
-    const oldestAllowed = Date.now() - EARLY_AUDIO_MAX_AGE_MS;
-    for (const entry of buffered) {
-      if (entry.at < oldestAllowed) continue;
-      if (turn.status !== "recording") return;
+    for (const entry of chunks) {
+      if (turn.status !== "recording") return false;
       this.writeTurnAudio(turn, entry.chunk);
     }
+    return true;
   }
   async handleSessionStart(event) {
     const sessionId = sanitizeId(event.session_id || randomId("session"), "session_id");
@@ -331,8 +322,7 @@ class VoiceSessionConnection {
       deviceId: sanitizeLooseId(event.device_id || event.deviceId || event.client?.device_id || event.client?.deviceId || ""),
       contextAction: event.context_action || event.contextAction };
     if (await this.voiceDraft.start(event, nextTurnIdentity)) {
-      this.earlyAudio = [];
-      this.earlyAudioBytes = 0;
+      this.earlyAudio.reset();
       return;
     }
     const pendingReplacement = this.steeringCoordinator.take(nextTurnIdentity);
@@ -353,7 +343,7 @@ class VoiceSessionConnection {
     const profileVersion = this.sessionAdmission.profileVersion(deviceId),
       effectiveProfile = effectiveProfileForSession(this.sessionAdmission.effectiveProfile(deviceId), event);
     const admitted = await this.sessionAdmission.admit({ deviceId, sessionId, branchId, turnId,
-      sendEvent: (payload) => this.sendEvent(payload), onDenied: () => { this.earlyAudio = []; this.earlyAudioBytes = 0; },
+      sendEvent: (payload) => this.sendEvent(payload), onDenied: () => this.earlyAudio.reset(),
       effectiveProfile, profileVersion });
     if (!admitted.provider) {
       return;
@@ -421,13 +411,17 @@ class VoiceSessionConnection {
     this.phraseAssist.configureTurn(turn, event.phrase_assist || event.phraseAssist);
     turn.contextPrompt = this.contextPromptForTurn(turn);
     turn.contextSummary = contextSummaryForTurn(turn, this.contextProvider);
-    turn.audioStream = fs.createWriteStream(turn.pcmPath, { flags: "w" });
-    turn.audioStream.on("error", (error) => {
-      turn.status = "error";
-      writeTurnMetadata(turn, { status: "error", error: cleanError(error) });
-      this.sendError(`failed to write audio: ${cleanError(error)}`);
-    });
     this.turn = turn;
+    let inputAudioStream;
+    try {
+      inputAudioStream = fs.createWriteStream(turn.pcmPath, { flags: "w" });
+      turn.audioStream = inputAudioStream;
+    } catch (error) {
+      await this.handleInputSpoolError(turn, null, error); return;
+    }
+    inputAudioStream.on("error", (error) => {
+      void this.handleInputSpoolError(turn, inputAudioStream, error);
+    });
     this.sessionIdentity = { ownerId: deviceId || "legacy_owner", sessionId, branchId, turnId };
     const reconcileRequest = event.transcript_reconciliation || event.transcriptReconciliation || {};
     this.transcriptReconcile.configure(turn, { provider: this.voiceProvider, ownerId: deviceId || "legacy_owner", format,
@@ -478,7 +472,9 @@ class VoiceSessionConnection {
         writeTurnMetadata(turn, { stt_stream_error: cleanError(error) });
       }
     }
-    this.flushEarlyAudio(turn);
+    if (!(await this.flushEarlyAudio(turn))) {
+      return;
+    }
     writeTurnMetadata(turn, { status: "recording" });
     await this.sendEvent({
       type: "session_ready",
@@ -560,14 +556,8 @@ class VoiceSessionConnection {
       turn.transportSummary = transportSummaryForTurn(turn, "audio");
       await this.recordProviderEvent(turn, providerEvents, "capture_committed", turn.captureSummary);
       await this.recordProviderEvent(turn, providerEvents, "transport_committed", turn.transportSummary);
-      if (turn.liveSession) {
-        // Live/native path: the provider streams through the session-start hooks
-        // and never calls onTurnProgress, so the session server keepalives from
-        // commit until the first assistant-audio event (which stops it) or a
-        // terminal path. Cascaded turns start progress via the onTurnProgress
-        // hook when the reasoner begins.
-        this.startTurnProgress(turn, "reasoning");
-      }
+      // Keep Android alive while streaming STT or retained-audio repair drains.
+      this.startTurnProgress(turn, "reasoning");
       await closeAudioStream(turn);
       this.transcriptReconcile.finish(turn);
       const providerResult = turn.liveSession
@@ -1374,7 +1364,7 @@ class VoiceSessionConnection {
   }
 
   async failCommittedTurn(turn, providerEvents, error) {
-    if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
+    if (!turn || turn.terminalizing || TERMINAL_TURN_STATUSES.has(turn.status)) {
       return;
     }
     if (isTurnSupersededError(error)) {
@@ -1383,6 +1373,7 @@ class VoiceSessionConnection {
       // rebrand a normal interruption and emit events for the dead turn.
       return;
     }
+    turn.terminalizing = true;
     const message = cleanError(error);
     turn.status = "error";
     this.stopTurnProgress();
@@ -1442,6 +1433,13 @@ class VoiceSessionConnection {
     }
   }
 
+  async handleInputSpoolError(turn, stream, error) {
+    if (!turn || turn.terminalizing || TERMINAL_TURN_STATUSES.has(turn.status)) return;
+    if (stream && turn.audioStream === stream) turn.audioStream = null;
+    turn.inputSpoolFailed = true;
+    const failure = Object.assign(new Error(`input audio spool failed: ${cleanError(error)}`), { code: "input_spool_error" });
+    await this.failCommittedTurn(turn, turn.providerEvents || this.createProviderEvents(turn), failure);
+  }
   async sendTurnDone(payload) {
     try {
       await this.sendEvent(payload);
@@ -2104,6 +2102,8 @@ function cleanError(error) {
 }
 
 function turnErrorReason(error) {
+  if (error?.code === "input_spool_error") return "input_spool_error";
+  if (["early_audio_overflow", "early_audio_expired"].includes(error?.code)) return "early_audio_overflow";
   const message = cleanError(error).toLowerCase();
   if (error?.name === "AbortError" || message.includes("timeout") || message.includes("timed out")) {
     return "timeout";
