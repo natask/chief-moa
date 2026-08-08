@@ -102,6 +102,42 @@ test("profile selection maps only gateway-owned provider environment names", () 
   assert.equal(withModel.XAI_REALTIME_MODEL, "grok-voice-custom");
 });
 
+test("native profile keeps a configured cascaded switch-back choice", () => {
+  const env = configuredEnv({ OPENAI_API_KEY: "configured", VOICE_TTS_PROVIDER: "gemini-tts" });
+  const nativeProfile = {
+    model: "gpt-realtime-2.1", voice_provider: "openai-realtime",
+    stt_provider: "openai-realtime", reasoning_provider: "openai-realtime",
+    tts_provider: "openai-realtime",
+  };
+  const catalog = createVoiceProviderCatalog({ env, profile: nativeProfile });
+  const cascaded = choice(catalog, "cascaded-openai");
+  assert.equal(catalog.selection_scope, "profile_effective");
+  assert.equal(catalog.active_selection.scope, "profile_effective");
+  assert.equal(cascaded.status, "configured");
+  assert.equal(cascaded.stages.tts, "gemini-tts");
+  const selected = resolveProviderSelection({ choice_id: cascaded.id }, { env, profile: nativeProfile });
+  assert.equal(selected.patch.voice_provider, "chirp");
+  assert.equal(selected.patch.tts_provider, "gemini-tts");
+});
+
+test("admission diagnostics distinguish boot defaults from device-effective selection", async () => {
+  const profile = { ...BASE_PROFILE };
+  const admission = createVoiceSessionAdmission({
+    sanitizeId: (value) => value,
+    agentProfile: { effective: () => profile, currentVersion: () => "device_profile_v0002" },
+    voiceProviderFactory: () => ({ status: () => ({ provider: "chirp" }) }),
+  });
+  assert.equal(admission.status().provider_selection.scope, "boot_default");
+  const admitted = await admission.admit({
+    deviceId: "android_test", effectiveProfile: profile, profileVersion: "device_profile_v0002",
+  });
+  assert.deepEqual(admitted.providerSelection, {
+    scope: "device_effective",
+    device_id: "android_test",
+    provider_bundle: "chirp|chirp|openai-compatible|gemini-tts|gpt-test",
+  });
+});
+
 function configuredEnv(overrides = {}) {
   return {
     MODEL_PROVIDER: "openai-compatible", MODEL_BASE_URL: "https://api.openai.com/v1",

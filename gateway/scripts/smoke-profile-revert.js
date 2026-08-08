@@ -378,7 +378,9 @@ async function startFakeLive() {
           state.toolResponses.push({ name: response.name, response: response.response });
         }
         // The turn can complete once the tool result is back.
-        ws.send(JSON.stringify({ serverContent: { turnComplete: true } }));
+        ws.send(JSON.stringify({ serverContent: {
+          outputTranscription: { text: "Profile update handled." }, turnComplete: true,
+        } }));
         return;
       }
       if (message.realtimeInput?.audioStreamEnd) {
@@ -399,7 +401,9 @@ async function startFakeLive() {
           }));
           return;
         }
-        ws.send(JSON.stringify({ serverContent: { turnComplete: true } }));
+        ws.send(JSON.stringify({ serverContent: {
+          outputTranscription: { text: "Ready." }, turnComplete: true,
+        } }));
       }
     });
   });

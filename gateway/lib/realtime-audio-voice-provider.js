@@ -1,6 +1,7 @@
 "use strict";
 
 const { WebSocket } = require("ws");
+const { createInactivityTimer, nativeEmptyResponseError } = require("./native-voice-reliability");
 
 const CLIENT_FORMAT = Object.freeze({ encoding: "pcm16", sample_rate: 16000, channels: 1 });
 const PROVIDER_RATE = 24000;
@@ -67,8 +68,7 @@ class RealtimeAudioVoiceProvider {
       resolveDone = resolve;
       rejectDone = reject;
     });
-    const timeout = setTimeout(() => rejectOnce(new Error(`${this.provider} timed out after ${this.timeoutMs}ms`)), this.timeoutMs);
-    timeout.unref();
+    let inactivityTimer = null;
 
     const result = () => ({
       provider: this.provider,
@@ -79,12 +79,16 @@ class RealtimeAudioVoiceProvider {
       audio_format: CLIENT_FORMAT,
     });
     const cleanup = () => {
-      clearTimeout(timeout);
+      inactivityTimer?.cancel();
       closed = true;
       try { socket?.close(1000, "turn complete"); } catch {}
     };
     const resolveOnce = async () => {
       if (settled) return;
+      if (!assistantText.trim() && !audioStarted) {
+        rejectOnce(nativeEmptyResponseError(this.provider));
+        return;
+      }
       settled = true;
       if (audioStarted && !audioDone) {
         audioDone = true;
@@ -100,6 +104,9 @@ class RealtimeAudioVoiceProvider {
       rejectReady(error);
       rejectDone(error);
     };
+    inactivityTimer = createInactivityTimer(this.timeoutMs, () => {
+      rejectOnce(new Error(`${this.provider} inactivity timeout after ${this.timeoutMs}ms`));
+    });
     const enqueue = (task) => {
       chain = chain.then(task).catch(rejectOnce);
     };
@@ -118,8 +125,12 @@ class RealtimeAudioVoiceProvider {
       },
       maxPayload: 32 * 1024 * 1024,
     });
-    socket.on("open", () => send(sessionUpdate(this.spec.shape, this.model, this.voice, this.transcriptionModel, turn, this.defaultPrompt)));
+    socket.on("open", () => {
+      send(sessionUpdate(this.spec.shape, this.model, this.voice, this.transcriptionModel, turn, this.defaultPrompt));
+      inactivityTimer.touch();
+    });
     socket.on("message", (raw) => enqueue(async () => {
+      inactivityTimer.touch();
       const event = parseEvent(raw);
       if (event.type === "error") throw new Error(event.error?.message || event.message || `${this.provider} error`);
       if (event.type === "session.updated") {
@@ -172,16 +183,19 @@ class RealtimeAudioVoiceProvider {
         enqueue(async () => {
           if (ready) send(audioAppend(resamplePcm16(value, 16000, PROVIDER_RATE)));
           else queuedAudio.push(value);
+          inactivityTimer.touch();
         });
       },
       sendText: (text) => readyPromise.then(() => enqueue(async () => {
         send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: String(text || "") }] } });
         send({ type: "response.create" });
+        inactivityTimer.touch();
       })).catch(rejectOnce),
       commit: () => readyPromise.then(() => enqueue(async () => {
         flushAudio();
         send({ type: "input_audio_buffer.commit" });
         send({ type: "response.create" });
+        inactivityTimer.touch();
       })).catch(rejectOnce),
       cancel: () => rejectOnce(new Error("turn canceled")),
     };

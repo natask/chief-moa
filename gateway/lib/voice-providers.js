@@ -22,6 +22,7 @@ const {
 } = require("./google-auth");
 const { readAgentSettingsGeminiDeclaration } = require("./profile-settings-reader");
 const { realtimeProviderDefinitions } = require("./realtime-audio-voice-provider");
+const { createInactivityTimer, nativeEmptyResponseError } = require("./native-voice-reliability");
 const CLIENT_AUDIO_FORMAT = {
   encoding: "pcm16",
   sample_rate: 16000,
@@ -616,7 +617,7 @@ class CascadedVoiceProvider {
       : null;
     this.streamingSttRotateAfterMs = Math.max(10000, numberFrom(env.VOICE_STT_STREAM_ROTATE_MS, DEFAULT_ROTATE_AFTER_MS));
     this._streamingSttClient = null;
-    this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null;
+    this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null; this.reasoningProviderId = registryProviderId(this.names.reasoning || this.names.llm || "gateway");
     this.agentProfile = options?.agentProfile || null;
     this.lastTtsError = "";
     this.ttsProviderId = registryProviderId(this.names.tts);
@@ -2293,7 +2294,7 @@ class GeminiLiveVoiceProvider {
     let ready = false;
     let closed = false;
     let idleTimer = null;
-    let timeout = null;
+    let inactivityTimer = null;
     let resolveReady;
     let rejectReady;
     const readyPromise = new Promise((resolve, reject) => {
@@ -2347,14 +2348,15 @@ class GeminiLiveVoiceProvider {
     const cleanup = () => {
       clearIdleTimer();
       transcriptGate.cancel();
-      if (timeout) {
-        clearTimeout(timeout);
-        timeout = null;
-      }
+      inactivityTimer?.cancel();
     };
 
     const resolveOnce = () => {
       if (state.resolved || state.rejected) return;
+      if (!state.outputTranscript.trim() && !state.assistantAudioStarted) {
+        rejectOnce(nativeEmptyResponseError(this.provider));
+        return;
+      }
       state.resolved = true;
       state.completed = true;
       cleanup();
@@ -2371,10 +2373,9 @@ class GeminiLiveVoiceProvider {
       rejectDone(error);
     };
 
-    // Turn completion goes through the settle gate, not straight to
-    // resolveOnce, so a turn that completes before its inputTranscription
-    // arrives waits (bounded) for the trailing fragments instead of losing
-    // them to the socket close.
+    inactivityTimer = createInactivityTimer(this.timeoutMs, () => {
+      rejectOnce(new Error(`${this.provider} inactivity timeout after ${this.timeoutMs}ms`));
+    });
     const transcriptGate = createTranscriptSettleGate({
       graceMs: this.transcriptGraceMs,
       settleMs: this.transcriptSettleMs,
@@ -2398,15 +2399,6 @@ class GeminiLiveVoiceProvider {
       chain = chain.then(task).catch(rejectOnce);
     };
 
-    timeout = setTimeout(() => {
-      rejectOnce(new Error(`gemini-live timed out after ${this.timeoutMs}ms`));
-    }, this.timeoutMs);
-    timeout.unref();
-
-    // websocketHeaders may refresh an ADC token over the network, so the
-    // socket opens after that resolves. Session methods below stay safe: every
-    // send queues behind readyPromise, which only resolves once this socket
-    // reports setupComplete.
     const connect = async () => {
       const headers = await this.websocketHeaders();
       if (state.resolved || state.rejected) {
@@ -2420,10 +2412,12 @@ class GeminiLiveVoiceProvider {
       websocket.on("open", () => {
         websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
           if (error) rejectOnce(error);
+          else inactivityTimer.touch();
         });
       });
 
       websocket.on("message", (data, isBinary) => {
+        inactivityTimer.touch();
         let message = null;
         if (isBinary) {
           message = parsePossibleJsonMessage(data);
@@ -2497,6 +2491,7 @@ class GeminiLiveVoiceProvider {
             await readyPromise;
           }
           await sendAudioChunk(value);
+          inactivityTimer.touch();
         });
       },
       sendText: (text) => {
@@ -2520,6 +2515,7 @@ class GeminiLiveVoiceProvider {
               turnComplete: true,
             },
           });
+          inactivityTimer.touch();
         });
       },
       commit: () => {
@@ -2536,6 +2532,7 @@ class GeminiLiveVoiceProvider {
           await sendGeminiJson(websocket, this.manualActivityDetection
             ? { realtimeInput: { activityEnd: {} } }
             : { realtimeInput: { audioStreamEnd: true } });
+          inactivityTimer.touch();
         });
       },
       sendToolResponse: (functionResponses) => {
@@ -2551,6 +2548,7 @@ class GeminiLiveVoiceProvider {
               functionResponses,
             },
           });
+          inactivityTimer.touch();
         });
       },
       cancel: () => {
@@ -2560,8 +2558,6 @@ class GeminiLiveVoiceProvider {
   }
 
   async runWebSocketTurn(turn, hooks, state) {
-    // websocketHeaders may refresh an ADC token over the network; resolve it
-    // before the socket opens so the handshake carries a real bearer token.
     const headers = await this.websocketHeaders();
     return new Promise((resolve, reject) => {
       const websocket = new WebSocket(this.websocketUrl(), {
@@ -2570,11 +2566,7 @@ class GeminiLiveVoiceProvider {
       });
       let chain = Promise.resolve();
       let idleTimer = null;
-      const timeout = setTimeout(() => {
-        rejectOnce(new Error(`gemini-live timed out after ${this.timeoutMs}ms`));
-        websocket.close(1011, "voice provider timeout");
-      }, this.timeoutMs);
-      timeout.unref();
+      let inactivityTimer = null;
 
       const clearIdleTimer = () => {
         if (idleTimer) {
@@ -2595,11 +2587,15 @@ class GeminiLiveVoiceProvider {
 
       const resolveOnce = () => {
         if (state.resolved || state.rejected) return;
+        if (!state.outputTranscript.trim() && !state.assistantAudioStarted) {
+          rejectOnce(nativeEmptyResponseError(this.provider));
+          return;
+        }
         state.resolved = true;
         state.completed = true;
         clearIdleTimer();
         transcriptGate.cancel();
-        clearTimeout(timeout);
+        inactivityTimer?.cancel();
         websocket.close(1000, "turn completed");
         resolve();
       };
@@ -2608,12 +2604,14 @@ class GeminiLiveVoiceProvider {
         state.rejected = true;
         clearIdleTimer();
         transcriptGate.cancel();
-        clearTimeout(timeout);
+        inactivityTimer?.cancel();
         reject(error);
       };
 
-      // Same settle gate as createLiveTurnSession: hold the socket open for a
-      // bounded window when the turn completes before its transcript arrives.
+      inactivityTimer = createInactivityTimer(this.timeoutMs, () => {
+        rejectOnce(new Error(`${this.provider} inactivity timeout after ${this.timeoutMs}ms`));
+        websocket.close(1011, "voice provider inactivity timeout");
+      });
       const transcriptGate = createTranscriptSettleGate({
         graceMs: this.transcriptGraceMs,
         settleMs: this.transcriptSettleMs,
@@ -2624,6 +2622,7 @@ class GeminiLiveVoiceProvider {
       websocket.on("open", () => {
         websocket.send(JSON.stringify({ setup: this.setupMessage(turn) }), (error) => {
           if (error) rejectOnce(error);
+          else inactivityTimer.touch();
         });
       });
 
@@ -2643,6 +2642,7 @@ class GeminiLiveVoiceProvider {
       };
 
       websocket.on("message", (data, isBinary) => {
+        inactivityTimer.touch();
         chain = chain.then(async () => {
           if (isBinary) {
             const message = parsePossibleJsonMessage(data);

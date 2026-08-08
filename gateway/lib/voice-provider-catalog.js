@@ -22,7 +22,7 @@ function createVoiceProviderCatalog(options = {}) {
   const profile = options.profile || {};
   const registry = createVoiceProviderRegistry({ env });
   const indexed = indexRegistry(registry.providers);
-  const ttsId = normalized(profile.tts_provider) || normalized(voiceProviderNames(env).tts) || "none";
+  const ttsId = cascadedTtsId(profile, env, indexed);
   const choices = [
     nativeChoice("loopback", "Loopback transport QA", indexed, "local-test-tone"),
     nativeChoice("openai-realtime", "ChatGPT / OpenAI Realtime", indexed, env.OPENAI_REALTIME_MODEL || "gpt-realtime-2.1"),
@@ -40,9 +40,34 @@ function createVoiceProviderCatalog(options = {}) {
   return {
     version: VERSION,
     credentials_owner: "gateway",
+    selection_scope: "profile_effective",
     choices,
-    active_selection: identifySelection(profile, choices, env),
+    active_selection: { ...identifySelection(profile, choices, env), scope: "profile_effective" },
   };
+}
+
+function cascadedTtsId(profile, env, indexed) {
+  const profileStt = normalized(profile?.stt_provider) || normalized(profile?.voice_provider);
+  const candidates = [];
+  const add = (value) => {
+    const id = normalized(value);
+    // Catalog cascaded choices promise a gateway STT -> reasoner -> hosted-TTS
+    // turn. Local Android TTS and `none` are valid lower-tier runtime settings,
+    // but selecting either here would silently skip the middle/reply pipeline.
+    if (id && !["android-tts", "none"].includes(id) && indexed.tts.has(id) && !candidates.includes(id)) {
+      candidates.push(id);
+    }
+  };
+  // A native-live bundle stores its provider id in every stage field. Never
+  // reuse that id as the TTS leg of a cascaded choice: it is not a modular TTS
+  // adapter and doing so makes switching back from native voice impossible.
+  if (profileStt === "chirp") add(profile?.tts_provider);
+  add(env.VOICE_CASCADED_TTS_PROVIDER);
+  add(voiceProviderNames(env).tts);
+  add("gemini-tts");
+  add("cloud-tts");
+  const configured = candidates.find((id) => indexed.tts.get(id)?.configured);
+  return configured || candidates[0] || "none";
 }
 
 function resolveProviderSelection(input, options = {}) {

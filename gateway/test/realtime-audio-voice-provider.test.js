@@ -76,3 +76,37 @@ for (const fixture of [
     assert.equal(result.assistant_text, "Hi.");
   });
 }
+
+test("native realtime completion without assistant output is retryable", async (t) => {
+  const server = http.createServer();
+  const wss = new WebSocketServer({ server });
+  wss.on("connection", (socket) => socket.on("message", (raw) => {
+    const event = JSON.parse(String(raw));
+    if (event.type === "session.update") socket.send(JSON.stringify({ type: "session.updated" }));
+    if (event.type === "input_audio_buffer.commit") {
+      socket.send(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "hello" }));
+      socket.send(JSON.stringify({ type: "response.done", response: { status: "completed" } }));
+    }
+  }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => wss.close(() => server.close(resolve))));
+  const provider = createVoiceProvider({ env: {
+    VOICE_PROVIDER: "openai-realtime", OPENAI_API_KEY: "fixture-key",
+    OPENAI_REALTIME_ENDPOINT: `ws://127.0.0.1:${server.address().port}`,
+  } });
+  const session = provider.createLiveTurnSession({
+    format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
+  }, hooks());
+  session.sendAudio(Buffer.alloc(3200, 2));
+  session.commit();
+  await assert.rejects(session.done, (error) => error?.code === "native_provider_empty_response"
+    && error?.retryable === true);
+});
+
+function hooks() {
+  return {
+    onTranscriptPartial: async () => {}, onTranscriptFinal: async () => {},
+    onAssistantText: async () => {}, onAssistantAudioStart: async () => {},
+    sendAudio: async () => {}, onAssistantAudioDone: async () => {},
+  };
+}

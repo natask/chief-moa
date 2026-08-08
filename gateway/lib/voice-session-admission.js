@@ -22,7 +22,8 @@ function createVoiceSessionAdmission(options) {
     if (admission?.routing?.provider_work_allowed !== false) {
       const profile = deepFreeze({ ...applyMode(effectiveProfile || {}, admission) });
       return { admission, provider: getProvider(profile), effectiveProfile: profile,
-        profileVersion: profileVersion || "profile_v0001", providerBundle: providerKey(profile) };
+        profileVersion: profileVersion || "profile_v0001", providerBundle: providerKey(profile),
+        providerSelection: selectionDiagnostic(deviceId, profile) };
     }
     if (typeof onDenied === "function") onDenied();
     const endpoint = admission.routing.capture_endpoint || "/v1/audio-notes";
@@ -54,7 +55,19 @@ function createVoiceSessionAdmission(options) {
         return "profile_v0001";
       }
     },
-    status: () => getProvider(null).status(),
+    status: () => ({ ...getProvider(null).status(), provider_selection: {
+      scope: "boot_default",
+      provider_bundle: "boot-default",
+      note: "runtime health default; admitted turns may use a device-effective profile",
+    } }),
+  };
+}
+
+function selectionDiagnostic(deviceId, profile) {
+  return {
+    scope: deviceId ? "device_effective" : "global_effective",
+    device_id: deviceId || "",
+    provider_bundle: providerKey(profile),
   };
 }
 
