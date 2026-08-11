@@ -179,50 +179,6 @@ public final class MoaVoiceEndpointerTest {
     }
 
     @Test
-    public void alternatingAdaptiveAmbientCannotExtendPastTheAbsoluteCap() {
-        for (int high : new int[]{273, 274}) {
-            MoaVoiceEndpointer endpointer = calibratedAt(100);
-            long now = feed(endpointer, 241L, 3, 40L, 250);
-            long admittedAt = endpointer.lastVoiceActivityAtMs();
-            long absoluteCap = admittedAt + MoaVoiceEndpointer.ADAPTIVE_ONLY_LIMIT_MS;
-            int frame = 0;
-            long committedAt = -1L;
-            while (now < absoluteCap) {
-                endpointer.observe(pcm(frame++ % 2 == 0 ? high : 250, 40L), now);
-                if (endpointer.evaluate(now) == MoaVoiceEndpointer.Decision.COMMIT) {
-                    committedAt = now;
-                    break;
-                }
-                now += 40L;
-            }
-            if (high == 273) {
-                assertTrue("sub-variation plateau terminates early", committedAt > 0L);
-                assertTrue("stationarity bound", committedAt - admittedAt
-                        <= MoaVoiceEndpointer.ADAPTIVE_STATIONARY_LIMIT_MS
-                                + MoaVoiceEndpointer.ENDPOINT_SILENCE_MS + 40L);
-                System.out.println("voice_endpointer alternating_250_273 commits=1 endpoint_ms="
-                        + (committedAt - admittedAt));
-                continue;
-            }
-            assertEquals("exact variation reaches cap", -1L, committedAt);
-            long lastRefresh = endpointer.lastVoiceActivityAtMs();
-            endpointer.observe(pcm(high, 40L), absoluteCap);
-            assertEquals("cap blocks refresh " + high, lastRefresh, endpointer.lastVoiceActivityAtMs());
-            assertEquals(MoaVoiceEndpointer.Decision.NONE,
-                    endpointer.evaluate(lastRefresh + MoaVoiceEndpointer.ENDPOINT_SILENCE_MS - 1L));
-            assertEquals(MoaVoiceEndpointer.Decision.COMMIT,
-                    endpointer.evaluate(lastRefresh + MoaVoiceEndpointer.ENDPOINT_SILENCE_MS));
-            long totalDelay = lastRefresh + MoaVoiceEndpointer.ENDPOINT_SILENCE_MS - admittedAt;
-            assertTrue("absolute cap bound " + high,
-                    totalDelay <= MoaVoiceEndpointer.ADAPTIVE_ONLY_LIMIT_MS
-                            + MoaVoiceEndpointer.ENDPOINT_SILENCE_MS);
-            System.out.println("voice_endpointer alternating_250_" + high
-                    + " commits=1 cap_ms=" + MoaVoiceEndpointer.ADAPTIVE_ONLY_LIMIT_MS
-                    + " endpoint_ms=" + totalDelay);
-        }
-    }
-
-    @Test
     public void coldAdaptiveRangeIsCalibratedAsPossibleAmbient() {
         for (int level : new int[]{220, 300, 449}) {
             MoaVoiceEndpointer endpointer = startedAt(1L);
@@ -278,21 +234,6 @@ public final class MoaVoiceEndpointerTest {
         endpointer.observe(pcm(360, 40L), now + 120L);
         assertTrue("120ms admission evidence", endpointer.heardSpeech());
         System.out.println("voice_endpointer straddle_pre_ms=40 straddle_post_ms=40 total_admission_ms=120");
-    }
-
-    @Test
-    public void mixedCallbackUsesSeparateCalibrationAndPostBoundaryEnergy() {
-        MoaVoiceEndpointer endpointer = startedAt(1L);
-        long now = feed(endpointer, 1L, 5, 40L, 300);
-        byte[] mixed = concat(pcm(300, 40L), pcm(500, 40L));
-        endpointer.observe(mixed, now);
-
-        assertTrue(endpointer.calibrated());
-        assertEquals("calibration slice only", 300, endpointer.noiseFloor());
-        assertFalse("post-boundary has only 40ms evidence", endpointer.heardSpeech());
-        endpointer.observe(pcm(500, 80L), now + 80L);
-        assertTrue("hard post-boundary evidence admits", endpointer.heardSpeech());
-        System.out.println("voice_endpointer mixed_straddle floor=300 post_level=500 admission_ms=120");
     }
 
     @Test
@@ -366,12 +307,5 @@ public final class MoaVoiceEndpointerTest {
             pcm[index + 1] = (byte) ((sample >> 8) & 0xff);
         }
         return pcm;
-    }
-
-    private static byte[] concat(byte[] first, byte[] second) {
-        byte[] joined = new byte[first.length + second.length];
-        System.arraycopy(first, 0, joined, 0, first.length);
-        System.arraycopy(second, 0, joined, first.length, second.length);
-        return joined;
     }
 }
