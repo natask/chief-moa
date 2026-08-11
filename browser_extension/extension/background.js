@@ -4,11 +4,12 @@
 // owns model routing and credentials.
 
 import { DEFAULT_GATEWAY_URL, gatewayUrlDiagnostic, getEffectiveGatewayConfig } from "./config.js";
+import "./capture-only-policy.js";
 import { createAudioNoteOutbox } from "./audio-note-outbox.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
-import { STYLE_ID, STYLE_LABEL, STYLE_VERSION, buildWritingStylePrompt } from "./writing-style-contract.js";
+import { createWritingStyleRewriteRequest, writingStyleRewriteResult } from "./writing-style-contract.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
@@ -2309,22 +2310,11 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
 async function generateWritingVariant(source) {
   const cfg = await getConfig();
   if (!cfg.gatewayUrl) throw new Error("No gateway URL set.");
-  const sessionId = await getStableSessionId();
-  const deviceId = await getStableDeviceId();
-  const data = await callGateway(cfg, "/v1/voice/turns", {
-    body: {
-      source: "agee-extension-writing-style",
-      device_id: deviceId,
-      session_id: sessionId,
-      conversation_id: sessionId,
-      branch_id: `writing-${Date.now().toString(36)}`,
-      context_action: "incognito",
-      transcript: buildWritingStylePrompt(source),
-      client: { platform: "browser", source: "agee-extension", device_id: deviceId, input: "text" },
-    },
+  const request = await createWritingStyleRewriteRequest(source);
+  const data = await callGateway(cfg, "/v1/writing-style/rewrite", {
+    body: request.body,
   });
-  const text = String(data.display || data.text || data.speak || "").trim(); if (!text) throw new Error("The writing style returned no text.");
-  return { text, skill_id: STYLE_ID, skill_name: STYLE_LABEL, skill_version: STYLE_VERSION };
+  return writingStyleRewriteResult(data, request);
 }
 
 // Execute validated media, sampler, or page-tweak proposals locally and report
@@ -3170,6 +3160,7 @@ function attachVoiceSession(id, tabId) {
 async function forwardVoiceSessionEvent(session, event) {
   if (!voiceSessions.has(session.id)) return;
   const data = event.data;
+  if (!AgeeCaptureOnlyPolicy.acceptsWorkerPayload(session, data)) return;
   if (data instanceof ArrayBuffer) {
     deliverVoiceSessionEvent(session, { audio: bytesToBase64(data) });
     return;
@@ -3183,6 +3174,8 @@ async function forwardVoiceSessionEvent(session, event) {
   try {
     parsed = JSON.parse(String(data || "{}"));
   } catch {}
+  parsed = AgeeCaptureOnlyPolicy.filterGatewayEvent(session, parsed);
+  if (!parsed && AgeeCaptureOnlyPolicy.isCaptureOnly(session)) return;
   if (parsed?.type === "session_ready") {
     AgeeTranscriptRevisionProtocol.acceptReady(session.transcriptRevision, parsed); if (session.draftMode) {
       if (!session.voiceDraft) {

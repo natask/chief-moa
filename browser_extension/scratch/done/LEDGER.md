@@ -1,3 +1,4 @@
+- Dropped assistant output and effects at the worker's capture-only boundary and kept literal and fixed-contract Polished copy separate — agent: codex/gpt-5 — this commit
 - Kept browser dictation raw and reply-free, added explicit plain-style polished copy generation, and persisted the chosen copy variant — agent: codex/gpt-5 — entire checkpoint browser-raw-polished-separation-20260811
 - Restored complete browser companion reinjection, double-Command assistant summon, visible voice Cancel/Pause and task Stop, and compact-size checks — agent: codex/gpt-5 — entire checkpoint browser-companion-controls-20260803
 - Added capability-gated browser voice drafts with mascot Send, adjacent Cancel and Pause/Resume, exact revision authority, discard-on-cancel, and legacy gateway fallback — agent: codex/gpt-5 — entire checkpoint browser-voice-controls-20260802

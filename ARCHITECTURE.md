@@ -233,6 +233,23 @@ Moa Gateway
   are not yet projected into capture blocks; that reconciliation remains a
   separate additive change.
 
+  The browser worker enforces capture-only delivery before it updates state,
+  presentation, or local action dispatch. While `transcriptionOnly` or
+  `transcriptFinalizing` is active, it drops binary assistant audio and all
+  assistant text, audio, media, tool, and action events. It admits only the
+  bounded transcript, progress, and terminal protocol events; admitted terminal
+  events have any embedded assistant or action payload removed. Ask sessions
+  keep the ordinary assistant event path.
+
+  Polished dictation copy uses the authenticated
+  `POST /v1/writing-style/rewrite` route. That route reads only the exact source
+  text, its request/turn binding, and the gateway's fixed versioned 25-rule
+  writing contract. It does not load standing memory, the agent profile,
+  conversation history, page context, tools, or actions, and it writes no turn,
+  conversation, memory, profile, broker, or agent-run state. The gateway binds
+  its no-store response to the source digest and request id. Literal copy stays
+  a separate unchanged variant owned by the browser.
+
   An authenticated stored-audio-first intake may create the same canonical
   block type through `POST /v1/capture-blocks`. It references an already-stored
   `audio_note_id`, preserves the note's source surface/session identity, and

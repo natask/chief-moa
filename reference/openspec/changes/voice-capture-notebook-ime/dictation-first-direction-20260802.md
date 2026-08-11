@@ -25,6 +25,19 @@ Accessibility typing, or agent dispatch. Final text must remain copyable and
 editable, recording state must stay visible, and retained audio/transcript
 failure must be honest and retryable.
 
+The browser enforces this at the worker's first inbound voice-event boundary.
+Capture-only and transcript-finalizing sessions drop binary assistant audio and
+assistant text, audio, media, tool, and action events before state, presentation,
+or dispatch. Transcript and terminal events still pass after embedded assistant
+or action payloads are removed. Ask behavior does not change.
+
+Literal and Polished are separate copy variants. Polished calls a dedicated
+authenticated gateway rewrite route with the exact source, request binding, and
+fixed versioned 25-rule writing contract. The route loads no standing memory,
+profile, conversation history, page context, tools, or actions and persists
+nothing. The response binds back to the source digest and request id. A failure
+leaves the literal variant unchanged and available.
+
 ## First Missing Observable Behavior
 
 Android has launcher dictation but no real input method. The first implementation

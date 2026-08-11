@@ -1,3 +1,4 @@
+- Added a source-bound no-memory, no-profile, no-history, no-tools, no-actions, no-persistence writing-style rewrite route — agent: codex/gpt-5 — this commit
 - Made every configured Android app-scoped OTA route a compatibility alias to the canonical stable store, ignoring retired per-app directory values without migrating or deleting them — agent: Codex/GPT-5 — this commit
 - Added gateway-owned durable reminders with restart-safe due state, authenticated create/query/cancel APIs, cascaded voice tools, and explicit no-delivery/external-app boundaries — agent: Codex/GPT-5 — this commit
 - Added the personal-first tenant identity spine with unique Better Auth bindings, owner membership, and two-axis forced RLS — agent: codex/gpt-5 — 6e03d51e

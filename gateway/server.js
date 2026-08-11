@@ -162,6 +162,8 @@ const { createThreadSwitchHandlers } = require("./lib/thread-switch-handlers");
 const { createBrokerResearchHandlers } = require("./lib/broker-research-handlers");
 const { createMediaNoteHandlers } = require("./lib/media-note-handlers");
 const { createVoiceControlHandlers } = require("./lib/voice-control-handlers");
+const { createWritingStyleRewriteService } = require("./lib/writing-style-rewrite");
+const { createWritingStyleRewriteHandlers } = require("./lib/writing-style-rewrite-handlers");
 const { createGatewayHealthHandlers } = require("./lib/gateway-health-handlers");
 const { createReleaseControlRuntime } = require("./lib/release-control-runtime");
 const {
@@ -1066,6 +1068,24 @@ const { routeVoiceControls } = createVoiceControlHandlers({
   livekitNotConfiguredPayload, handleInternalVoiceReason,
   handleInternalVoiceSynthesize, handleInternalVoiceTurnRecord, handleVoiceFrame,
 });
+const writingStyleRewrite = createWritingStyleRewriteService({
+  rewrite: ({ messages, model_options: modelOptions }) => callModel(messages, {
+    model: MODEL_ID,
+    reasoning_provider: MODEL_PROVIDER,
+    temperature: MODEL_TEMPERATURE,
+  }, {
+    includeProfileInstruction: false,
+    allowTools: false,
+    maxOutputTokens: 2048,
+    temperature: MODEL_TEMPERATURE,
+    ...modelOptions,
+  }),
+});
+const { route: routeWritingStyleRewrite } = createWritingStyleRewriteHandlers({
+  readJsonBody,
+  sendJson,
+  service: writingStyleRewrite,
+});
 const { routeSupervisor } = createSupervisorHandlers({
   authorizedAgent, agentAuthError, sendJson, harnessStatus, workGraph,
   listAllAgentRuns, isTerminalRunStatus, provider: MODEL_PROVIDER, model: MODEL_ID,
@@ -1330,6 +1350,14 @@ const server = http.createServer(async (request, response) => {
       }
       await handleChat(request, response);
       return;
+    }
+
+    if (url.pathname === "/v1/writing-style/rewrite") {
+      if (!authorized(request)) {
+        sendJson(response, 401, { error: "missing or invalid gateway token" });
+        return;
+      }
+      if (await routeWritingStyleRewrite(request, response, url)) return;
     }
 
     if (request.method === "POST" && url.pathname === "/v1/voice/turns") {
