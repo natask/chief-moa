@@ -620,7 +620,7 @@ class CascadedVoiceProvider {
     this.reasoner = typeof options?.reasoner === "function" ? options.reasoner : null; this.reasoningProviderId = registryProviderId(this.names.reasoning || this.names.llm || "gateway");
     this.agentProfile = options?.agentProfile || null;
     this.lastTtsError = "";
-    this.ttsProviderId = registryProviderId(this.names.tts);
+    this.ttsProviderId = registryProviderId(this.names.tts); this.ttsEndpointPreferences = new Map();
     if (this.ttsProviderId === "gemini-tts") {
       this.ttsVoice = String(env.GEMINI_TTS_VOICE || env.CHIRP_TTS_VOICE || env.CLOUD_TTS_VOICE || "").trim() || GEMINI_TTS_DEFAULT_VOICE;
       this.ttsModel = String(env.GEMINI_TTS_MODEL || env.CHIRP_TTS_MODEL || "").trim() || GEMINI_TTS_DEFAULT_MODEL;
@@ -1743,7 +1743,7 @@ class CascadedVoiceProvider {
       location: this.location,
       projectId: this.projectId,
       timeoutMs: this.cloudTtsTimeoutMs,
-      endpoint: this.testCloudTtsEndpoint,
+      endpoint: this.testCloudTtsEndpoint, endpointPreferences: this.ttsEndpointPreferences,
       targetSampleRate: CLIENT_AUDIO_FORMAT.sample_rate,
     });
   }
@@ -3412,11 +3412,10 @@ async function synthesizeCloudTts(options) {
     voice.modelName = modelName;
   }
   const explicitEndpoint = String(options.endpoint || "").trim();
-  // Gemini TTS models may only exist on v1beta1, so retry there when v1
-  // rejects the request. An explicit (test) endpoint is never retried.
-  const endpoints = explicitEndpoint
-    ? [explicitEndpoint]
-    : (modelName ? [CLOUD_TTS_ENDPOINT, CLOUD_TTS_V1BETA1_ENDPOINT] : [CLOUD_TTS_ENDPOINT]);
+  // Model-backed TTS remembers a successful API version but retains the alternate fallback.
+  const baseEndpoints = explicitEndpoint ? [explicitEndpoint] : (modelName ? [CLOUD_TTS_ENDPOINT, CLOUD_TTS_V1BETA1_ENDPOINT] : [CLOUD_TTS_ENDPOINT]);
+  const preferredEndpoint = modelName ? options.endpointPreferences?.get(modelName) : "";
+  const endpoints = preferredEndpoint && baseEndpoints.includes(preferredEndpoint) ? [preferredEndpoint, ...baseEndpoints.filter((endpoint) => endpoint !== preferredEndpoint)] : baseEndpoints;
   const timeoutMs = Math.max(1, Number(options.timeoutMs) || 20000);
   // Gemini-TTS caps input.text and input.prompt at ~4000 bytes each; classic
   // Cloud TTS allows a longer text field. The natural-language style prompt goes
@@ -3465,6 +3464,7 @@ async function synthesizeCloudTts(options) {
         signal: options.signal,
       }, timeoutMs);
       if (response.ok) {
+        if (modelName) options.endpointPreferences?.set(modelName, endpoint);
         return;
       }
       const text = await response.text();
