@@ -77,6 +77,9 @@ function delegationEnvelope(userIntent) {
   };
 }
 
+const FILE_ACCESS_ALLOWED_SUMMARY = "Ag may navigate browser tabs to file URLs.";
+const FILE_ACCESS_INSTRUCTION = "Chrome must grant Ag access to local files. Open chrome://extensions, find Ag, choose Details, turn on “Allow access to file URLs”, then retry. Ag cannot enable this permission for you.";
+
 const REQUIRED_PHONE_TOOLS = [
   "app.launch", "app.list", "url.open", "phone.dial", "contact.open",
   "media.open", "media.control", "media.bookmark", "media.playlist",
@@ -305,12 +308,11 @@ test("browser permission status is read-only, no-input, explicitly warranted, an
     source: "android-overlay", modality: "voice", transcript_source: "client_stt",
     transcript: "Check whether the browser permissions and file access are ready",
   };
-  const instruction = "Open Chrome extension details and enable Allow access to file URLs.";
   const permissionReceipt = {
     device_id: "browser_test",
     ok: true,
-    summary: "Browser file access is disabled.",
-    result: { file_scheme_access: { allowed: false, supported: true, instruction } },
+    summary: FILE_ACCESS_INSTRUCTION,
+    result: { file_scheme_access: { allowed: false, supported: true, instruction: FILE_ACCESS_INSTRUCTION } },
     local_receipt: { tool: "browser.permissions.status", success: true },
   };
   const state = harness(call, [], permissionReceipt);
@@ -337,11 +339,11 @@ test("browser permission status is read-only, no-input, explicitly warranted, an
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.type, "tool_request_receipt");
   assert.equal(result.tool, "browser.permissions.status");
-  assert.equal(result.receipt.summary, "Browser file access is disabled.");
+  assert.equal(result.receipt.summary, FILE_ACCESS_INSTRUCTION);
   assert.equal(result.receipt.result.file_scheme_access.allowed, false);
-  assert.equal(result.receipt.result.file_scheme_access.instruction, instruction);
+  assert.equal(result.receipt.result.file_scheme_access.instruction, FILE_ACCESS_INSTRUCTION);
   assert.deepEqual(result.permission_state, permissionReceipt.result.file_scheme_access);
-  assert.match(result.message, /file access is disabled/i);
+  assert.match(result.message, /Chrome must grant Ag access to local files/i);
   assert.match(result.message, /allow access to file URLs/i);
   assert.equal(state.created.length, 1);
   assert.equal(state.created[0].tool, "browser.permissions.status");
@@ -355,6 +357,48 @@ test("browser permission status is read-only, no-input, explicitly warranted, an
   assert.equal(incomplete.ok, false, "ok:true without a terminal receipt must fail closed");
   assert.equal(incomplete.receipt, null);
   assert.match(incomplete.error, /did not include a clear/);
+
+  const malformedReceipts = [
+    {
+      ok: true, summary: "Enabled.",
+      result: { file_scheme_access: { allowed: true, supported: true } },
+      local_receipt: { tool: "browser.permissions.status", success: true },
+    },
+    {
+      ok: true, summary: "File access is disabled.",
+      result: { file_scheme_access: { allowed: false, supported: true, instruction: "Enable it in settings." } },
+      local_receipt: { tool: "browser.permissions.status", success: true },
+    },
+    {
+      ok: true, summary: FILE_ACCESS_ALLOWED_SUMMARY,
+      result: { file_scheme_access: { allowed: false, supported: true, instruction: FILE_ACCESS_INSTRUCTION } },
+      local_receipt: { tool: "browser.permissions.status", success: true },
+    },
+    {
+      ok: true, summary: FILE_ACCESS_ALLOWED_SUMMARY,
+      result: { file_scheme_access: { allowed: true, supported: true } },
+      local_receipt: { tool: "browser.permissions.status", success: false },
+    },
+  ];
+  for (const malformedReceipt of malformedReceipts) {
+    const malformed = harness(call, [], malformedReceipt);
+    const malformedResult = await surfaceExecuteCapabilities(call, malformed.deps)
+      .browser_permissions_status.run({});
+    assert.equal(malformedResult.ok, false, JSON.stringify(malformedReceipt));
+    assert.match(malformedResult.error, /did not include a clear/);
+  }
+
+  const enabledReceipt = {
+    ok: true, summary: FILE_ACCESS_ALLOWED_SUMMARY,
+    result: { file_scheme_access: { allowed: true, supported: true } },
+    local_receipt: { tool: "browser.permissions.status", success: true },
+  };
+  const enabled = harness(call, [], enabledReceipt);
+  const enabledResult = await surfaceExecuteCapabilities(call, enabled.deps)
+    .browser_permissions_status.run({});
+  assert.equal(enabledResult.ok, true);
+  assert.equal(enabledResult.permission_state.allowed, true);
+  assert.equal(enabledResult.message, FILE_ACCESS_ALLOWED_SUMMARY);
 });
 
 test("browser permission status rejects evidence-only, quoted, historical, and implicit references", async () => {
@@ -370,6 +414,16 @@ test("browser permission status rejects evidence-only, quoted, historical, and i
     { transcript: "Can browser permissions track me?" },
     { transcript: "What browser permissions are dangerous?" },
     { transcript: "Translate check browser permission status into Amharic" },
+    { transcript: "How do you say browser permission status in Amharic?" },
+    { transcript: "Check browser permission status yesterday" },
+    { transcript: "Check browser permission status in the attached document" },
+    { transcript: "Check browser permission status from the metadata" },
+    { transcript: "Check browser permission status as a concept" },
+    { transcript: "Check browser permission status described in the message" },
+    { transcript: "Check browser permission status and explain what it means" },
+    { transcript: "Check ('browser permission status')" },
+    { transcript: "Check (browser permission status)" },
+    { transcript: `Check browser permission status ${" ".repeat(250)}described in metadata` },
   ];
   for (const call of cases) {
     const spokenCall = { source: "android-overlay", modality: "voice", transcript_source: "client_stt", ...call };
@@ -379,7 +433,7 @@ test("browser permission status rejects evidence-only, quoted, historical, and i
       input: {},
     });
     assert.equal(result.ok, false, call.transcript);
-    assert.match(result.error, /current user turn|current-turn|did not explicitly ask|direct spoken/);
+    assert.match(result.error, /current user turn|current-turn|direct spoken|direct, current-state|direct spoken command|spoken\/STT|no additional clause/);
     assert.equal(state.created.length, 0, `${call.transcript} must create no tool request`);
   }
 
@@ -388,6 +442,9 @@ test("browser permission status rejects evidence-only, quoted, historical, and i
     { source: "android-overlay", modality: "voice", transcript_source: "client_stt", text: "Check browser permission status" },
     { source: "some-api", modality: "text", transcript_source: "text", transcript: "Check browser permission status" },
     { source: "agee-extension", modality: "text", transcript_source: "text", transcript: "Check browser permission status" },
+    { source: "agee-extension", transcript: "Check browser permission status" },
+    { source: "android-overlay", transcript: "Check browser permission status" },
+    { source: "browser", transcript: "Check browser permission status" },
   ]) {
     const state = harness(call);
     const result = await runBrowserAction(call, state.deps, { tool: "browser.permissions.status" });
