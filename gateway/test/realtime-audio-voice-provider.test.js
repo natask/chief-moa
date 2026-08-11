@@ -32,7 +32,7 @@ for (const fixture of [
       [fixture.key]: "fixture-key",
       [fixture.endpoint]: `ws://127.0.0.1:${server.address().port}`,
     };
-    const provider = createVoiceProvider({ env });
+    const provider = createVoiceProvider({ env, systemPrompt: "Use the configured realtime fallback prompt." });
     assert.equal(provider.status().provider, fixture.id);
     const transcripts = [];
     const text = [];
@@ -42,7 +42,8 @@ for (const fixture of [
     const session = provider.createLiveTurnSession({
       format: { encoding: "pcm16", sample_rate: 16000, channels: 1 },
       effectiveProfile: {
-        system_prompt: "Say exactly what I ask in voice mode.",
+        system_prompt: fixture.shape === "openai" ? "Say exactly what I ask in voice mode." : "",
+        spoken_reply_style: "calm, plain, conversational",
         input_languages: "en-US,am-ET",
         language: "am-ET",
         voice: "fixture-voice",
@@ -60,7 +61,12 @@ for (const fixture of [
     const result = await session.done;
 
     const update = received.find((event) => event.type === "session.update").session;
-    assert.match(update.instructions, /Say exactly what I ask/);
+    assert.match(update.instructions, fixture.shape === "openai"
+      ? /Say exactly what I ask/
+      : /Use the configured realtime fallback prompt/);
+    assert.match(update.instructions, /Spoken reply style preference:\n- calm, plain, conversational/);
+    assert.match(update.instructions, /Voice mode: this reply will be heard/);
+    assert.match(update.instructions, /cannot weaken the required voice rules, safety boundaries, tool policy, or approval requirements/);
     assert.match(update.instructions, /en-US,am-ET/);
     assert.match(update.instructions, /am-ET/);
     assert.deepEqual(update.tools, []);

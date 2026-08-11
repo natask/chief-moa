@@ -1,6 +1,7 @@
 "use strict";
 
 const { WebSocket } = require("ws");
+const { safeSystemPromptForProvider } = require("./agent-profile");
 const { createInactivityTimer, nativeEmptyResponseError } = require("./native-voice-reliability");
 
 const CLIENT_FORMAT = Object.freeze({ encoding: "pcm16", sample_rate: 16000, channels: 1 });
@@ -245,7 +246,7 @@ function nativeCapabilities() {
 
 function sessionUpdate(shape, model, voice, transcriptionModel, turn, fallbackPrompt) {
   const profile = turn?.effectiveProfile || {};
-  const prompt = String(profile.system_prompt || fallbackPrompt).trim();
+  const prompt = safeSystemPromptForProvider(profile, fallbackPrompt);
   const inputLanguages = String(profile.input_languages || profile.input_language_primary || "").trim();
   const outputLanguage = String(profile.language || profile.language_output || "").trim();
   const instructions = [
