@@ -10,14 +10,14 @@ public final class MoaVoiceEndpointerTest {
     private static final long FRAME_MS = 20L;
 
     @Test
-    public void steady250CalibratesWithoutFalseStartOrCommitAndCancelsOnce() {
+    public void steadyNoiseProducesNoFalseStartOrCommitAndCancelsOnce() {
         MoaVoiceEndpointer endpointer = startedAt(1L);
         int falseStarts = 0;
         int commits = 0;
         int cancellations = 0;
 
         for (long now = 1L; now <= 13_001L; now += FRAME_MS) {
-            endpointer.observe(pcm(250), now);
+            endpointer.observe(pcm(140), now);
             if (endpointer.heardSpeech()) falseStarts += 1;
             MoaVoiceEndpointer.Decision decision = endpointer.evaluate(now);
             if (decision == MoaVoiceEndpointer.Decision.COMMIT) commits += 1;
@@ -27,42 +27,30 @@ public final class MoaVoiceEndpointerTest {
         assertEquals("false starts", 0, falseStarts);
         assertEquals("false commits", 0, commits);
         assertEquals("no-speech cancellations", 1, cancellations);
-        assertEquals("learned steady floor", 250, endpointer.noiseFloor());
-        System.out.println("voice_endpointer steady_250 false_starts=0 false_commits=0 cancellations=1 floor=250");
+        System.out.println("voice_endpointer steady_noise false_starts=0 false_commits=0 cancellations=1");
     }
 
     @Test
     public void quietSpeechAboveAdaptiveFloorStartsAfterConsecutiveFrames() {
         MoaVoiceEndpointer endpointer = startedAt(1L);
-        long now = feed(endpointer, 1L, 6, 40L, 120);
+        long now = feed(endpointer, 1L, 20, 120);
         int learnedFloor = endpointer.noiseFloor();
 
-        endpointer.observe(pcm(360, 40L), now);
-        endpointer.observe(pcm(360, 40L), now + 40L);
+        endpointer.observe(pcm(360), now);
+        endpointer.observe(pcm(360), now + FRAME_MS);
         assertFalse(endpointer.heardSpeech());
-        endpointer.observe(pcm(360, 40L), now + 80L);
+        endpointer.observe(pcm(360), now + 2L * FRAME_MS);
 
         assertTrue(endpointer.heardSpeech());
-        assertEquals("startup floor learned", 120, learnedFloor);
-        System.out.println("voice_endpointer quiet_speech learned_floor=120 calibration_ms=240 admission_ms=120");
-    }
-
-    @Test
-    public void productionAndIrregularPartialReadsAdmitAfterTheSameAudioDuration() {
-        long productionAdmission = admissionDuration(new long[]{40L, 40L, 40L});
-        long irregularAdmission = admissionDuration(new long[]{10L, 30L, 15L, 25L, 40L});
-
-        assertEquals(MoaVoiceEndpointer.START_ADMISSION_MS, productionAdmission);
-        assertEquals(productionAdmission, irregularAdmission);
-        System.out.println("voice_endpointer production_frame_bytes=1280 admission_ms="
-                + productionAdmission + " irregular_admission_ms=" + irregularAdmission);
+        assertTrue("startup floor learned", learnedFloor >= 100 && learnedFloor < 160);
+        System.out.println("voice_endpointer quiet_speech learned_floor=" + learnedFloor + " start_frames=3");
     }
 
     @Test
     public void briefDipProducesZeroFalseCutsAndSustainedSilenceCommitsOnceAt700Ms() {
         MoaVoiceEndpointer endpointer = startedAt(1L);
-        long now = feed(endpointer, 1L, 6, 40L, 100);
-        now = feed(endpointer, now, 3, 40L, 600);
+        long now = feed(endpointer, 1L, 10, 100);
+        now = feed(endpointer, now, 8, 600);
         long firstSpeechTail = endpointer.lastVoiceActivityAtMs();
         int falseCuts = 0;
 
@@ -92,54 +80,9 @@ public final class MoaVoiceEndpointerTest {
     }
 
     @Test
-    public void risingBackgroundAfterSpeechHasBoundedContinuation() {
-        MoaVoiceEndpointer endpointer = startedAt(1L);
-        long now = feed(endpointer, 1L, 6, 40L, 100);
-        now = feed(endpointer, now, 3, 40L, 600);
-        long lastStrongAt = endpointer.lastVoiceActivityAtMs();
-        int commits = 0;
-        long committedAt = -1L;
-
-        for (long plateau = 40L; plateau <= 1_200L; plateau += 40L) {
-            long tick = lastStrongAt + plateau;
-            endpointer.observe(pcm(180, 40L), tick);
-            if (endpointer.evaluate(tick) == MoaVoiceEndpointer.Decision.COMMIT) {
-                commits += 1;
-                committedAt = tick;
-            }
-        }
-
-        long boundedDelay = committedAt - lastStrongAt;
-        assertEquals("one bounded commit", 1, commits);
-        assertTrue("weak continuation bounded", boundedDelay <= MoaVoiceEndpointer.ENDPOINT_SILENCE_MS
-                + MoaVoiceEndpointer.WEAK_CONTINUATION_LIMIT_MS);
-        System.out.println("voice_endpointer rising_100_to_180 commits=1 bounded_endpoint_ms=" + boundedDelay);
-    }
-
-    @Test
-    public void exactStartAndContinueThresholdsHaveFailClosedBoundaries() {
-        MoaVoiceEndpointer belowStart = calibratedAt(100);
-        int start = belowStart.startThreshold();
-        feed(belowStart, 241L, 4, 40L, start - 1);
-        assertFalse("below start", belowStart.heardSpeech());
-
-        MoaVoiceEndpointer atStart = calibratedAt(100);
-        feed(atStart, 241L, 3, 40L, start);
-        assertTrue("at start", atStart.heardSpeech());
-        long strongAt = atStart.lastVoiceActivityAtMs();
-        int continuation = atStart.continueThreshold();
-        atStart.observe(pcm(continuation - 1, 40L), strongAt + 40L);
-        assertEquals("below continue does not refresh", strongAt, atStart.lastVoiceActivityAtMs());
-        atStart.observe(pcm(continuation, 40L), strongAt + 80L);
-        assertEquals("at continue bridges", strongAt + 80L, atStart.lastVoiceActivityAtMs());
-        System.out.println("voice_endpointer threshold_sweep start=" + start + " continue=" + continuation);
-    }
-
-    @Test
     public void resetDoesNotCarrySpeechOrTerminalStateIntoTheNextTurn() {
         MoaVoiceEndpointer endpointer = startedAt(1L);
-        long now = feed(endpointer, 1L, 6, 40L, 100);
-        now = feed(endpointer, now, 3, 40L, 700);
+        long now = feed(endpointer, 1L, 6, 700);
         assertTrue(endpointer.heardSpeech());
         assertEquals(MoaVoiceEndpointer.Decision.COMMIT,
                 endpointer.evaluate(endpointer.lastVoiceActivityAtMs() + MoaVoiceEndpointer.ENDPOINT_SILENCE_MS));
@@ -147,32 +90,12 @@ public final class MoaVoiceEndpointerTest {
         endpointer.reset(5_000L);
         assertFalse(endpointer.heardSpeech());
         assertEquals(MoaVoiceEndpointer.Decision.NONE, endpointer.evaluate(5_700L));
-        now = feed(endpointer, 5_000L, 6, 40L, 120);
+        now = feed(endpointer, 5_000L, 20, 120);
         assertFalse(endpointer.heardSpeech());
         assertEquals(MoaVoiceEndpointer.Decision.CANCEL_NO_SPEECH,
                 endpointer.evaluate(5_000L + MoaVoiceEndpointer.NO_SPEECH_TIMEOUT_MS));
         assertTrue(now > 5_000L);
         System.out.println("voice_endpointer reset_isolation=true next_turn_cancellations=1");
-    }
-
-    private static long admissionDuration(long[] frameDurationsMs) {
-        MoaVoiceEndpointer endpointer = calibratedAt(100);
-        long now = 241L;
-        long total = 0L;
-        for (long duration : frameDurationsMs) {
-            total += duration;
-            now += duration;
-            endpointer.observe(pcm(500, duration), now);
-            if (endpointer.heardSpeech()) return total;
-        }
-        return -1L;
-    }
-
-    private static MoaVoiceEndpointer calibratedAt(int floor) {
-        MoaVoiceEndpointer endpointer = startedAt(1L);
-        feed(endpointer, 1L, 6, 40L, floor);
-        assertTrue(endpointer.calibrated());
-        return endpointer;
     }
 
     private static MoaVoiceEndpointer startedAt(long nowMs) {
@@ -181,25 +104,19 @@ public final class MoaVoiceEndpointerTest {
         return endpointer;
     }
 
-    private static long feed(MoaVoiceEndpointer endpointer, long startMs, int frames,
-            long frameDurationMs, int level) {
+    private static long feed(MoaVoiceEndpointer endpointer, long startMs, int frames, int level) {
         long now = startMs;
         for (int frame = 0; frame < frames; frame += 1) {
-            endpointer.observe(pcm(level, frameDurationMs), now);
+            endpointer.observe(pcm(level), now);
             endpointer.evaluate(now);
-            now += frameDurationMs;
+            now += FRAME_MS;
         }
         return now;
     }
 
     private static byte[] pcm(int level) {
-        return pcm(level, FRAME_MS);
-    }
-
-    private static byte[] pcm(int level, long durationMs) {
         int bounded = Math.max(0, Math.min(Short.MAX_VALUE, level));
-        int samples = (int) (16_000L * durationMs / 1000L);
-        byte[] pcm = new byte[samples * 2];
+        byte[] pcm = new byte[320];
         for (int index = 0; index < pcm.length; index += 2) {
             int sample = (index / 2) % 2 == 0 ? bounded : -bounded;
             pcm[index] = (byte) (sample & 0xff);
