@@ -32,6 +32,7 @@ const PROFILE_FIELDS = [
   "temperature",
   "voice_max_chars",
   "spoken_reply_style",
+  "turn_taking_mode",
   "language",
   "voice",
   "speaking_rate",
@@ -646,6 +647,12 @@ function pickProfileFields(input) {
       out.spoken_reply_style = style;
     }
   }
+  if (typeof input.turn_taking_mode === "string") {
+    const mode = input.turn_taking_mode.trim().toLowerCase();
+    if (["responsive", "patient", "strict"].includes(mode)) {
+      out.turn_taking_mode = mode;
+    }
+  }
   if (typeof input.language === "string" && input.language.trim()) {
     const list = normalizeLanguageList(input.language);
     if (list.codes.length > 0 && list.invalid.length === 0) {
@@ -798,6 +805,7 @@ function normalizeProfile(defaults) {
     temperature: picked.temperature !== undefined ? picked.temperature : 0.4,
     voice_max_chars: picked.voice_max_chars !== undefined ? picked.voice_max_chars : 280,
     spoken_reply_style: picked.spoken_reply_style !== undefined ? picked.spoken_reply_style : "",
+    turn_taking_mode: picked.turn_taking_mode || "responsive",
     language,
     // Empty means "no profile override"; the voice provider falls back to its
     // env default (GEMINI_LIVE_VOICE) when the effective voice is unset.
