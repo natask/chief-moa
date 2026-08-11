@@ -337,10 +337,7 @@ function compactInput(input) {
 
 function prepareNoInput(args) {
   const source = actionInput(args);
-  const wrapped = plainObject(args);
-  const inputKeys = Object.hasOwn(wrapped, "input")
-    ? Object.keys(source)
-    : Object.keys(source).filter((key) => key !== "tool");
+  const inputKeys = Object.keys(source).filter((key) => key !== "tool");
   return inputKeys.length ? { error: "this action does not accept input" } : { input: {} };
 }
 
@@ -483,58 +480,26 @@ function appListWarrant(call) {
 }
 
 function browserPermissionsStatusWarrant(call) {
-  const rawTranscript = currentSpokenTranscript(call);
-  if (!rawTranscript) {
-    return "browser permission status requires a current-turn spoken/STT transcript";
-  }
-  if (quotedPermissionRequest(rawTranscript)) {
-    return "browser permission status requires a direct spoken request, not quoted text";
-  }
-  const transcript = normalizedWords(rawTranscript);
+  const transcript = userTranscript(call);
   if (!transcript) {
     return "the current user turn did not explicitly ask for browser permission status";
   }
-  const referencesOtherAuthority = /\b(?:page|screen|evidence|quote|quoted|says|said|mentions|mentioned|history|earlier|previously|prior|before|last turn|asked|translate|translation|phrase|wording|mean|means|dangerous|track|tracking)\b/.test(transcript);
-  if (referencesOtherAuthority) {
-    return "browser permission status requires a direct current-turn readiness request, not quoted, historical, evidence, translation, or conceptual text";
+  const referencesEvidenceOrAnotherTurn = /\b(?:page|screen|evidence|quote|quoted|says|said|mentions|mentioned|history|earlier|previously|prior|before|last turn|asked)\b/.test(transcript);
+  if (referencesEvidenceOrAnotherTurn) {
+    return "browser permission status requires an explicit request in the current user turn, not quoted, historical, or page evidence";
   }
   const namesPermissionState = (
     /\b(?:browser|chrome|extension)\b.*\bpermissions?\b/.test(transcript)
     || /\bpermissions?\b.*\b(?:browser|chrome|extension)\b/.test(transcript)
     || /\b(?:file access|access to (?:local )?files?)\b/.test(transcript)
   );
-  const hasReadinessLanguage = /\b(?:status|state|ready|readiness|granted|allowed|enabled|available|file access|access to (?:local )?files?)\b/.test(transcript);
-  const hasInspectionRequest = /\b(?:check|show|tell|report|verify|inspect|list|what|which|are|is|does|do|can)\b/.test(transcript);
+  const asksForReadiness = /\b(?:check|show|tell|report|verify|inspect|list|status|state|ready|readiness|granted|allowed|enabled|available|what|which|are|is|does|do|can)\b/.test(transcript);
   const isCurrentRequest = /^(?:please )?(?:check|show|tell|report|verify|inspect|list|what|which|are|is|does|do|can|could|would)\b/.test(transcript)
     || /\b(?:can|could|would) you\b/.test(transcript)
     || /\bi (?:want|need) you to\b/.test(transcript);
-  return namesPermissionState && hasReadinessLanguage && hasInspectionRequest && isCurrentRequest
+  return namesPermissionState && asksForReadiness && isCurrentRequest
     ? ""
     : "the current user turn did not explicitly ask for browser permission or file-access readiness";
-}
-
-function currentSpokenTranscript(call) {
-  if (!call || typeof call !== "object" || !Object.hasOwn(call, "transcript")) return "";
-  const transcript = typeof call.transcript === "string" ? call.transcript.trim().slice(0, 2000) : "";
-  if (!transcript) return "";
-  const transcriptSource = String(call.transcript_source || call.transcriptSource || "").trim().toLowerCase();
-  const modality = String(call.modality || call.input_mode || call.inputMode || "").trim().toLowerCase();
-  const surfaceSource = String(call.source || "").trim().toLowerCase();
-  const spokenTranscriptSource = ["stt", "client_stt", "stt-retranscribe", "stt-auto-reconcile"].includes(transcriptSource);
-  if (transcriptSource && !spokenTranscriptSource) return "";
-  if (modality && !["voice", "live_voice"].includes(modality) && !spokenTranscriptSource) return "";
-  const spokenProvenance = spokenTranscriptSource || ["voice", "live_voice"].includes(modality)
-    || /(?:^|[-_])voice(?:$|[-_])/.test(surfaceSource)
-    || /^(?:android|android-overlay|agee-extension|browser)(?:$|-)/.test(surfaceSource);
-  return spokenProvenance ? transcript : "";
-}
-
-function quotedPermissionRequest(rawTranscript) {
-  const permissionText = "(?:browser|chrome|extension|permissions?|file\\s+access|access\\s+to\\s+(?:local\\s+)?files?)";
-  const doubleQuoted = new RegExp(`["“][^"”]{0,500}${permissionText}[^"”]{0,500}["”]`, "iu");
-  const singleQuoted = new RegExp(`(?:^|\\s)[‘'][^’']{0,500}${permissionText}[^’']{0,500}[’'](?=$|\\s|[.!?])`, "iu");
-  const backtickQuoted = /`[^`]{0,500}(?:browser|chrome|extension|permissions?|file\s+access|access\s+to\s+(?:local\s+)?files?)[^`]{0,500}`/iu;
-  return doubleQuoted.test(rawTranscript) || singleQuoted.test(rawTranscript) || backtickQuoted.test(rawTranscript);
 }
 
 function tapTextWarrant(call, input) {
@@ -901,7 +866,7 @@ async function brokerToolRequest(call, deps, spec, input, options = {}) {
       message: `Queued ${spec.tool} for the ${spec.surface} client; it will run when the device claims it.`,
     };
   }
-  const result = {
+  return {
     ok: outcome.ok,
     type: "tool_request_receipt",
     tool: spec.tool,
@@ -911,33 +876,6 @@ async function brokerToolRequest(call, deps, spec, input, options = {}) {
     message: outcome.ok
       ? `The ${spec.surface} client ran ${spec.tool}.`
       : `The ${spec.surface} client could not run ${spec.tool}.`,
-  };
-  return spec.tool === "browser.permissions.status"
-    ? validateBrowserPermissionsStatusResult(result)
-    : result;
-}
-
-function validateBrowserPermissionsStatusResult(result) {
-  if (!result || result.type !== "tool_request_receipt" || result.ok !== true) return result;
-  const receipt = result.receipt;
-  const fileAccess = receipt?.result?.file_scheme_access;
-  const summary = String(receipt?.summary || "").trim();
-  const instruction = String(fileAccess?.instruction || "").trim();
-  const summaryNamesState = /\b(?:browser|permission|file|access)\b/i.test(summary);
-  const instructionExplainsAccess = /\b(?:allow access|file URLs?|chrome:\/\/extensions|extension details)\b/i.test(instruction);
-  if (!receipt || typeof fileAccess?.allowed !== "boolean" || !summaryNamesState
-      || (fileAccess.allowed === false && !instructionExplainsAccess)) {
-    return {
-      ...result,
-      ok: false,
-      error: "browser permission status receipt did not include a clear file_scheme_access.allowed state and required instruction",
-      message: "The browser returned an incomplete permission-state receipt.",
-    };
-  }
-  return {
-    ...result,
-    permission_state: fileAccess,
-    message: fileAccess.allowed ? summary : `${summary} ${instruction}`.trim(),
   };
 }
 
