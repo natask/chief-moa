@@ -19,6 +19,7 @@ final class MoaVoiceEndpointer {
     static final long START_ADMISSION_MS = 120L;
     static final long WEAK_CONTINUATION_LIMIT_MS = 200L;
     static final long ADAPTIVE_STATIONARY_LIMIT_MS = 400L;
+    static final long ADAPTIVE_ONLY_LIMIT_MS = 8_000L;
 
     private static final int SAMPLE_RATE_HZ = 16_000;
     private static final int PCM_BYTES_PER_SAMPLE = 2;
@@ -41,6 +42,7 @@ final class MoaVoiceEndpointer {
     private long recordingStartedAtMs;
     private long lastVoiceActivityAtMs;
     private long adaptiveRefreshUntilMs;
+    private long adaptiveAbsoluteUntilMs;
     private int lastAdaptiveLevel;
     private boolean adaptiveOnlySpeech;
     private int noiseFloor = INITIAL_NOISE_FLOOR;
@@ -55,6 +57,7 @@ final class MoaVoiceEndpointer {
         recordingStartedAtMs = Math.max(0L, nowMs);
         lastVoiceActivityAtMs = 0L;
         adaptiveRefreshUntilMs = 0L;
+        adaptiveAbsoluteUntilMs = 0L;
         lastAdaptiveLevel = 0;
         adaptiveOnlySpeech = false;
         noiseFloor = INITIAL_NOISE_FLOOR;
@@ -70,24 +73,29 @@ final class MoaVoiceEndpointer {
         if (terminalDecisionEmitted || recordingStartedAtMs <= 0L || pcm == null || pcm.length < 2) {
             return false;
         }
-        int level = meanAbsolutePcm16(pcm);
         int availableSamples = pcm.length / PCM_BYTES_PER_SAMPLE;
+        int level = meanAbsolutePcm16(pcm);
         // Preserve the old detector's >=450 signal as hard evidence. It may
         // admit immediately and is never folded into the ambient estimate.
         // Energy from 220..449 remains ambiguous and calibrates fail-closed.
-        if (calibrationSamples < CALIBRATION_SAMPLES && level < HARD_STRONG_LEVEL) {
+        if (calibrationSamples < CALIBRATION_SAMPLES) {
+            int calibrating = Math.min(availableSamples, CALIBRATION_SAMPLES - calibrationSamples);
+            int calibrationLevel = meanAbsolutePcm16(pcm, 0, calibrating);
+            if (calibrationLevel >= HARD_STRONG_LEVEL) {
+                return observeEvidence(level, availableSamples, nowMs);
+            }
             // Calibration/background breaks a hard-strong candidate. Otherwise
             // separated loud pulses could accumulate as if they were continuous.
             consecutiveStartSamples = 0;
             candidateContainsHardStrong = false;
-            int calibrating = Math.min(availableSamples, CALIBRATION_SAMPLES - calibrationSamples);
-            calibrationLevelSampleTotal += (long) level * calibrating;
+            calibrationLevelSampleTotal += (long) calibrationLevel * calibrating;
             calibrationSamples += calibrating;
             availableSamples -= calibrating;
             if (calibrationSamples >= CALIBRATION_SAMPLES) {
                 noiseFloor = (int) Math.max(0L, calibrationLevelSampleTotal / calibrationSamples);
             }
             if (availableSamples <= 0) return false;
+            level = meanAbsolutePcm16(pcm, calibrating, availableSamples);
         }
         return observeEvidence(level, availableSamples, nowMs);
     }
@@ -98,6 +106,7 @@ final class MoaVoiceEndpointer {
             if (hardStrong) {
                 long hardStrongAtMs = Math.max(recordingStartedAtMs, nowMs);
                 adaptiveRefreshUntilMs = hardStrongAtMs + WEAK_CONTINUATION_LIMIT_MS;
+                adaptiveAbsoluteUntilMs = 0L;
                 adaptiveOnlySpeech = false;
                 lastVoiceActivityAtMs = hardStrongAtMs;
                 return true;
@@ -105,19 +114,25 @@ final class MoaVoiceEndpointer {
             if (level >= continueThreshold()) {
                 if (adaptiveOnlySpeech) {
                     if (Math.abs(level - lastAdaptiveLevel) >= ADAPTIVE_VARIATION_LEVEL) {
-                        adaptiveRefreshUntilMs = nowMs + ADAPTIVE_STATIONARY_LIMIT_MS;
+                        adaptiveRefreshUntilMs = Math.min(
+                                nowMs + ADAPTIVE_STATIONARY_LIMIT_MS,
+                                adaptiveAbsoluteUntilMs);
                     }
                     lastAdaptiveLevel = level;
                 }
             }
-            if (level >= continueThreshold() && nowMs < adaptiveRefreshUntilMs) {
+            if (level >= continueThreshold()
+                    && nowMs < adaptiveRefreshUntilMs
+                    && (!adaptiveOnlySpeech || nowMs < adaptiveAbsoluteUntilMs)) {
                 lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 return true;
             }
             return false;
         }
 
-        int admissionLevel = calibrated() ? startThreshold() : HARD_STRONG_LEVEL;
+        int admissionLevel = hardStrong
+                ? HARD_STRONG_LEVEL
+                : (calibrated() ? startThreshold() : HARD_STRONG_LEVEL);
         if (level >= admissionLevel) {
             consecutiveStartSamples += availableSamples;
             candidateContainsHardStrong |= hardStrong;
@@ -126,6 +141,7 @@ final class MoaVoiceEndpointer {
                 lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 if (candidateContainsHardStrong) {
                     adaptiveRefreshUntilMs = lastVoiceActivityAtMs + WEAK_CONTINUATION_LIMIT_MS;
+                    adaptiveAbsoluteUntilMs = 0L;
                     adaptiveOnlySpeech = false;
                 } else {
                     // Energy-only input cannot distinguish steady quiet speech
@@ -134,6 +150,7 @@ final class MoaVoiceEndpointer {
                     // frame arrives.
                     adaptiveOnlySpeech = true;
                     lastAdaptiveLevel = level;
+                    adaptiveAbsoluteUntilMs = lastVoiceActivityAtMs + ADAPTIVE_ONLY_LIMIT_MS;
                     adaptiveRefreshUntilMs = lastVoiceActivityAtMs + ADAPTIVE_STATIONARY_LIMIT_MS;
                 }
                 return true;
@@ -196,12 +213,18 @@ final class MoaVoiceEndpointer {
     }
 
     static int meanAbsolutePcm16(byte[] pcm) {
-        if (pcm == null) {
+        return meanAbsolutePcm16(pcm, 0, pcm == null ? 0 : pcm.length / PCM_BYTES_PER_SAMPLE);
+    }
+
+    private static int meanAbsolutePcm16(byte[] pcm, int startSample, int sampleCount) {
+        if (pcm == null || startSample < 0 || sampleCount <= 0) {
             return 0;
         }
         long total = 0L;
         int samples = 0;
-        for (int i = 0; i + 1 < pcm.length; i += 2) {
+        int startByte = Math.min(pcm.length, startSample * PCM_BYTES_PER_SAMPLE);
+        int endByte = Math.min(pcm.length, startByte + sampleCount * PCM_BYTES_PER_SAMPLE);
+        for (int i = startByte; i + 1 < endByte; i += PCM_BYTES_PER_SAMPLE) {
             int sample = (pcm[i + 1] << 8) | (pcm[i] & 0xff);
             total += Math.abs((long) sample);
             samples += 1;
