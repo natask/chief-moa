@@ -105,14 +105,6 @@ const PHONE_CAPABILITIES = {
       /\b(?:list|show|which|what)\b/, /\b(?:browser )?tabs?\b/,
       "the current user turn did not explicitly ask to list browser tabs"),
   },
-  browser_permissions_status: {
-    tool: "browser.permissions.status",
-    surface: "browser_extension",
-    args: "{} (read-only browser permission and file-access readiness)",
-    label: "report browser permission and file-access readiness",
-    prepare: prepareNoInput,
-    warrant: browserPermissionsStatusWarrant,
-  },
   browser_activate_tab: {
     tool: "browser.tab.activate",
     surface: "browser_extension",
@@ -264,7 +256,6 @@ const CLASSIC_PHONE_TOOLS = {
 
 const CLASSIC_BROWSER_TOOLS = Object.freeze({
   "browser.tab.list": "browser_list_tabs",
-  "browser.permissions.status": "browser_permissions_status",
   "browser.tab.open": "browser_open_tab",
   "browser.tab.activate": "browser_activate_tab",
   "browser.tab.close": "browser_close_tab",
@@ -337,8 +328,7 @@ function compactInput(input) {
 
 function prepareNoInput(args) {
   const source = actionInput(args);
-  const inputKeys = Object.keys(source).filter((key) => key !== "tool");
-  return inputKeys.length ? { error: "this action does not accept input" } : { input: {} };
+  return Object.keys(source).length ? { error: "this action does not accept input" } : { input: {} };
 }
 
 function prepareTabIdInput(args) {
@@ -477,29 +467,6 @@ function appListWarrant(call) {
     && /\b(?:installed |launcher )?(?:apps|applications)\b/.test(transcript)
     ? ""
     : "the current user turn did not explicitly ask to list installed apps";
-}
-
-function browserPermissionsStatusWarrant(call) {
-  const transcript = userTranscript(call);
-  if (!transcript) {
-    return "the current user turn did not explicitly ask for browser permission status";
-  }
-  const referencesEvidenceOrAnotherTurn = /\b(?:page|screen|evidence|quote|quoted|says|said|mentions|mentioned|history|earlier|previously|prior|before|last turn|asked)\b/.test(transcript);
-  if (referencesEvidenceOrAnotherTurn) {
-    return "browser permission status requires an explicit request in the current user turn, not quoted, historical, or page evidence";
-  }
-  const namesPermissionState = (
-    /\b(?:browser|chrome|extension)\b.*\bpermissions?\b/.test(transcript)
-    || /\bpermissions?\b.*\b(?:browser|chrome|extension)\b/.test(transcript)
-    || /\b(?:file access|access to (?:local )?files?)\b/.test(transcript)
-  );
-  const asksForReadiness = /\b(?:check|show|tell|report|verify|inspect|list|status|state|ready|readiness|granted|allowed|enabled|available|what|which|are|is|does|do|can)\b/.test(transcript);
-  const isCurrentRequest = /^(?:please )?(?:check|show|tell|report|verify|inspect|list|what|which|are|is|does|do|can|could|would)\b/.test(transcript)
-    || /\b(?:can|could|would) you\b/.test(transcript)
-    || /\bi (?:want|need) you to\b/.test(transcript);
-  return namesPermissionState && asksForReadiness && isCurrentRequest
-    ? ""
-    : "the current user turn did not explicitly ask for browser permission or file-access readiness";
 }
 
 function tapTextWarrant(call, input) {
@@ -1033,12 +1000,12 @@ function surfaceClassicTools(call, deps) {
 function surfaceBrowserActionTool(call, deps) {
   return {
     name: "browser_tab_action",
-    description: "Ask a connected browser to list, open, activate, close, or reload tabs; report permission/file-access readiness; or execute bounded CDP commands on an agent-owned inactive tab. Permission status is read-only, takes no input, and requires an explicit current-turn spoken request. CDP requires an explicit automation/debug authority profile and a confirmed current-user delegation. The browser classifies every CDP method, refuses credential/cookie/auth/storage access, redacts results, and returns a local receipt.",
+    description: "Ask a connected browser to list, open, activate, close, or reload tabs, or to execute bounded CDP commands on an agent-owned inactive tab. CDP requires an explicit automation/debug authority profile and a confirmed current-user delegation. The browser classifies every CDP method, refuses credential/cookie/auth/storage access, redacts results, and returns a local receipt.",
     parameters: {
       type: "object",
       properties: {
         tool: { type: "string", enum: Object.keys(CLASSIC_BROWSER_TOOLS) },
-        input: { type: "object", description: "browser.tab.open takes url; activate/close/reload take tab_id; list and browser.permissions.status take no input. browser.cdp.execute takes tab_id, authority_profile automation|debug, and bounded commands [{method, params?}]. Do not request cookies, authorization data, passwords, credentials, or browser storage." },
+        input: { type: "object", description: "browser.tab.open takes url; activate/close/reload take tab_id; list takes no input. browser.cdp.execute takes tab_id, authority_profile automation|debug, and bounded commands [{method, params?}]. Do not request cookies, authorization data, passwords, credentials, or browser storage." },
       },
       required: ["tool"],
     },

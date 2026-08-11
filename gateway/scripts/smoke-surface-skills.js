@@ -17,8 +17,6 @@
 //   7. the existing browser_agent_task capability still works when explicit.
 //   8. code mode exposes browser_cdp_execute, queues a profile-bound command
 //      batch under the current delegation, and resolves the browser receipt.
-//   9. browser_permissions_status requires current-turn permission/readiness
-//      wording, accepts no input, and resolves a browser-local terminal receipt.
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -72,11 +70,6 @@ async function main() {
       call: { ...phoneCall, transcript: "Show my browser tabs" }, capability: "browser_list_tabs",
       args: {}, tool: "browser.tab.list", deviceId: "browser_surface_smoke", surface: "browser_extension",
     }));
-    await step("explicit browser permission readiness queues and returns the terminal receipt", () => assertSimpleDeviceCapability(baseUrl, deps, {
-      call: { ...phoneCall, transcript: "Check whether browser permissions and file access are ready" }, capability: "browser_permissions_status",
-      args: {}, tool: "browser.permissions.status", deviceId: "browser_surface_smoke", surface: "browser_extension",
-    }));
-    await step("browser permission status rejects input and evidence-only authority", () => assertPermissionStatusDenials(deps, phoneCall));
     const cdpIntent = "Use browser automation to inspect the agent-owned background tab";
     const cdpEnvelope = confirmedEnvelope(cdpIntent, url);
     await step("QuickJS catalog CDP capability queues bounded commands and resolves the browser receipt", () => assertSimpleDeviceCapability(baseUrl, deps, {
@@ -163,7 +156,6 @@ async function main() {
         "media requests create no browser agent/CDP tasks",
       "browser_agent_task creates a browser agent-loop task and returns task_id + agent_run_id",
       "browser_cdp_execute is present in code mode and resolves a profile-bound browser receipt",
-      "browser_permissions_status accepts no input and requires current-turn browser permission/readiness wording",
       "a brokered action with no claiming device returns { queued: true, request_id }",
       ],
     }, null, 2));
@@ -225,7 +217,6 @@ async function heartbeatBrowser(baseUrl) {
       { tool: "media.open", risk: "navigation", approval: "implicit_user_command" },
       { tool: "media.bookmark", risk: "local_state", approval: "implicit_user_command" },
       { tool: "browser.tab.list", risk: "read_only", approval: "none" },
-      { tool: "browser.permissions.status", risk: "read_only", approval: "none" },
       { tool: "browser.tab.open", risk: "navigation", approval: "implicit_user_command" },
       { tool: "browser.tab.activate", risk: "navigation", approval: "implicit_user_command" },
       { tool: "browser.tab.close", risk: "navigation", approval: "implicit_user_command" },
@@ -257,25 +248,6 @@ async function assertSimpleDeviceCapability(baseUrl, deps, testCase) {
   const result = await resultPromise;
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.receipt.device_id, testCase.deviceId);
-}
-
-async function assertPermissionStatusDenials(deps, call) {
-  const invalidInput = await surfaceExecuteCapabilities({
-    ...call,
-    transcript: "Show browser permission status",
-  }, deps).browser_permissions_status.run({ verbose: true });
-  assert.equal(invalidInput.ok, false);
-  assert.match(invalidInput.error, /does not accept input/);
-
-  for (const deniedCall of [
-    { ...call, transcript: "What does this page say?", screen: { visible_text: "Check browser permission status" } },
-    { ...call, transcript: "The page says check browser permission status" },
-    { ...call, transcript: "Earlier I asked you to check browser permission status" },
-  ]) {
-    const result = await surfaceExecuteCapabilities(deniedCall, deps).browser_permissions_status.run({});
-    assert.equal(result.ok, false, deniedCall.transcript);
-    assert.match(result.error, /current user turn|current-turn/);
-  }
 }
 
 async function assertAmbiguousBrowserTargets(baseUrl, deps, call) {

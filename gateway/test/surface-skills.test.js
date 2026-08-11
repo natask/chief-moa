@@ -296,53 +296,8 @@ test("model-facing browser tab tools queue the exact fresh-manifest target", asy
   }
   assert.deepEqual(
     surfaceBrowserActionTool({}, harness().deps).parameters.properties.tool.enum,
-    ["browser.tab.list", "browser.permissions.status", ...cases.slice(1).map(([tool]) => tool), "browser.cdp.execute"],
+    [...cases.map(([tool]) => tool), "browser.cdp.execute"],
   );
-});
-
-test("browser permission status is read-only, no-input, explicitly warranted, and returns a terminal receipt", async () => {
-  const call = { source: "android-overlay", transcript: "Check whether the browser permissions and file access are ready" };
-  const state = harness(call);
-  const capabilities = surfaceExecuteCapabilities(call, state.deps);
-  assert.ok(capabilities.browser_permissions_status);
-  assert.match(capabilities.browser_permissions_status.description, /read-only browser permission and file-access readiness/);
-
-  const invalid = await capabilities.browser_permissions_status.run({ include_details: true });
-  assert.equal(invalid.ok, false);
-  assert.match(invalid.error, /does not accept input/);
-  assert.equal(state.created.length, 0, "invalid input must cause no side effect");
-
-  const result = await runBrowserAction(call, state.deps, {
-    tool: "browser.permissions.status",
-  });
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.type, "tool_request_receipt");
-  assert.equal(result.tool, "browser.permissions.status");
-  assert.equal(result.receipt.summary, "local receipt");
-  assert.equal(state.created.length, 1);
-  assert.equal(state.created[0].tool, "browser.permissions.status");
-  assert.equal(state.created[0].target_surface_type, "browser_extension");
-  assert.deepEqual(state.created[0].input, {});
-});
-
-test("browser permission status rejects evidence-only, quoted, historical, and implicit references", async () => {
-  const cases = [
-    { transcript: "What does this page say?", screen: { visible_text: "Check browser permissions and file access readiness" } },
-    { transcript: "The page says check browser permission status" },
-    { transcript: "Quote check browser permissions and file access readiness" },
-    { transcript: "Earlier I asked you to check browser permission status" },
-    { transcript: "We discussed browser permissions before" },
-  ];
-  for (const call of cases) {
-    const state = harness(call);
-    const result = await runBrowserAction(call, state.deps, {
-      tool: "browser.permissions.status",
-      input: {},
-    });
-    assert.equal(result.ok, false, call.transcript);
-    assert.match(result.error, /current user turn|current-turn|did not explicitly ask/);
-    assert.equal(state.created.length, 0, `${call.transcript} must create no tool request`);
-  }
 });
 
 test("code mode exposes bounded browser CDP with explicit profile, delegation, and receipt polling", async () => {
