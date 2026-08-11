@@ -18,8 +18,9 @@
   color: #fff;
   cursor: pointer;
   font: 600 11px/1 system-ui, sans-serif;
-  min-height: 30px;
-  padding: 0 10px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
   pointer-events: auto;
 }
 
@@ -31,6 +32,15 @@
 #agee-draft-controls button:disabled { cursor: wait; opacity: 0.55; }
 
 #agee-root.agee-draft-paused #agee-launcher { filter: saturate(0.72); }
+
+/* At a mathematically infeasible viewport, keep the safety controls usable and
+   remove the mascot/conversation geometry they cannot coexist with. The class
+   clears as soon as a subsequent layout fits again. */
+#agee-root.agee-control-layout-impossible #agee-launcher,
+#agee-root.agee-control-layout-impossible .agee-ribbon {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 
 @media (prefers-color-scheme: light) {
   #agee-draft-controls button {

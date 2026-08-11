@@ -156,6 +156,167 @@
     };
   }
 
+  // Lay independent companion controls out as one rail. Callers may own
+  // different DOM nodes (draft controls and task Stop), but they must reserve
+  // space together or they will choose the same side of the mascot and overlap
+  // on narrow screens. Controls are ordered nearest-to-furthest from the
+  // companion and stay on its horizontal lane, between the upper/lower
+  // ribbons. This keeps every control a predictable distance from the mascot
+  // without occupying either conversation lane.
+  function companionControlPlacement({
+    launcherRect,
+    viewportWidth,
+    viewportHeight,
+    controls = [],
+    edge = 8,
+    gap = GAP,
+  }) {
+    const rect = launcherRect || { left: 0, right: 0, top: 0, bottom: 0, height: 0 };
+    const measured = controls
+      .map((control) => ({
+        id: String(control?.id || ""),
+        width: Math.max(0, Number(control?.width) || 0),
+        height: Math.max(0, Number(control?.height) || 0),
+      }))
+      .filter((control) => control.id && control.width > 0 && control.height > 0);
+    if (!measured.length) return { side: "right", placements: [] };
+
+    const railWidth = measured.reduce((sum, control) => sum + control.width, 0)
+      + gap * Math.max(0, measured.length - 1);
+    const leftRoom = Math.max(0, rect.left - edge - gap);
+    const rightRoom = Math.max(0, viewportWidth - edge - rect.right - gap);
+    const usableHeight = Math.max(0, viewportHeight - edge * 2);
+    // Keep the historical right-first behavior where it fits. When it does
+    // not, the roomier side wins; ties prefer left because the default mascot
+    // rests at the lower-right corner.
+    const side = rightRoom >= railWidth
+      ? "right"
+      : leftRoom >= railWidth
+        ? "left"
+        : rightRoom > leftRoom ? "right" : "left";
+    const horizontal = (side === "right" ? rightRoom : leftRoom) >= railWidth;
+    if (!horizontal) {
+      // A short viewport may have plenty of height for one row but not enough
+      // width on either single side. Split the rail before stacking: each side
+      // remains on the mascot lane and therefore clear of both ribbons.
+      if (measured.length > 1 && measured.length <= 12
+        && measured.every((control) => control.height <= usableHeight)) {
+        let split = null;
+        for (let mask = 1; mask < (1 << measured.length) - 1; mask += 1) {
+          const leftControls = measured.filter((_, index) => mask & (1 << index));
+          const rightControls = measured.filter((_, index) => !(mask & (1 << index)));
+          const widthOf = (list) => list.reduce((sum, control) => sum + control.width, 0)
+            + gap * Math.max(0, list.length - 1);
+          const leftWidth = widthOf(leftControls);
+          const rightWidth = widthOf(rightControls);
+          if (leftWidth > leftRoom || rightWidth > rightRoom) continue;
+          const score = Math.abs((leftRoom - leftWidth) - (rightRoom - rightWidth));
+          if (!split || score < split.score) split = { leftControls, rightControls, score };
+        }
+        if (split) {
+          const placements = [];
+          let leftCursor = rect.left - gap;
+          for (const control of split.leftControls) {
+            leftCursor -= control.width;
+            placements.push({
+              id: control.id,
+              left: leftCursor,
+              top: clamp(rect.top + ((rect.height || 0) - control.height) / 2, edge, viewportHeight - edge - control.height),
+              width: control.width,
+              height: control.height,
+            });
+            leftCursor -= gap;
+          }
+          let rightCursor = rect.right + gap;
+          for (const control of split.rightControls) {
+            placements.push({
+              id: control.id,
+              left: rightCursor,
+              top: clamp(rect.top + ((rect.height || 0) - control.height) / 2, edge, viewportHeight - edge - control.height),
+              width: control.width,
+              height: control.height,
+            });
+            rightCursor += control.width + gap;
+          }
+          return { side: "split", stacked: false, impossible: false, placements };
+        }
+      }
+
+      const stackWidth = Math.max(...measured.map((control) => control.width));
+      const stackHeight = measured.reduce((sum, control) => sum + control.height, 0)
+        + gap * Math.max(0, measured.length - 1);
+      const stackFitsLeft = leftRoom >= stackWidth;
+      const stackFitsRight = rightRoom >= stackWidth;
+      if ((stackFitsLeft || stackFitsRight) && stackHeight <= usableHeight) {
+        const stackSide = stackFitsRight && (!stackFitsLeft || rightRoom > leftRoom) ? "right" : "left";
+        const left = stackSide === "right" ? rect.right + gap : rect.left - gap - stackWidth;
+        let top = clamp(
+          rect.top + ((rect.height || rect.bottom - rect.top || 0) - stackHeight) / 2,
+          edge,
+          Math.max(edge, viewportHeight - edge - stackHeight),
+        );
+        const placements = measured.map((control) => {
+          const placement = {
+            id: control.id,
+            left: stackSide === "right" ? left : left + stackWidth - control.width,
+            top,
+            width: control.width,
+            height: control.height,
+          };
+          top += control.height + gap;
+          return placement;
+        });
+        return { side: stackSide, stacked: true, placements };
+      }
+
+      // No side can hold even the widest control. Detach the stack to the
+      // viewport edge and put it wholly above or below the mascot. This is the
+      // last-resort phone policy: controls stay full-sized and reachable rather
+      // than clipping or covering the mascot. Individual controls wider than
+      // the viewport are an impossible input and are reported to the caller.
+      const usableWidth = Math.max(0, viewportWidth - edge * 2);
+      let impossible = stackWidth > usableWidth || stackHeight > usableHeight;
+      const left = rightRoom > leftRoom
+        ? Math.max(edge, viewportWidth - edge - stackWidth)
+        : edge;
+      const roomAbove = rect.top - edge - gap;
+      const roomBelow = viewportHeight - edge - rect.bottom - gap;
+      const below = roomBelow >= stackHeight || roomBelow > roomAbove;
+      const horizontalOverlap = left < rect.right && left + stackWidth > rect.left;
+      if (horizontalOverlap && roomAbove < stackHeight && roomBelow < stackHeight) impossible = true;
+      let top = below ? rect.bottom + gap : rect.top - gap - stackHeight;
+      top = clamp(top, edge, Math.max(edge, viewportHeight - edge - stackHeight));
+      const placements = measured.map((control) => {
+        const placement = { id: control.id, left, top, width: control.width, height: control.height };
+        top += control.height + gap;
+        return placement;
+      });
+      return { side: "detached", stacked: true, impossible, placements };
+    }
+    let cursor = side === "right"
+      ? Math.max(edge, rect.right + gap)
+      : Math.min(viewportWidth - edge, rect.left - gap);
+    const placements = measured.map((control) => {
+      let left;
+      if (side === "right") {
+        left = cursor;
+        cursor += control.width + gap;
+      } else {
+        left = cursor - control.width;
+        cursor = left - gap;
+      }
+      const top = clamp(
+        rect.top + ((rect.height || rect.bottom - rect.top || 0) - control.height) / 2,
+        edge,
+        Math.max(edge, viewportHeight - edge - control.height),
+      );
+      // Preserve half-pixels from odd-sized mascots. Rounding a 45px mascot's
+      // centre lane can silently turn the specified 8px gap into 7.5px.
+      return { id: control.id, left, top, width: control.width, height: control.height };
+    });
+    return { side, stacked: false, placements };
+  }
+
   // Popups flip to stay inside the viewport instead of being clipped by it.
   function popupPlacement({
     anchorRect,
@@ -211,6 +372,7 @@
     MIN_HEIGHT,
     MIN_BUBBLE_W,
     MIN_BUBBLE_H,
+    companionControlPlacement,
     launcherBounds,
     clampLauncher,
     isWithinProximity,

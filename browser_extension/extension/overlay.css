@@ -681,6 +681,9 @@
 #agee-stop {
   display: none;
   position: fixed;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
   z-index: 2147483647;
 }
 #agee-stop.visible {
@@ -1266,8 +1269,7 @@ button.agee-ui-list-row:hover {
     padding: 9px 9px 9px 12px;
   }
   #agee-voice,
-  #agee-record,
-  #agee-stop {
+  #agee-record {
     width: 32px;
     height: 32px;
     min-width: 32px;

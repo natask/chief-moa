@@ -557,6 +557,9 @@
 }
 #agee-copy-menu {
   position: absolute;
+  /* Expanded ribbons establish z-index:2. Keep the chooser above both ribbon
+     plates so the nearest plate cannot cover the first (Literal) row. */
+  z-index: 4;
   width: 214px;
   padding: 5px;
   border-radius: 12px;
@@ -588,6 +591,7 @@
   appearance: none;
   display: block;
   width: 100%;
+  min-height: 44px;
   padding: 7px 9px;
   border: 0;
   border-radius: 8px;

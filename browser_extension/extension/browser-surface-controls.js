@@ -15,20 +15,40 @@
     }
 
     function positionStop() {
-      if (!stopButton.classList.contains("visible")) return;
+      if (!stopButton.classList.contains("visible")) {
+        const draft = launcher.parentElement?.querySelector("#agee-draft-controls:not([hidden])");
+        if (!draft) launcher.parentElement?.classList.remove("agee-control-layout-impossible");
+        return;
+      }
       const mark = launcher.getBoundingClientRect();
       const control = stopButton.getBoundingClientRect();
-      const gap = 8;
-      let left = mark.right + gap;
-      if (left + control.width > win.innerWidth - 8) left = mark.left - control.width - gap;
-      stopButton.style.left = `${Math.max(8, Math.round(left))}px`;
-      stopButton.style.top = `${Math.max(8, Math.min(win.innerHeight - control.height - 8, Math.round(mark.top + (mark.height - control.height) / 2)))}px`;
+      const draft = launcher.parentElement?.querySelector("#agee-draft-controls:not([hidden])");
+      const draftRect = draft?.getBoundingClientRect();
+      const layout = win.AgeeRibbonLayout.companionControlPlacement({
+        launcherRect: mark,
+        viewportWidth: win.innerWidth,
+        viewportHeight: win.innerHeight,
+        controls: [
+          ...(draftRect?.width ? [{ id: "draft", width: draftRect.width, height: draftRect.height }] : []),
+          { id: "stop", width: control.width, height: control.height },
+        ],
+      });
+      launcher.parentElement?.classList.toggle("agee-control-layout-impossible", layout.impossible === true);
+      for (const placement of layout.placements) {
+        const target = placement.id === "draft" ? draft : stopButton;
+        if (!target) continue;
+        target.style.left = `${placement.left}px`;
+        target.style.top = `${placement.top}px`;
+      }
     }
 
     function syncStop(active) {
       stopButton.classList.toggle("visible", active === true);
       positionStop();
+      launcher.parentElement?.dispatchEvent(new win.CustomEvent("agee:position-companion-controls"));
     }
+
+    launcher.parentElement?.addEventListener("agee:position-companion-controls", positionStop);
 
     return Object.freeze({ positionStop, restoreVisibility, reveal, syncStop });
   }

@@ -37,14 +37,30 @@
     }
 
     function position() {
-      if (toolbar.hidden) return;
+      if (toolbar.hidden) {
+        if (!root.querySelector("#agee-stop.visible")) root.classList.remove("agee-control-layout-impossible");
+        return;
+      }
       const mark = launcher.getBoundingClientRect();
       const controls = toolbar.getBoundingClientRect();
-      const gap = 8;
-      let left = mark.right + gap;
-      if (left + controls.width > innerWidth - 8) left = mark.left - controls.width - gap;
-      toolbar.style.left = `${Math.max(8, Math.round(left))}px`;
-      toolbar.style.top = `${Math.max(8, Math.min(innerHeight - controls.height - 8, Math.round(mark.top + (mark.height - controls.height) / 2)))}px`;
+      const stop = root.querySelector("#agee-stop.visible");
+      const stopRect = stop?.getBoundingClientRect();
+      const layout = globalThis.AgeeRibbonLayout.companionControlPlacement({
+        launcherRect: mark,
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        controls: [
+          { id: "draft", width: controls.width, height: controls.height },
+          ...(stopRect?.width ? [{ id: "stop", width: stopRect.width, height: stopRect.height }] : []),
+        ],
+      });
+      root.classList.toggle("agee-control-layout-impossible", layout.impossible === true);
+      for (const placement of layout.placements) {
+        const target = placement.id === "draft" ? toolbar : stop;
+        if (!target) continue;
+        target.style.left = `${placement.left}px`;
+        target.style.top = `${placement.top}px`;
+      }
     }
 
     function render() {
@@ -61,6 +77,7 @@
       if (active) launcher.setAttribute("data-agee-tip", "Send voice");
       else launcher.removeAttribute("data-agee-tip");
       position();
+      if (!active) root.dispatchEvent(new globalThis.CustomEvent("agee:position-companion-controls"));
     }
 
     function bind(value) {
@@ -147,6 +164,7 @@
       onSend?.();
     });
     addEventListener("resize", position);
+    root.addEventListener("agee:position-companion-controls", position);
     refreshCapability();
 
     return Object.freeze({ accept, active, begin, bind, commitMessage, position, refreshCapability, reset, supported });
