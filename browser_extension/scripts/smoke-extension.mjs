@@ -1440,14 +1440,14 @@ async function main() {
     ) {
       throw new Error(`expanding must not move the companion, the other ribbon, or the page: ${JSON.stringify({ ribbonBefore, expanded })}`);
     }
-    // Three variants, ranked, with the highest AVAILABLE one defaulted and the
-    // missing one shown as unavailable rather than silently substituted.
+    // Three variants, ranked, with the highest available one defaulted. The
+    // missing polished form is an explicit generation action, never a fake copy.
     if (
       copyMenu.open !== true ||
       copyMenu.rows?.length !== 3 ||
       !copyMenu.rows[0].label.startsWith("Polished") ||
-      copyMenu.rows[0].disabled !== true ||
-      copyMenu.rows[0].why !== "not generated for this turn" ||
+      copyMenu.rows[0].disabled !== false ||
+      copyMenu.rows[0].why !== "Generate with plain style" ||
       copyMenu.rows[1].label !== "Corrected" ||
       copyMenu.rows[1].disabled !== false ||
       copyMenu.rows[1].isDefault !== true ||

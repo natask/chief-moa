@@ -69,7 +69,7 @@
   // mark remaps to: single click = current-thread capture toggle, still hold =
   // push-to-talk, double-click = fresh-thread capture toggle, and triple-click
   // = text chat. Flag off keeps the legacy contract untouched.
-  const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled";
+  const VOICE_FIRST_GESTURES_KEY = "ageeVoiceFirstGesturesEnabled", PREFERRED_COPY_VARIANT_KEY = "ageePreferredCopyVariant";
   const VOICE_FIRST_HOLD_MS = 260;
   let voiceFirstGestures = false;
   let voiceFirstHoldStartedTurn = false;
@@ -359,7 +359,7 @@
     surfaceControls.restoreVisibility(() => open);
     restoreMascotScale();
     restoreUiChimePreference();
-    restoreVoiceRepliesPreference();
+    restoreVoiceRepliesPreference(); restorePreferredCopyVariant();
     restoreVoiceFirstGestures();
     loadAvatarBehaviorRuntime();
     loadUiSpec();
@@ -509,6 +509,8 @@
       ribbons?.setVoiceReplies(voiceRepliesEnabled);
     }).catch(() => {});
   }
+
+  const restorePreferredCopyVariant = () => safeStorageLocalGet({ [PREFERRED_COPY_VARIANT_KEY]: "" }).then((stored) => ribbons?.setPreferredCopyVariant(stored[PREFERRED_COPY_VARIANT_KEY])).catch(() => {});
 
   function setVoiceRepliesEnabled(enabled) {
     const wasEnabled = voiceRepliesEnabled;
@@ -1007,10 +1009,6 @@
   }
 
   // ---- Ribbons -----------------------------------------------------------
-  // The overlay is a companion between two single-line streams. The runtime
-  // lives in ribbon-runtime.js, its text model in ribbon-window.js and its
-  // geometry in ribbon-layout.js; content.js only supplies the host document,
-  // the companion anchor, and the clipboard/history capabilities.
   let ribbons = null;
   function setupRibbons() {
     ribbons = AgeeRibbons.create({
@@ -1018,10 +1016,7 @@
       launcher,
       placeLauncher,
       copyText: copyTextToClipboard,
-      // History is a separate surface, not overlay content. The side panel
-      // already hydrates from the canonical gateway session projection.
       openHistory: () => safeRuntimeSendMessage({ cmd: "openHistoryPanel" }).catch(() => ({ ok: false })),
-      // Text mode types into the you-line. Submitting it is an ordinary turn.
       onSubmitText: (text) => submitInstruction(text),
       // Optional by contract (see compose-heartbeat.js): a hard reference here takes every gesture down with it.
       onComposeStateChange: globalThis.AgeeComposeHeartbeat?.create?.({ write: safeStorageLocalSet }),
@@ -1029,6 +1024,12 @@
       // The mute button moved from the deleted floating pill into the reply
       // bubble's rail. The wiring and the storage key are unchanged.
       onVoiceRepliesChange: setVoiceRepliesEnabled,
+      onPreferredCopyVariantChange: (variant) => ["skill", "edited", "literal"].includes(variant)
+        && safeStorageLocalSet({ [PREFERRED_COPY_VARIANT_KEY]: variant }).catch(() => {}),
+      generateWritingVariant: async (source) => {
+        const result = await safeRuntimeSendMessage({ cmd: "generateWritingVariant", source });
+        if (!result?.ok) throw new Error(result?.error || "Could not generate polished text."); return result.variant;
+      },
       onGeometryBreach: (list) => safeStorageLocalSet({ ageeOverlayGeometryBreaches: list }).catch(() => {}),
     });
   }
@@ -2389,7 +2390,6 @@
     }
   }
 
-  // The lower ribbon is the assistant response stream.
   // The lower ribbon is the assistant response stream. The last value is also
   // recorded because the ribbon retires on its own linger timer: a check that
   // arrives after the reply faded still needs to know what was said.
@@ -2604,6 +2604,7 @@
   function handleLiveVoiceMessage(state, payload) {
     if (state?.steeredAtGeneration && state.steeredAtGeneration <= steeringGeneration) return;
     resetVoiceWatchdog(state);
+    if (AgeeCaptureOnlyPolicy.isCaptureOnly(state) && (payload?.audio || payload?.data instanceof ArrayBuffer || payload?.data instanceof Blob)) return;
     if (payload?.audio) {
       playLiveAssistantPcm(state, base64ToBuffer(payload.audio));
       return;
@@ -2631,6 +2632,7 @@
     }
     if (!isLiveVoiceStateActive(state) || state.gatewayRouted) return;
     const isCurrentTurn = liveVoice === state;
+    if (!AgeeCaptureOnlyPolicy.acceptsAssistantEvent(state, msg.type)) return;
 
     const draftEvent = voiceDraftControls?.accept(msg);
     if (draftEvent?.handled && !draftEvent.accepted) return;
@@ -2880,11 +2882,12 @@
     state.committed = true; state.finalizeTranscriptOnly = finalizeTranscriptOnly;
     stopLiveCapture(state);
     setVoiceState(false);
-    setAgentState("thinking");
+    const captureOnly = AgeeCaptureOnlyPolicy.isCaptureOnly(state);
+    setAgentState(captureOnly ? "idle" : "thinking");
     armVoiceWatchdog(state);
     setTranscript(state.transcript || "");
-    ensureVoiceCueCard(state, state.transcript || "Voice", "sending…");
-    updateCue(state.cueId, "thinking…", "running");
+    ensureVoiceCueCard(state, state.transcript || "Voice", captureOnly ? "finishing transcript…" : "sending…");
+    updateCue(state.cueId, captureOnly ? "finishing transcript…" : "thinking…", "running");
     if (state.voiceSessionId) {
       safeRuntimeSendMessage({
         cmd: "voiceSessionControl",

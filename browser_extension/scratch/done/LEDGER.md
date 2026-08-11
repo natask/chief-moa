@@ -1,3 +1,4 @@
+- Kept browser dictation raw and reply-free, added explicit plain-style polished copy generation, and persisted the chosen copy variant — agent: codex/gpt-5 — entire checkpoint browser-raw-polished-separation-20260811
 - Restored complete browser companion reinjection, double-Command assistant summon, visible voice Cancel/Pause and task Stop, and compact-size checks — agent: codex/gpt-5 — entire checkpoint browser-companion-controls-20260803
 - Added capability-gated browser voice drafts with mascot Send, adjacent Cancel and Pause/Resume, exact revision authority, discard-on-cancel, and legacy gateway fallback — agent: codex/gpt-5 — entire checkpoint browser-voice-controls-20260802
 - Made the browser mascot legible without growing it, exposed active companion identity and exact assistant copy in the side panel, cancelled interrupted voice holds, and returned blank ribbon padding to the page — agent: codex/gpt-5 — entire checkpoint browser-controls-20260802

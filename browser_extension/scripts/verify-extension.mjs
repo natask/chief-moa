@@ -1859,7 +1859,8 @@ if (
   !/function defaultVariant\(/.test(ribbonWindowSource) ||
   !/function openCopyMenu\(/.test(ribbonRuntimeSource) ||
   !/not generated for this turn/.test(ribbonWindowSource) ||
-  !/if \(key\) ribbon\.chosenVariant = key;/.test(ribbonRuntimeSource) ||
+  !/ribbon\.chosenVariant = key;/.test(ribbonRuntimeSource) ||
+  !/generateWritingVariant\(literal\)/.test(ribbonRuntimeSource) ||
   !/user_variants: Object\.hasOwn\(patch, "user_variants"\)/.test(backgroundSource)
 ) {
   throw new Error("the copy rail must offer literal/corrected/polished with an available-variant default");

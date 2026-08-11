@@ -8,6 +8,7 @@ import { createAudioNoteOutbox } from "./audio-note-outbox.js";
 import { parseSettingsIntent, parseProfileQueryIntent, looksLikeGatewayProfileControlIntent } from "./settings-intent.js";
 import { parseBrowserTaskIntent, looksLikePageContextQuestion } from "./browser-task-intent.js";
 import { isStopCommand } from "./stop-intent.js";
+import { STYLE_ID, STYLE_LABEL, STYLE_VERSION, buildWritingStylePrompt } from "./writing-style-contract.js";
 import { isLivekitVoiceEnabled, startLivekitVoiceSession } from "./livekit-voice.js";
 import { parseVoiceSamplerAction } from "./voice-sampler.js";
 import { createVoiceSamplerRuntime } from "./voice-sampler-runtime.js";
@@ -2242,8 +2243,7 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
   // Share one stable session+conversation id across turns so the gateway
   // accumulates them (and the overlay can reload them). The cueId becomes the
   // branch_id, preserving per-cue distinction without fragmenting the session.
-  const sessionId = await getStableSessionId();
-  const deviceId = await getStableDeviceId();
+  const sessionId = await getStableSessionId(), deviceId = await getStableDeviceId();
   // Explicit client thread control ("/new", "/incognito") always wins over the
   // model's own context choice. The gateway resolves context_action and returns
   // a context block; an incognito turn is answered but never persisted.
@@ -2304,6 +2304,27 @@ async function runViaGateway(tabId, instruction, cfg, signal, cueId, contextCont
     lastResult: `[${data.classification || "chat"}] ${summary.slice(0, 400)}`,
   });
   return data;
+}
+
+async function generateWritingVariant(source) {
+  const cfg = await getConfig();
+  if (!cfg.gatewayUrl) throw new Error("No gateway URL set.");
+  const sessionId = await getStableSessionId();
+  const deviceId = await getStableDeviceId();
+  const data = await callGateway(cfg, "/v1/voice/turns", {
+    body: {
+      source: "agee-extension-writing-style",
+      device_id: deviceId,
+      session_id: sessionId,
+      conversation_id: sessionId,
+      branch_id: `writing-${Date.now().toString(36)}`,
+      context_action: "incognito",
+      transcript: buildWritingStylePrompt(source),
+      client: { platform: "browser", source: "agee-extension", device_id: deviceId, input: "text" },
+    },
+  });
+  const text = String(data.display || data.text || data.speak || "").trim(); if (!text) throw new Error("The writing style returned no text.");
+  return { text, skill_id: STYLE_ID, skill_name: STYLE_LABEL, skill_version: STYLE_VERSION };
 }
 
 // Execute validated media, sampler, or page-tweak proposals locally and report
@@ -4627,6 +4648,12 @@ async function captureAmbientFrame() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.cmd === "generateWritingVariant" && sender.tab) {
+    generateWritingVariant(msg.source)
+      .then((variant) => sendResponse({ ok: true, variant }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
   if (msg.cmd === "voiceDraftCapability") {
     voiceDraftCapabilityStatus().then(sendResponse).catch(() => sendResponse({ supported: false }));
     return true;

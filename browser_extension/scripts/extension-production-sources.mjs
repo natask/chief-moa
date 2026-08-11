@@ -31,6 +31,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/browser-turn-protocol.js",
   "extension/browser-voice-activity.js",
   "extension/browser-visual-capture-runtime.js",
+  "extension/capture-only-policy.js",
   "extension/companion-level.js",
   "extension/companion-rim.js",
   "extension/compose-heartbeat.js",
@@ -77,6 +78,7 @@ const RUNTIME_SOURCE_FILES = Object.freeze([
   "extension/voice-preroll-buffer.js",
   "extension/voice-sampler-runtime.js",
   "extension/voice-sampler.js",
+  "extension/writing-style-contract.js",
   "extension/youtube-media.js",
 ]);
 

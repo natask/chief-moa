@@ -52,6 +52,7 @@
         "steering-ui.js",
         "launcher-removal-runtime.js",
         "browser-command-transcript-runtime.js",
+        "capture-only-policy.js",
         "document-context.js",
         "voice-first-tap-chain.js",
         "ribbon-geometry-report.js",

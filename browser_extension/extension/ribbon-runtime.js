@@ -119,6 +119,9 @@
       // only where you press it moved, so this is a location change and not a
       // behaviour change.
       onVoiceRepliesChange = () => {},
+      preferredCopyVariant = "",
+      onPreferredCopyVariantChange = () => {},
+      generateWritingVariant = async () => null,
       // Handed the whole bounded ring whenever it grows, so the host can
       // persist it: the band is intermittent and the page it appeared on is
       // usually gone by the time anyone goes looking.
@@ -144,6 +147,7 @@
     let userCaptureOpen = false;
     let geometryBreaches = [];
     let geometryAuditPending = false;
+    let currentPreferredCopyVariant = ["skill", "edited", "literal"].includes(preferredCopyVariant) ? preferredCopyVariant : "";
 
     function setPageObservation(rawPhase, rawId) {
       const phase = String(rawPhase || "");
@@ -190,7 +194,7 @@
         expanded: false,
         variants: TextModel.emptyVariants(),
         skillName: "",
-        chosenVariant: "",
+        chosenVariant: currentPreferredCopyVariant,
         lingerTimer: null,
         lingerAfterReveal: 0,
         copyTimer: null,
@@ -400,7 +404,7 @@
       ribbon.lingerAfterReveal = 0;
       ribbon.variants = TextModel.emptyVariants();
       ribbon.skillName = "";
-      ribbon.chosenVariant = "";
+      ribbon.chosenVariant = currentPreferredCopyVariant;
       ribbon.buffer = "";
       ribbon.target = "";
       ribbon.targetGraphemes = [];
@@ -743,9 +747,10 @@
         return true;
       }
       const variant = key || TextModel.defaultVariant(ribbon);
-      // Choosing a variant is sticky for this turn only. A durable preference
-      // is profile state and the agent owns that, not the overlay.
-      if (key) ribbon.chosenVariant = key;
+      if (key) {
+        ribbon.chosenVariant = key;
+        try { onPreferredCopyVariantChange(key); } catch {}
+      }
       const text = TextModel.variantText(ribbon, variant);
       if (!text) return false;
       const copied = await copyText(text);
@@ -1147,12 +1152,30 @@
         why.textContent = row.note;
         button.appendChild(head);
         button.appendChild(why);
-        if (!row.available) button.disabled = true;
+        const canGenerate = ribbon === you && row.key === "skill" && !row.available;
+        if (!row.available && !canGenerate) button.disabled = true;
+        if (canGenerate) {
+          button.classList.add("agee-copy-generate");
+          why.textContent = "Generate with plain style";
+        }
         if (row.isDefault) button.classList.add("agee-copy-default");
         button.addEventListener("pointerdown", (event) => event.stopPropagation());
         button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
+          if (canGenerate) {
+            button.disabled = true;
+            why.textContent = "Generating...";
+            const literal = TextModel.variantText(ribbon, "literal");
+            Promise.resolve(generateWritingVariant(literal)).then((result) => {
+              const text = String(result?.text || "").trim();
+              if (!text) return;
+              ribbon.variants.skill = text;
+              ribbon.skillName = String(result?.skill_name || "plain style");
+              return copy(ribbon, "skill");
+            }).catch(() => {}).finally(closeCopyMenu);
+            return;
+          }
           copy(ribbon, row.key).catch(() => {});
           closeCopyMenu();
         });
@@ -1261,6 +1284,11 @@
       // Sync the rail to the stored preference. Never notifies back: the host
       // is the one telling us, so echoing it would rewrite storage on load.
       setVoiceReplies: (on) => setVoiceReplies(on),
+      setPreferredCopyVariant(variant) {
+        if (variant !== "" && !["skill", "edited", "literal"].includes(variant)) return;
+        currentPreferredCopyVariant = variant;
+        for (const ribbon of both) ribbon.chosenVariant = variant;
+      },
 
       // Text mode: the you-line becomes the buffer you type into.
       beginCompose,
