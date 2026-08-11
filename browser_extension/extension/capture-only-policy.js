@@ -29,6 +29,42 @@
     "connection_closed",
   ]);
 
+  const COMMON_EVENT_FIELDS = ["type", "session_id", "branch_id", "turn_id"];
+  const CAPTURE_EVENT_FIELDS = Object.freeze({
+    session_ready: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "transcript_finalize", "capabilities", "voice_draft",
+    ]),
+    transcript_partial: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "text", "speaker", "transcript_sequence",
+    ]),
+    transcript_final: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "text", "speaker", "transcript_sequence",
+    ]),
+    transcript_prefix_revision: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "message_id", "owner_id", "speaker", "transcript_sequence",
+      "revision", "finalized_text", "unsealed_text", "text", "sealed_through_audio_byte",
+      "audio_format", "source", "updated_at",
+    ]),
+    transcript_finalized: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "status", "transcript", "transcription_only", "stored",
+      "reason", "reply_language", "input_languages", "transcript_quality",
+    ]),
+    turn_progress: Object.freeze([...COMMON_EVENT_FIELDS, "stage"]),
+    turn_done: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "status", "transcription_only", "stored", "reason",
+      "reply_language", "input_languages", "transcript_quality", "message", "error",
+    ]),
+    voice_draft_state: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "capabilities", "voice_draft",
+    ]),
+    error: Object.freeze([
+      ...COMMON_EVENT_FIELDS, "status", "message", "error", "code", "reason",
+      "recoverable", "recovery",
+    ]),
+    revoked: Object.freeze([...COMMON_EVENT_FIELDS, "reason"]),
+    connection_closed: Object.freeze([...COMMON_EVENT_FIELDS, "reason"]),
+  });
+
   const TERMINAL_EVENT_TYPES = new Set([
     "transcript_finalized",
     "turn_done",
@@ -59,21 +95,25 @@
     const type = String(event?.type || "");
     if (!CAPTURE_EVENT_TYPES.has(type) || !acceptsAssistantEvent(state, type)) return null;
     if (!event || typeof event !== "object") return null;
-    const filtered = { ...event };
-    for (const key of [
-      "action", "actions", "assistant_audio", "assistant_media", "assistant_text",
-      "display", "media", "response", "speak", "tool_call", "tool_request",
-    ]) delete filtered[key];
-    if (TERMINAL_EVENT_TYPES.has(type)) delete filtered.text;
+    const filtered = {};
+    for (const key of CAPTURE_EVENT_FIELDS[type]) {
+      if (Object.hasOwn(event, key)) filtered[key] = event[key];
+    }
     return filtered;
+  }
+
+  function allowsActionExtraction(state) {
+    return !isCaptureOnly(state);
   }
 
   global.AgeeCaptureOnlyPolicy = Object.freeze({
     ASSISTANT_EVENT_TYPES,
+    CAPTURE_EVENT_FIELDS,
     CAPTURE_EVENT_TYPES,
     TERMINAL_EVENT_TYPES,
     acceptsAssistantEvent,
     acceptsWorkerPayload,
+    allowsActionExtraction,
     filterGatewayEvent,
     isCaptureOnly,
   });

@@ -248,7 +248,14 @@ Moa Gateway
   conversation history, page context, tools, or actions, and it writes no turn,
   conversation, memory, profile, broker, or agent-run state. The gateway binds
   its no-store response to the source digest and request id. Literal copy stays
-  a separate unchanged variant owned by the browser.
+  a separate unchanged variant owned by the browser. Rewrite idempotency is an
+  explicit five-minute post-completion contract: matching concurrent requests
+  share one in-flight model call, and matching retries replay the completed
+  result until the horizon expires. A request id cannot change source or turn
+  binding while it is in flight or retained. In-flight work has no time-based
+  eviction. The gateway bounds memory by reserving capacity before model work
+  starts and rejects new request ids with a retryable 503 when all reservations
+  are occupied; it never evicts an unexpired binding to admit duplicate work.
 
   An authenticated stored-audio-first intake may create the same canonical
   block type through `POST /v1/capture-blocks`. It references an already-stored

@@ -36,6 +36,7 @@ import {
 import {
   browserLocalToolManifest as browserMediaLocalToolManifest,
   createBrowserMediaRuntime,
+  executeFirstMediaActionFromTurn,
   mediaActionsFromTurn,
 } from "./browser-media-runtime.js";
 import { createMediaConfirmationRuntime } from "./media-confirmation-runtime.js";
@@ -3303,16 +3304,21 @@ async function forwardVoiceSessionEvent(session, event) {
       status: status === "completed" ? "done" : status,
     }).catch(() => {});
   }
-  const voiceMediaAction = mediaActionsFromTurn(parsed)[0];
-  if (voiceMediaAction) {
-    const key = JSON.stringify(voiceMediaAction).slice(0, 2000);
-    const executed = session.executedMediaActionKeys ||= new Set();
-    if (!executed.has(key)) {
+  const mediaExecution = await executeFirstMediaActionFromTurn(parsed, {
+    allowed: AgeeCaptureOnlyPolicy.allowsActionExtraction(session),
+    shouldExecute(action) {
+      const key = JSON.stringify(action).slice(0, 2000);
+      const executed = session.executedMediaActionKeys ||= new Set();
+      if (executed.has(key)) return false;
       executed.add(key);
-      const receipt = await browserMedia.execute(voiceMediaAction, { tabId: session.tabId, sourceText: session.mediaIntentText });
-      deliverVoiceSessionEvent(session, { event: { type: "media_action_receipt", ...receipt } });
-    }
-  }
+      return true;
+    },
+    execute: (action) => browserMedia.execute(action, {
+      tabId: session.tabId,
+      sourceText: session.mediaIntentText,
+    }),
+  });
+  if (mediaExecution) deliverVoiceSessionEvent(session, { event: { type: "media_action_receipt", ...mediaExecution.receipt } });
   deliverVoiceSessionEvent(session, {
     event: parsed || { type: "raw", data: String(data || "") },
   });

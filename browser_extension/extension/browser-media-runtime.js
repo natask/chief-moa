@@ -51,6 +51,15 @@ function mediaActionsFromTurn(data) {
   return values.map(mediaActionEnvelope).filter(Boolean);
 }
 
+async function executeFirstMediaActionFromTurn(data, options = {}) {
+  if (options.allowed === false) return null;
+  const extract = typeof options.extract === "function" ? options.extract : mediaActionsFromTurn;
+  const execute = typeof options.execute === "function" ? options.execute : null;
+  const action = extract(data)[0];
+  if (!action || !execute || (typeof options.shouldExecute === "function" && !options.shouldExecute(action))) return null;
+  return { action, receipt: await execute(action) };
+}
+
 function explicitMediaOpenIntent(value) {
   const text = boundedText(value, 500).toLowerCase();
   if (!text) return false;
@@ -611,4 +620,4 @@ function selectYouTubeSearchResult(results, target) {
     : { status: candidates.length ? "ambiguous" : "not_found", candidates };
 }
 
-export { browserLocalToolManifest, createBrowserMediaRuntime, explicitMediaOpenIntent, explicitYouTubeSearchIntent, mediaActionEnvelope, mediaActionsFromTurn, selectYouTubeSearchResult };
+export { browserLocalToolManifest, createBrowserMediaRuntime, executeFirstMediaActionFromTurn, explicitMediaOpenIntent, explicitYouTubeSearchIntent, mediaActionEnvelope, mediaActionsFromTurn, selectYouTubeSearchResult };

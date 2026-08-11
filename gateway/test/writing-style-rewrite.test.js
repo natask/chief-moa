@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   CHECK_SEMANTICS,
+  IDEMPOTENCY_HORIZON_MS,
   RULES,
   STYLE_DIGEST,
   STYLE_ID,
@@ -12,6 +13,16 @@ const {
   createWritingStyleRewriteService,
   sha256,
 } = require("../lib/writing-style-rewrite");
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
 
 function request(source = "We made a decision to use it.", id = "rewrite-1", turnId = "turn-1") {
   return {
@@ -69,6 +80,116 @@ test("bound retries are idempotent and request ids cannot switch sources", async
   assert.equal(first.text, replay.text);
   assert.equal(replay.replayed, true);
   await assert.rejects(() => service.rewrite(request("two", "same-request")), { code: "request_binding_collision" });
+});
+
+test("a completed request id cannot switch source turn bindings", async () => {
+  let calls = 0;
+  const service = createWritingStyleRewriteService({ rewrite: async () => { calls += 1; return "rewrite"; } });
+  await service.rewrite(request("one", "completed-turn-collision", "turn-1"));
+  await assert.rejects(service.rewrite(request("one", "completed-turn-collision", "turn-2")), {
+    code: "request_binding_collision",
+    statusCode: 409,
+  });
+  assert.equal(calls, 1);
+});
+
+test("concurrent matching rewrites share one in-flight promise and model call", async () => {
+  const model = deferred();
+  let calls = 0;
+  const service = createWritingStyleRewriteService({
+    rewrite: () => {
+      calls += 1;
+      return model.promise;
+    },
+  });
+  const first = service.rewrite(request("one", "concurrent"));
+  const second = service.rewrite(request("one", "concurrent"));
+  assert.strictEqual(first, second);
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  model.resolve("shared rewrite");
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.strictEqual(firstResult, secondResult);
+  assert.equal(firstResult.text, "shared rewrite");
+});
+
+test("a concurrent request id collision fails while the original rewrite continues", async () => {
+  const model = deferred();
+  let calls = 0;
+  const service = createWritingStyleRewriteService({ rewrite: () => { calls += 1; return model.promise; } });
+  const original = service.rewrite(request("one", "active-collision"));
+  await assert.rejects(service.rewrite(request("two", "active-collision")), { code: "request_binding_collision", statusCode: 409 });
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  model.resolve("original rewrite");
+  assert.equal((await original).text, "original rewrite");
+});
+
+test("an in-flight turn binding survives clock advance beyond the completed replay horizon", async () => {
+  const model = deferred();
+  let calls = 0;
+  let currentTime = 1_000;
+  const service = createWritingStyleRewriteService({
+    now: () => currentTime,
+    rewrite: () => { calls += 1; return model.promise; },
+  });
+  const original = service.rewrite(request("one", "long-running", "turn-1"));
+  await Promise.resolve();
+  assert.equal(calls, 1);
+
+  currentTime += IDEMPOTENCY_HORIZON_MS + 1;
+  const shared = service.rewrite(request("one", "long-running", "turn-1"));
+  assert.strictEqual(shared, original);
+  await assert.rejects(service.rewrite(request("one", "long-running", "turn-2")), {
+    code: "request_binding_collision",
+    statusCode: 409,
+  });
+  assert.equal(calls, 1);
+
+  model.resolve("long-running rewrite");
+  const [originalResult, sharedResult] = await Promise.all([original, shared]);
+  assert.strictEqual(originalResult, sharedResult);
+});
+
+test("in-flight reservations are bounded without evicting active work", async () => {
+  const model = deferred();
+  let calls = 0;
+  const service = createWritingStyleRewriteService({
+    maxIdempotencyReservations: 1,
+    rewrite: () => { calls += 1; return model.promise; },
+  });
+  const active = service.rewrite(request("one", "active"));
+  await assert.rejects(service.rewrite(request("two", "other")), {
+    code: "rewrite_idempotency_capacity",
+    statusCode: 503,
+  });
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  model.resolve("active rewrite");
+  assert.equal((await active).text, "active rewrite");
+});
+
+test("completed rewrites replay for the fixed horizon and expire without early capacity eviction", async () => {
+  let currentTime = 1_000;
+  let calls = 0;
+  const service = createWritingStyleRewriteService({
+    maxIdempotencyReservations: 1,
+    now: () => currentTime,
+    rewrite: async () => `rewrite ${++calls}`,
+  });
+  assert.equal((await service.rewrite(request("one", "held"))).text, "rewrite 1");
+  currentTime += IDEMPOTENCY_HORIZON_MS - 1;
+  const replay = await service.rewrite(request("one", "held"));
+  assert.equal(replay.text, "rewrite 1");
+  assert.equal(replay.replayed, true);
+  await assert.rejects(service.rewrite(request("two", "blocked")), {
+    code: "rewrite_idempotency_capacity",
+    statusCode: 503,
+  });
+  assert.equal(calls, 1, "capacity pressure must not evict an unexpired idempotency binding");
+  currentTime += 1;
+  assert.equal((await service.rewrite(request("one", "held"))).text, "rewrite 2");
+  assert.equal(calls, 2);
 });
 
 test("invalid source, source digest, and fixed contract fail closed", async () => {

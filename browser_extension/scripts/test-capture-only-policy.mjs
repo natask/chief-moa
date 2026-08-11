@@ -25,7 +25,12 @@ test("Ask turns keep assistant text and audio", () => {
 test("capture-only terminal events pass without embedded effects", () => {
   const event = policy.filterGatewayEvent({ transcriptionOnly: true }, {
     type: "turn_done", status: "completed", text: "assistant text", speak: "leak",
-    actions: [{ type: "media_action" }], response: { actions: [{ type: "page_tweak" }] },
+    action: { type: "media.open" }, actions: [{ type: "media.open" }],
+    proposals: [{ type: "media.open" }], action_proposals: [{ type: "media.open" }],
+    result: {
+      action: { type: "media.open" }, actions: [{ type: "media.open" }],
+      proposals: [{ type: "media.open" }], action_proposals: [{ type: "media.open" }],
+    },
   });
   assert.deepEqual(event, { type: "turn_done", status: "completed" });
   assert.equal(policy.filterGatewayEvent({ transcriptFinalizing: true }, { type: "page_tweak" }), null);
@@ -33,4 +38,21 @@ test("capture-only terminal events pass without embedded effects", () => {
     policy.filterGatewayEvent({ transcriptFinalizing: true }, { type: "transcript_final", text: "literal" }),
     { type: "transcript_final", text: "literal" },
   );
+});
+
+test("every capture event uses its own positive field allowlist", () => {
+  for (const [type, fields] of Object.entries(policy.CAPTURE_EVENT_FIELDS)) {
+    const event = Object.fromEntries(fields.map((field) => [field, `${type}:${field}`]));
+    Object.assign(event, {
+      action: { type: "media.open" }, actions: [{ type: "media.open" }],
+      proposals: [{ type: "media.open" }], action_proposals: [{ type: "media.open" }],
+      media: { type: "media.open" },
+      result: {
+        action: { type: "media.open" }, actions: [{ type: "media.open" }],
+        proposals: [{ type: "media.open" }], action_proposals: [{ type: "media.open" }],
+      },
+    });
+    event.type = type;
+    assert.deepEqual(Object.keys(policy.filterGatewayEvent({ transcriptionOnly: true }, event)), fields, type);
+  }
 });

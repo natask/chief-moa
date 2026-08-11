@@ -1,3 +1,5 @@
+- Added deterministic completed and long-running in-flight source-turn collision coverage for writing-style rewrite idempotency — agent: Codex/GPT-5 — uncommitted shared-master checkpoint
+- Made concurrent writing-style retries share one model call and protected a documented five-minute idempotency horizon with bounded reservations — agent: Codex/GPT-5 — uncommitted checkpoint
 - Added a source-bound no-memory, no-profile, no-history, no-tools, no-actions, no-persistence writing-style rewrite route — agent: codex/gpt-5 — this commit
 - Made every configured Android app-scoped OTA route a compatibility alias to the canonical stable store, ignoring retired per-app directory values without migrating or deleting them — agent: Codex/GPT-5 — this commit
 - Added gateway-owned durable reminders with restart-safe due state, authenticated create/query/cancel APIs, cascaded voice tools, and explicit no-delivery/external-app boundaries — agent: Codex/GPT-5 — this commit

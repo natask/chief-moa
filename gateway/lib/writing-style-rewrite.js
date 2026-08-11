@@ -6,7 +6,8 @@ const STYLE_ID = "plain-calm-verb-first";
 const STYLE_VERSION = "1.0.0";
 const STYLE_LABEL = "plain style";
 const MAX_SOURCE_BYTES = 64 * 1024;
-const MAX_CACHE_ENTRIES = 128;
+const IDEMPOTENCY_HORIZON_MS = 5 * 60 * 1000;
+const MAX_IDEMPOTENCY_RESERVATIONS = 128;
 
 const RULES = Object.freeze([
   "Put the verb early.",
@@ -119,41 +120,104 @@ function rewriteMessages(request) {
 
 function createWritingStyleRewriteService(options = {}) {
   if (typeof options.rewrite !== "function") throw new TypeError("rewrite is required");
-  const cache = new Map();
-  async function rewrite(input) {
-    const request = normalizeRequest(input);
-    const cached = cache.get(request.binding.request_id);
-    if (cached) {
-      if (cached.binding.source_sha256 !== request.binding.source_sha256
-          || cached.binding.source_turn_id !== request.binding.source_turn_id) {
-        throw contractError("request_binding_collision", "request id is already bound to another source", 409);
-      }
-      return { ...cached, replayed: true };
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  const maxReservations = options.maxIdempotencyReservations === undefined
+    ? MAX_IDEMPOTENCY_RESERVATIONS
+    : Number(options.maxIdempotencyReservations);
+  if (!Number.isSafeInteger(maxReservations) || maxReservations < 1) {
+    throw new TypeError("maxIdempotencyReservations must be a positive safe integer");
+  }
+  const completed = new Map();
+  const inFlight = new Map();
+
+  function sameBinding(left, right) {
+    return left.source_sha256 === right.source_sha256
+      && left.source_turn_id === right.source_turn_id;
+  }
+
+  function assertSameBinding(binding, requestBinding) {
+    if (!sameBinding(binding, requestBinding)) {
+      throw contractError("request_binding_collision", "request id is already bound to another source", 409);
     }
-    const text = String(await options.rewrite({
-      messages: rewriteMessages(request),
-      source: request.source,
-      binding: request.binding,
-      model_options: Object.freeze({ includeProfileInstruction: false, allowTools: false, persist: false }),
-    }) || "").trim();
-    if (!text) throw contractError("empty_rewrite", "writing style returned no text", 502);
-    const result = Object.freeze({
-      text,
-      binding: request.binding,
-      style: Object.freeze({ id: STYLE_ID, label: STYLE_LABEL, version: STYLE_VERSION, digest: STYLE_DIGEST }),
-      actions: Object.freeze([]),
-      persisted: false,
-      replayed: false,
-    });
-    cache.set(request.binding.request_id, result);
-    if (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
-    return result;
+  }
+
+  function deleteExpired(currentTime) {
+    for (const [requestId, entry] of completed) {
+      if (currentTime - entry.completedAt >= IDEMPOTENCY_HORIZON_MS) completed.delete(requestId);
+    }
+  }
+
+  function rewrite(input) {
+    let request;
+    try {
+      request = normalizeRequest(input);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const requestId = request.binding.request_id;
+    deleteExpired(now());
+    const cached = completed.get(requestId);
+    if (cached) {
+      try {
+        assertSameBinding(cached.result.binding, request.binding);
+        return Promise.resolve({ ...cached.result, replayed: true });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    const active = inFlight.get(requestId);
+    if (active) {
+      try {
+        assertSameBinding(active.binding, request.binding);
+        return active.promise;
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    if (completed.size + inFlight.size >= maxReservations) {
+      return Promise.reject(contractError(
+        "rewrite_idempotency_capacity",
+        "writing-style rewrite idempotency capacity is temporarily full",
+        503,
+      ));
+    }
+    const promise = Promise.resolve()
+      .then(() => options.rewrite({
+        messages: rewriteMessages(request),
+        source: request.source,
+        binding: request.binding,
+        model_options: Object.freeze({ includeProfileInstruction: false, allowTools: false, persist: false }),
+      }))
+      .then((value) => {
+        const text = String(value || "").trim();
+        if (!text) throw contractError("empty_rewrite", "writing style returned no text", 502);
+        return Object.freeze({
+          text,
+          binding: request.binding,
+          style: Object.freeze({ id: STYLE_ID, label: STYLE_LABEL, version: STYLE_VERSION, digest: STYLE_DIGEST }),
+          actions: Object.freeze([]),
+          persisted: false,
+          replayed: false,
+        });
+      })
+      .then((result) => {
+        inFlight.delete(requestId);
+        completed.set(requestId, { completedAt: now(), result });
+        return result;
+      }, (error) => {
+        inFlight.delete(requestId);
+        throw error;
+      });
+    inFlight.set(requestId, { binding: request.binding, promise });
+    return promise;
   }
   return Object.freeze({ rewrite });
 }
 
 module.exports = {
   CHECK_SEMANTICS,
+  IDEMPOTENCY_HORIZON_MS,
+  MAX_IDEMPOTENCY_RESERVATIONS,
   RULES,
   STYLE_DIGEST,
   STYLE_ID,
