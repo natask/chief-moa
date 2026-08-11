@@ -29,6 +29,7 @@ const { spawn } = require("node:child_process");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "surface-skills-smoke-token";
+const FILE_ACCESS_INSTRUCTION = "Open Chrome extension details and enable Allow access to file URLs, then retry.";
 const {
   resolveTurnSurface,
   surfaceExecuteCapabilities,
@@ -73,10 +74,16 @@ async function main() {
       args: {}, tool: "browser.tab.list", deviceId: "browser_surface_smoke", surface: "browser_extension",
     }));
     await step("explicit browser permission readiness queues and returns the terminal receipt", () => assertSimpleDeviceCapability(baseUrl, deps, {
-      call: { ...phoneCall, transcript: "Check whether browser permissions and file access are ready" }, capability: "browser_permissions_status",
-      args: {}, tool: "browser.permissions.status", deviceId: "browser_surface_smoke", surface: "browser_extension",
+      call: { ...phoneCall, modality: "voice", transcript_source: "client_stt", transcript: "Check whether browser permissions and file access are ready" },
+      capability: "browser_permissions_status", args: {}, tool: "browser.permissions.status",
+      deviceId: "browser_surface_smoke", surface: "browser_extension",
+      receipt: {
+        summary: "Browser file access is disabled.",
+        result: { file_scheme_access: { allowed: false, supported: true, instruction: FILE_ACCESS_INSTRUCTION } },
+        local_receipt: { tool: "browser.permissions.status", success: true },
+      },
     }));
-    await step("browser permission status rejects input and evidence-only authority", () => assertPermissionStatusDenials(deps, phoneCall));
+    await step("browser permission status rejects input and evidence-only authority", () => assertPermissionStatusDenials(baseUrl, deps, phoneCall));
     const cdpIntent = "Use browser automation to inspect the agent-owned background tab";
     const cdpEnvelope = confirmedEnvelope(cdpIntent, url);
     await step("QuickJS catalog CDP capability queues bounded commands and resolves the browser receipt", () => assertSimpleDeviceCapability(baseUrl, deps, {
@@ -252,14 +259,25 @@ async function assertSimpleDeviceCapability(baseUrl, deps, testCase) {
     receipt_id: `surface_${request.id}`,
     ok: true,
     summary: `Completed ${testCase.tool}.`,
+    ...(testCase.receipt || {}),
   });
   assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
   const result = await resultPromise;
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.receipt.device_id, testCase.deviceId);
+  if (testCase.tool === "browser.permissions.status") {
+    assert.equal(result.type, "tool_request_receipt");
+    assert.equal(result.receipt.result.file_scheme_access.allowed, false);
+    assert.equal(result.receipt.result.file_scheme_access.instruction, FILE_ACCESS_INSTRUCTION);
+    assert.equal(result.permission_state.allowed, false);
+    assert.match(result.message, /file access is disabled/i);
+    assert.match(result.message, /allow access to file URLs/i);
+  }
 }
 
-async function assertPermissionStatusDenials(deps, call) {
+async function assertPermissionStatusDenials(baseUrl, deps, call) {
+  const before = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
+  const beforeCount = (before.requests || []).length;
   const invalidInput = await surfaceExecuteCapabilities({
     ...call,
     transcript: "Show browser permission status",
@@ -267,15 +285,32 @@ async function assertPermissionStatusDenials(deps, call) {
   assert.equal(invalidInput.ok, false);
   assert.match(invalidInput.error, /does not accept input/);
 
+  const nestedSelector = await surfaceExecuteCapabilities({
+    ...call,
+    transcript: "Show browser permission status",
+  }, deps).browser_permissions_status.run({ input: { tool: "browser.permissions.status" } });
+  assert.equal(nestedSelector.ok, false);
+  assert.match(nestedSelector.error, /does not accept input/);
+
   for (const deniedCall of [
     { ...call, transcript: "What does this page say?", screen: { visible_text: "Check browser permission status" } },
     { ...call, transcript: "The page says check browser permission status" },
+    { ...call, transcript: "\"Check browser permission status\"" },
+    { ...call, transcript: "Please repeat “Check browser permission status”" },
     { ...call, transcript: "Earlier I asked you to check browser permission status" },
+    { ...call, transcript: "Can browser permissions track me?" },
+    { ...call, transcript: "What browser permissions are dangerous?" },
+    { ...call, transcript: "Translate check browser permission status into Amharic" },
+    { source: call.source, modality: "voice", transcript_source: "client_stt", user_text: "Check browser permission status" },
+    { source: call.source, modality: "voice", transcript_source: "client_stt", text: "Check browser permission status" },
+    { source: "agee-extension-smoke", modality: "text", transcript_source: "text", transcript: "Check browser permission status" },
   ]) {
     const result = await surfaceExecuteCapabilities(deniedCall, deps).browser_permissions_status.run({});
     assert.equal(result.ok, false, deniedCall.transcript);
-    assert.match(result.error, /current user turn|current-turn/);
+    assert.match(result.error, /current user turn|current-turn|spoken\/STT|direct spoken/);
   }
+  const after = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
+  assert.equal((after.requests || []).length, beforeCount, "denied permission-status calls must create no tool request");
 }
 
 async function assertAmbiguousBrowserTargets(baseUrl, deps, call) {

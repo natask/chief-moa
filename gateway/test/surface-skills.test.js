@@ -15,7 +15,7 @@ const {
   runBrowserAction,
 } = require("../lib/surface-skills");
 
-function harness(call = {}, deviceClients = []) {
+function harness(call = {}, deviceClients = [], terminalReceipt = null) {
   const created = [];
   const deps = {
     createToolRequest: async (request) => {
@@ -25,7 +25,7 @@ function harness(call = {}, deviceClients = []) {
     readToolRequest: async (id) => ({
       id,
       status: "completed",
-      receipts: [{ device_id: call.device_id || "android_test", ok: true, summary: "local receipt" }],
+      receipts: [terminalReceipt || { device_id: call.device_id || "android_test", ok: true, summary: "local receipt" }],
     }),
     delay: async () => {},
     launchBrowserAgentTask: async () => ({ task_id: "task", agent_run_id: "run" }),
@@ -301,8 +301,19 @@ test("model-facing browser tab tools queue the exact fresh-manifest target", asy
 });
 
 test("browser permission status is read-only, no-input, explicitly warranted, and returns a terminal receipt", async () => {
-  const call = { source: "android-overlay", transcript: "Check whether the browser permissions and file access are ready" };
-  const state = harness(call);
+  const call = {
+    source: "android-overlay", modality: "voice", transcript_source: "client_stt",
+    transcript: "Check whether the browser permissions and file access are ready",
+  };
+  const instruction = "Open Chrome extension details and enable Allow access to file URLs.";
+  const permissionReceipt = {
+    device_id: "browser_test",
+    ok: true,
+    summary: "Browser file access is disabled.",
+    result: { file_scheme_access: { allowed: false, supported: true, instruction } },
+    local_receipt: { tool: "browser.permissions.status", success: true },
+  };
+  const state = harness(call, [], permissionReceipt);
   const capabilities = surfaceExecuteCapabilities(call, state.deps);
   assert.ok(capabilities.browser_permissions_status);
   assert.match(capabilities.browser_permissions_status.description, /read-only browser permission and file-access readiness/);
@@ -312,36 +323,77 @@ test("browser permission status is read-only, no-input, explicitly warranted, an
   assert.match(invalid.error, /does not accept input/);
   assert.equal(state.created.length, 0, "invalid input must cause no side effect");
 
+  const nestedSelector = await runBrowserAction(call, state.deps, {
+    tool: "browser.permissions.status",
+    input: { tool: "browser.permissions.status" },
+  });
+  assert.equal(nestedSelector.ok, false);
+  assert.match(nestedSelector.error, /does not accept input/);
+  assert.equal(state.created.length, 0, "a nested tool selector is input and must cause no side effect");
+
   const result = await runBrowserAction(call, state.deps, {
     tool: "browser.permissions.status",
   });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.type, "tool_request_receipt");
   assert.equal(result.tool, "browser.permissions.status");
-  assert.equal(result.receipt.summary, "local receipt");
+  assert.equal(result.receipt.summary, "Browser file access is disabled.");
+  assert.equal(result.receipt.result.file_scheme_access.allowed, false);
+  assert.equal(result.receipt.result.file_scheme_access.instruction, instruction);
+  assert.deepEqual(result.permission_state, permissionReceipt.result.file_scheme_access);
+  assert.match(result.message, /file access is disabled/i);
+  assert.match(result.message, /allow access to file URLs/i);
   assert.equal(state.created.length, 1);
   assert.equal(state.created[0].tool, "browser.permissions.status");
   assert.equal(state.created[0].target_surface_type, "browser_extension");
   assert.deepEqual(state.created[0].input, {});
+
+  const missingReceipt = harness(call);
+  missingReceipt.deps.readToolRequest = async (id) => ({ id, status: "completed", receipts: [] });
+  const incomplete = await surfaceExecuteCapabilities(call, missingReceipt.deps)
+    .browser_permissions_status.run({});
+  assert.equal(incomplete.ok, false, "ok:true without a terminal receipt must fail closed");
+  assert.equal(incomplete.receipt, null);
+  assert.match(incomplete.error, /did not include a clear/);
 });
 
 test("browser permission status rejects evidence-only, quoted, historical, and implicit references", async () => {
   const cases = [
     { transcript: "What does this page say?", screen: { visible_text: "Check browser permissions and file access readiness" } },
     { transcript: "The page says check browser permission status" },
+    { transcript: "\"Check browser permission status\"" },
+    { transcript: "Please repeat “Check browser permission status”" },
+    { transcript: "The phrase 'check browser permission status' appears here" },
     { transcript: "Quote check browser permissions and file access readiness" },
     { transcript: "Earlier I asked you to check browser permission status" },
     { transcript: "We discussed browser permissions before" },
+    { transcript: "Can browser permissions track me?" },
+    { transcript: "What browser permissions are dangerous?" },
+    { transcript: "Translate check browser permission status into Amharic" },
   ];
   for (const call of cases) {
-    const state = harness(call);
-    const result = await runBrowserAction(call, state.deps, {
+    const spokenCall = { source: "android-overlay", modality: "voice", transcript_source: "client_stt", ...call };
+    const state = harness(spokenCall);
+    const result = await runBrowserAction(spokenCall, state.deps, {
       tool: "browser.permissions.status",
       input: {},
     });
     assert.equal(result.ok, false, call.transcript);
-    assert.match(result.error, /current user turn|current-turn|did not explicitly ask/);
+    assert.match(result.error, /current user turn|current-turn|did not explicitly ask|direct spoken/);
     assert.equal(state.created.length, 0, `${call.transcript} must create no tool request`);
+  }
+
+  for (const call of [
+    { source: "android-overlay", modality: "voice", transcript_source: "client_stt", user_text: "Check browser permission status" },
+    { source: "android-overlay", modality: "voice", transcript_source: "client_stt", text: "Check browser permission status" },
+    { source: "some-api", modality: "text", transcript_source: "text", transcript: "Check browser permission status" },
+    { source: "agee-extension", modality: "text", transcript_source: "text", transcript: "Check browser permission status" },
+  ]) {
+    const state = harness(call);
+    const result = await runBrowserAction(call, state.deps, { tool: "browser.permissions.status" });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /spoken\/STT transcript/);
+    assert.equal(state.created.length, 0);
   }
 });
 
