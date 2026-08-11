@@ -16,6 +16,19 @@ final class MoaStreamingVoiceSessionController {
     static final long DRAFT_READY_TIMEOUT_MS = 10000;
     static final long DRAFT_CONTROL_ACK_TIMEOUT_MS = 6000;
 
+    private static final long AUTO_COMMIT_MIN_RECORDING_MS = 650;
+    private static final long AUTO_COMMIT_SILENCE_MS = 700;
+    // NOT a product limit on how long the user may speak. Audio is streamed to
+    // the gateway frame-by-frame, so an utterance can run indefinitely. Once
+    // speech has been heard, the turn ends on the silence VAD above; this 30-min
+    // value is only a safety backstop that force-commits if the VAD gets stuck
+    // and never detects the end-of-speech silence. It should never be hit by a
+    // real turn.
+    private static final long AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS = 1_800_000;
+    // Separate, short give-up for a session where NO speech was ever detected
+    // (mic opened but the user never spoke): cancel so the orb returns to idle
+    // instead of listening forever. This bounds silence, not speech.
+    private static final long AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS = 12000;
     private static final long AUTO_COMMIT_CHECK_MS = 100;
     // How long a commit will wait for session_ready before failing the turn.
     // Without this bound a deferred commit could wait forever on a hung socket.
@@ -28,6 +41,7 @@ final class MoaStreamingVoiceSessionController {
     // authority window after the 3.5s connect bound instead of making those two
     // setup stages consume one shared deadline.
     static final long PENDING_COMMIT_TIMEOUT_MS = DRAFT_READY_TIMEOUT_MS + 4000;
+    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 450;
     // Covers the 3.5s socket-connect bound plus the 10s draft-authority window
     // with margin. Unlike the old rolling five-second queue, overflow is terminal:
     // a voice turn must never execute after silently losing its spoken prefix.
@@ -133,8 +147,9 @@ final class MoaStreamingVoiceSessionController {
     private final MoaAssistantAudioProgressTracker assistantAudioProgress = new MoaAssistantAudioProgressTracker();
     private final MoaAssistantOutputState assistantOutputState = new MoaAssistantOutputState();
     private final MoaVoicePlaybackDrainGate playbackDrainGate = new MoaVoicePlaybackDrainGate();
-    private final MoaVoiceEndpointer endpointer = new MoaVoiceEndpointer();
     private long capturedAudioBytes;
+    private long recordingStartedAtMs;
+    private long lastVoiceActivityAtMs;
     private MoaVoiceLifecycleTrace lifecycleTrace;
     private boolean lifecyclePlaybackCompleted;
     private boolean lifecyclePlaybackStopped;
@@ -318,7 +333,8 @@ final class MoaStreamingVoiceSessionController {
             clearPendingAudioLocked();
             pendingAudio.beginDeferredCapture();
             capturedAudioBytes = 0;
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
             sessionId = requestedSessionId.isEmpty() ? "mobile-" + UUID.randomUUID().toString() : requestedSessionId;
             turnId = requestedTurnId.isEmpty() ? "turn_" + UUID.randomUUID().toString() : requestedTurnId;
             assistantOutputState.begin(turnId);
@@ -460,7 +476,8 @@ final class MoaStreamingVoiceSessionController {
             committed = true;
             commitRequested = false;
             pendingCommitAfterSessionReady = !sessionReady;
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
             socket = gatewaySocket;
             currentTurnId = turnId;
             shouldFinishNow = sessionReady;
@@ -504,7 +521,8 @@ final class MoaStreamingVoiceSessionController {
             transcriptRevisionsEnabled = false;
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
         mainHandler.removeCallbacks(pendingCommitTimeout);
@@ -604,7 +622,8 @@ final class MoaStreamingVoiceSessionController {
             capturedAudioBytes = 0;
             sessionId = "";
             turnId = "";
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
         mainHandler.removeCallbacks(pendingCommitTimeout);
@@ -830,7 +849,8 @@ final class MoaStreamingVoiceSessionController {
             assistantAudioProgress.reset();
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
         Log.w(TAG, "pending commit timed out before session_ready");
@@ -887,7 +907,8 @@ final class MoaStreamingVoiceSessionController {
             pendingCommitAfterSessionReady = false;
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
             shouldStopPlayback = playbackDrainGate.shouldStopOnTurnDone(status);
         }
         mainHandler.removeCallbacks(autoCommitCheck);
@@ -950,7 +971,8 @@ final class MoaStreamingVoiceSessionController {
             transcriptRevisionsEnabled = false;
             clearPendingAudioLocked();
             capturedAudioBytes = 0;
-            endpointer.reset(0L);
+            recordingStartedAtMs = 0;
+            lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
         mainHandler.removeCallbacks(pendingCommitTimeout);
@@ -982,26 +1004,38 @@ final class MoaStreamingVoiceSessionController {
             if (!active || committed) {
                 return;
             }
-            endpointer.reset(SystemClock.elapsedRealtime());
+            long now = SystemClock.elapsedRealtime();
+            recordingStartedAtMs = now;
+            lastVoiceActivityAtMs = 0;
         }
         mainHandler.removeCallbacks(autoCommitCheck);
         mainHandler.postDelayed(autoCommitCheck, AUTO_COMMIT_CHECK_MS);
     }
 
     private void maybeAutoCommitTurn() {
-        MoaVoiceEndpointer.Decision decision;
+        boolean shouldCommit = false;
+        boolean shouldCancel = false;
         synchronized (lock) {
-            if (!active || committed || !autoCommitOnSilence) {
+            if (!active || committed || !autoCommitOnSilence || recordingStartedAtMs <= 0) {
                 return;
             }
-            decision = endpointer.evaluate(SystemClock.elapsedRealtime());
+            long now = SystemClock.elapsedRealtime();
+            long recordingAge = now - recordingStartedAtMs;
+            boolean heardSpeech = lastVoiceActivityAtMs > 0;
+            boolean silentAfterSpeech = heardSpeech
+                    && recordingAge >= AUTO_COMMIT_MIN_RECORDING_MS
+                    && now - lastVoiceActivityAtMs >= AUTO_COMMIT_SILENCE_MS;
+            boolean backstopReached = recordingAge >= AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS;
+            boolean noSpeechTimedOut = !heardSpeech && recordingAge >= AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS;
+            shouldCommit = silentAfterSpeech || (heardSpeech && backstopReached);
+            shouldCancel = noSpeechTimedOut;
         }
-        if (decision == MoaVoiceEndpointer.Decision.COMMIT) {
+        if (shouldCommit) {
             Log.i(TAG, "autoCommit turn");
             commitTurn();
             return;
         }
-        if (decision == MoaVoiceEndpointer.Decision.CANCEL_NO_SPEECH) {
+        if (shouldCancel) {
             Log.i(TAG, "autoCancel turn: no speech detected");
             cancel();
             return;
@@ -1013,18 +1047,18 @@ final class MoaStreamingVoiceSessionController {
         if (!autoCommitOnSilence || pcm == null || pcm.length < 2) {
             return;
         }
-        boolean firstVoiceActivity = false;
+        if (!hasVoiceActivity(pcm)) {
+            return;
+        }
         synchronized (lock) {
             if (active && !committed) {
-                boolean wasHeard = endpointer.heardSpeech();
-                endpointer.observe(pcm, SystemClock.elapsedRealtime());
-                if (!wasHeard && endpointer.heardSpeech() && !loggedVoiceActivity) {
+                lastVoiceActivityAtMs = SystemClock.elapsedRealtime();
+                if (!loggedVoiceActivity) {
                     loggedVoiceActivity = true;
-                    firstVoiceActivity = true;
+                    Log.i(TAG, "firstVoiceActivity");
                 }
             }
         }
-        if (firstVoiceActivity) Log.i(TAG, "firstVoiceActivity");
     }
 
     private MoaDeferredVoiceCaptureBuffer.AppendResult bufferAudioLocked(byte[] pcm) {
@@ -1036,6 +1070,19 @@ final class MoaStreamingVoiceSessionController {
 
     private void clearPendingAudioLocked() {
         pendingAudio.reset();
+    }
+
+    private static boolean hasVoiceActivity(byte[] pcm) {
+        long total = 0;
+        int samples = 0;
+        for (int i = 0; i + 1 < pcm.length; i += 2) {
+            int low = pcm[i] & 0xff;
+            int high = pcm[i + 1];
+            int sample = (high << 8) | low;
+            total += Math.abs(sample);
+            samples += 1;
+        }
+        return samples > 0 && total / samples >= VOICE_ACTIVITY_AVERAGE_THRESHOLD;
     }
 
     private void post(Runnable runnable) {
