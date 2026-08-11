@@ -35,7 +35,7 @@ const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "profile-revert-smoke-token";
 const ENV_DEFAULT_VOICE = "Kore";
 
-const { createAgentProfileStore } = require(path.join(GATEWAY_DIR, "lib", "agent-profile"));
+const { createAgentProfileStore, PROFILE_FIELDS } = require(path.join(GATEWAY_DIR, "lib", "agent-profile"));
 const { createVoiceProvider } = require(path.join(GATEWAY_DIR, "lib", "voice-providers"));
 
 main().catch((error) => {
@@ -215,7 +215,8 @@ async function assertLiveModalityTool(wsUrl, fakeLive) {
 async function assertLiveSettingsRead(wsUrl, fakeLive) {
   const listed = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", { operation: "list" });
   assert.equal(listed.ok, true);
-  assert.equal(listed.count, 32);
+  assert.equal(listed.count, PROFILE_FIELDS.length);
+  assert.deepEqual(listed.settings.map((setting) => setting.id), PROFILE_FIELDS);
   assert.ok(listed.settings.every((setting) => setting.id && setting.readable === true));
   const recommended = await runLiveToolCall(wsUrl, fakeLive, "read_agent_settings", {
     operation: "recommend",
