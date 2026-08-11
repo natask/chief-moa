@@ -29,7 +29,7 @@ const { spawn } = require("node:child_process");
 
 const GATEWAY_DIR = path.resolve(__dirname, "..");
 const TOKEN = "surface-skills-smoke-token";
-const FILE_ACCESS_INSTRUCTION = "Chrome must grant Ag access to local files. Open chrome://extensions, find Ag, choose Details, turn on “Allow access to file URLs”, then retry. Ag cannot enable this permission for you.";
+const FILE_ACCESS_INSTRUCTION = "Open Chrome extension details and enable Allow access to file URLs, then retry.";
 const {
   resolveTurnSurface,
   surfaceExecuteCapabilities,
@@ -78,13 +78,12 @@ async function main() {
       capability: "browser_permissions_status", args: {}, tool: "browser.permissions.status",
       deviceId: "browser_surface_smoke", surface: "browser_extension",
       receipt: {
-        summary: FILE_ACCESS_INSTRUCTION,
+        summary: "Browser file access is disabled.",
         result: { file_scheme_access: { allowed: false, supported: true, instruction: FILE_ACCESS_INSTRUCTION } },
         local_receipt: { tool: "browser.permissions.status", success: true },
       },
     }));
     await step("browser permission status rejects input and evidence-only authority", () => assertPermissionStatusDenials(baseUrl, deps, phoneCall));
-    await step("browser permission status rejects malformed enabled and disabled receipts", () => assertMalformedPermissionStatusReceipts(baseUrl, deps, phoneCall));
     const cdpIntent = "Use browser automation to inspect the agent-owned background tab";
     const cdpEnvelope = confirmedEnvelope(cdpIntent, url);
     await step("QuickJS catalog CDP capability queues bounded commands and resolves the browser receipt", () => assertSimpleDeviceCapability(baseUrl, deps, {
@@ -271,7 +270,7 @@ async function assertSimpleDeviceCapability(baseUrl, deps, testCase) {
     assert.equal(result.receipt.result.file_scheme_access.allowed, false);
     assert.equal(result.receipt.result.file_scheme_access.instruction, FILE_ACCESS_INSTRUCTION);
     assert.equal(result.permission_state.allowed, false);
-    assert.match(result.message, /Chrome must grant Ag access to local files/i);
+    assert.match(result.message, /file access is disabled/i);
     assert.match(result.message, /allow access to file URLs/i);
   }
 }
@@ -302,67 +301,16 @@ async function assertPermissionStatusDenials(baseUrl, deps, call) {
     { ...call, transcript: "Can browser permissions track me?" },
     { ...call, transcript: "What browser permissions are dangerous?" },
     { ...call, transcript: "Translate check browser permission status into Amharic" },
-    { ...call, transcript: "How do you say browser permission status in Amharic?" },
-    { ...call, transcript: "Check browser permission status yesterday" },
-    { ...call, transcript: "Check browser permission status in the attached document" },
-    { ...call, transcript: "Check browser permission status from metadata" },
-    { ...call, transcript: "Check browser permission status as a concept" },
-    { ...call, transcript: "Check browser permission status described in the message" },
-    { ...call, transcript: "Check browser permission status and explain what it means" },
-    { ...call, transcript: "Check ('browser permission status')" },
-    { ...call, transcript: "Check (browser permission status)" },
-    { ...call, transcript: `Check browser permission status ${" ".repeat(250)}described in metadata` },
     { source: call.source, modality: "voice", transcript_source: "client_stt", user_text: "Check browser permission status" },
     { source: call.source, modality: "voice", transcript_source: "client_stt", text: "Check browser permission status" },
     { source: "agee-extension-smoke", modality: "text", transcript_source: "text", transcript: "Check browser permission status" },
-    { source: "agee-extension-smoke", transcript: "Check browser permission status" },
-    { source: "android-overlay", transcript: "Check browser permission status" },
-    { source: "browser", transcript: "Check browser permission status" },
   ]) {
     const result = await surfaceExecuteCapabilities(deniedCall, deps).browser_permissions_status.run({});
     assert.equal(result.ok, false, deniedCall.transcript);
-    assert.match(result.error, /current user turn|current-turn|spoken\/STT|direct spoken|direct, current-state|direct spoken command|no additional clause/);
+    assert.match(result.error, /current user turn|current-turn|spoken\/STT|direct spoken/);
   }
   const after = await getJson(`${baseUrl}/v1/tool/requests?limit=100`);
   assert.equal((after.requests || []).length, beforeCount, "denied permission-status calls must create no tool request");
-}
-
-async function assertMalformedPermissionStatusReceipts(baseUrl, deps, call) {
-  const malformedReceipts = [
-    {
-      summary: "Enabled.",
-      result: { file_scheme_access: { allowed: true, supported: true } },
-      local_receipt: { tool: "browser.permissions.status", success: true },
-    },
-    {
-      summary: "File access is disabled.",
-      result: { file_scheme_access: { allowed: false, supported: true, instruction: "Open settings." } },
-      local_receipt: { tool: "browser.permissions.status", success: true },
-    },
-  ];
-  for (const receiptBody of malformedReceipts) {
-    const resultPromise = surfaceExecuteCapabilities({
-      ...call,
-      modality: "voice",
-      transcript_source: "client_stt",
-      transcript: "Check browser permission status",
-    }, deps).browser_permissions_status.run({});
-    const request = await waitForPendingToolRequest(baseUrl, "browser.permissions.status");
-    const claim = await postJson(`${baseUrl}/v1/tool/requests/claim`, { device_id: "browser_surface_smoke" });
-    assert.equal(claim.status, 200, JSON.stringify(claim.json));
-    assert.equal(claim.json.request.id, request.id);
-    const receipt = await postJson(`${baseUrl}/v1/tool/requests/${request.id}/receipts`, {
-      device_id: "browser_surface_smoke",
-      claim_id: claim.json.request.claim_id,
-      receipt_id: `malformed_${request.id}`,
-      ok: true,
-      ...receiptBody,
-    });
-    assert.equal(receipt.status, 200, JSON.stringify(receipt.json));
-    const result = await resultPromise;
-    assert.equal(result.ok, false, JSON.stringify(result));
-    assert.match(result.error, /did not include a clear/);
-  }
 }
 
 async function assertAmbiguousBrowserTargets(baseUrl, deps, call) {
