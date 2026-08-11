@@ -46,6 +46,8 @@ test("catalog exposes current/default state, constraints, and managed fields", (
   assert.equal(terse.type, "integer");
   assert.equal(catalog.get("voice").values.includes("Aoede"), true);
   assert.deepEqual(catalog.get("response_modality").values, ["auto", "speech", "text"]);
+  assert.equal(catalog.get("spoken_reply_style").values.includes("conversational"), true);
+  assert.match(catalog.get("spoken_reply_style").description, /six catalog-backed/);
   assert.equal(catalog.get("active_companion_id").writable, true);
   assert.equal(catalog.get("active_companion_id").managed, true);
   assert.equal(catalog.get("system_prompt").sensitivity, "private");
@@ -59,6 +61,8 @@ test("search and recommendations are deterministic and catalog-grounded", () => 
   assert.match(concise[0].match.reason, /alias|title|description/);
   const recognition = catalog.search("speech recognition listens for");
   assert.equal(recognition[0].id, "input_languages");
+  const spokenStyle = catalog.search("speaking style");
+  assert.equal(spokenStyle[0].id, "spoken_reply_style");
   const recommended = catalog.recommend("I want text only replies", { limit: 3 });
   assert.equal(recommended[0].id, "response_modality");
   assert.ok(recommended.every((setting) => PROFILE_FIELDS.includes(setting.id)));

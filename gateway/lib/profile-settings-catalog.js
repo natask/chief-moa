@@ -1,6 +1,6 @@
 "use strict";
 
-const { PROFILE_FIELDS } = require("./agent-profile");
+const { PROFILE_FIELDS, SPOKEN_REPLY_STYLE_VALUES } = require("./agent-profile");
 
 const DEFINITIONS = Object.freeze({
   system_prompt: define("System prompt", "behavior", "Standing instructions that shape the agent's behavior.", ["instructions", "behavior", "persona"], "Change this when you want durable behavioral instructions."),
@@ -11,6 +11,7 @@ const DEFINITIONS = Object.freeze({
   model: define("Reasoning model", "model", "The gateway model identifier used for reasoning.", ["llm", "model id", "intelligence"], "Change this when selecting a different configured reasoning model.", "text"),
   temperature: define("Temperature", "model", "Sampling temperature for model responses, from 0 to 2.", ["randomness", "creativity", "deterministic"], "Lower values are steadier; higher values are more varied.", "number", { minimum: 0, maximum: 2 }),
   voice_max_chars: define("Spoken reply limit", "voice", "Maximum characters spoken in one reply.", ["terse", "concise", "short reply", "verbose", "length"], "Lower this for shorter spoken answers; raise it for more detail.", "integer", { minimum: 1 }),
+  spoken_reply_style: define("Spoken reply style", "voice", "Up to six catalog-backed presentation descriptors for how spoken replies should sound.", ["speaking style", "spoken style", "delivery style", "how you talk"], "Combine up to six listed descriptors for a stable spoken presentation preference.", "text", { values: SPOKEN_REPLY_STYLE_VALUES }),
   language: define("Reply languages", "language", "BCP-47 languages Ag may use in replies.", ["output language", "speak", "reply in"], "Use this to choose the language or languages Ag replies in.", "language_list"),
   voice: define("Voice", "voice", "Catalog-backed speaking voice used for synthesized replies.", ["speaker", "sound", "masculine", "feminine"], "Change this when you want a different speaking voice.", "enum"),
   speaking_rate: define("Speaking rate", "voice", "Speech speed multiplier from 0.5 to 2.", ["voice speed", "speech speed", "faster", "slower", "pace"], "Change this when speech is too fast or too slow.", "number", { minimum: 0.5, maximum: 2 }),
