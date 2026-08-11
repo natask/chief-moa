@@ -3241,8 +3241,9 @@ public final class OverlayService extends Service {
                     return;
                 }
                 currentStreamingTurnCommitRequested = true;
-                liveConversation.awaitAssistant(streamingVoiceController == null
-                        ? "" : streamingVoiceController.turnId());
+                String turnId = streamingVoiceController == null ? "" : streamingVoiceController.turnId();
+                liveConversation.awaitAssistant(turnId);
+                if (transcriptionOnly) liveConversation.finishAssistantPlayback(turnId, "");
                 renderVoiceTranscriptRows();
                 if (shouldRouteStreamingTranscriptThroughMoa(currentStreamingTranscript)) {
                     routeStreamingTranscriptThroughMoa(currentStreamingTranscript);
@@ -3287,6 +3288,7 @@ public final class OverlayService extends Service {
                 if (!transcript.isEmpty()) {
                     currentStreamingTranscript = transcript;
                     liveConversation.finalizeUser(turnId, transcript);
+                    if (transcriptionOnly) liveConversation.finishAssistantPlayback(turnId, "");
                     renderVoiceTranscriptRows();
                     if (!nextStreamingVoiceFollowUpRunId.isEmpty()) {
                         String followUpRunId = nextStreamingVoiceFollowUpRunId;
@@ -3901,10 +3903,6 @@ public final class OverlayService extends Service {
         MoaAccessibilityService.SemanticActionResult paste =
                 MoaAccessibilityService.pasteIntoFocusedEditor(launcherDictationTarget);
         launcherDictationTarget = null;
-        updateVoiceAssistantTranscript(
-                paste == MoaAccessibilityService.SemanticActionResult.PERFORMED
-                        ? "Inserted."
-                        : "Copied.");
         showReadyForNextVoiceTurn(streamingVoiceGeneration);
     }
 
