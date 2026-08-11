@@ -27,6 +27,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -181,6 +182,14 @@ public final class OverlayService extends Service {
     private boolean streamingCommitPendingOpen;
     private boolean pendingContinuousVoiceRestartAfterAudio;
     private boolean streamingAssistantAudioPlaying;
+    private final MoaTurnTakingPolicy.CaptureCoordinator turnTakingCoordinator =
+            new MoaTurnTakingPolicy.CaptureCoordinator(
+                    () -> streamingAssistantAudioPlaying = false,
+                    this::teardownPriorVoiceTurn, this::discardWarmMic,
+                    pushToTalkFinish::intentionalCancel,
+                    reason -> Log.i(TAG, "capture refused: " + reason),
+                    reason -> Toast.makeText(this, reason, Toast.LENGTH_SHORT).show(),
+                    reason -> { if (orbView != null) orbView.announceForAccessibility(reason); });
     private boolean currentStreamingTurnAudioReceived;
     private final MoaTtsRecoveryQueue ttsRecoveryQueue = new MoaTtsRecoveryQueue();
     private boolean deviceClientLoopRunning;
@@ -2368,8 +2377,6 @@ public final class OverlayService extends Service {
         showPanel();
     }
 
-    // True only while the user owns an open manual capture. Assistant playback
-    // and reasoning are not capture: tapping then interrupts and starts a new turn.
     private boolean isManualTapCaptureActive() {
         return audioNoteActive || voiceInvocationLatched || reviewableVoiceDraftActive();
     }
@@ -2380,14 +2387,15 @@ public final class OverlayService extends Service {
                 : MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
     }
 
-    // VOICE-FIRST single quick tap (draft off) = start a reviewable draft with
-    // barge-in. Starting stops any assistant audio first, which is the interrupt.
-    // A tap never cuts a live user mic: while a PTT hold or a record capture owns
-    // the mic this is a no-op, so nothing spoken is dropped.
     private void handleOrbStartTalkLoop() {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        if (!admitNewUserCapture(false)) return;
+        startOrbTalkLoopAfterAdmission();
+    }
+
+    private void startOrbTalkLoopAfterAdmission() {
         boolean freshThread = nextVoiceCaptureFreshThread;
         manualTapCaptureOrigin = freshThread
                 ? MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD
@@ -2396,10 +2404,6 @@ public final class OverlayService extends Service {
             startAudioNoteCapture();
             return;
         }
-        stopAssistantAudioForBargeIn();
-        // Suppress the "didn't catch that" cue for this first turn only: a tap that
-        // starts the loop and captures no speech was a barge-in or a stray tap, not
-        // a failed utterance. Set after the barge-in teardown clears it.
         suppressFirstTapTurnEmptyCue = true;
         startReviewableVoiceDraft();
         nextVoiceCaptureFreshThread = false;
@@ -2422,8 +2426,9 @@ public final class OverlayService extends Service {
             return;
         }
         if (action == MoaVoiceInvocationPolicy.Action.START_LATCHED_CAPTURE) {
+            if (!admitNewUserCapture(false)) return;
             voiceInvocationLatched = true;
-            handleOrbStartTalkLoop();
+            startOrbTalkLoopAfterAdmission();
         }
     }
 
@@ -2437,23 +2442,24 @@ public final class OverlayService extends Service {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        if (!admitNewUserCapture(false)) return;
         launcherDictationLatched = true;
         voiceInvocationLatched = true;
         nextStreamingTurnTranscriptionOnly = true;
         launcherDictationTarget = MoaAccessibilityService.currentFocusedEditorTarget();
-        handleOrbStartTalkLoop();
+        startOrbTalkLoopAfterAdmission();
     }
 
     private void handleHandsFreeInvocation() {
         if (pushToTalkVoiceTurn || audioNoteActive || continuousVoiceLoop) {
             return;
         }
+        if (!admitNewUserCapture(false)) return;
         voiceInvocationLatched = false;
         launcherDictationLatched = false;
         nextStreamingTurnTranscriptionOnly = false;
         launcherDictationTarget = null;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
-        stopAssistantAudioForBargeIn();
         suppressFirstTapTurnEmptyCue = false;
         if (streamingVoiceAvailable()) {
             startStreamingVoiceTurn(true, true);
@@ -2466,6 +2472,7 @@ public final class OverlayService extends Service {
         if (pushToTalkVoiceTurn || audioNoteActive) {
             return;
         }
+        if (!admitNewUserCapture(false)) return;
         if (recordModeEnabled) {
             startAudioNoteCapture();
             manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
@@ -2474,7 +2481,7 @@ public final class OverlayService extends Service {
         contextControls.armNewThread();
         refreshContextControls();
         nextVoiceCaptureFreshThread = true;
-        handleOrbStartTalkLoop();
+        startOrbTalkLoopAfterAdmission();
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.FRESH_THREAD;
     }
 
@@ -2490,10 +2497,16 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // Stop any assistant audio so a tap-to-talk starts on a quiet mic. Cancels an
-    // in-flight streaming turn's playback, a local TTS reply, and the voice
-    // sampler. A fresh session opens immediately after.
+    private boolean admitNewUserCapture(boolean pushToTalk) {
+        return turnTakingCoordinator.admit(
+                MoaPrefs.turnTakingMode(this), streamingAssistantAudioPlaying, pushToTalk);
+    }
+
     private void stopAssistantAudioForBargeIn() {
+        turnTakingCoordinator.stopAssistantAudio();
+    }
+
+    private void teardownPriorVoiceTurn() {
         cancelContinuousVoiceRestart();
         liveConversation.clear();
         voiceLog.markSteeringBoundary();
@@ -2513,11 +2526,6 @@ public final class OverlayService extends Service {
         cancelVoiceSampler();
         voiceController.stopQuietly();
     }
-
-
-    // The escape hatch: a large move after a press-to-talk hold confirmed cancels
-    // the capture that hold started (streaming turn or audio note) WITHOUT
-    // committing it, so the gesture becomes a plain drag. Nothing is sent.
     private void handleOrbPushToTalkCancel() {
         pushToTalkFinish.intentionalCancel();
         if (audioNoteActive) {
@@ -2760,11 +2768,8 @@ public final class OverlayService extends Service {
         updateMicState();
     }
 
-    // DOUBLE-CLICK-AND-HOLD the orb = manual voice. Capture starts once the
-    // second press is held briefly, and release commits without provider VAD.
-    // While record mode is on, the same gesture records a raw audio note
-    // instead: no voice session, no SpeechRecognizer, no STT/LLM/TTS.
     private void handleOrbDoublePressStart() {
+        if (!admitNewUserCapture(true)) return;
         manualTapCaptureOrigin = MoaVoiceFirstTapResolver.CaptureOrigin.NONE;
         if (recordModeEnabled) {
             startAudioNoteCapture();
@@ -2773,10 +2778,6 @@ public final class OverlayService extends Service {
         startPushToTalkVoiceTurn();
     }
 
-    // RECORD MODE. Capture raw PCM locally while the orb is held, upload the
-    // finished bytes to the gateway as an audio note on release. By
-    // construction this path never opens a streaming voice session, never
-    // starts SpeechRecognizer, and never plays TTS.
     private void toggleRecordMode() {
         recordModeEnabled = !recordModeEnabled;
         if (!recordModeEnabled && audioNoteActive) {
@@ -3614,6 +3615,7 @@ public final class OverlayService extends Service {
                 && draftCapability != null
                 && draftCapability.isFreshFor(gatewayUrl, System.currentTimeMillis());
         streamingVoiceController.setVoiceDraftEnabled(exactDraftMode);
+        streamingVoiceController.setTurnTakingMode(MoaPrefs.turnTakingMode(this));
         streamingVoiceController.setTranscriptionOnly(transcriptionOnly);
         streamingVoiceController.setTranscriptReconciliationEnabled(reconciliationEligible);
         if (!pendingReplacementTurnId.isEmpty()) {
@@ -3677,6 +3679,7 @@ public final class OverlayService extends Service {
     }
 
     private void retryFailedVoiceCapture() {
+        if (!admitNewUserCapture(false)) return;
         voiceFailureRetry.consumeAndRun(streamingVoiceGeneration, () -> {
             // Record again is a reviewable current-thread toggle even when the
             // experimental preference is off: the companion itself sends on a

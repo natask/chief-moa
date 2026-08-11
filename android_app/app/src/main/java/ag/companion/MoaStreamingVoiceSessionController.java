@@ -16,19 +16,15 @@ final class MoaStreamingVoiceSessionController {
     static final long DRAFT_READY_TIMEOUT_MS = 10000;
     static final long DRAFT_CONTROL_ACK_TIMEOUT_MS = 6000;
 
-    private static final long AUTO_COMMIT_MIN_RECORDING_MS = 650;
-    private static final long AUTO_COMMIT_SILENCE_MS = 700;
     // NOT a product limit on how long the user may speak. Audio is streamed to
     // the gateway frame-by-frame, so an utterance can run indefinitely. Once
     // speech has been heard, the turn ends on the silence VAD above; this 30-min
     // value is only a safety backstop that force-commits if the VAD gets stuck
     // and never detects the end-of-speech silence. It should never be hit by a
     // real turn.
-    private static final long AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS = 1_800_000;
     // Separate, short give-up for a session where NO speech was ever detected
     // (mic opened but the user never spoke): cancel so the orb returns to idle
     // instead of listening forever. This bounds silence, not speech.
-    private static final long AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS = 12000;
     private static final long AUTO_COMMIT_CHECK_MS = 100;
     // How long a commit will wait for session_ready before failing the turn.
     // Without this bound a deferred commit could wait forever on a hung socket.
@@ -41,7 +37,6 @@ final class MoaStreamingVoiceSessionController {
     // authority window after the 3.5s connect bound instead of making those two
     // setup stages consume one shared deadline.
     static final long PENDING_COMMIT_TIMEOUT_MS = DRAFT_READY_TIMEOUT_MS + 4000;
-    private static final int VOICE_ACTIVITY_AVERAGE_THRESHOLD = 450;
     // Covers the 3.5s socket-connect bound plus the 10s draft-authority window
     // with margin. Unlike the old rolling five-second queue, overflow is terminal:
     // a voice turn must never execute after silently losing its spoken prefix.
@@ -108,6 +103,7 @@ final class MoaStreamingVoiceSessionController {
     private String deviceId = "";
     private final String branchId;
     private final boolean autoCommitOnSilence;
+    private String turnTakingMode = MoaTurnTakingPolicy.RESPONSIVE;
     private boolean transcriptionOnly;
     private String sourceSurface = "";
     private final Callback callback;
@@ -235,6 +231,12 @@ final class MoaStreamingVoiceSessionController {
 
     void setPlaybackEnabled(boolean enabled) {
         playbackEnabled = enabled;
+    }
+
+    void setTurnTakingMode(String mode) {
+        synchronized (lock) {
+            if (!active) turnTakingMode = MoaTurnTakingPolicy.canonicalMode(mode);
+        }
     }
 
     void setTranscriptionOnly(boolean enabled) {
@@ -1022,13 +1024,11 @@ final class MoaStreamingVoiceSessionController {
             long now = SystemClock.elapsedRealtime();
             long recordingAge = now - recordingStartedAtMs;
             boolean heardSpeech = lastVoiceActivityAtMs > 0;
-            boolean silentAfterSpeech = heardSpeech
-                    && recordingAge >= AUTO_COMMIT_MIN_RECORDING_MS
-                    && now - lastVoiceActivityAtMs >= AUTO_COMMIT_SILENCE_MS;
-            boolean backstopReached = recordingAge >= AUTO_COMMIT_STUCK_VAD_BACKSTOP_MS;
-            boolean noSpeechTimedOut = !heardSpeech && recordingAge >= AUTO_COMMIT_NO_SPEECH_TIMEOUT_MS;
-            shouldCommit = silentAfterSpeech || (heardSpeech && backstopReached);
-            shouldCancel = noSpeechTimedOut;
+            MoaTurnTakingPolicy.EndpointAction action = MoaTurnTakingPolicy.endpointAction(
+                    turnTakingMode, recordingAge, heardSpeech,
+                    heardSpeech ? now - lastVoiceActivityAtMs : 0);
+            shouldCommit = action == MoaTurnTakingPolicy.EndpointAction.COMMIT;
+            shouldCancel = action == MoaTurnTakingPolicy.EndpointAction.CANCEL_NO_SPEECH;
         }
         if (shouldCommit) {
             Log.i(TAG, "autoCommit turn");
@@ -1047,7 +1047,7 @@ final class MoaStreamingVoiceSessionController {
         if (!autoCommitOnSilence || pcm == null || pcm.length < 2) {
             return;
         }
-        if (!hasVoiceActivity(pcm)) {
+        if (!MoaTurnTakingPolicy.hasVoiceActivity(pcm)) {
             return;
         }
         synchronized (lock) {
@@ -1070,19 +1070,6 @@ final class MoaStreamingVoiceSessionController {
 
     private void clearPendingAudioLocked() {
         pendingAudio.reset();
-    }
-
-    private static boolean hasVoiceActivity(byte[] pcm) {
-        long total = 0;
-        int samples = 0;
-        for (int i = 0; i + 1 < pcm.length; i += 2) {
-            int low = pcm[i] & 0xff;
-            int high = pcm[i + 1];
-            int sample = (high << 8) | low;
-            total += Math.abs(sample);
-            samples += 1;
-        }
-        return samples > 0 && total / samples >= VOICE_ACTIVITY_AVERAGE_THRESHOLD;
     }
 
     private void post(Runnable runnable) {

@@ -295,6 +295,11 @@ final class MoaPrefs {
         prefs(context).edit().putString(KEY_AGENT_PROFILE_JSON, profileJson == null ? "" : profileJson).apply();
     }
 
+    static String turnTakingMode(Context context) {
+        return MoaTurnTakingPolicy.canonicalMode(
+                agentProfile(context).optString("turn_taking_mode", ""));
+    }
+
     static String activeCompanionJson(Context context) {
         return activeCompanion(context).toString();
     }
