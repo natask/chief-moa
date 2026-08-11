@@ -3,10 +3,11 @@ package ag.companion;
 /**
  * Deterministic PCM16 endpointer for hands-free turns.
  *
- * The detector learns the quiet startup floor, requires several consecutive
- * speech frames to open a turn, and uses a lower continuation threshold once
- * speech is active. Time is supplied by the caller so policy tests need no
- * sleeps and lifecycle resets cannot inherit evidence from a prior turn.
+ * The detector spends a short, fail-closed interval learning the startup floor,
+ * then requires a duration of speech rather than a number of callbacks. This
+ * keeps partial AudioRecord reads from changing admission. Once speech starts,
+ * a lower continuation band may bridge a short soft passage but cannot let a
+ * sustained background plateau hold the turn forever.
  */
 final class MoaVoiceEndpointer {
     static final long ENDPOINT_SILENCE_MS = 700L;
@@ -14,14 +15,19 @@ final class MoaVoiceEndpointer {
     static final long NO_SPEECH_TIMEOUT_MS = 12_000L;
     static final long STUCK_VAD_BACKSTOP_MS = 1_800_000L;
 
+    static final long CALIBRATION_MS = 240L;
+    static final long START_ADMISSION_MS = 120L;
+    static final long WEAK_CONTINUATION_LIMIT_MS = 200L;
+
+    private static final int SAMPLE_RATE_HZ = 16_000;
+    private static final int PCM_BYTES_PER_SAMPLE = 2;
+    private static final int CALIBRATION_SAMPLES = samplesForMs(CALIBRATION_MS);
+    private static final int START_ADMISSION_SAMPLES = samplesForMs(START_ADMISSION_MS);
     private static final int INITIAL_NOISE_FLOOR = 64;
     private static final int MIN_START_LEVEL = 220;
     private static final int MIN_CONTINUE_LEVEL = 140;
     private static final int START_MARGIN = 100;
     private static final int CONTINUE_MARGIN = 70;
-    private static final int REQUIRED_START_FRAMES = 3;
-    private static final int NOISE_EMA_OLD_WEIGHT = 7;
-    private static final int NOISE_EMA_TOTAL_WEIGHT = 8;
 
     enum Decision {
         NONE,
@@ -31,16 +37,22 @@ final class MoaVoiceEndpointer {
 
     private long recordingStartedAtMs;
     private long lastVoiceActivityAtMs;
+    private long lastStrongVoiceActivityAtMs;
     private int noiseFloor = INITIAL_NOISE_FLOOR;
-    private int consecutiveStartFrames;
+    private int calibrationSamples;
+    private long calibrationLevelSampleTotal;
+    private int consecutiveStartSamples;
     private boolean heardSpeech;
     private boolean terminalDecisionEmitted;
 
     void reset(long nowMs) {
         recordingStartedAtMs = Math.max(0L, nowMs);
         lastVoiceActivityAtMs = 0L;
+        lastStrongVoiceActivityAtMs = 0L;
         noiseFloor = INITIAL_NOISE_FLOOR;
-        consecutiveStartFrames = 0;
+        calibrationSamples = 0;
+        calibrationLevelSampleTotal = 0L;
+        consecutiveStartSamples = 0;
         heardSpeech = false;
         terminalDecisionEmitted = false;
     }
@@ -50,8 +62,25 @@ final class MoaVoiceEndpointer {
             return false;
         }
         int level = meanAbsolutePcm16(pcm);
+        int availableSamples = pcm.length / PCM_BYTES_PER_SAMPLE;
+        if (calibrationSamples < CALIBRATION_SAMPLES) {
+            int calibrating = Math.min(availableSamples, CALIBRATION_SAMPLES - calibrationSamples);
+            calibrationLevelSampleTotal += (long) level * calibrating;
+            calibrationSamples += calibrating;
+            availableSamples -= calibrating;
+            if (calibrationSamples >= CALIBRATION_SAMPLES) {
+                noiseFloor = (int) Math.max(0L, calibrationLevelSampleTotal / calibrationSamples);
+            }
+            if (availableSamples <= 0) return false;
+        }
         if (heardSpeech) {
-            if (level >= continueThreshold()) {
+            if (level >= startThreshold()) {
+                lastStrongVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
+                lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
+                return true;
+            }
+            if (level >= continueThreshold()
+                    && nowMs - lastStrongVoiceActivityAtMs < WEAK_CONTINUATION_LIMIT_MS) {
                 lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 return true;
             }
@@ -59,17 +88,17 @@ final class MoaVoiceEndpointer {
         }
 
         if (level >= startThreshold()) {
-            consecutiveStartFrames += 1;
-            if (consecutiveStartFrames >= REQUIRED_START_FRAMES) {
+            consecutiveStartSamples += availableSamples;
+            if (consecutiveStartSamples >= START_ADMISSION_SAMPLES) {
                 heardSpeech = true;
+                lastStrongVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 return true;
             }
             return false;
         }
 
-        consecutiveStartFrames = 0;
-        noiseFloor = ((noiseFloor * NOISE_EMA_OLD_WEIGHT) + level) / NOISE_EMA_TOTAL_WEIGHT;
+        consecutiveStartSamples = 0;
         return false;
     }
 
@@ -106,12 +135,20 @@ final class MoaVoiceEndpointer {
         return noiseFloor;
     }
 
-    private int startThreshold() {
+    boolean calibrated() {
+        return calibrationSamples >= CALIBRATION_SAMPLES;
+    }
+
+    int startThreshold() {
         return Math.max(MIN_START_LEVEL, noiseFloor + Math.max(START_MARGIN, noiseFloor * 3 / 4));
     }
 
-    private int continueThreshold() {
+    int continueThreshold() {
         return Math.max(MIN_CONTINUE_LEVEL, noiseFloor + Math.max(CONTINUE_MARGIN, noiseFloor / 2));
+    }
+
+    private static int samplesForMs(long durationMs) {
+        return (int) (SAMPLE_RATE_HZ * durationMs / 1000L);
     }
 
     static int meanAbsolutePcm16(byte[] pcm) {
