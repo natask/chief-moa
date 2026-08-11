@@ -18,19 +18,16 @@ final class MoaVoiceEndpointer {
     static final long CALIBRATION_MS = 240L;
     static final long START_ADMISSION_MS = 120L;
     static final long WEAK_CONTINUATION_LIMIT_MS = 200L;
-    static final long ADAPTIVE_STATIONARY_LIMIT_MS = 400L;
 
     private static final int SAMPLE_RATE_HZ = 16_000;
     private static final int PCM_BYTES_PER_SAMPLE = 2;
     private static final int CALIBRATION_SAMPLES = samplesForMs(CALIBRATION_MS);
     private static final int START_ADMISSION_SAMPLES = samplesForMs(START_ADMISSION_MS);
     private static final int INITIAL_NOISE_FLOOR = 64;
-    private static final int HARD_STRONG_LEVEL = 450;
     private static final int MIN_START_LEVEL = 220;
     private static final int MIN_CONTINUE_LEVEL = 140;
     private static final int START_MARGIN = 100;
     private static final int CONTINUE_MARGIN = 70;
-    private static final int ADAPTIVE_VARIATION_LEVEL = 24;
 
     enum Decision {
         NONE,
@@ -40,28 +37,22 @@ final class MoaVoiceEndpointer {
 
     private long recordingStartedAtMs;
     private long lastVoiceActivityAtMs;
-    private long adaptiveRefreshUntilMs;
-    private int lastAdaptiveLevel;
-    private boolean adaptiveOnlySpeech;
+    private long lastStrongVoiceActivityAtMs;
     private int noiseFloor = INITIAL_NOISE_FLOOR;
     private int calibrationSamples;
     private long calibrationLevelSampleTotal;
     private int consecutiveStartSamples;
-    private boolean candidateContainsHardStrong;
     private boolean heardSpeech;
     private boolean terminalDecisionEmitted;
 
     void reset(long nowMs) {
         recordingStartedAtMs = Math.max(0L, nowMs);
         lastVoiceActivityAtMs = 0L;
-        adaptiveRefreshUntilMs = 0L;
-        lastAdaptiveLevel = 0;
-        adaptiveOnlySpeech = false;
+        lastStrongVoiceActivityAtMs = 0L;
         noiseFloor = INITIAL_NOISE_FLOOR;
         calibrationSamples = 0;
         calibrationLevelSampleTotal = 0L;
         consecutiveStartSamples = 0;
-        candidateContainsHardStrong = false;
         heardSpeech = false;
         terminalDecisionEmitted = false;
     }
@@ -72,14 +63,7 @@ final class MoaVoiceEndpointer {
         }
         int level = meanAbsolutePcm16(pcm);
         int availableSamples = pcm.length / PCM_BYTES_PER_SAMPLE;
-        // Preserve the old detector's >=450 signal as hard evidence. It may
-        // admit immediately and is never folded into the ambient estimate.
-        // Energy from 220..449 remains ambiguous and calibrates fail-closed.
-        if (calibrationSamples < CALIBRATION_SAMPLES && level < HARD_STRONG_LEVEL) {
-            // Calibration/background breaks a hard-strong candidate. Otherwise
-            // separated loud pulses could accumulate as if they were continuous.
-            consecutiveStartSamples = 0;
-            candidateContainsHardStrong = false;
+        if (calibrationSamples < CALIBRATION_SAMPLES) {
             int calibrating = Math.min(availableSamples, CALIBRATION_SAMPLES - calibrationSamples);
             calibrationLevelSampleTotal += (long) level * calibrating;
             calibrationSamples += calibrating;
@@ -89,60 +73,32 @@ final class MoaVoiceEndpointer {
             }
             if (availableSamples <= 0) return false;
         }
-        return observeEvidence(level, availableSamples, nowMs);
-    }
-
-    private boolean observeEvidence(int level, int availableSamples, long nowMs) {
-        boolean hardStrong = level >= HARD_STRONG_LEVEL;
         if (heardSpeech) {
-            if (hardStrong) {
-                long hardStrongAtMs = Math.max(recordingStartedAtMs, nowMs);
-                adaptiveRefreshUntilMs = hardStrongAtMs + WEAK_CONTINUATION_LIMIT_MS;
-                adaptiveOnlySpeech = false;
-                lastVoiceActivityAtMs = hardStrongAtMs;
+            if (level >= startThreshold()) {
+                lastStrongVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
+                lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 return true;
             }
-            if (level >= continueThreshold()) {
-                if (adaptiveOnlySpeech) {
-                    if (Math.abs(level - lastAdaptiveLevel) >= ADAPTIVE_VARIATION_LEVEL) {
-                        adaptiveRefreshUntilMs = nowMs + ADAPTIVE_STATIONARY_LIMIT_MS;
-                    }
-                    lastAdaptiveLevel = level;
-                }
-            }
-            if (level >= continueThreshold() && nowMs < adaptiveRefreshUntilMs) {
+            if (level >= continueThreshold()
+                    && nowMs - lastStrongVoiceActivityAtMs < WEAK_CONTINUATION_LIMIT_MS) {
                 lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 return true;
             }
             return false;
         }
 
-        int admissionLevel = calibrated() ? startThreshold() : HARD_STRONG_LEVEL;
-        if (level >= admissionLevel) {
+        if (level >= startThreshold()) {
             consecutiveStartSamples += availableSamples;
-            candidateContainsHardStrong |= hardStrong;
             if (consecutiveStartSamples >= START_ADMISSION_SAMPLES) {
                 heardSpeech = true;
+                lastStrongVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
                 lastVoiceActivityAtMs = Math.max(recordingStartedAtMs, nowMs);
-                if (candidateContainsHardStrong) {
-                    adaptiveRefreshUntilMs = lastVoiceActivityAtMs + WEAK_CONTINUATION_LIMIT_MS;
-                    adaptiveOnlySpeech = false;
-                } else {
-                    // Energy-only input cannot distinguish steady quiet speech
-                    // from a new background plateau. Variable speech may keep
-                    // refreshing; stationary energy expires unless a hard-strong
-                    // frame arrives.
-                    adaptiveOnlySpeech = true;
-                    lastAdaptiveLevel = level;
-                    adaptiveRefreshUntilMs = lastVoiceActivityAtMs + ADAPTIVE_STATIONARY_LIMIT_MS;
-                }
                 return true;
             }
             return false;
         }
 
         consecutiveStartSamples = 0;
-        candidateContainsHardStrong = false;
         return false;
     }
 
