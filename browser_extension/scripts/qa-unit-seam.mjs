@@ -86,8 +86,19 @@ class Cdp {
 async function evaluate(cdp, expression, contextId) {
   const params = { expression, awaitPromise: true, returnByValue: true };
   if (contextId != null) params.contextId = contextId;
-  const result = await cdp.send("Runtime.evaluate", params);
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "evaluation failed");
+  let result;
+  try {
+    result = await cdp.send("Runtime.evaluate", params);
+  } catch (error) {
+    const summary = String(expression || "").replace(/\s+/g, " ").trim().slice(0, 180);
+    throw new Error(`${String(error?.message || error)}; expression=${summary}`);
+  }
+  if (result.exceptionDetails) {
+    const description = result.exceptionDetails.exception?.description;
+    const text = result.exceptionDetails.text;
+    const detail = [text, description].filter(Boolean).join(": ");
+    throw new Error(detail || "evaluation failed");
+  }
   return result.result.value;
 }
 
@@ -95,7 +106,7 @@ async function waitFor(cdp, expression, timeoutMs = 12000, contextId) {
   const started = Date.now();
   let last;
   while (Date.now() - started < timeoutMs) {
-    last = await evaluate(cdp, expression, contextId).catch(() => undefined);
+    last = await evaluate(cdp, expression, contextId);
     if (last) return last;
     await delay(120);
   }
@@ -137,13 +148,19 @@ const MEASURE = `
 
 async function main() {
   mkdirSync(shotDir, { recursive: true });
-  const { server, port } = await serve();
-  const demoUrl = `http://localhost:${port}/fixtures/demo.html`;
-  const chromePath = resolveChromeForTesting();
-  const chrome = spawn(chromePath, [
-    ...quietChromeArgs({ extensionPath, profilePath }),
-    "--window-size=1280,820",
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+  let server;
+  let chrome;
+  let pageCdp;
+  let workerCdp;
+  try {
+    const served = await serve();
+    server = served.server;
+    const demoUrl = `http://localhost:${served.port}/fixtures/demo.html`;
+    const chromePath = resolveChromeForTesting();
+    chrome = spawn(chromePath, [
+      ...quietChromeArgs({ extensionPath, profilePath }),
+      "--window-size=1280,820",
+    ], { stdio: ["ignore", "pipe", "pipe"] });
 
   let stderr = "";
   chrome.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
@@ -160,7 +177,7 @@ async function main() {
 
   const list = await fetch(`http://127.0.0.1:${wsMatch}/json/new?${encodeURIComponent(demoUrl)}`, { method: "PUT" })
     .then((r) => r.json());
-  const pageCdp = new Cdp(list.webSocketDebuggerUrl);
+  pageCdp = new Cdp(list.webSocketDebuggerUrl);
   await pageCdp.send("Runtime.enable");
   await pageCdp.send("Page.enable");
   await waitFor(pageCdp, `document.readyState === "complete" && Boolean(document.getElementById("agee-root"))`);
@@ -193,12 +210,13 @@ async function main() {
     }
     throw new Error("service worker target never appeared");
   })();
-  const workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
+  workerCdp = new Cdp(workerTarget.webSocketDebuggerUrl);
   await workerCdp.send("Runtime.enable");
-  const tabId = await evaluate(workerCdp, `
-    chrome.tabs.query({}).then((tabs) => (tabs.find((t) => t.url && t.url.includes("demo.html")) || {}).id || null)
+  const tabId = await waitFor(workerCdp, `
+    typeof globalThis.chrome?.tabs?.query !== "function"
+      ? null
+      : chrome.tabs.query({}).then((tabs) => (tabs.find((t) => t.url && t.url.includes("demo.html")) || {}).id || null)
   `);
-  if (!tabId) throw new Error("could not find the demo tab from the worker");
 
   await evaluate(workerCdp, `
     chrome.tabs.sendMessage(${tabId}, {
@@ -250,10 +268,17 @@ async function main() {
   console.log(JSON.stringify({ placed, settled, samples: samples.slice(0, 40) }, null, 2));
   console.log(`shots: ${beforeShot}\n       ${midShot}\n       ${afterShot}`);
 
-  pageCdp.close();
-  workerCdp.close();
-  chrome.kill();
-  server.close();
+  } finally {
+    for (const cdp of [pageCdp, workerCdp]) {
+      try { cdp?.close(); } catch {}
+    }
+    try {
+      if (chrome && chrome.exitCode == null) chrome.kill();
+    } catch {}
+    if (server?.listening) {
+      await new Promise((resolveClose) => server.close(resolveClose));
+    }
+  }
 }
 
 main().catch((error) => {
