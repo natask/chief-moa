@@ -51,7 +51,7 @@ function manifest(overrides = {}) {
       artifact_size: 321,
       evidence_ref: "evidence://android.json",
       download_url: "https://preview.example/android.apk",
-      app_id: "ai.moa.assistant",
+      app_id: "ag.companion",
       version_code: 20260723,
       version_name: "0.2.0",
     }],

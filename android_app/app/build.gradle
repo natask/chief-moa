@@ -37,6 +37,10 @@ android {
     namespace 'ag.companion'
     compileSdk 35
 
+    sourceSets {
+        test.resources.srcDir file("${rootDir}/../release_control_plane/test/fixtures")
+    }
+
     buildFeatures {
         buildConfig true
     }

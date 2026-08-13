@@ -18,7 +18,7 @@ function artifact(surface_id, release_id, artifact_sha256, semantic_version) {
     surface_id, release_id, artifact_sha256, semantic_version,
     artifact_size: 100, git_sha: "1".repeat(40),
     download_url: `https://releases.example/${release_id}`,
-    app_id: surface_id === "android" ? "ai.moa.assistant" : "chief-moa",
+    app_id: surface_id === "android" ? "ag.companion" : "chief-moa",
     version_code: surface_id === "android" ? 100 : null,
     version_name: semantic_version,
   };
@@ -247,7 +247,7 @@ test("HTTP abstraction exposes frozen view and append endpoints with bounded con
   assert.equal(view.body.effective_assignment.bundle_id, "preview-2");
   assert.equal(view.body.schema_version, 1);
   assert.equal(view.body.channels.preview.sequence, 2);
-  assert.equal(view.body.candidates.find((item) => item.artifact.surface === "android").artifact.app_id, "ai.moa.assistant");
+  assert.equal(view.body.candidates.find((item) => item.artifact.surface === "android").artifact.app_id, "ag.companion");
 });
 
 test("HTTP authentication rejects missing identity and ignores forged tenant and actor fields", async () => {
@@ -376,20 +376,21 @@ test("unsupported bundle compatibility blocks readiness and additive lifecycle s
 });
 
 test("canonical Android and browser fixtures exactly match public HTTP views", async () => {
+  const sharedFixture = JSON.parse(fs.readFileSync(
+    new URL("./fixtures/release-control-client-views-v1.json", import.meta.url),
+    "utf8",
+  ));
   for (const target of [
     {
-      fixture: "android-view-v1.json", device_id: "phone-1", surface_id: "android",
+      fixture: "android", device_id: "phone-1", surface_id: "android",
       release_id: "android-preview-2", artifact_sha256: digestC,
     },
     {
-      fixture: "browser-view-v1.json", device_id: "browser-1", surface_id: "browser_extension",
+      fixture: "browser_extension", device_id: "browser-1", surface_id: "browser_extension",
       release_id: "browser-preview-2", artifact_sha256: digestA,
     },
   ]) {
-    const expected = JSON.parse(fs.readFileSync(
-      new URL(`./fixtures/${target.fixture}`, import.meta.url),
-      "utf8",
-    ));
+    const expected = sharedFixture.views[target.fixture];
     const assignmentRecord = assignment("device-1", "device", target.device_id, 1, "preview", "preview-2");
     const { service } = harness({
       assignment_events: [assignmentRecord],
@@ -414,7 +415,7 @@ test("canonical Android and browser fixtures exactly match public HTTP views", a
     assert.equal(result.status, 200);
     assert.deepEqual(result.body, expected);
     if (target.surface_id === "android") {
-      assert.equal(result.body.installed.app_id, "ai.moa.assistant");
+      assert.equal(result.body.installed.app_id, "ag.companion");
       assert.equal(result.body.installed.version_code, 100);
       assert.equal(result.body.installed.version_name, "1.1.0");
     } else {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import {
   buildAssignmentRequest,
@@ -12,6 +13,20 @@ import {
 
 const stableDigest = "a".repeat(64);
 const previewDigest = "b".repeat(64);
+
+const sharedClientViews = JSON.parse(fs.readFileSync(
+  new URL("../../release_control_plane/test/fixtures/release-control-client-views-v1.json", import.meta.url),
+  "utf8",
+));
+
+test("parses the shared release-control HTTP fixture", () => {
+  const view = parseReleaseControlView(sharedClientViews.views.browser_extension);
+  assert.equal(view.effective_assignment.release_id, "browser-preview-2");
+  assert.equal(view.channels.stable.bundle.release_id, "browser-stable-1");
+  assert.equal(view.channels.preview.bundle.release_id, "browser-preview-2");
+  assert.equal(view.installed.artifact_sha256, "a".repeat(64));
+  assert.equal(view.last_known_good.bundle_id, "stable-1");
+});
 
 function fixture() {
   const stable = {

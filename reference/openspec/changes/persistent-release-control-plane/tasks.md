@@ -107,16 +107,16 @@
       database credentials and isolated preview credentials. Fail before backup
       or preview when the live roles are absent, preserve mode-0600 atomic env
       updates, and test the idempotent no-output installer in gateway CI.
-- [ ] V0.2.9 Run all release-control, Android, and browser verification. Fix any
+- [x] V0.2.9 Run all release-control, Android, and browser verification. Fix any
       failure before creating release artifacts. Add one shared contract test
       that feeds the HTTP projection into both strict client parsers. Align
       Android lifecycle receipts with the service's accepted states.
       - [x] Release-control, gateway, Android unit/build, browser verify, and
         real-extension smoke checks pass; Android `activated` now matches the
         service lifecycle vocabulary.
-      - [ ] One fixture must still be consumed directly by both the Java and
-        JavaScript strict parsers, rather than only being compared with the HTTP
-        projection in service tests.
+      - [x] One canonical HTTP fixture is consumed directly by both the Java and
+        JavaScript strict parsers and is also compared with the service's exact
+        per-surface HTTP projections.
 - [ ] V0.2.10 Host the control-plane service behind production authentication,
       apply the migration to its separate database, seed immutable bundles and
       channel heads, and prove backup/restore and rollback.

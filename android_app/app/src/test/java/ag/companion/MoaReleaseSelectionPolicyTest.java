@@ -4,14 +4,30 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import java.util.List;
 
 public final class MoaReleaseSelectionPolicyTest {
     private static final String DIGEST = "a".repeat(64);
+
+    @Test
+    public void parsesSharedReleaseControlHttpFixture() throws Exception {
+        JSONObject payload = sharedClientViews().getJSONObject("views").getJSONObject("android");
+
+        MoaReleaseSelectionPolicy.View view = MoaReleaseSelectionPolicy.parseView(payload);
+
+        assertEquals("android-preview-2", view.assignment.releaseId);
+        assertEquals("android-stable-1", view.stable.releaseId);
+        assertEquals("android-preview-2", view.preview.releaseId);
+        assertEquals("c".repeat(64), view.reportedInstalledSha256);
+        assertTrue(view.hasLastKnownGood);
+    }
 
     @Test
     public void parsesStablePreviewAndKeepsAssignmentSeparateFromInstall() throws Exception {
@@ -306,5 +322,13 @@ public final class MoaReleaseSelectionPolicyTest {
                 .put("version_name", "0.1.9")
                 .put("git_sha", "abc123")
                 .put("status", "installed");
+    }
+
+    private static JSONObject sharedClientViews() throws Exception {
+        try (InputStream input = MoaReleaseSelectionPolicyTest.class.getClassLoader()
+                .getResourceAsStream("release-control-client-views-v1.json")) {
+            if (input == null) throw new AssertionError("Shared release-control fixture is missing");
+            return new JSONObject(new String(input.readAllBytes(), StandardCharsets.UTF_8));
+        }
     }
 }
