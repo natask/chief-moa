@@ -56,3 +56,12 @@ test("master integration uses local gates without PR or Actions commands", () =>
   assert.match(pushMaster, /cargo clippy --all-targets -- -D warnings/);
   assert.match(pushMaster, /verify-dictation-source\.mjs/);
 });
+
+test("Windows candidates fail closed unless all surviving Windows gates run locally", () => {
+  const script = read("scripts/release/push-master.sh");
+  assert.match(script, /Windows changes require the local pre-master gate on a Windows host/);
+  assert.match(script, /cargo build --locked --target x86_64-pc-windows-msvc/);
+  assert.match(script, /dotnet test windows_app\/Aggie\.Windows\.Tests\/Aggie\.Windows\.Tests\.csproj --configuration Release/);
+  assert.match(script, /msbuild windows_app\/Aggie\.Windows\/Aggie\.Windows\.csproj \/restore \/p:Platform=x64 \/p:AppxPackageSigningEnabled=false/);
+  assert.ok(script.indexOf("cargo build --locked --target x86_64-pc-windows-msvc") < script.indexOf("package-windows-dictation-qa.mjs"));
+});

@@ -36,14 +36,24 @@ fi
 if ! git diff --quiet origin/master HEAD -- apple_surfaces; then
   bash scripts/release/local-release.sh macos
 fi
-if ! git diff --quiet origin/master HEAD -- windows_app; then
+if ! git diff --quiet origin/master HEAD -- windows_app \
+  .github/workflows/windows-native-core.yml .github/workflows/windows-surface-shell.yml; then
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) fail "Windows changes require the local pre-master gate on a Windows host" ;;
+  esac
+  command -v dotnet >/dev/null || fail "Windows gate requires dotnet 8"
+  command -v msbuild >/dev/null || fail "Windows gate requires Visual Studio MSBuild"
   (
     cd windows_app/core
     cargo fmt --check
     cargo test --locked
     cargo clippy --all-targets -- -D warnings
+    cargo build --locked --target x86_64-pc-windows-msvc
   )
   node windows_app/scripts/verify-dictation-source.mjs
+  dotnet test windows_app/Aggie.Windows.Tests/Aggie.Windows.Tests.csproj --configuration Release
+  msbuild windows_app/Aggie.Windows/Aggie.Windows.csproj /restore /p:Platform=x64 /p:AppxPackageSigningEnabled=false
   node windows_app/scripts/package-windows-dictation-qa.mjs
 fi
 if ! git diff --quiet origin/master HEAD -- scripts/deploy.sh scripts/release release_control_plane; then
