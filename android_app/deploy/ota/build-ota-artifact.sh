@@ -51,7 +51,10 @@ fi
 # manifest, not just the Gradle source line.
 AAPT="$(find "${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -n1)"
 if [[ -n "$AAPT" ]]; then
-  badging="$("$AAPT" dump badging "$APK_PATH" | head -n1)"
+  # `head` closes this pipe after the first line; under `set -o pipefail`, aapt
+  # then exits with SIGPIPE (141) and aborts an otherwise valid OTA build.
+  # sed reads the complete output while retaining only the package line.
+  badging="$("$AAPT" dump badging "$APK_PATH" | sed -n '1p')"
   if [[ "$badging" != *"package: name='$APP_ID'"* ]]; then
     echo "Built APK package name does not match applicationId '$APP_ID' derived from $BUILD_GRADLE." >&2
     exit 1
