@@ -183,20 +183,18 @@ recording with temporary fakes; it does not contact or mutate a live service.
 
 ## Promote A New Version From Your Workstation
 
-After the target branch is committed locally and ready to become the active VPS
-gateway, run the local promotion wrapper from the repo checkout:
+After the exact candidate is committed locally and ready to become the active
+VPS gateway, run the local-first release entrypoint:
 
 ```sh
-scripts/vps/push.sh --host root@203.0.113.7 --ref master
-# or:
-MOA_VPS_SSH=root@vps scripts/vps/push.sh --ref master
+bash scripts/deploy.sh gateway \
+  --direct-deploy --target chief-moa-production
 ```
 
-The script never guesses the host. It refuses uncommitted VPS deploy-path
-changes, pushes the named local branch to `origin` only when origin is missing
-that branch or is behind it, then SSHes to the VPS and runs
-`/opt/chief-moa/app/scripts/vps/update.sh --ref <branch>`. For a non-default
-checkout path, set `MOA_VPS_APP_DIR=/path/to/app`.
+The tracked target record supplies the verified identity and host. The wrapper
+runs the exact local gate, pins the full candidate SHA, publishes an immutable
+SHA-named ref, then SSHes to the VPS candidate promoter. The promoter creates
+and validates release evidence before the guarded updater runs.
 
 This is a promotion of the active gateway. Run it only when an operator has
 explicitly approved deploy/promote for the current turn. Promotion builds and

@@ -35,9 +35,10 @@
       installation, and install without relaunch smoke is not production-ready.
       Implemented by `scripts/release/release-evidence.mjs`; the first slice is
       an intentionally read-only projection and does not yet persist receipts.
-      `.github/workflows/release-evidence.yml` runs the surface matrix on every
-      relevant branch, and Android OTA CI now runs the full Gradle `check`
-      (including the coverage ratchet) plus `assembleDebug` before packaging.
+      `scripts/release/local-release.sh` runs the surface checks and records
+      exact artifact SHA-256 receipts without runner or remote effects. Android
+      runs lint, unit tests, package assembly, and OTA transaction tests before
+      packaging.
       The first full run also forced the pre-Android-14 Quick Settings launch
       fallback behind a narrowly annotated legacy helper while retaining the
       required PendingIntent path on Android 14+.

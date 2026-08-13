@@ -67,12 +67,13 @@ npm start
 VPS gateway deploy path:
 
 ```sh
-scripts/vps/push.sh --host root@203.0.113.10 --ref master
+bash scripts/deploy.sh gateway \
+  --direct-deploy --target chief-moa-production
 ```
 
 See [gateway/deploy/vps/README.md](gateway/deploy/vps/README.md) before using
 this against active clients; this is an active gateway promotion, so the VPS
-backup and scratch restore gate must pass first.
+preview, drain, compatibility, rollback, and smoke gates must pass first.
 
 Browser extension check:
 
@@ -122,16 +123,16 @@ android_app/deploy/ota/build-ota-artifact.sh
 VPS Android OTA publish:
 
 ```sh
-bash scripts/deploy.sh android
+bash scripts/deploy.sh android --direct-deploy --target chief-moa-production
 ```
 
 Android uses OTA-only direct distribution through the gateway and Android
 package installer. Every build must use the same continuity certificate. Read
-[DEPLOYMENT.md](DEPLOYMENT.md) before release work. GitHub Actions currently
-builds a verification artifact. It does not publish an installable update unless
-the workflow uses the continuity key and completes the VPS publication gate.
+[DEPLOYMENT.md](DEPLOYMENT.md) before release work. The default command runs
+locally and writes an exact SHA-256 receipt. Publication requires the explicit
+direct-deploy command above and the continuity key on this Mac.
 
-Auto-deploy committed target changes:
+Locally verify and package committed target changes:
 
 ```sh
 bash scripts/deploy.sh auto

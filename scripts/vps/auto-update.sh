@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # Pull-based automatic promotion for the VPS gateway.
 #
-# CI (deploy-vps.yml) verifies every gateway-touching push to master and, on
-# success, fast-forwards the `vps-deploy` ref to that SHA. This script runs
-# from a systemd timer on the VPS, notices when origin/vps-deploy moves past
-# the deployed checkout, and promotes through the guarded preview/apply path.
-#
-# GitHub runners cannot reach port 22 on this droplet (cloud firewall), which
-# is why promotion pulls from here instead of CI pushing in.
+# The operator may explicitly publish a locally verified `vps-deploy` ref.
+# This script runs from a systemd timer on the VPS, notices when that ref moves
+# past the deployed checkout, and promotes through the guarded preview/apply
+# path. GitHub runners are not part of this release path.
 #
 # Installed by install-auto-update.sh. Safe to run by hand.
 

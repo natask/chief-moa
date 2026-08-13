@@ -7,7 +7,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SYNC_SCRIPT="$ROOT_DIR/android_app/deploy/ota/sync-vps.sh"
-WORKFLOW="$ROOT_DIR/.github/workflows/android-ota-vps.yml"
 TMP_DIR="$(mktemp -d)"
 FAKE_BIN="$TMP_DIR/bin"
 FAKE_CALL_LOG="$TMP_DIR/calls.log"
@@ -258,11 +257,12 @@ run_sync_with_host() {
     OTA_MODULE_DIR="$ROOT_DIR/gateway/lib" \
     ANDROID_OTA_OUT_DIR="$local_dir" \
     MOA_VPS_OTA_DIR="$remote_dir" \
-    MOA_VPS_PUBLIC_GATEWAY_URL="https://api.example.invalid" \
+    MOA_VPS_PUBLIC_GATEWAY_URL="https://api.agee.app" \
     MOA_OTA_SKIP_BUILD=1 \
     MOA_OTA_SNAPSHOT_RETENTION=5 \
     "$@" \
-    bash "$SYNC_SCRIPT" --host "$host" >"$output" 2>&1
+    bash "$SYNC_SCRIPT" --direct-deploy --target chief-moa-production \
+      --host "$host" >"$output" 2>&1
 }
 
 run_sync() {
@@ -271,7 +271,7 @@ run_sync() {
   local output="$3"
   shift 3
   run_sync_with_host "$local_dir" "$remote_dir" "$output" \
-    qa-secret@example.invalid "$@"
+    root@10.147.17.179 "$@"
 }
 
 # Manufacture a `.publish-lock` describing a publish of the release currently
@@ -354,44 +354,25 @@ if grep -Eq 'rsync.*--delete' "$SYNC_SCRIPT"; then
   exit 1
 fi
 
-# The production workflow must publish the exact artifact whose signer and
-# digest were already verified. Rebuilding inside sync-vps.sh or checking the
-# saved digest only after publication would reopen a TOCTOU gap.
-publish_step="$(sed -n \
-  '/- name: Publish through the existing VPS sync path/,/- name: Fetch and verify the published OTA/p' \
-  "$WORKFLOW")"
-checksum_line="$(first_line_number_containing "$publish_step" 'sha256sum --check --status' || true)"
-sync_line="$(first_line_number_containing "$publish_step" 'bash android_app/deploy/ota/sync-vps.sh' || true)"
-[ -n "$checksum_line" ] && [ -n "$sync_line" ] && [ "$checksum_line" -lt "$sync_line" ] || {
-  echo "Android OTA workflow must verify the saved APK digest before VPS sync" >&2
-  exit 1
-}
-contains_literal "$publish_step" 'MOA_OTA_SKIP_BUILD=1' || {
-  echo "Android OTA workflow must disable rebuilding after stable-signer verification" >&2
-  exit 1
-}
-grep -Fq "node - \"\$manifest\" \"\$apk\"" "$WORKFLOW" || {
-  echo "Android OTA signer verification must run its inline script via node stdin" >&2
-  exit 1
-}
-grep -Fq "node - \"\$ANDROID_OTA_OUT_DIR/latest.json\"" "$WORKFLOW" || {
-  echo "Android OTA publication verification must run its inline script via node stdin" >&2
-  exit 1
-}
-if grep -Fq "node \"\$manifest\" \"\$apk\"" "$WORKFLOW" \
-  || grep -Fq "node \"\$ANDROID_OTA_OUT_DIR/latest.json\"" "$WORKFLOW"; then
-  echo "Android OTA workflow must not execute JSON artifacts as JavaScript" >&2
-  exit 1
-fi
-grep -Fq '^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$' "$WORKFLOW" || {
-  echo "Android OTA workflow must reject option-like SSH targets" >&2
-  exit 1
-}
-if ! grep -Fq 'ssh_host=' "$WORKFLOW" \
-  || ! grep -Fq 'VPS_SSH_TARGET#*@' "$WORKFLOW"; then
-  echo "Android OTA workflow must validate normalized SSH host labels" >&2
-  exit 1
-fi
+# Remote mutation authority must be explicit and target-bound even when the
+# caller invokes the low-level publisher directly.
+case_dir="$TMP_DIR/direct-authority"
+local_dir="$case_dir/local"
+remote_dir="$case_dir/remote"
+mkdir -p "$local_dir" "$remote_dir"
+publish_release "$local_dir" 4 '2026-07-01T00:00:00Z' local-4
+: > "$FAKE_CALL_LOG"
+if env PATH="$FAKE_BIN:$PATH" FAKE_CALL_LOG="$FAKE_CALL_LOG" \
+  ANDROID_OTA_OUT_DIR="$local_dir" MOA_VPS_OTA_DIR="$remote_dir" \
+  bash "$SYNC_SCRIPT" --host root@10.147.17.179 >"$case_dir/no-flag" 2>&1; then exit 1; fi
+[ ! -s "$FAKE_CALL_LOG" ]
+grep -Fq 'require --direct-deploy' "$case_dir/no-flag"
+if env PATH="$FAKE_BIN:$PATH" FAKE_CALL_LOG="$FAKE_CALL_LOG" \
+  ANDROID_OTA_OUT_DIR="$local_dir" MOA_VPS_OTA_DIR="$remote_dir" \
+  bash "$SYNC_SCRIPT" --direct-deploy --target wrong-production \
+    --host root@10.147.17.179 >"$case_dir/wrong-target" 2>&1; then exit 1; fi
+[ ! -s "$FAKE_CALL_LOG" ]
+grep -Fq 'target identity' "$case_dir/wrong-target"
 
 # An option-like SSH target must fail before build or transport even though it
 # otherwise fits the old broad user@host character class.
@@ -910,4 +891,4 @@ grep -Fq 'process.env.MOA_GATEWAY_TOKEN' "$SYNC_SCRIPT" || {
   exit 1
 }
 
-echo "Android OTA VPS publication safety smoke passed (30 fake transport cases + workflow contract)."
+echo "Android OTA VPS publication safety smoke passed (30 fake transport cases)."

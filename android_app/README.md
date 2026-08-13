@@ -67,14 +67,15 @@ npm start
 
 ## Deploy
 
-Repo-level Android deploy publishes and publicly verifies the OTA artifact:
+Repo-level Android release locally verifies and packages the OTA artifact:
 
 ```sh
 bash ../scripts/deploy.sh android
 ```
 
-It never inspects connected devices or installs the APK. The phone discovers
-the release through the OTA manifest and Android owns installer approval.
+It has no remote or device effects. Add
+`--direct-deploy --target chief-moa-production` to publish the exact candidate;
+Android still owns installer approval.
 
 ## Action Runtime
 

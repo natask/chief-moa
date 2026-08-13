@@ -76,13 +76,14 @@ Historical USB and OTA APKs use this certificate. Keep using it until a planned
 key migration proves how every installed device will move without losing app
 state.
 
-Build and publish the current Android OTA through:
+Build, test, package, and hash the current Android OTA locally through:
 
 ```sh
 bash scripts/deploy.sh android
 ```
 
-This command publishes and verifies the OTA artifact only. It never starts
+This command has no remote or device effects. Publish the exact candidate only
+with `--direct-deploy --target chief-moa-production`. Neither command starts
 ADB, inspects connected devices, or installs an APK. Installation is a separate
 Android/user-owned state proven by an install receipt from the phone.
 
@@ -95,30 +96,31 @@ the authoritative history and retry; do not bypass the guard with a newer
 timestamp version code. After building, the wrapper rechecks HEAD and
 Android-input cleanliness and publishes only the exact artifact carrying that full SHA.
 
-This command builds a timestamp-versioned debug APK with the local continuity
+The direct-deploy form builds a timestamp-versioned debug APK with the local continuity
 key and publishes it to the VPS OTA store. The repository entrypoint reads the canonical,
 non-secret production target from `scripts/deploy-targets.json`;
 `MOA_VPS_SSH` overrides that target. The lower-level
-`android_app/deploy/ota/sync-vps.sh` accepts `MOA_VPS_SSH`/`--host` and
-`MOA_VPS_PUBLIC_GATEWAY_URL`, but falls back to the same tracked
-`scripts/deploy-targets.json` (`production.vps_ssh` and
-`production.public_gateway_url`) when neither is set, so running it directly
-(for example to recover a stuck lock, see below) does not require already
-knowing the deploy target. Both remain overridable. SSH authentication
-remains in the user's SSH configuration and is never stored in the target
-file. If you need the public gateway origin and do not have the target file
-handy, the running gateway also reports it at `GET /health` as
-`public_gateway_url`.
+`android_app/deploy/ota/sync-vps.sh` resolves the same tracked
+`scripts/deploy-targets.json` identity, host, and public origin. Its low-level
+entrypoint also requires `--direct-deploy --target chief-moa-production` and
+rejects host or origin overrides that differ from that verified target. SSH
+authentication remains in the user's SSH configuration and is never stored in
+the target file. The running gateway reports the public origin at `GET /health`
+as `public_gateway_url`.
+
+The same target record pins `production.android_signer_sha256` to the
+continuity-certificate digest above. The local release gate verifies the exact
+APK against that value before it writes the SHA-256 artifact receipt.
 
 ### What each stage does
 
-`scripts/deploy.sh android` runs, in order:
+`scripts/deploy.sh android --direct-deploy --target chief-moa-production` runs, in order:
 
 1. **Lineage and build** — the wrapper captures and validates the clean
    candidate lineage, then `android_app/deploy/ota/build-ota-artifact.sh` compiles a
    debug-signed APK with a timestamp version code, unless
    `MOA_OTA_SKIP_BUILD=1` (used when a caller already built and verified the
-   exact artifact, e.g. CI's stable-signed path).
+   exact artifact after local verification).
 2. **Candidate recheck and local validation** — the wrapper proves HEAD and
    cleanliness did not move during the build. The local OTA store's `current` symlink, release
    directory, and legacy compatibility files must be byte-consistent before
@@ -255,35 +257,38 @@ that no publish is actually running, remove `$REMOTE_OTA_DIR/.publish-lock` by
 hand only after confirming `current`, the release directory, and the legacy
 files are all consistent with each other; do not delete it blind.
 
-Running `sync-vps.sh` locally (not through CI) reports which specific
+Running `sync-vps.sh` locally reports which specific
 invariant failed instead of one generic sentence — for example, whether it
 was a missing receipt, a receipt too young to reclaim, a receipt that does
 not match the live release, or an unrelated store-consistency problem — with
-a pointer to this section. CI intentionally keeps this message generic: the
-`Publish through the existing VPS sync path` step in
-`.github/workflows/android-ota-vps.yml` deliberately withholds `sync-vps.sh`'s
-full output because it may contain target details that should not sit in a
-shared build log. That withholding is intentional and untouched; only the
-locally-run message got more specific.
+a pointer to this section. Keep command output local because it may contain
+target details.
 
-## Android GitHub Actions migration
+## Local-first Android release
 
-GitHub Actions is the desired release path. It is still a migration target.
+GitHub Actions is not part of Android release authority. Build, lint, unit
+tests, OTA transaction tests, signing, packaging, and SHA-256 receipts run on
+the development Mac:
 
-A GitHub runner creates its own debug keystore unless the workflow receives a
-stable continuity key. An APK signed with that temporary key cannot update the
-USB-installed app. A green credential-free Android build proves compilation and
-packaging only. It does not prove that the artifact can update the phone.
+```sh
+bash scripts/deploy.sh android
+```
 
-Before GitHub Actions may publish Android OTA updates:
+That command has no remote effects. It leaves the APK and manifest in the local
+OTA output directory and writes a receipt under Git's shared
+`chief-moa-local-releases/` directory.
 
-1. Store the current continuity key in the protected release environment.
-2. Verify its certificate digest against the value in this file.
-3. Build the exact OTA APK with that key.
-4. Compare the APK signer with the installed phone signer or a captured installed
-   base APK.
-5. Publish through the existing VPS transaction and rollback checks.
-6. Complete one real-phone update and smoke check.
+Publish only with an explicit target identity:
+
+```sh
+bash scripts/deploy.sh android \
+  --direct-deploy --target chief-moa-production
+```
+
+The direct publisher re-runs the exact local release gate, verifies the clean
+candidate lineage against the current stable release, verifies the configured
+target identity, preserves the current continuity signer, and then enters the
+existing remote transaction, rollback, and public-digest checks.
 
 Do not create a new signing key during routine deployment. Treat a signing-key
 change as a separate migration.
@@ -298,21 +303,24 @@ Use these terms precisely:
 - `installed`: the target device reports the new version.
 - `smoked`: the installed version passed the surface QA check.
 
-Never report an Android CI artifact as OTA-available until the gateway manifest
+Never report a local Android artifact as OTA-available until the gateway manifest
 serves its version and digest.
-
-This checkout may mark `.github` files as sparse or skip-worktree. If a workflow
-is absent from the working tree, inspect it with:
-
-```sh
-git show HEAD:.github/workflows/<workflow>.yml
-```
 
 ## Gateway and extension
 
-Move `master` only through `scripts/release/push-master.sh`. Gateway CI moves the
-verified commit to `vps-deploy`. The VPS timer then runs preview, drain,
-compatibility, rollback, and smoke checks before it changes the active gateway.
+Move `master` only through
+`scripts/release/push-master.sh --direct-push --target master`. It runs affected
+release gates locally and fast-forwards the exact verified candidate without a
+pull request or runner. An explicit gateway deployment runs as:
+
+```sh
+bash scripts/deploy.sh gateway \
+  --direct-deploy --target chief-moa-production
+```
+
+The local wrapper verifies and hashes the gateway candidate, then uses
+`scripts/vps/push.sh`; the VPS still runs preview, drain, compatibility,
+rollback, and smoke checks before it changes the active gateway.
 
 Gateway promotion does not create a Postgres dump or copy `/data`. The previous
 code revision remains the rollback target while Postgres and the named data
@@ -332,12 +340,9 @@ trigger. Do not restore the old `OnUnitActiveSec` schedule; its 120-second
 activation-relative interval elapsed during a promotion and the resulting
 collision looked like a timeout. The installer also removes the known legacy
 1800-second activation-relative drop-in so it cannot remain as a second trigger.
-GitHub Actions verifies the candidate and publishes `vps-deploy`; it does not
-hold a paid runner open while the droplet builds. `scripts/release/push-master.sh`
-waits from the operator machine until public `/health` reports the exact commit.
-A green ref-publication job alone is still not a successful deploy. Rapid
-updates to the same branch or master ref cancel stale CI runs before they spend
-more runner time.
+The operator publishes only an exact locally verified candidate. A moved Git
+ref alone is not a successful deploy; public `/health` and the durable VPS
+promotion receipt must identify the exact commit.
 
 For the first release that adds the separate release-control database, install
 its two distinct role passwords without restarting the active gateway:

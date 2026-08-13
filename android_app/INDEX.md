@@ -60,9 +60,9 @@ intentionally pointing the app at this Mac's local gateway over ZeroTier.
 bash scripts/deploy.sh android
 ```
 
-This builds the timestamp-versioned OTA APK, syncs it to the gateway, and
-publicly verifies the exact manifest and APK. It does not inspect or install to
-connected devices.
+This runs the local Android gates, builds the timestamp-versioned OTA APK, and
+writes an immutable APK and SHA-256 receipt. It has no remote or device effects.
+Publish only with `--direct-deploy --target chief-moa-production`.
 
 ## Main Files
 

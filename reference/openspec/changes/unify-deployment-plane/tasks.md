@@ -173,7 +173,7 @@
 
 ## 6. Documentation
 
-- [ ] 6.1 Remove or correct `deploy_gateway()` at `scripts/deploy.sh:151-170`,
+- [x] 6.1 Remove or correct `deploy_gateway()` at `scripts/deploy.sh:151-170`,
       which targets the decommissioned main machine.
       Acceptance: no document lists a gateway promotion command that cannot
       promote the gateway.

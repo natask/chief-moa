@@ -1460,8 +1460,8 @@ single `${turnId}.assistant.pcm` file used today, and `streaming`,
 result and canonical record; no migration is required, and rollback to the
 previous ref or `VOICE_STREAMING=0` reproduces the prior record shape exactly.
 
-Rollout is gateway-first: merging and pushing promotes through the existing
-`Deploy VPS gateway` workflow and droplet auto-update timer, since old clients
+Rollout is gateway-first: the locally verified explicit direct deploy promotes
+through the guarded VPS path, since old clients
 already tolerate the multi-frame wire behavior. Live QA on both the phone and
 the browser immediately after promotion is mandatory, not optional
 observation, because the shipped Android APK and packaged extension exercise
@@ -2140,9 +2140,9 @@ explicitly temporary, high-risk single-user compromise.
 
 The current Android distribution policy is OTA-only. OTA updates must keep the
 same package id and debug signing certificate. The continuity key lives on the
-development Mac. A GitHub runner's temporary debug key produces a verification
-artifact that cannot update the installed app. `DEPLOYMENT.md` records the
-current certificate digest and the gates for moving signing into GitHub Actions.
+development Mac. Local release gates build and hash the exact APK before the
+explicit direct publisher may send it to the OTA store. `DEPLOYMENT.md` records
+the certificate digest and direct-publication gates.
 
 VPS publication is a transaction over an immutable release directory. The
 publisher first validates the local `current` pointer and byte-consistent
@@ -2783,10 +2783,11 @@ queues.
   Agent-loop smoke:
   `browser_extension/scripts/smoke-agent-loop.mjs`
   (`npm run smoke:agent-loop`).
-- `scripts/deploy.sh`: shared deploy entrypoint for gateway, Android OTA,
-  browser extension, and committed-change auto-deploy.
-- `.github/workflows/android-ota.yml`: commit-triggered Android OTA artifact
-  build and main-machine deploy.
+- `scripts/deploy.sh`: local-first verification/package entrypoint for gateway,
+  Android OTA, and browser extension; active effects require an explicit direct
+  deploy flag and verified target identity.
+- `scripts/release/local-release.sh`: exact local tests, packaging, and SHA-256
+  receipts without remote effects.
 - `gateway/Dockerfile`, `docker-compose.yml`, `docker-compose.vps.yml`: one
   gateway image and the VPS stack (gateway + Postgres + Caddy TLS).
 - `gateway/deploy/vps`: VPS runbook, Caddyfile, and compose env example.
@@ -2830,9 +2831,9 @@ new-client/old-server behavior before the control plane marks the candidate
 eligible; sharing a release-control view does not make preview storage shared
 production storage.
 
-Gateway-touching master pushes are verified in a read-only CI job. A separate,
-write-scoped job may atomically advance only `vps-deploy` to that exact verified
-master SHA. The droplet then owns runtime authority: its pull timer requires
+Gateway candidates are verified and hashed on the operator machine. An explicit
+direct deploy publishes an immutable SHA-named candidate ref and invokes the
+guarded candidate promoter. The droplet then owns runtime authority: it requires
 four distinct credentials, waits for a drain-safe gateway, runs the candidate
 from an isolated checkout/project/ports/volumes, records the M4
 review/preview/verification/apply claim, and only then calls the guarded updater.
@@ -2895,12 +2896,11 @@ active code no longer needs it.
 Promote automatically when the gate is proven. Wait at the preview or artifact
 when it is not proven.
 
-`scripts/deploy.sh auto` is the repo-level active-promotion target after the
-gate passes. It deploys only committed gateway, Android, and browser-extension
-changes since each target's last successful deploy marker, and skips dirty
-target files so uncommitted work is not published. Explicit deploy targets
-remain available when a human or agent needs one surface: `gateway`, `android`,
-`extension`, or `all`.
+`scripts/deploy.sh auto` is the repo-level local verification and packaging
+target. It runs only committed gateway, Android, and browser-extension changes
+since each target's last successful marker and skips dirty target files. Active
+effects require `--direct-deploy --target chief-moa-production` on an explicit
+surface target.
 
 `scripts/deploy.sh plan <release-evidence.json>` is the non-mutating precursor
 for every surface. It fails closed on unknown fields, mismatched artifact

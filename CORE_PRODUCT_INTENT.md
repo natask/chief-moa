@@ -226,11 +226,12 @@ workers when local projects and worktrees consume too much disk or memory.
 Delete a task worktree only after its unique work is committed, integrated, and
 recorded. Keep no idle worktree as task state.
 
-The user's preferred end state is direct, sequenced work on `master`. The live
-repo contract currently requires isolated fix work and moves `master` only
-through `scripts/release/push-master.sh`. Keep that safety rule until a new
-workflow proves that shared-master edits cannot mix candidates, race QA, or
-publish unverified state.
+The user's preferred end state is direct, sequenced work on `master`. Isolated
+fix work moves `master` only through the local release gate in
+`scripts/release/push-master.sh --direct-push --target master`. The command pins
+one candidate, runs affected tests and packaging locally, records artifact
+hashes, and rechecks master before its direct fast-forward. GitHub runners are
+not release authority.
 
 Relevant work:
 

@@ -92,8 +92,7 @@
       `VOICE_STREAM_MAX_CHARS`/`VOICE_TTS_MAX_CHARS` split, and the mandatory
       post-promote live QA step.
 - [x] 5.3 Note in `proposal.md` that this docs change must land in the same
-      master push as the gateway lane, since `deploy-vps.yml` triggers only
-      on `gateway/**`.
+      locally verified candidate as the gateway lane.
 - [x] 5.4 Verification: inspect
       `reference/openspec/changes/streaming-cascaded-voice/` for structural
       parity with sibling changes and run `openspec validate

@@ -91,45 +91,38 @@ re-deriving the commands. Each is a thin wrapper over the repo's real
   doesn't respond" reports.
 - `moa-extension-refresh` - verify + smoke + auto-bump the manifest patch
   version as a tracked edit + package + reload the unpacked browser extension
-  via `scripts/deploy.sh extension`, then VERIFY the loaded extension actually
+  via `scripts/deploy.sh extension --direct-deploy --target chief-moa-production`, then VERIFY the loaded extension actually
   reloaded (the poke is a fire-and-forget 12s window). Reports the reload as
   confirmed, blocked, or unverified -- never claims success when only the poke
   fired. Records a blocker with the package path when the reload is blocked or
   unverified. For deep fuzzing use `chrome-extension-qa-ralph` instead.
 - `moa-gateway-refresh` - audit-first gateway health, drift, and change review.
   Audit mode is read-only and never restarts the live service. Promotion
-  (`scripts/deploy.sh gateway`) requires the active-promotion gate to pass:
+  (`scripts/deploy.sh gateway --direct-deploy --target chief-moa-production`)
+  requires the active-promotion gate to pass:
   preview smoke, rollback path, no interrupted work, and state compatibility.
-  Background/cron invocations may
-  promote when they can prove the same gate; otherwise they stop at audit.
+  Background and cron invocations remain audit/local-release only.
 
 The main machine (10.147.17.10) has been decommissioned. The production
 gateway is the DigitalOcean droplet behind https://api.agee.app. Fix work
 happens in an isolated branch or worktree, never against the running service.
 
-Android currently uses OTA-only direct distribution through the gateway and
-Android package installer. OTA APKs must use the same debug certificate from
-this development Mac. The GitHub-runner signing path is a migration target. A green
-credential-free Android CI artifact is not an OTA publication. Read
+Android uses OTA-only direct distribution through the gateway and Android
+package installer. OTA APKs use the continuity certificate on this development
+Mac. Local verification, packaging, and SHA-256 receipts are mandatory. Read
 `DEPLOYMENT.md` before Android release work.
 
-The VPS gateway auto-promotes (user-approved policy, 2026-07-06): every push
-to master that touches the gateway deploy path is verified by the
-`Deploy VPS gateway` workflow, which on success moves the `vps-deploy` ref;
-a systemd timer on the droplet (`scripts/vps/auto-update.sh`) promotes that
-ref after the prior worker finishes plus a ~2-minute completion-relative delay
-through `scripts/vps/update.sh`. A long preview/build cannot collide with its
-own next timer trigger. The state-compatibility and rollback gates still abort
-before touching the service if either fails.
-Agents deploy the gateway by merging verified work to master when the
-active-promotion gate below passes. If the gate is not proven, they wait.
-Manual promotion (`scripts/vps/push.sh`) uses the same gate.
+GitHub runners are not part of the release path. The operator machine runs the
+exact local gates and creates artifact SHA-256 receipts. An explicit direct
+deploy then invokes the guarded VPS or OTA publisher. Preview, drain,
+state-compatibility, rollback, and smoke gates still abort before active
+mutation if any check fails.
 
-Master is moved ONLY through `scripts/release/push-master.sh`, never by a
-direct `git push origin <branch>:master`. The script pushes the branch, opens
-a PR so the same CI workflows verify it branch-side, waits for green, and
-fast-forwards master only then — a red run burns on the branch instead of on
-the deploy ref. When extension sources changed, pick the version with
+Master is moved ONLY through
+`scripts/release/push-master.sh --direct-push --target master`, never by an
+unverified direct push. The script runs affected release gates locally, pins
+the exact candidate SHA, rechecks that master did not move, then fast-forwards
+master without a pull request or GitHub runner. When extension sources changed, pick the version with
 `scripts/release/next-extension-version.sh` (it scans every ref so parallel
 branches never collide).
 
@@ -197,24 +190,29 @@ promotion happens automatically when the active-promotion gate passes, then the
 target is smoke-checked. For Android app changes, publish the OTA artifact when
 the install path will not interrupt an active phone session and rollback is
 clear. Use the current local continuity signer described in `DEPLOYMENT.md`.
-Do not substitute a GitHub runner's temporary debug key.
+Do not substitute another signing key.
 If preview or active promotion is blocked by missing credentials, failing
 verification, unavailable network, unsafe state, or a non-deployable docs-only
 change, record the blocker plainly before ending the task.
 
-Active promotion commands:
+Local verification and packaging commands (no publication or reload):
 
 - Auto-detect committed target changes: `bash scripts/deploy.sh auto`
 - Gateway: `bash scripts/deploy.sh gateway`
 - Android OTA: `bash scripts/deploy.sh android`
-- Browser extension/local browser: `bash scripts/deploy.sh extension`
-- Explicit all-target deploy: `bash scripts/deploy.sh all`
+- Browser extension: `bash scripts/deploy.sh extension`
+- All targets: `bash scripts/deploy.sh all`
 
-`scripts/deploy.sh auto` is the default active-promotion target for repo-level
-agents after the active-promotion gate passes. It deploys committed gateway,
-Android, and browser-extension changes since each target's last successful
-deploy marker. It skips dirty target files and logs the reason instead of
-publishing uncommitted work.
+Active promotion requires both explicit switches:
+
+```sh
+bash scripts/deploy.sh <gateway|android|extension|all> \
+  --direct-deploy --target chief-moa-production
+```
+
+`scripts/deploy.sh auto` defaults to local release work. It skips dirty targets
+and never publishes, reloads, invokes SSH, or marks a target deployed unless
+the explicit direct-deploy flag and verified target identity are present.
 
 Browser-extension packaging is a release artifact. Browser-extension active
 promotion means verify, smoke-test, package the extension, and send a short

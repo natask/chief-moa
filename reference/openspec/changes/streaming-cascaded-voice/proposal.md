@@ -122,11 +122,8 @@ instead of a single blocking call.
   streaming turn (both already tolerate N frames); their own hardening lanes
   (`android-compat`, `browser-compat`) verify against the shipped gateway
   behavior but do not add wire-protocol surface.
-- This docs change must land in the SAME master push as the gateway lane:
-  `deploy-vps.yml` triggers only on `gateway/**`, so a separate docs-only push
-  would leave `ARCHITECTURE.md` describing shipped behavior the deployed
-  gateway does not yet run (or vice versa, a docs push lagging an already
-  promoted gateway).
+- This docs change must land in the same locally verified candidate as the
+  gateway lane so `ARCHITECTURE.md` and the promoted runtime cannot drift.
 
 ## Verification
 

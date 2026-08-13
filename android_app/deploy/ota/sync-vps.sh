@@ -7,23 +7,22 @@
 #   2. verify the staged bytes, install the immutable release, refresh legacy
 #      artifacts, and atomically move `current` last.
 #
-#   MOA_VPS_SSH=root@vps android_app/deploy/ota/sync-vps.sh
-#   android_app/deploy/ota/sync-vps.sh --host root@vps
+#   android_app/deploy/ota/sync-vps.sh --direct-deploy \
+#     --target chief-moa-production --host root@vps
 #
-# This low-level publisher accepts --host or MOA_VPS_SSH, but falls back to
-# the repository's tracked, non-secret canonical production target in
-# scripts/deploy-targets.json when neither is set, so a human running this
-# script directly (e.g. to recover a stuck lock) does not have to already know
-# the deploy target. MOA_VPS_PUBLIC_GATEWAY_URL falls back the same way. Both
-# remain overridable. See DEPLOYMENT.md's "Android OTA" section for the full
-# publish/recover/rollback story, including how to read a stuck-lock failure.
+# This low-level publisher resolves the repository's tracked production
+# identity, host, and public origin from scripts/deploy-targets.json. Supplied
+# host/origin values must match that record. See DEPLOYMENT.md's "Android OTA"
+# section for the publish/recover/rollback story.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LOCAL_OTA_DIR="${ANDROID_OTA_OUT_DIR:-$ROOT_DIR/gateway/data/android-ota}"
-DEPLOY_TARGETS_FILE="${MOA_DEPLOY_TARGETS_FILE:-$ROOT_DIR/scripts/deploy-targets.json}"
+DEPLOY_TARGETS_FILE="$ROOT_DIR/scripts/deploy-targets.json"
 HOST="${MOA_VPS_SSH:-}"
+DIRECT_DEPLOY=false
+EXPECTED_TARGET=""
 # Host-side path of the canonical stable Android release store. Recognized
 # historical package ids publish one `current` pointer here. Optional future
 # experimental channels are explicit user-selected heads, not directories
@@ -90,9 +89,34 @@ while [ $# -gt 0 ]; do
       HOST="$2"
       shift 2
       ;;
+    --direct-deploy)
+      DIRECT_DEPLOY=true
+      shift
+      ;;
+    --target)
+      [ -n "${2:-}" ] || { echo "--target requires an identity" >&2; exit 1; }
+      EXPECTED_TARGET="$2"
+      shift 2
+      ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+CANONICAL_IDENTITY="$(canonical_target_field identity 2>/dev/null || true)"
+CANONICAL_HOST="$(canonical_target_field vps_ssh 2>/dev/null || true)"
+CANONICAL_PUBLIC_URL="$(canonical_target_field public_gateway_url 2>/dev/null || true)"
+if [ "$DIRECT_DEPLOY" != true ]; then
+  echo "Remote OTA effects require --direct-deploy and a verified --target identity." >&2
+  exit 1
+fi
+if [ -z "$CANONICAL_IDENTITY" ] || [ "$EXPECTED_TARGET" != "$CANONICAL_IDENTITY" ]; then
+  echo "OTA target identity does not match the configured production identity." >&2
+  exit 1
+fi
+if [ "$HOST" != "$CANONICAL_HOST" ] || [ "$REMOTE_PUBLIC_GATEWAY_URL" != "$CANONICAL_PUBLIC_URL" ]; then
+  echo "OTA host or public origin does not match the verified production target." >&2
+  exit 1
+fi
 
 if [ -z "$HOST" ]; then
   echo "Missing VPS host: no --host, no MOA_VPS_SSH, and $DEPLOY_TARGETS_FILE has no readable production.vps_ssh. Set MOA_VPS_SSH=user@host, pass --host user@host, or fix that tracked file." >&2

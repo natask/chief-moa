@@ -1,6 +1,8 @@
 {
   "production": {
+    "identity": "chief-moa-production",
     "vps_ssh": "root@10.147.17.179",
-    "public_gateway_url": "https://api.agee.app"
+    "public_gateway_url": "https://api.agee.app",
+    "android_signer_sha256": "8f0b62c73777a961687041f6faac24597830127d1f0ca9841aa6f7c70fe6ae0d"
   }
 }

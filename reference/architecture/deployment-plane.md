@@ -5,6 +5,11 @@ structure that replaces it. Written 2026-07-29 against the live droplet
 (`root@143.198.226.83`, read-only) and the tree at
 `feat/deployment-architecture-audit-20260729`.
 
+> Historical audit: the GitHub-runner mechanics below were removed on
+> 2026-08-13. The current local-first contract and exact removal inventory are
+> recorded in
+> `reference/openspec/changes/unify-deployment-plane/local-first-release-20260813.md`.
+
 ## Summary
 
 The user's complaint is correct. There are three deployment mechanisms. They
