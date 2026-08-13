@@ -28,6 +28,8 @@ test("normal local release has no GitHub runner or remote publication entrypoint
   assert.match(localRelease, /shasum -a 256/);
   assert.match(localRelease, /chief-moa-local-release\/v1/);
   assert.match(localRelease, /remote_effects: false/);
+  assert.match(localRelease, /extension-\$\{HEAD_SHA\}\.zip/);
+  assert.match(localRelease, /immutable extension artifact copy changed/);
 });
 
 test("active effects require an explicit flag and configured target identity", () => {

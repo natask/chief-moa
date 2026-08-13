@@ -124,11 +124,17 @@ release_extension() {
   fi
   log "extension: running verification, smoke, and package"
   (cd "$ROOT_DIR/browser_extension" && npm run verify && npm run smoke && npm run package)
-  local version archive
+  local version archive digest immutable_archive
   version="$(node -p "require('$ROOT_DIR/browser_extension/extension/manifest.json').version")"
   archive="$(find "$ROOT_DIR/browser_extension/dist" -maxdepth 1 -type f -name "*-${version}.zip" -print -quit)"
   [ -n "$archive" ] || fail "extension package for version $version was not found"
-  write_receipt extension "$archive" "$(sha256_file "$archive")"
+  digest="$(sha256_file "$archive")"
+  immutable_archive="$RECEIPT_DIR/extension-${HEAD_SHA}.zip"
+  cp "$archive" "$immutable_archive"
+  chmod 600 "$immutable_archive"
+  [ "$(sha256_file "$immutable_archive")" = "$digest" ] \
+    || fail "immutable extension artifact copy changed"
+  write_receipt extension "$immutable_archive" "$digest"
 }
 
 release_macos() {
