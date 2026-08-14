@@ -1,3 +1,4 @@
+- Added a voice-independent native release rescue that caches exact device-bound Stable/Trial metadata, verifies APK digest/package/version/continuity signer, and routes reconnect into real enrollment without silent uninstall — agent: Codex/GPT-5 — this commit
 - Made gateway promotion prove Postgres-backed release control in preview, then enable it on drained production with automatic env rollback — agent: Codex/GPT-5 — this commit
 - Restored AG mobile chat and voice through owner-bound enrolled-device auth, blocked tokenless stable OTA publication, exposed stable/trial/feature releases, and kept guarded promotion on master without release branches — agent: Codex/GPT-5 — this commit
 - Exposed capture, socket, gateway STT/model/TTS, and real Android playout latency for completed phone voice turns — agent: Codex/GPT-5.6 — this commit

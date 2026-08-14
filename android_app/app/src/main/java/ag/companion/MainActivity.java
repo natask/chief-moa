@@ -127,6 +127,7 @@ public final class MainActivity extends Activity {
         setContentView(createContent());
         scrollToHistoryIfRequested(getIntent());
         openReleaseCandidateIfRequested(getIntent());
+        handleRecoveryIntent(getIntent());
     }
 
     @Override
@@ -143,6 +144,7 @@ public final class MainActivity extends Activity {
         updatePermissionState();
         scrollToHistoryIfRequested(intent);
         openReleaseCandidateIfRequested(intent);
+        handleRecoveryIntent(intent);
         if (Settings.canDrawOverlays(this) && OverlayService.isRunning()) {
             collapseOverlaySurfaces();
         }
@@ -213,6 +215,23 @@ public final class MainActivity extends Activity {
             contentScroll.post(() -> contentScroll.smoothScrollTo(0, releaseController.anchor().getTop()));
         }
         releaseController.refresh();
+    }
+
+    private void handleRecoveryIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (MoaVoiceRecoveryDialog.ACTION_RECONNECT_DEVICE.equals(action)) {
+            intent.setAction(null);
+            showFullAppSection(true);
+            if (enrollmentCapabilityInput != null) {
+                enrollmentCapabilityInput.requestFocus();
+                contentScroll.requestChildFocus(enrollmentCapabilityInput, enrollmentCapabilityInput);
+            }
+        } else if (MoaVoiceRecoveryDialog.ACTION_OPEN_RELEASE_RESCUE.equals(action)) {
+            intent.setAction(null);
+            new MoaReleaseRescueController(this, MoaPrefs.gatewayUrl(this),
+                    MoaPrefs.gatewayToken(this), androidDeviceId()).show();
+        }
     }
 
     private void startBoundedReleasePolling() {
@@ -1747,65 +1766,18 @@ public final class MainActivity extends Activity {
     // Rollback verification mirrors verifyDownloadedUpdate but must not require a
     // higher version than installed — a rollback is intentionally same-or-lower.
     private void verifyDownloadedRollback(MoaUpdatePolicy.RollbackOption rollback, File apk) throws Exception {
-        if (rollback.sizeBytes <= 0 || apk.length() != rollback.sizeBytes) {
-            throw new IllegalStateException("rollback APK size mismatch");
-        }
-        if (!rollback.sha256.matches("[a-f0-9]{64}") || !rollback.sha256.equalsIgnoreCase(sha256Hex(apk))) {
-            throw new IllegalStateException("rollback APK checksum mismatch");
-        }
-
-        PackageInfo archive = MoaUpdateArtifact.packageInfoForArchive(getPackageManager(), apk);
-        if (archive == null || !getPackageName().equals(archive.packageName)) {
-            throw new IllegalStateException("rollback APK package mismatch");
-        }
-        long archiveVersionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-                ? archive.getLongVersionCode()
-                : archive.versionCode;
-        if (archiveVersionCode != rollback.versionCode) {
-            throw new IllegalStateException("rollback APK version mismatch");
-        }
-
-        PackageInfo installed = getPackageManager().getPackageInfo(
-                getPackageName(),
-                MoaUpdateArtifact.signatureFlags()
-        );
-        if (!signatureDigests(installed).equals(signatureDigests(archive))) {
-            throw new IllegalStateException("rollback APK signer mismatch");
-        }
+        MoaReleaseArtifactVerifier.verify(getPackageManager(), getPackageName(), apk,
+                getPackageName(), rollback.versionCode, rollback.sha256, rollback.sizeBytes);
     }
 
     private void verifyDownloadedUpdate(JSONObject update, File apk) throws Exception {
-        if (!getPackageName().equals(update.optString("app_id", "").trim())) {
-            throw new IllegalStateException("APK application id mismatch");
-        }
-        long expectedSize = update.optLong("size_bytes", 0);
-        if (expectedSize <= 0 || apk.length() != expectedSize) {
-            throw new IllegalStateException("APK size mismatch");
-        }
-        String expectedSha = update.optString("sha256", "").trim().toLowerCase();
-        if (!expectedSha.matches("[a-f0-9]{64}") || !expectedSha.equalsIgnoreCase(sha256Hex(apk))) {
-            throw new IllegalStateException("APK checksum mismatch");
-        }
-
-        PackageInfo archive = MoaUpdateArtifact.packageInfoForArchive(getPackageManager(), apk);
-        if (archive == null || !getPackageName().equals(archive.packageName)) {
-            throw new IllegalStateException("APK package mismatch");
-        }
-        long archiveVersionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-                ? archive.getLongVersionCode()
-                : archive.versionCode;
         long manifestVersionCode = update.optLong("version_code", 0L);
-        if (manifestVersionCode <= currentVersionCode() || archiveVersionCode != manifestVersionCode) {
+        if (manifestVersionCode <= currentVersionCode()) {
             throw new IllegalStateException("APK version mismatch");
         }
-
-        PackageInfo installed = getPackageManager().getPackageInfo(
-                getPackageName(),
-                MoaUpdateArtifact.signatureFlags()
-        );
-        if (!signatureDigests(installed).equals(signatureDigests(archive))) {
-            throw new IllegalStateException("APK signer mismatch");
-        }
+        MoaReleaseArtifactVerifier.verify(getPackageManager(), getPackageName(), apk,
+                update.optString("app_id", ""), manifestVersionCode,
+                update.optString("sha256", ""), update.optLong("size_bytes", 0L));
     }
 
     private Set<String> signatureDigests(PackageInfo info) throws Exception {

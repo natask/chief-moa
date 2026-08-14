@@ -84,7 +84,7 @@ final class MoaVoiceRecoveryDialog {
         rescue.setOnClickListener(view -> {
             dialog.dismiss();
             openApp(context, ACTION_OPEN_RELEASE_RESCUE,
-                    "Release rescue is not available in this build yet.");
+                    "Opening release rescue without voice or model access.");
         });
 
         Window window = dialog.getWindow();
