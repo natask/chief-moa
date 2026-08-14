@@ -20,7 +20,8 @@ gateway_token="$(value MOA_GATEWAY_TOKEN)"
 [ "${#gateway_token}" -ge 32 ] || { echo "MOA_GATEWAY_TOKEN is missing or too short" >&2; exit 1; }
 
 missing=()
-for key in MOA_DEPLOY_REVIEWER_TOKEN MOA_PREVIEW_DEPLOYER_TOKEN MOA_PRODUCTION_PROMOTER_TOKEN; do
+for key in MOA_DEPLOY_REVIEWER_TOKEN MOA_PREVIEW_DEPLOYER_TOKEN \
+  MOA_PRODUCTION_PROMOTER_TOKEN MOA_DEVELOPMENT_COORDINATOR_TOKEN; do
   current="$(value "$key")"
   if [ "${#current}" -lt 32 ]; then
     [ "$MODE" = "--install" ] || { echo "$key is not configured" >&2; exit 1; }
@@ -35,14 +36,24 @@ if [ "${#missing[@]}" -gt 0 ]; then
   done
   mv -f "$env_temporary" "$ENV_FILE"
 fi
+if [ "$MODE" = "--install" ]; then
+  chmod 600 "$ENV_FILE"
+  if [ "$(id -u)" -eq 0 ]; then
+    chown root:root "$ENV_FILE"
+  fi
+fi
 
 reviewer="$(value MOA_DEPLOY_REVIEWER_TOKEN)"
 preview="$(value MOA_PREVIEW_DEPLOYER_TOKEN)"
 promoter="$(value MOA_PRODUCTION_PROMOTER_TOKEN)"
-[ "$gateway_token" != "$reviewer" ] && [ "$gateway_token" != "$preview" ] \
-  && [ "$gateway_token" != "$promoter" ] && [ "$reviewer" != "$preview" ] \
-  && [ "$reviewer" != "$promoter" ] && [ "$preview" != "$promoter" ] \
-  || { echo "promotion credentials must all be distinct" >&2; exit 1; }
+coordinator="$(value MOA_DEVELOPMENT_COORDINATOR_TOKEN)"
+tokens=("$gateway_token" "$reviewer" "$preview" "$promoter" "$coordinator")
+for ((left = 0; left < ${#tokens[@]}; left++)); do
+  for ((right = left + 1; right < ${#tokens[@]}; right++)); do
+    [ "${tokens[$left]}" != "${tokens[$right]}" ] \
+      || { echo "privileged credentials must all be distinct" >&2; exit 1; }
+  done
+done
 
 domain="$(value MOA_DOMAIN)"
 port="$(value GATEWAY_PORT)"; port="${port:-8787}"
@@ -63,11 +74,17 @@ if [ "$MODE" = "--install" ]; then
   } > "$temporary"
   chmod 600 "$temporary"
   mv -f "$temporary" "$PROMOTION_ENV"
+  if [ "$(id -u)" -eq 0 ]; then
+    chown root:root "$PROMOTION_ENV"
+  fi
   mkdir -p "$SYSTEMD_DIR/chief-moa-auto-update.service.d"
   drop_in="$SYSTEMD_DIR/chief-moa-auto-update.service.d/promotion.conf"
   printf '[Service]\nEnvironmentFile=%s\n' "$PROMOTION_ENV" > "${drop_in}.$$"
   chmod 600 "${drop_in}.$$"
   mv -f "${drop_in}.$$" "$drop_in"
+  if [ "$(id -u)" -eq 0 ]; then
+    chown root:root "$drop_in"
+  fi
   systemctl daemon-reload
 fi
 

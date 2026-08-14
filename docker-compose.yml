@@ -67,6 +67,9 @@ services:
       MOA_DEPLOY_REVIEWER_TOKEN: ${MOA_DEPLOY_REVIEWER_TOKEN:-}
       MOA_PREVIEW_DEPLOYER_TOKEN: ${MOA_PREVIEW_DEPLOYER_TOKEN:-}
       MOA_PRODUCTION_PROMOTER_TOKEN: ${MOA_PRODUCTION_PROMOTER_TOKEN:-}
+      # Server-only authority for durable development-request progress. This is
+      # never a client bootstrap token and must not be shipped to Android/web.
+      MOA_DEVELOPMENT_COORDINATOR_TOKEN: ${MOA_DEVELOPMENT_COORDINATOR_TOKEN:-}
       MOA_DEPLOY_REVIEWER_ID: ${MOA_DEPLOY_REVIEWER_ID:-deployment-reviewer}
       MOA_PREVIEW_DEPLOYER_ID: ${MOA_PREVIEW_DEPLOYER_ID:-preview-deployer}
       MOA_PRODUCTION_PROMOTER_ID: ${MOA_PRODUCTION_PROMOTER_ID:-production-promoter}

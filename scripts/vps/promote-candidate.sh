@@ -65,9 +65,18 @@ preview_compose down -v >/dev/null 2>&1 || true
 docker rm -f "$preview_tls_container" >/dev/null 2>&1 || true
 git -C "$APP_DIR" worktree remove --force "$source_dir" >/dev/null 2>&1 || true
 git -C "$APP_DIR" worktree add --detach "$source_dir" "$target" >/dev/null
+# Install any newly introduced server-only role credential from the candidate
+# before Compose evaluates the active env. This is additive and predecessor-
+# compatible: a failed preview leaves the old gateway running, which ignores
+# unknown env keys, while a retry preserves the exact generated credential.
+MOA_PROMOTION_ENV_FILE="$PROMOTION_ENV" \
+  "$source_dir/scripts/vps/install-promotion-control-plane.sh" --install >/dev/null
 "$source_dir/scripts/vps/install-release-control-database-credentials.sh" --check
 
 preview_token="$(openssl rand -hex 32)"
+preview_coordinator_token="$(openssl rand -hex 32)"
+[ "$preview_coordinator_token" != "$preview_token" ] \
+  || { echo "promotion blocked: preview credentials are not distinct" >&2; exit 1; }
 preview_password="$(openssl rand -hex 32)"
 preview_release_password="$(openssl rand -hex 32)"
 preview_release_publisher_password="$(openssl rand -hex 32)"
@@ -76,6 +85,7 @@ preview_auth_password="$(openssl rand -base64 24 | tr -d '\n')"
 cat > "$preview_env" <<ENV
 MOA_MODE=self-host
 MOA_GATEWAY_TOKEN=$preview_token
+MOA_DEVELOPMENT_COORDINATOR_TOKEN=$preview_coordinator_token
 MOA_AUTH=better-auth
 BETTER_AUTH_URL=https://127.0.0.1:$preview_tls_port
 BETTER_AUTH_SECRET=$preview_auth_secret

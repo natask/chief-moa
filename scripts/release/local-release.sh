@@ -53,6 +53,7 @@ release_gateway() {
   bash "$ROOT_DIR/scripts/vps/test-node-runtime.sh"
   bash "$ROOT_DIR/scripts/vps/test-preview-tls-proxy.sh"
   bash "$ROOT_DIR/scripts/vps/test-install-promotion-control-plane.sh"
+  bash "$ROOT_DIR/scripts/vps/test-development-coordinator-credential.sh"
   bash "$ROOT_DIR/scripts/vps/test-install-release-control-database-credentials.sh"
   bash "$ROOT_DIR/scripts/vps/test-install-auto-update.sh"
   bash "$ROOT_DIR/scripts/vps/test-auto-update.sh"
