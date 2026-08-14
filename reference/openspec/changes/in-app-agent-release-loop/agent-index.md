@@ -64,8 +64,19 @@ remain disjoint and are required before the wave can be promoted.
 | `device_revocation` | `master` | shared current worktree | released; credential generations, revocation migration, focused tests | revoked token stays denied; same binding accepts a new credential generation | complete: `45d40857` |
 | `gateway_wave1_integration` | `master` | shared current worktree | released; server wiring, narrow credential/request handlers, enrolled-device policy | own-device revoke and tenant-owned named requests are reachable without exposing privileged development routes | complete: `a32f0d05` |
 | `android_native_rescue` | `master` | shared current worktree | released; `MainActivity`, recovery dialog, native rescue/cache helpers and tests | reconnect reaches enrollment; rescue works without voice/model and never claims unavailable restore | complete: `2cc8ddc8` |
-| `gateway_recovery_read` | `master` | shared current worktree | gateway recovery manifest route, enrollment scope, route policy, focused tests | dedicated read-only recovery capability without conversation or mutation authority | active |
-| `wave1_verifier` | `master` | shared current worktree | read-only review and cross-surface gates | all P1 findings closed and exact gates green | findings issued; reverify pending |
+| `gateway_recovery_read` | `master` | shared current worktree | released; recovery manifest route, enrollment scope, route policy, focused tests | dedicated read-only recovery capability without conversation or mutation authority | complete: `7aa109e6` |
+| `wave1_verifier` | `master` | shared current worktree | read-only review and cross-surface gates | all P1 findings closed and exact gates green | final reverify active |
+
+## Corrective Wave 1C
+
+| Agent/task | Branch | Worktree | Exact path claim | Exit criterion | State |
+| --- | --- | --- | --- | --- | --- |
+| `gateway_wave1_integration` | `master` | shared current worktree | gateway request/credential authority boundary and tests | phones cannot forge progress; recent owner can revoke a lost credential | complete: `45c1b58c` |
+| `coordinator_token_ops` | `master` | shared current worktree | Compose and guarded VPS credential installers/tests | distinct coordinator token is generated, collision-checked, and gateway-only | complete: `d8e851d1` |
+| `forward_recovery_lead` | `master` | shared current worktree | integration/review across the three disjoint recovery lanes | forward recovery is truthful, continuity-signed, in-place, and pointer-independent | complete |
+| `recovery_artifact_pipeline` | `master` | shared current worktree | `android_app/deploy/ota/**` and focused pipeline tests | exact predecessor source produces a newer signed recovery APK with bound provenance | complete: `df763951`, `befe78c8`, `fd0ef66d` |
+| `recovery_manifest` | `master` | shared current worktree | gateway recovery provenance/store/handler integration and tests | only exact verified recovery receipts and bytes are projected | complete: `ab7f6918`, `a2cf02c7`, `49c9792a` |
+| `android_recovery_install` | `master` | shared current worktree | Android recovery parser/cache/controller/verifier tests | verified forward APK installs in place without silent uninstall | complete: `db75fd92`, `94bfe96d` |
 
 ## Worktree State Convention
 

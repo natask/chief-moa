@@ -12,20 +12,20 @@ claims are recorded in `agent-index.md`.
       deployment, and other high-authority route families (`67d2447b`).
 - [x] 0.3 Remove GitHub Actions from the release-authority path and retain local
       guarded verification/promotion (`a9d330c0`).
-- [ ] 0.4 Add own-device enforcement to release assignment/fallback service
+- [x] 0.4 Add own-device enforcement to release assignment/fallback service
       operations and negative tests for forged scope/user/device identifiers.
-- [ ] 0.5 Add revocable device credential state and HTTP/WebSocket parity tests.
+- [x] 0.5 Add revocable device credential state and HTTP/WebSocket parity tests.
 
 ## 1. Demonstrable Recovery Slice
 
-- [ ] 1.1 Preserve a failed voice turn's best transcript as an editable draft
+- [x] 1.1 Preserve a failed voice turn's best transcript as an editable draft
       with one idempotency identity shared by voice retry and text submit.
-- [ ] 1.2 Show distinct actions for `Send as text`, `Try voice again`,
+- [x] 1.2 Show distinct actions for `Send as text`, `Try voice again`,
       `Reconnect device`, and `Open release rescue`.
-- [ ] 1.3 Add a native rescue view backed by cached signed release metadata and
+- [x] 1.3 Add a native rescue view backed by cached signed release metadata and
       a narrow `release.recovery.read` capability independent of conversation
       and model availability.
-- [ ] 1.4 Produce forward-versioned, continuity-signed recovery artifacts for
+- [x] 1.4 Produce forward-versioned, continuity-signed recovery artifacts for
       confirmed predecessors; keep uninstall as an explicit last resort.
 
 Acceptance: invalidate conversation auth and voice transport, preserve and send
@@ -51,9 +51,9 @@ access without affecting the other user.
 
 ## 3. Named Development Requests And Planning
 
-- [ ] 3.1 Add tenant-owned idempotent development requests with editable display
+- [x] 3.1 Add tenant-owned idempotent development requests with editable display
       names, immutable source text, project binding, and voice/text provenance.
-- [ ] 3.2 Add list/detail projections and mobile-safe progress updates.
+- [x] 3.2 Add list/detail projections and mobile-safe progress updates.
 - [ ] 3.3 Reuse the existing planner to propose 2–32 dependency/path-claim tasks,
       acceptance checks, memory estimate, and runnable width without launching.
 - [ ] 3.4 Require explicit start after plan review; use a server orchestrator
