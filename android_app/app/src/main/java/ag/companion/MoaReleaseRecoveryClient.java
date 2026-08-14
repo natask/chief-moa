@@ -7,7 +7,6 @@ import java.io.File;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 /** Read/download-only transport for rescue; it exposes no release mutation method. */
@@ -25,8 +24,7 @@ final class MoaReleaseRecoveryClient {
     }
 
     JSONObject view() throws Exception {
-        String path = "/v1/release-control/apps/chief-moa/view?device_id="
-                + URLEncoder.encode(deviceId, StandardCharsets.UTF_8.name()) + "&surface=android";
+        String path = "/v1/release-recovery/manifest";
         HttpURLConnection connection = (HttpURLConnection) new URL(origin + path).openConnection();
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(3500);
