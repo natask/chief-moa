@@ -61,9 +61,10 @@ remain disjoint and are required before the wave can be promoted.
 
 | Agent/task | Branch | Worktree | Exact path claim | Exit criterion | State |
 | --- | --- | --- | --- | --- | --- |
-| `device_revocation` | `master` | shared current worktree | credential registry, revocation migration, focused tests | revoked token stays denied; same binding accepts a new credential generation | active |
-| `gateway_wave1_integration` | `master` | shared current worktree | `gateway/server.js`, narrow credential/request handlers, enrolled-device route policy, focused HTTP tests | own-device revoke and tenant-owned named requests are reachable without exposing privileged development routes | active |
-| `android_native_rescue` | `master` | shared current worktree | `MainActivity.java`, recovery dialog, new native rescue/cache helpers and tests | reconnect reaches enrollment; rescue works without voice/model and never claims unavailable restore | active |
+| `device_revocation` | `master` | shared current worktree | released; credential generations, revocation migration, focused tests | revoked token stays denied; same binding accepts a new credential generation | complete: `45d40857` |
+| `gateway_wave1_integration` | `master` | shared current worktree | released; server wiring, narrow credential/request handlers, enrolled-device policy | own-device revoke and tenant-owned named requests are reachable without exposing privileged development routes | complete: `a32f0d05` |
+| `android_native_rescue` | `master` | shared current worktree | released; `MainActivity`, recovery dialog, native rescue/cache helpers and tests | reconnect reaches enrollment; rescue works without voice/model and never claims unavailable restore | complete: `2cc8ddc8` |
+| `gateway_recovery_read` | `master` | shared current worktree | gateway recovery manifest route, enrollment scope, route policy, focused tests | dedicated read-only recovery capability without conversation or mutation authority | active |
 | `wave1_verifier` | `master` | shared current worktree | read-only review and cross-surface gates | all P1 findings closed and exact gates green | findings issued; reverify pending |
 
 ## Worktree State Convention
