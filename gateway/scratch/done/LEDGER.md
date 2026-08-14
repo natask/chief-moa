@@ -1,4 +1,4 @@
-- Added a fail-closed forward Android recovery manifest that binds the restored source, replaced build, stable/trial parents, continuity signer, and exact available APK bytes — agent: Codex/GPT-5 — this commit
+- Added a fail-closed read-only forward Android recovery store and manifest that bind current Stable, the replaced build, lineage, continuity signer, and exact available APK bytes — agent: Codex/GPT-5 — ab7f6918 + this commit
 - Added deterministic completed and long-running in-flight source-turn collision coverage for writing-style rewrite idempotency — agent: Codex/GPT-5 — uncommitted shared-master checkpoint
 - Made concurrent writing-style retries share one model call and protected a documented five-minute idempotency horizon with bounded reservations — agent: Codex/GPT-5 — uncommitted checkpoint
 - Added a source-bound no-memory, no-profile, no-history, no-tools, no-actions, no-persistence writing-style rewrite route — agent: codex/gpt-5 — this commit

@@ -6,6 +6,7 @@ const {
   ForwardRecoveryError,
   projectForwardRecoveryManifest,
   provenanceDigest,
+  recoveryExpectationFromView,
 } = require("../lib/forward-recovery-manifest");
 
 const A = "a".repeat(64);
@@ -130,6 +131,23 @@ test("rejects a recovery target that is not its exact confirmed parent", async (
   ));
 });
 
+test("allows a historical trial target with a distinct authoritative expectation", async () => {
+  const value = receipt();
+  value.target_predecessor = {
+    ...value.target_predecessor,
+    channel: "trial",
+    bundle_id: "trial-20",
+    release_id: "trial-release-20",
+    sequence: 20,
+    artifact_version_code: 20,
+  };
+  value.source_commit = "5".repeat(40);
+  value.provenance_sha256 = provenanceDigest(value);
+  const manifest = await project(value, { expected: expected(value) });
+  assert.equal(manifest.target.bundle_id, "trial-20");
+  assert.equal(manifest.parents.trial.bundle_id, "trial-30");
+});
+
 test("rejects a replaced build that is not one of the confirmed parents", async () => {
   const value = receipt();
   value.replaces.bundle_id = "unrelated-bundle";
@@ -184,6 +202,11 @@ test("rejects malformed fields and unsafe download URLs", async () => {
   value.provenance_sha256 = provenanceDigest(value);
   await assert.rejects(() => project(value), (error) => error.code === "invalid_recovery_manifest");
 
+  const misbound = receipt();
+  misbound.download_path = "/v1/release-recovery/artifacts/a-different-recovery.apk";
+  misbound.provenance_sha256 = provenanceDigest(misbound);
+  await assert.rejects(() => project(misbound), (error) => error.code === "invalid_recovery_manifest");
+
   const valid = receipt();
   await assert.rejects(() => projectForwardRecoveryManifest({
     receipt: valid,
@@ -193,4 +216,36 @@ test("rejects malformed fields and unsafe download URLs", async () => {
     download_url: "http://gateway.test/recovery.apk",
     inspectArtifact: async () => observation(valid),
   }), (error) => error.code === "invalid_recovery_manifest");
+});
+
+test("derives freshness only from exact current release-view bindings", () => {
+  const value = receipt();
+  const view = {
+    candidates: [
+      {
+        channel: "stable", sequence: 12, bundle_id: "stable-12", release_id: "stable-release-12",
+        artifact: { sha256: C, version_code: 12, git_sha: SOURCE },
+      },
+      {
+        channel: "preview", sequence: 30, bundle_id: "trial-30", release_id: "trial-release-30",
+        artifact: { sha256: B, version_code: 30, git_sha: REPLACED_SOURCE },
+      },
+    ],
+    effective_assignment: { bundle_id: "trial-30", release_id: "trial-release-30" },
+    installed: {
+      release_id: "trial-release-30", artifact_sha256: B, version_code: 30, git_sha: REPLACED_SOURCE,
+    },
+  };
+  assert.deepEqual(recoveryExpectationFromView(value, view), expected(value));
+  view.candidates[0].sequence = 13;
+  assert.throws(() => recoveryExpectationFromView(value, view), (error) => (
+    error.code === "recovery_provenance_stale"
+  ));
+
+  const trial = receipt();
+  trial.target_predecessor.channel = "trial";
+  trial.provenance_sha256 = provenanceDigest(trial);
+  assert.throws(() => recoveryExpectationFromView(trial, view), (error) => (
+    error.code === "recovery_provenance_stale"
+  ));
 });

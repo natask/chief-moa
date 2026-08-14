@@ -2,6 +2,11 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const {
+  ForwardRecoveryError,
+  projectForwardRecoveryManifest,
+  recoveryExpectationFromView,
+} = require("./forward-recovery-manifest");
 
 const MANIFEST_PATH = "/v1/release-recovery/manifest";
 const ARTIFACT_PATTERN = /^\/v1\/release-recovery\/artifacts\/([^/]+)\.apk$/;
@@ -18,6 +23,7 @@ function createReleaseRecoveryHandlers(options = {}) {
     options.externalOriginForRequest,
     "externalOriginForRequest",
   );
+  const recoveryStore = options.recoveryStore || null;
 
   async function routeReleaseRecovery(request, response, url) {
     const pathname = String(url?.pathname || "");
@@ -41,7 +47,12 @@ function createReleaseRecoveryHandlers(options = {}) {
       sendJson(response, result?.status || 401, result?.body || { error: "unauthorized" });
       return true;
     }
-    const manifest = recoveryManifest(result.body, externalOriginForRequest(request));
+    const origin = externalOriginForRequest(request);
+    const manifest = await recoveryManifestWithForwardRecoveries(
+      result.body,
+      origin,
+      recoveryStore,
+    );
     if (!artifactMatch) {
       sendJson(response, 200, manifest);
       return true;
@@ -53,7 +64,9 @@ function createReleaseRecoveryHandlers(options = {}) {
       sendJson(response, 404, { error: "release_recovery_artifact_not_found" });
       return true;
     }
-    const apkPath = resolveArtifactPath(releaseId);
+    const apkPath = artifact.kind === "forward_recovery"
+      ? recoveryStore?.artifactPath(releaseId)
+      : resolveArtifactPath(releaseId);
     const verified = await verifyArtifact(apkPath, artifact);
     if (!verified) {
       sendJson(response, 404, { error: "release_recovery_artifact_not_found" });
@@ -94,6 +107,41 @@ function recoveryManifest(view, origin) {
   });
 }
 
+async function recoveryManifestWithForwardRecoveries(view, origin, store) {
+  const base = recoveryManifest(view, origin);
+  if (!store) return Object.freeze({
+    ...base,
+    recoveries: Object.freeze([]),
+    recommended_recovery_id: null,
+  });
+  const entries = [];
+  for (const receipt of await store.listReceipts()) {
+    try {
+      const expected = recoveryExpectationFromView(receipt, view);
+      entries.push(await projectForwardRecoveryManifest({
+        receipt,
+        expected,
+        application_id: view.application_id,
+        device_id: view.device_id,
+        download_url: `${String(origin || "").replace(/\/$/, "")}${receipt.download_path}`,
+        inspectArtifact: store.inspectArtifact,
+      }));
+    } catch (error) {
+      if (!(error instanceof ForwardRecoveryError)) throw error;
+    }
+  }
+  entries.sort((left, right) => (
+    right.artifact.version_code - left.artifact.version_code
+      || right.artifact.built_at.localeCompare(left.artifact.built_at)
+      || left.recovery_id.localeCompare(right.recovery_id)
+  ));
+  return Object.freeze({
+    ...base,
+    recoveries: Object.freeze(entries),
+    recommended_recovery_id: entries[0]?.recovery_id || null,
+  });
+}
+
 function recoveryCandidate(view, channel, bundleId = "") {
   const candidate = (Array.isArray(view?.candidates) ? view.candidates : []).find((item) => (
     item?.channel === channel
@@ -124,6 +172,7 @@ function installedCandidate(installed, candidates) {
 function publicRecoveryArtifact(candidate, artifact) {
   return Object.freeze({
     channel: candidate.channel,
+    sequence: candidate.sequence || 0,
     bundle_id: String(candidate.bundle_id || ""),
     release_id: String(candidate.release_id || ""),
     source_ref: String(artifact.git_sha || ""),
@@ -153,16 +202,24 @@ function withRecoveryUrl(value, origin) {
 }
 
 function allowedArtifacts(manifest) {
-  return (Array.isArray(manifest.candidates) ? manifest.candidates : []).map((item) => ({
+  const ordinary = (Array.isArray(manifest.candidates) ? manifest.candidates : []).map((item) => ({
     release_id: item.release_id,
     sha256: item.artifact.sha256,
     size_bytes: item.artifact.size_bytes,
+    kind: "candidate",
   }));
+  const recoveries = (Array.isArray(manifest.recoveries) ? manifest.recoveries : []).map((item) => ({
+    release_id: item.recovery_id,
+    sha256: item.artifact.sha256,
+    size_bytes: item.artifact.size_bytes,
+    kind: "forward_recovery",
+  }));
+  return [...ordinary, ...recoveries];
 }
 
 function channelHead(candidate) {
   return candidate ? Object.freeze({
-    sequence: 0,
+    sequence: candidate.sequence || 0,
     bundle: Object.freeze({ bundle_id: candidate.bundle_id, release_id: candidate.release_id }),
   }) : null;
 }
@@ -190,4 +247,9 @@ function requiredFunction(value, name) {
   return value;
 }
 
-module.exports = { createReleaseRecoveryHandlers, recoveryManifest, verifyArtifact };
+module.exports = {
+  createReleaseRecoveryHandlers,
+  recoveryManifest,
+  recoveryManifestWithForwardRecoveries,
+  verifyArtifact,
+};

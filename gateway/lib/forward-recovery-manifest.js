@@ -77,6 +77,56 @@ async function projectForwardRecoveryManifest(input = {}) {
   });
 }
 
+function recoveryExpectationFromView(receiptInput, view) {
+  const receipt = normalizeReceipt(receiptInput);
+  if (receipt.target_predecessor.channel !== "stable") {
+    stale("trial recovery requires an authoritative assignment-history projection");
+  }
+  const candidates = Array.isArray(view?.candidates) ? view.candidates : [];
+  const stable = candidates.find((item) => item?.channel === "stable") || null;
+  const trial = candidates.find((item) => item?.channel === "preview" || item?.channel === "trial") || null;
+  const target = stable;
+  const assignment = view?.effective_assignment;
+  const installed = view?.installed;
+  if (!target || !assignment || !installed
+      || assignment.bundle_id !== receipt.replaces.bundle_id
+      || installed.release_id !== assignment.release_id
+      || installed.release_id !== receipt.replaces.release_id) {
+    stale("release view no longer contains the recovery bindings");
+  }
+  const expected = deepFreeze({
+    source_commit: cleanCommit(target.artifact?.git_sha || target.source_ref, "target.source_commit"),
+    target_predecessor: {
+      channel: receipt.target_predecessor.channel,
+      bundle_id: cleanId(target.bundle_id, "target.bundle_id"),
+      release_id: cleanId(target.release_id, "target.release_id"),
+      sequence: cleanInteger(target.sequence, "target.sequence", 0),
+      artifact_sha256: cleanDigest(target.artifact?.sha256, "target.artifact.sha256"),
+      artifact_version_code: cleanInteger(target.artifact?.version_code, "target.artifact.version_code", 1),
+    },
+    replaces: {
+      bundle_id: cleanId(assignment.bundle_id, "assignment.bundle_id"),
+      release_id: cleanId(installed.release_id, "installed.release_id"),
+      source_commit: cleanCommit(installed.git_sha, "installed.git_sha"),
+      artifact_sha256: cleanDigest(installed.artifact_sha256, "installed.artifact_sha256"),
+      artifact_version_code: cleanInteger(installed.version_code, "installed.version_code", 1),
+    },
+    parent_stable: candidateParent(stable, "stable"),
+    parent_trial: trial ? candidateParent(trial, "trial") : null,
+  });
+  assertFresh(receipt, expected);
+  return expected;
+}
+
+function candidateParent(candidate, label) {
+  if (!candidate) stale(`${label} parent is unavailable`);
+  return {
+    bundle_id: cleanId(candidate.bundle_id, `${label}.bundle_id`),
+    release_id: cleanId(candidate.release_id, `${label}.release_id`),
+    sequence: cleanInteger(candidate.sequence, `${label}.sequence`, 0),
+  };
+}
+
 function normalizeReceipt(value) {
   const receipt = exactObject(value, [
     "schema_version", "kind", "recovery_release_id", "source_commit", "builder_commit",
@@ -104,19 +154,21 @@ function normalizeReceipt(value) {
   if (normalized.artifact.apk !== "moa-assistant.apk") {
     invalid("artifact.apk must use the recovery artifact basename");
   }
+  if (normalized.download_path !== `/v1/release-recovery/artifacts/${normalized.recovery_release_id}.apk`) {
+    invalid("download_path must be bound to recovery_release_id");
+  }
   if (normalized.artifact.version_code <= normalized.replaces.artifact_version_code) {
     stale("recovery version_code must be higher than the replaced build");
   }
   if (normalized.artifact.version_code <= normalized.target_predecessor.artifact_version_code) {
     stale("recovery version_code must be higher than the recovery target build");
   }
-  const targetParent = normalized.target_predecessor.channel === "stable"
-    ? normalized.parent_stable : normalized.parent_trial;
-  if (!targetParent || canonicalJson(targetParent) !== canonicalJson({
-    bundle_id: normalized.target_predecessor.bundle_id,
-    release_id: normalized.target_predecessor.release_id,
-    sequence: normalized.target_predecessor.sequence,
-  })) stale("recovery target does not match its confirmed parent binding");
+  if (normalized.target_predecessor.channel === "stable"
+      && canonicalJson(normalized.parent_stable) !== canonicalJson({
+        bundle_id: normalized.target_predecessor.bundle_id,
+        release_id: normalized.target_predecessor.release_id,
+        sequence: normalized.target_predecessor.sequence,
+      })) stale("stable recovery target does not match its confirmed stable parent");
   const replacementIsParent = [normalized.parent_stable, normalized.parent_trial].some((parent) => (
     parent && parent.bundle_id === normalized.replaces.bundle_id
       && parent.release_id === normalized.replaces.release_id
@@ -313,4 +365,5 @@ module.exports = {
   canonicalJson,
   projectForwardRecoveryManifest,
   provenanceDigest,
+  recoveryExpectationFromView,
 };

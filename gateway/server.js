@@ -172,6 +172,7 @@ const { createWritingStyleRewriteHandlers } = require("./lib/writing-style-rewri
 const { createGatewayHealthHandlers } = require("./lib/gateway-health-handlers");
 const { createReleaseControlRuntime } = require("./lib/release-control-runtime");
 const { createReleaseRecoveryHandlers } = require("./lib/release-recovery-handlers");
+const { createFileForwardRecoveryStore } = require("./lib/forward-recovery-store");
 const {
   createDeviceCredentialRegistry,
   createPostgresDeviceCredentialStore,
@@ -1589,6 +1590,7 @@ async function initializeReleaseControl() {
   routeReleaseRecovery = createReleaseRecoveryHandlers({
     recoveryView: releaseControlRuntime.recoveryView,
     resolveArtifactPath: (releaseId) => androidOta.resolveReleaseApkPath(ANDROID_OTA_DIR, releaseId),
+    recoveryStore: createFileForwardRecoveryStore({ root: ANDROID_OTA_DIR }),
     sendJson,
     externalOriginForRequest,
   }).routeReleaseRecovery;
