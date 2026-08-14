@@ -106,8 +106,8 @@ MOA_BUILD_SHA="$target" MOA_BUILD_REF="$REF" MOA_BUILD_TIME="$(date -u +%Y-%m-%d
   preview_compose up -d --build --wait
 preview_upstream_url="http://127.0.0.1:$preview_port"
 preview_url="https://127.0.0.1:$preview_tls_port"
-curl -fsS --max-time 5 "$preview_upstream_url/health" >/dev/null
-curl -fsS --max-time 5 "$preview_upstream_url/health" | node_runtime -e '
+curl -fsS --max-time 15 "$preview_upstream_url/health" >/dev/null
+curl -fsS --max-time 15 "$preview_upstream_url/health" | node_runtime -e '
   let input = "";
   process.stdin.on("data", (chunk) => { input += chunk; });
   process.stdin.on("end", () => {
