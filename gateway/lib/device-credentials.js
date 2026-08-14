@@ -8,12 +8,13 @@ const SURFACES = new Set(["android", "browser_extension", "desktop"]);
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const IDEMPOTENCY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
 const DEVICE_TOKEN_PATTERN = /^(?:moa|ag)_dev_v1\.[A-Za-z0-9_-]{43}$/;
+const REVOCATION_REASONS = new Set(["owner_requested", "device_lost", "credential_rotated", "security_response"]);
 
 function createDeviceCredentialRegistry(options = {}) {
   const store = options.store;
   if (!store || typeof store.findByBinding !== "function"
       || typeof store.findByTokenHash !== "function"
-      || typeof store.insert !== "function") {
+      || typeof store.insert !== "function" || typeof store.revoke !== "function") {
     throw new Error("device credential store is required");
   }
   const now = typeof options.now === "function" ? options.now : () => Date.now();
@@ -86,26 +87,78 @@ function createDeviceCredentialRegistry(options = {}) {
     });
   }
 
-  return Object.freeze({ register, authenticateRequest });
+  async function revoke(input = {}) {
+    const tenantId = requiredId(input.tenant_id, "tenant_id");
+    const credentialId = requiredId(input.credential_id, "credential_id");
+    const reason = requiredRevocationReason(input.reason);
+    const revokedAtMs = now();
+    if (!Number.isSafeInteger(revokedAtMs) || revokedAtMs <= 0) throw new Error("clock returned an invalid time");
+    const result = await store.revoke({
+      tenant_id: tenantId,
+      credential_id: credentialId,
+      reason,
+      revoked_at: new Date(revokedAtMs).toISOString(),
+    });
+    if (!result?.record) {
+      throw credentialError("device_credential_not_found", "device credential was not found");
+    }
+    return Object.freeze({
+      receipt: publicReceipt(result.record),
+      replay: !result.newly_revoked,
+    });
+  }
+
+  // HTTP requests and WebSocket upgrade requests use the same headers and the
+  // same read-time credential check. Expose both names so callers cannot drift.
+  return Object.freeze({
+    register,
+    revoke,
+    authenticateRequest,
+    authenticateHttpRequest: authenticateRequest,
+    authenticateWebSocketRequest: authenticateRequest,
+  });
 }
 
 function createMemoryDeviceCredentialStore(initial = []) {
   const byTokenHash = new Map();
   const byBinding = new Map();
+  const byCredentialId = new Map();
+  const revoked = new Map();
   for (const item of initial) {
     const record = frozenCopy(item);
     byTokenHash.set(record.token_hash, record);
     byBinding.set(record.binding_key, record);
+    byCredentialId.set(record.credential_id, record);
+    if (record.status === "revoked") revoked.set(record.credential_id, record);
   }
   return Object.freeze({
-    async findByBinding(_tenantId, bindingKey) { return byBinding.get(bindingKey) || null; },
-    async findByTokenHash(tokenHash) { return byTokenHash.get(tokenHash) || null; },
+    async findByBinding(tenantId, bindingKey) {
+      const record = byBinding.get(bindingKey);
+      if (!record || record.tenant_id !== tenantId) return null;
+      return projectedMemoryRecord(record, revoked.has(record.credential_id));
+    },
+    async findByTokenHash(tokenHash) {
+      const record = byTokenHash.get(tokenHash);
+      if (!record || revoked.has(record.credential_id)) return null;
+      return record;
+    },
     async insert(record) {
       if (byBinding.has(record.binding_key) || byTokenHash.has(record.token_hash)) return false;
       const copy = frozenCopy(record);
       byBinding.set(copy.binding_key, copy);
       byTokenHash.set(copy.token_hash, copy);
+      byCredentialId.set(copy.credential_id, copy);
       return true;
+    },
+    async revoke(event) {
+      const record = byCredentialId.get(event.credential_id);
+      if (!record || record.tenant_id !== event.tenant_id) return null;
+      const newlyRevoked = !revoked.has(record.credential_id);
+      if (newlyRevoked) revoked.set(record.credential_id, frozenCopy(event));
+      return Object.freeze({
+        record: projectedMemoryRecord(record, true),
+        newly_revoked: newlyRevoked,
+      });
     },
   });
 }
@@ -118,10 +171,15 @@ function createPostgresDeviceCredentialStore(pool) {
     async findByBinding(tenantId, bindingKey) {
       return tenantQuery(pool, tenantId, async (client) => {
         const result = await client.query(
-          `select credential_id, binding_key, tenant_id, device_id, surface_id,
-                  token_hash, idempotency_hash, status, created_at
-             from release_device_credentials
-            where tenant_id = $1 and binding_key = $2 limit 1`,
+          `select c.credential_id, c.binding_key, c.tenant_id, c.device_id, c.surface_id,
+                  c.token_hash, c.idempotency_hash,
+                  case when exists (
+                    select 1 from release_device_credential_revocations r
+                     where r.credential_id = c.credential_id
+                  ) then 'revoked' else c.status end as status,
+                  c.created_at, c.application_id, c.scopes, c.owner_id
+             from release_device_credentials c
+            where c.tenant_id = $1 and c.binding_key = $2 limit 1`,
           [tenantId, bindingKey],
         );
         return normalizeDatabaseRecord(result.rows?.[0]);
@@ -150,6 +208,35 @@ function createPostgresDeviceCredentialStore(pool) {
           ],
         );
         return result.rowCount === 1;
+      });
+    },
+    async revoke(event) {
+      return tenantQuery(pool, event.tenant_id, async (client) => {
+        const result = await client.query(
+          `with inserted as (
+             insert into release_device_credential_revocations
+               (credential_id, tenant_id, reason, revoked_at)
+             select c.credential_id, c.tenant_id, $3, $4
+               from release_device_credentials c
+              where c.tenant_id = $1 and c.credential_id = $2
+             on conflict (credential_id) do nothing
+             returning credential_id
+           )
+           select c.credential_id, c.binding_key, c.tenant_id, c.device_id, c.surface_id,
+                  c.token_hash, c.idempotency_hash, 'revoked'::text as status,
+                  c.created_at, c.application_id, c.scopes, c.owner_id,
+                  exists (select 1 from inserted) as newly_revoked
+             from release_device_credentials c
+            where c.tenant_id = $1 and c.credential_id = $2
+            limit 1`,
+          [event.tenant_id, event.credential_id, event.reason, event.revoked_at],
+        );
+        const row = result.rows?.[0];
+        if (!row) return null;
+        return Object.freeze({
+          record: normalizeDatabaseRecord(row),
+          newly_revoked: row.newly_revoked === true,
+        });
       });
     },
   });
@@ -215,6 +302,14 @@ function requiredIdempotencyKey(value) {
   return result;
 }
 
+function requiredRevocationReason(value) {
+  const result = String(value || "owner_requested").trim().toLowerCase();
+  if (!REVOCATION_REASONS.has(result)) {
+    throw credentialError("invalid_device_revocation", "revocation reason is invalid");
+  }
+  return result;
+}
+
 function optionalHeaderId(request, name) {
   const value = header(request, name);
   if (value === false) return false;
@@ -245,6 +340,10 @@ function safeEqual(left, right) {
 
 function frozenCopy(value) {
   return Object.freeze({ ...value });
+}
+
+function projectedMemoryRecord(record, isRevoked) {
+  return isRevoked ? Object.freeze({ ...record, status: "revoked" }) : record;
 }
 
 function normalizeDatabaseRecord(row) {

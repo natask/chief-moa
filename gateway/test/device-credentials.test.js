@@ -2,6 +2,8 @@
 
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const {
   createDeviceCredentialRegistry,
@@ -34,6 +36,7 @@ test("registers only a token hash and authenticates its exact Device credential"
     findByBinding: async (_tenant, key) => records.find((item) => item.binding_key === key) || null,
     findByTokenHash: async (hash) => records.find((item) => item.token_hash === hash) || null,
     insert: async (record) => (records.push(record), true),
+    revoke: async () => null,
   };
   const credentials = registry({ store });
   const created = await credentials.register(registration);
@@ -99,6 +102,59 @@ test("rejects caller-forged assertions, bearer fallback, tampering, and malforme
   }), null);
 });
 
+test("revocation immediately fails closed with identical HTTP and WebSocket behavior", async () => {
+  const credentials = registry();
+  const created = await credentials.register(registration);
+  const request = {
+    headers: {
+      authorization: `Device ${deviceToken}`,
+      "x-moa-device-id": registration.device_id,
+      "x-moa-surface": registration.surface_id,
+    },
+  };
+
+  assert.equal((await credentials.authenticateHttpRequest(request)).credential_id,
+    created.receipt.credential_id);
+  assert.equal((await credentials.authenticateWebSocketRequest(request)).credential_id,
+    created.receipt.credential_id);
+
+  const revoked = await credentials.revoke({
+    tenant_id: registration.tenant_id,
+    credential_id: created.receipt.credential_id,
+    reason: "device_lost",
+  });
+  assert.equal(revoked.replay, false);
+  assert.equal(revoked.receipt.status, "revoked");
+  assert.equal(await credentials.authenticateHttpRequest(request), null);
+  assert.equal(await credentials.authenticateWebSocketRequest(request), null);
+
+  const replay = await credentials.revoke({
+    tenant_id: registration.tenant_id,
+    credential_id: created.receipt.credential_id,
+    reason: "security_response",
+  });
+  assert.equal(replay.replay, true);
+  assert.equal(replay.receipt.status, "revoked");
+  assert.equal((await credentials.register(registration)).receipt.status, "revoked");
+});
+
+test("revocation rejects forged tenant, unknown credential, and invalid reason", async () => {
+  const credentials = registry();
+  const created = await credentials.register(registration);
+  for (const input of [
+    { tenant_id: "another_owner", credential_id: created.receipt.credential_id },
+    { tenant_id: registration.tenant_id, credential_id: "devc_missing" },
+  ]) {
+    await assert.rejects(credentials.revoke(input),
+      (error) => error.code === "device_credential_not_found");
+  }
+  await assert.rejects(credentials.revoke({
+    tenant_id: registration.tenant_id,
+    credential_id: created.receipt.credential_id,
+    reason: "reactivate",
+  }), (error) => error.code === "invalid_device_revocation");
+});
+
 test("validates registration input and store configuration", async () => {
   assert.throws(() => createDeviceCredentialRegistry(), /store is required/);
   for (const bad of [
@@ -138,8 +194,26 @@ test("Postgres adapter queries exact hashes and inserts no plaintext secret", as
     idempotency_hash: "c".repeat(64), status: "active",
     created_at: "2026-07-23T12:00:00.000Z",
   });
-  assert.equal(calls.filter((call) => call.sql.includes("release_device_credentials")).length, 2);
+  const revoked = await store.revoke({
+    tenant_id: "owner", credential_id: "devc_123", reason: "owner_requested",
+    revoked_at: "2026-07-23T12:01:00.000Z",
+  });
+  assert.equal(revoked, null);
+  assert.equal(calls.filter((call) => call.sql.includes("release_device_credentials")).length, 3);
   assert.equal(JSON.stringify(calls).includes(deviceToken), false);
   assert.equal(calls.some((call) => call.sql.includes("release_authenticate_device_credential")), true);
   assert.equal(calls.some((call) => call.sql.includes("on conflict do nothing")), true);
+  assert.equal(calls.some((call) => call.sql.includes("release_device_credential_revocations")), true);
+});
+
+test("revocation migration is additive, tenant-scoped, append-only, and checked at authentication", () => {
+  const sql = fs.readFileSync(path.join(__dirname,
+    "../../release_control_plane/migrations/006_device_credential_revocations.sql"), "utf8");
+  assert.match(sql, /create table if not exists release_device_credential_revocations/);
+  assert.match(sql, /enable row level security/);
+  assert.match(sql, /force row level security/);
+  assert.match(sql, /tenant_id = current_setting\('moa\.tenant_id', true\)/);
+  assert.match(sql, /release_device_credential_revocations_append_only/);
+  assert.match(sql, /not exists \([\s\S]*release_device_credential_revocations/);
+  assert.doesNotMatch(sql, /alter table release_device_credentials[\s\S]*alter column/i);
 });
