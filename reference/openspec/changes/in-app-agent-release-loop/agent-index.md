@@ -52,6 +52,20 @@ refines exact paths before each ticket and records status here.
 | `wave1_verifier` | `master` | shared current worktree | read-only independent review and cross-surface verification | wave verification | active |
 | Primary coordinator | `master` | shared current worktree | this index, guarded push/deploy only | wave integration | active |
 
+## Corrective Wave 1B
+
+Independent verification found that Wave 1A was additive but not yet operable:
+revocation blocked same-device re-pairing, the new gateway domains had no narrow
+routes, and Android recovery intents had no real destination. These path claims
+remain disjoint and are required before the wave can be promoted.
+
+| Agent/task | Branch | Worktree | Exact path claim | Exit criterion | State |
+| --- | --- | --- | --- | --- | --- |
+| `device_revocation` | `master` | shared current worktree | credential registry, revocation migration, focused tests | revoked token stays denied; same binding accepts a new credential generation | active |
+| `gateway_wave1_integration` | `master` | shared current worktree | `gateway/server.js`, narrow credential/request handlers, enrolled-device route policy, focused HTTP tests | own-device revoke and tenant-owned named requests are reachable without exposing privileged development routes | active |
+| `android_native_rescue` | `master` | shared current worktree | `MainActivity.java`, recovery dialog, new native rescue/cache helpers and tests | reconnect reaches enrollment; rescue works without voice/model and never claims unavailable restore | active |
+| `wave1_verifier` | `master` | shared current worktree | read-only review and cross-surface gates | all P1 findings closed and exact gates green | findings issued; reverify pending |
+
 ## Worktree State Convention
 
 Because all lanes intentionally share the primary worktree and `master`, idle is
