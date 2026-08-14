@@ -113,6 +113,7 @@ public final class OverlayService extends Service {
             new MoaOverlayUnitController(overlayUnitHost());
     private VoiceRuntimeState voiceRuntimeState = VoiceRuntimeState.READY;
     private AlertDialog toolConfirmationDialog;
+    private AlertDialog voiceFailureDialog;
     private final MoaToolRequestGate toolRequestGate = new MoaToolRequestGate();
     private MoaToolReceiptOutbox toolReceiptOutbox;
     private MoaToolReceiptOutbox.Reservation activeToolReservation;
@@ -132,6 +133,7 @@ public final class OverlayService extends Service {
     private Runnable pendingContinuousVoiceRestart;
     private Runnable pendingStreamingTurnWatchdog;
     private final MoaVoiceFailureRetry voiceFailureRetry = new MoaVoiceFailureRetry();
+    private final MoaVoiceFailureDraft voiceFailureDraft = new MoaVoiceFailureDraft();
     private boolean streamingTurnAutoCommit;
     private boolean streamingTurnContinuous;
     private boolean streamingTurnRetried;
@@ -350,6 +352,8 @@ public final class OverlayService extends Service {
         MoaAccessibilityService.cancelActiveYoutubeOperation();
         if (toolConfirmationDialog != null) toolConfirmationDialog.dismiss();
         toolConfirmationDialog = null;
+        if (voiceFailureDialog != null) voiceFailureDialog.dismiss();
+        voiceFailureDialog = null;
         cancelAudioNoteCapture();
         discardWarmMic();
         cancelStreamingTurnWatchdog();
@@ -1383,6 +1387,7 @@ public final class OverlayService extends Service {
         if (value.isEmpty()) {
             return;
         }
+        voiceFailureDraft.observe(value);
         voiceLog.setUser(value, isFinal);
         voiceUserTranscript = value;
         voiceUserTranscriptFinal = isFinal;
@@ -1740,7 +1745,7 @@ public final class OverlayService extends Service {
         JSONObject body = gatewayRequestBody();
         body.put("session_id", conversationId);
         body.put("branch_id", activeBranchId);
-        body.put("turn_id", "turn_" + UUID.randomUUID().toString());
+        body.put("turn_id", voiceFailureDraft.nextTextTurnId());
         body.put("transcript", userText);
         body.put("text", userText);
         if (forcedAgent) {
@@ -3191,6 +3196,7 @@ public final class OverlayService extends Service {
                     return;
                 }
                 updateConversationId(sessionId);
+                voiceFailureDraft.begin(turnId);
                 currentTranscriptRevisionGate = new MoaTranscriptRevisionGate(sessionId, sessionBranch, turnId, androidDeviceId());
                 liveConversation.begin(turnId);
                 showTranscriptOverlay("");
@@ -3592,7 +3598,7 @@ public final class OverlayService extends Service {
                 cancelStreamingTurnWatchdog();
                 nextStreamingVoiceFollowUpRunId = "";
                 Log.w(TAG, "streaming voice error: " + safe(message), error);
-                if (isRecoverableStreamingVoiceError(message)) {
+                if (MoaVoiceFailureDraft.isRecoverableTransportFailure(message)) {
                     recoverStreamingVoiceTurn(generation);
                     return;
                 }
@@ -3601,13 +3607,17 @@ public final class OverlayService extends Service {
                 if (!currentStreamingTurnCommitRequested
                         && currentStreamingTranscript.isEmpty()
                         && !streamingTurnRetried) {
-                    retryStreamingVoiceTurn();
+                    Log.i(TAG, "silently retrying streaming voice session after pre-commit failure");
+                    boolean retryAutoCommit = streamingTurnAutoCommit;
+                    boolean retryContinuous = streamingTurnContinuous;
+                    startStreamingVoiceTurn(retryAutoCommit, retryContinuous);
+                    streamingTurnRetried = true;
                     return;
                 }
                 // Raw socket/provider diagnostics stay in logcat. The transcript
                 // gets one short line, and errors never land in the chat history.
-                String notice = shortVoiceFailureNotice(message);
-                showStreamingVoiceFailure(notice, generation);
+                String notice = MoaVoiceFailureDraft.shortNotice(message);
+                showStreamingVoiceFailure(notice, generation, message);
             }
         }, this);
         MoaVoiceDraftCapability.Snapshot draftCapability = voiceDraftCapability;
@@ -3632,43 +3642,11 @@ public final class OverlayService extends Service {
         }
     }
 
-    private boolean isRecoverableStreamingVoiceError(String message) {
-        String normalized = safe(message).toLowerCase(Locale.US);
-        return normalized.contains("gemini-live generation was interrupted")
-                || normalized.contains("failed to complete turn: gemini-live");
-    }
-
-    // One silent reconnect for a voice session that failed before the user
-    // committed anything. Restarts the same turn shape; the retry budget stays
-    // spent so a second failure surfaces normally.
-    private void retryStreamingVoiceTurn() {
-        Log.i(TAG, "silently retrying streaming voice session after pre-commit failure");
-        boolean autoCommit = streamingTurnAutoCommit;
-        boolean continuous = streamingTurnContinuous;
-        startStreamingVoiceTurn(autoCommit, continuous);
-        streamingTurnRetried = true;
-    }
-
-    // Raw socket diagnostics carry URLs and HTTP codes; those belong in logcat.
-    // The transcript gets one short line, actionable only when the failure is a
-    // setup problem the user can fix.
-    private String shortVoiceFailureNotice(String message) {
-        String normalized = safe(message).toLowerCase(Locale.US);
-        if (normalized.contains("token was rejected")) {
-            return "Voice can't connect: the gateway rejected this device's token. Re-pair in the Ag app.";
-        }
-        if (normalized.contains("url issue")
-                || normalized.contains("not deployed")
-                || normalized.contains("could not resolve")) {
-            return "Voice can't connect. Check the gateway URL in the Ag app.";
-        }
-        return "Voice failed.";
-    }
-
     private void showStreamingVoiceFailure(String notice, int generation) {
-        if (!isCurrentStreamingGeneration(generation)) {
-            return;
-        }
+        showStreamingVoiceFailure(notice, generation, notice);
+    }
+    private void showStreamingVoiceFailure(String notice, int generation, String diagnostic) {
+        if (!isCurrentStreamingGeneration(generation)) return;
         setContinuousVoiceLoop(false);
         voiceFailureRetry.arm(generation);
         liveConversation.clear();
@@ -3676,6 +3654,27 @@ public final class OverlayService extends Service {
         speakOverlayNotice(notice);
         setVoiceRuntimeState(VoiceRuntimeState.ERROR);
         updateMicState();
+        showVoiceRecoveryActions(voiceFailureDraft.fail(
+                "", currentStreamingTranscript, diagnostic));
+    }
+    private void showVoiceRecoveryActions(MoaVoiceFailureDraft.Snapshot draft) {
+        if (!Settings.canDrawOverlays(this)) return;
+        if (voiceFailureDialog != null) voiceFailureDialog.dismiss();
+        voiceFailureDialog = MoaVoiceRecoveryDialog.show(
+                this, MoaOverlayWindowType.resolve(), draft,
+                (editedText, requestId) -> {
+                    voiceFailureDialog = null;
+                    addMessage(false, editedText);
+                    updateVoiceUserTranscript(editedText, true);
+                    setVoiceRuntimeState(VoiceRuntimeState.THINKING);
+                    voiceFailureDraft.armTextSubmit(requestId);
+                    requestVoiceTurn(editedText, false, false);
+                }, requestId -> {
+                    voiceFailureDialog = null;
+                    pendingReplacementTurnId = requestId;
+                    retryFailedVoiceCapture();
+                });
+        voiceFailureDialog.setOnDismissListener(ignored -> voiceFailureDialog = null);
     }
 
     private void retryFailedVoiceCapture() {
