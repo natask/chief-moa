@@ -218,6 +218,42 @@ test("fallback appends a new assignment to recorded last-known-good and stays in
   assert.equal(view.installation.every((item) => !item.installed), true);
 });
 
+test("fallback projection keeps the captured stable bundle and artifact after stable advances", async () => {
+  const stable2 = {
+    tenant_id: "personal", application_id: "chief-moa", bundle_id: "stable-2",
+    compatibility_version: 1, created_at: "2026-07-24T00:00:00.000Z",
+    artifacts: [artifact("android", "android-stable-2", digestB, "1.0.1")],
+  };
+  const { http } = harness({
+    bundles: [...seed().bundles, stable2],
+    channel_heads: [...seed().channel_heads, {
+      tenant_id: "personal", application_id: "chief-moa", channel: "stable",
+      bundle_id: "stable-2", sequence: 2, updated_at: stable2.created_at,
+    }],
+    publication_receipts: [{
+      receipt_id: "published-stable-1", tenant_id: "personal", application_id: "chief-moa",
+      bundle_id: "stable-1", channel: "stable", new_sequence: 1, created_at: at,
+    }],
+    assignment_events: [{
+      ...assignment("trial-assignment", "device", "phone-1", 1, "preview", "preview-2"),
+      stable_fallback_bundle_id: "stable-1",
+    }],
+  });
+
+  const result = await http({
+    method: "POST", path: "/v1/release-control/apps/chief-moa/fallback",
+    body: { expected_assignment_sequence: 1, idempotency_key: "fallback-after-stable-advance" },
+  });
+
+  assert.equal(result.status, 201);
+  assert.equal(result.body.assignment_receipt.bundle_id, "stable-1");
+  assert.equal(result.body.assignment_receipt.release_id, "android-stable-1");
+  assert.equal(result.body.effective_assignment.bundle_id, "stable-1");
+  assert.equal(result.body.effective_assignment.release_id, "android-stable-1");
+  assert.equal(result.body.platform_action.kind, "android_install_review");
+  assert.equal(result.body.platform_action.artifact.sha256, digestA);
+});
+
 test("HTTP abstraction exposes frozen view and append endpoints with bounded conflicts", async () => {
   const { http } = harness();
   const selected = await http({

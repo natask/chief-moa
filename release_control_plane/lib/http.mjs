@@ -47,7 +47,7 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
       if (input.artifact_sha256 == null && input.sha256 != null) input.artifact_sha256 = input.sha256;
 
       if (method === "GET" && action === "view") {
-        return response(200, publicView(await service.view(input), input.surface || input.surface_id));
+        return response(200, (await releaseViewProjection(service, input)).body);
       }
       if (method === "GET" && action === "candidates") {
         return response(200, publicCatalog(await service.listCandidates(input), trustedSurface));
@@ -107,24 +107,84 @@ function publicCatalog(catalog, surface) {
 }
 
 async function assignmentEnvelope(service, input, assignment) {
-  const view = publicView(await service.view(input), input.surface || input.surface_id);
-  const surface = String(input.surface || input.surface_id || "").trim();
-  let candidate = view.candidates.find((item) => item.bundle_id === assignment.bundle_id
-    && (!surface || item.artifact.surface === surface)) || null;
-  if (!candidate && assignment.operation === "select_candidate") {
-    const catalog = publicCatalog(await service.listCandidates({ ...input, limit: 100 }), surface);
-    const exact = catalog.candidates.find((item) => item.bundle_id === assignment.bundle_id);
-    if (exact?.artifact) candidate = { ...exact, artifact: exact.artifact };
-  }
+  const projection = await releaseViewProjection(service, input);
+  const candidate = projection.effectiveCandidate?.bundle_id === assignment.bundle_id
+    ? projection.effectiveCandidate : null;
   return {
     assignment_receipt: publicAssignment(assignment, candidate?.release_id || null),
-    effective_assignment: view.effective_assignment,
-    platform_action: platformAction(surface, candidate?.artifact || null),
+    effective_assignment: projection.body.effective_assignment,
+    platform_action: platformAction(projection.surface, candidate?.artifact || null),
     install_confirmed: false,
   };
 }
 
-function publicView(view, requestedSurface = "") {
+async function releaseViewProjection(service, input) {
+  const surface = String(input.surface || input.surface_id || "").trim();
+  const view = await service.view(input);
+  const effectiveBundle = await resolveAssignedBundle(service, input, view, view.effective_assignment?.bundle_id);
+  const fallbackBundle = await resolveAssignedBundle(
+    service,
+    input,
+    view,
+    view.effective_assignment?.stable_fallback_bundle_id,
+  );
+  const effectiveCandidate = bundleCandidate(
+    effectiveBundle,
+    view.effective_assignment?.channel || "candidate",
+    surface,
+  );
+  const fallbackCandidate = bundleCandidate(fallbackBundle, "stable", surface);
+  return {
+    body: publicView(view, surface, { effectiveCandidate, fallbackCandidate }),
+    effectiveCandidate,
+    fallbackCandidate,
+    surface,
+  };
+}
+
+async function resolveAssignedBundle(service, input, view, bundleId) {
+  if (!bundleId) return null;
+  const frame = view.channels.find((item) => item.bundle?.bundle_id === bundleId);
+  if (frame?.bundle) return frame.bundle;
+  let cursor = null;
+  const visited = new Set();
+  do {
+    const page = await service.listCandidates({ ...input, limit: 100, cursor });
+    const exact = page.items.find((item) => item.bundle_id === bundleId);
+    if (exact) return exact;
+    cursor = page.next_cursor;
+    if (cursor && visited.has(cursor)) throw new Error("candidate catalog cursor repeated");
+    if (cursor) visited.add(cursor);
+  } while (cursor);
+  return null;
+}
+
+function bundleCandidate(bundle, channel, requestedSurface) {
+  if (!bundle) return null;
+  const artifact = bundle.artifacts.find((item) => !requestedSurface || item.surface_id === requestedSurface)
+    || bundle.artifacts[0];
+  if (!artifact) return null;
+  const compatible = bundle.compatibility_version === 1;
+  return {
+    channel,
+    sequence: 0,
+    bundle_id: bundle.bundle_id,
+    compatibility_version: bundle.compatibility_version,
+    release_id: artifact.release_id,
+    source_ref: artifact.git_sha,
+    compatibility: {
+      eligible: compatible,
+      reasons: compatible ? [] : [`unsupported compatibility version ${bundle.compatibility_version}`],
+    },
+    readiness: {
+      status: compatible && artifact.download_url ? "published" : "blocked",
+      ready: compatible && Boolean(artifact.download_url),
+    },
+    artifact: publicArtifact(artifact),
+  };
+}
+
+function publicView(view, requestedSurface = "", resolved = {}) {
   const frames = Object.fromEntries(view.channels.map((frame) => [frame.channel, frame]));
   const candidates = [];
   for (const frame of view.channels) {
@@ -151,10 +211,12 @@ function publicView(view, requestedSurface = "") {
     }
   }
   const effectiveCandidate = candidates.find((item) => item.bundle_id === view.effective_assignment?.bundle_id)
-    || candidates.find((item) => item.channel === "stable") || null;
+    || resolved.effectiveCandidate || null;
   const installedState = view.installation.find((item) => item.surface_id === requestedSurface)
     || view.installation[0] || null;
   const stableCandidate = candidates.find((item) => item.channel === "stable") || null;
+  const fallbackCandidate = candidates.find((item) => item.bundle_id === view.effective_assignment?.stable_fallback_bundle_id)
+    || resolved.fallbackCandidate || null;
   return {
     schema_version: 1,
     tenant_id: view.tenant_id,
@@ -182,10 +244,10 @@ function publicView(view, requestedSurface = "") {
       })),
     feedback_count: view.feedback_count,
     installed: publicInstalled(effectiveCandidate || stableCandidate, installedState),
-    last_known_good: view.effective_assignment && stableCandidate ? {
+    last_known_good: view.effective_assignment && fallbackCandidate ? {
       assignment_id: view.effective_assignment.event_id,
       bundle_id: view.effective_assignment.stable_fallback_bundle_id,
-      release_id: stableCandidate.release_id,
+      release_id: fallbackCandidate.release_id,
     } : null,
   };
 }
