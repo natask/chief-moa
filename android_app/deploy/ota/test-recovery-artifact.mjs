@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -135,4 +136,30 @@ test("fails closed when exact source or predecessor artifact is unavailable", ()
   assert.throws(() => installRecoveryArtifact(os.tmpdir(), missing, {
     recovery_release_id: "missing", artifact: { sha256: "0".repeat(64), size_bytes: 1 },
   }), /ENOENT/);
+});
+
+test("publisher rejects missing continuity signing before request parsing or Gradle", () => {
+  const script = path.join(import.meta.dirname, "build-recovery-artifact.sh");
+  const env = { ...process.env };
+  delete env.MOA_ANDROID_KEYSTORE_PATH;
+  delete env.MOA_ANDROID_KEYSTORE_PASSWORD;
+  delete env.MOA_ANDROID_KEY_ALIAS;
+  delete env.MOA_ANDROID_KEY_PASSWORD;
+  const result = spawnSync("bash", [script], { env, encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /continuity release signing is required/);
+  assert.doesNotMatch(result.stderr, /request provenance|Gradle|gradlew/);
+
+  const unavailable = spawnSync("bash", [script], {
+    env: {
+      ...env,
+      MOA_ANDROID_KEYSTORE_PATH: path.join(os.tmpdir(), `missing-keystore-${process.pid}`),
+      MOA_ANDROID_KEYSTORE_PASSWORD: "not-a-real-secret",
+      MOA_ANDROID_KEY_ALIAS: "continuity",
+    },
+    encoding: "utf8",
+  });
+  assert.equal(unavailable.status, 1);
+  assert.match(unavailable.stderr, /continuity keystore is unavailable/);
+  assert.doesNotMatch(unavailable.stderr, /request provenance|Gradle|gradlew/);
 });

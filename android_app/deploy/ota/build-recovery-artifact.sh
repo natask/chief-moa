@@ -21,6 +21,21 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Recovery artifacts are publisher inputs, not local previews. Never fall back
+# to whatever debug key happens to exist on a builder. The caller must provide
+# the existing continuity release signer explicitly; Gradle receives the
+# secrets through its inherited environment and this script never prints them.
+if [ -z "${MOA_ANDROID_KEYSTORE_PATH:-}" ] \
+  || [ -z "${MOA_ANDROID_KEYSTORE_PASSWORD:-}" ] \
+  || [ -z "${MOA_ANDROID_KEY_ALIAS:-}" ]; then
+  echo "Configured Android continuity release signing is required." >&2
+  exit 1
+fi
+[ -f "$MOA_ANDROID_KEYSTORE_PATH" ] || {
+  echo "Configured Android continuity keystore is unavailable." >&2
+  exit 1
+}
+
 [ -f "$REQUEST" ] || { echo "A readable --request provenance JSON file is required." >&2; exit 1; }
 [ -f "$PREDECESSOR_APK" ] || { echo "The exact --predecessor-apk is unavailable." >&2; exit 1; }
 [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "A numeric --version-code is required." >&2; exit 1; }
@@ -78,20 +93,14 @@ PLAN_VALUE="$(node -e 'const v=require(process.argv[1]); process.stdout.write(St
 APP_ID="$(node -e 'const v=require(process.argv[1]); process.stdout.write(v.app_id)' "$TMP_DIR/plan.json")"
 VERSION_NAME="$(node -e 'const v=require(process.argv[1]); process.stdout.write(v.version_name)' "$TMP_DIR/plan.json")"
 
-if [ -n "${MOA_ANDROID_KEYSTORE_PATH:-}" ]; then
-  VARIANT=Release
-  APK="$TMP_DIR/source/android_app/app/build/outputs/apk/release/app-release.apk"
-else
-  VARIANT=Debug
-  APK="$TMP_DIR/source/android_app/app/build/outputs/apk/debug/app-debug.apk"
-fi
+APK="$TMP_DIR/source/android_app/app/build/outputs/apk/release/app-release.apk"
 (
   cd "$TMP_DIR/source/android_app"
   ANDROID_HOME="$SDK_ROOT" \
   MOA_ANDROID_VERSION_CODE="$VERSION_CODE" \
   MOA_ANDROID_VERSION_NAME="$VERSION_NAME" \
   MOA_ANDROID_GIT_SHA="$SOURCE_COMMIT" \
-  ./gradlew ":app:assemble$VARIANT" -x verifySourceSizePolicy
+  ./gradlew ":app:assembleRelease" -x verifySourceSizePolicy
 )
 [ -f "$APK" ] || { echo "Recovery APK build did not produce the expected artifact." >&2; exit 1; }
 apk_facts "$APK" "$TMP_DIR/built-facts.json"
