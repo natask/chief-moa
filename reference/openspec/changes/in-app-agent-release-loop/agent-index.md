@@ -45,11 +45,12 @@ refines exact paths before each ticket and records status here.
 
 | Agent/task | Branch | Worktree | Exact path claim | Tickets | State |
 | --- | --- | --- | --- | --- | --- |
-| `release_own_device` | `master` | shared current worktree | release-control service/auth implementation and focused release-control tests | 0.4 | active |
-| `device_revocation` | `master` | shared current worktree | `gateway/lib/device-credentials.js`, additive credential migration/store support, focused credential/auth tests | 0.5 | active |
-| `android_voice_recovery` | `master` | shared current worktree | Android voice failure/draft UI in `OverlayService.java` plus focused helpers/tests | 1.1–1.2 | active |
-| `named_request_foundation` | `master` | shared current worktree | new `gateway/lib/development-request*.js` modules and focused tests | 3.1–3.2 foundation | active |
-| Primary coordinator | `master` | shared current worktree | this index, integration verification, guarded push/deploy only | wave integration | active |
+| `release_own_device` | `master` | shared current worktree | released; release-control service/auth implementation and focused tests | 0.4 | complete: `4af13c0f` |
+| `device_revocation` | `master` | shared current worktree | released; device credential registry, additive revocation migration, focused tests | 0.5 | complete: `cb2c8f3e` |
+| `android_voice_recovery` | `master` | shared current worktree | released; Android voice failure/draft UI, helpers, and focused tests | 1.1–1.2 | complete: `ad263df7` |
+| `named_request_foundation` | `master` | shared current worktree | released; development request domain and focused tests | 3.1–3.2 foundation | complete: `694f87ab` |
+| `wave1_verifier` | `master` | shared current worktree | read-only independent review and cross-surface verification | wave verification | active |
+| Primary coordinator | `master` | shared current worktree | this index, guarded push/deploy only | wave integration | active |
 
 ## Worktree State Convention
 
