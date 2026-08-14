@@ -12,6 +12,16 @@ const digestB = "b".repeat(64);
 const digestC = "c".repeat(64);
 const at = "2026-07-23T00:00:00.000Z";
 const authority = { actor_id: "nat", owner_id: "nat" };
+const deviceAuthority = {
+  actor_id: "devc-phone-1",
+  owner_id: "nat",
+  role_bindings: [{
+    tenant_id: "personal",
+    principal_id: "devc-phone-1",
+    role: "device",
+    scope: { application_id: "chief-moa", channel: "*" },
+  }],
+};
 
 function artifact(surface_id, release_id, artifact_sha256, semantic_version) {
   return {
@@ -218,6 +228,42 @@ test("fallback appends a new assignment to recorded last-known-good and stays in
   assert.equal(view.installation.every((item) => !item.installed), true);
 });
 
+test("device role can assign and fallback only its authenticated device scope", async () => {
+  const { adapter, service } = harness({
+    assignment_events: [assignment("other-device", "device", "phone-2", 1, "preview", "preview-2")],
+  });
+  const base = {
+    tenant_id: "personal", application_id: "chief-moa", device_id: "phone-1",
+    actor_id: "devc-phone-1", authority: deviceAuthority, surface: "android",
+  };
+
+  for (const forged of [
+    { scope_type: "device", scope_id: "phone-2" },
+    { scope_type: "user", scope_id: "nat" },
+  ]) {
+    await assert.rejects(() => service.assign({
+      ...base, ...forged, expected_sequence: 0, channel: "preview",
+      idempotency_key: `assign-${forged.scope_type}-${forged.scope_id}`,
+    }), (error) => error.code === "release_binding_mismatch" && error.reason === "device_scope_required");
+  }
+  await assert.rejects(() => service.fallback({
+    ...base, scope_type: "device", scope_id: "phone-2", expected_sequence: 1,
+    idempotency_key: "fallback-other-device",
+  }), (error) => error.code === "release_binding_mismatch" && error.reason === "device_scope_required");
+  assert.equal(adapter.snapshot().assignment_events.length, 1);
+});
+
+test("owner service authority retains explicit non-device assignment semantics", async () => {
+  const { service } = harness();
+  const assigned = await service.assign({
+    tenant_id: "personal", application_id: "chief-moa", device_id: "phone-1",
+    actor_id: "nat", authority, surface: "android", scope_type: "user", scope_id: "nat",
+    expected_sequence: 0, channel: "preview", idempotency_key: "owner-user-assignment",
+  });
+  assert.equal(assigned.scope_type, "user");
+  assert.equal(assigned.scope_id, "nat");
+});
+
 test("fallback projection keeps the captured stable bundle and artifact after stable advances", async () => {
   const stable2 = {
     tenant_id: "personal", application_id: "chief-moa", bundle_id: "stable-2",
@@ -259,7 +305,7 @@ test("HTTP abstraction exposes frozen view and append endpoints with bounded con
   const selected = await http({
     method: "POST",
     path: "/v1/release-control/apps/chief-moa/assignments",
-    body: { tenant_id: "forged", device_id: "phone-1", actor_id: "attacker", expected_assignment_sequence: 0, channel: "preview", surface: "android", bundle_id: "preview-2", release_id: "android-preview-2", idempotency_key: "http-assign-1" },
+    body: { expected_assignment_sequence: 0, channel: "preview", bundle_id: "preview-2", release_id: "android-preview-2", idempotency_key: "http-assign-1" },
   });
   assert.equal(selected.status, 201);
   assert.equal(selected.body.assignment_receipt.tenant_id, "personal");
@@ -277,7 +323,7 @@ test("HTTP abstraction exposes frozen view and append endpoints with bounded con
   const view = await http({
     method: "GET",
     path: "/v1/release-control/apps/chief-moa/view",
-    query: { tenant_id: "evil", device_id: "phone-1", surface: "android" },
+    query: { device_id: "phone-1", surface: "android" },
   });
   assert.equal(view.status, 200);
   assert.equal(view.body.effective_assignment.bundle_id, "preview-2");
@@ -286,7 +332,7 @@ test("HTTP abstraction exposes frozen view and append endpoints with bounded con
   assert.equal(view.body.candidates.find((item) => item.artifact.surface === "android").artifact.app_id, "ag.companion");
 });
 
-test("HTTP authentication rejects missing identity and ignores forged tenant and actor fields", async () => {
+test("HTTP authentication rejects missing identity and forged principal or scope fields", async () => {
   const { service } = harness();
   const unauthenticated = createReleaseControlHttpHandler(service, { authenticate: async () => null });
   const missing = await unauthenticated({
@@ -314,6 +360,61 @@ test("HTTP authentication rejects missing identity and ignores forged tenant and
     headers: { "content-type": "application/json" },
     body: { error: "release_not_authorized" },
   });
+
+  const { http } = harness();
+  for (const forged of [
+    { tenant_id: "other-tenant" },
+    { actor_id: "attacker" },
+    { owner_id: "attacker" },
+    { user_id: "attacker" },
+    { device_id: "phone-2" },
+    { surface: "browser_extension" },
+    { surface_id: "browser_extension" },
+    { application_id: "other-app" },
+    { scope_type: "user", scope_id: "nat" },
+    { scope_type: "device", scope_id: "phone-2" },
+    { cohort_id: "privileged-testers" },
+  ]) {
+    const result = await http({
+      method: "POST", path: "/v1/release-control/apps/chief-moa/assignments",
+      body: {
+        expected_assignment_sequence: 0, channel: "preview",
+        idempotency_key: `forged-${Object.keys(forged).join("-")}`,
+        ...forged,
+      },
+    });
+    assert.equal(result.status, 403, JSON.stringify(forged));
+    assert.equal(result.body.error, "release_not_authorized");
+  }
+
+  for (const forged of [
+    { tenant_id: "other-tenant" },
+    { user_id: "attacker" },
+    { device_id: "phone-2" },
+    { surface: "browser_extension" },
+    { scope_id: "phone-2" },
+  ]) {
+    const result = await http({
+      method: "GET", path: "/v1/release-control/apps/chief-moa/view", query: forged,
+    });
+    assert.equal(result.status, 403, JSON.stringify(forged));
+    assert.equal(result.body.error, "release_not_authorized");
+  }
+
+  const assigned = await http({
+    method: "POST", path: "/v1/release-control/apps/chief-moa/assignments",
+    body: { expected_assignment_sequence: 0, channel: "preview", idempotency_key: "fallback-setup" },
+  });
+  assert.equal(assigned.status, 201);
+  const forgedFallback = await http({
+    method: "POST", path: "/v1/release-control/apps/chief-moa/fallback",
+    body: {
+      expected_assignment_sequence: 1, scope_type: "device", scope_id: "phone-2",
+      idempotency_key: "forged-fallback",
+    },
+  });
+  assert.equal(forgedFallback.status, 403);
+  assert.equal(forgedFallback.body.error, "release_not_authorized");
 });
 
 test("HTTP accepts assignment_id, surface, sha256, and bounded evidence refs aliases", async () => {
@@ -402,7 +503,7 @@ test("unsupported bundle compatibility blocks readiness and additive lifecycle s
     }),
   });
   const result = await http({
-    method: "GET", path: "/v1/release-control/apps/chief-moa/view", query: { device_id: "forged" },
+    method: "GET", path: "/v1/release-control/apps/chief-moa/view", query: {},
   });
   const preview = result.body.candidates.find((item) => item.channel === "preview");
   assert.equal(preview.compatibility.eligible, false);
@@ -446,7 +547,7 @@ test("canonical Android and browser fixtures exactly match public HTTP views", a
     });
     const result = await http({
       method: "GET", path: "/v1/release-control/apps/chief-moa/view",
-      query: { device_id: "forged", surface: "forged" },
+      query: {},
     });
     assert.equal(result.status, 200);
     assert.deepEqual(result.body, expected);

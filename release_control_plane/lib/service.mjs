@@ -58,7 +58,7 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     key(input.surface || input.surface_id, "surface");
     const channel = key(input.channel, "channel");
     if (!["stable", "preview"].includes(channel)) throw new Error("channel is invalid");
-    authorize(input, "assign_channel", context.applicationId, channel);
+    const authorization = authorize(input, "assign_channel", context.applicationId, channel);
     const head = context.heads.get(channel);
     if (!head) throw new Error(`channel head not found: ${channel}`);
     if (input.bundle_id != null && key(input.bundle_id, "bundle_id") !== head.bundle_id) {
@@ -76,6 +76,7 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     const expected = integer(input.expected_sequence, "expected_sequence", 0);
     const scopeType = key(input.scope_type || "device", "scope_type");
     const scopeId = key(input.scope_id || input.device_id, "scope_id");
+    enforceOwnDeviceScope(input, authorization, scopeType, scopeId);
     const idempotencyKey = requiredIdempotencyKey(input.idempotency_key);
     const prior = idempotencyKey && context.assignments.find((item) => item.scope_type === scopeType
       && item.scope_id === scopeId && item.idempotency_key === idempotencyKey);
@@ -123,7 +124,7 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
   async function selectCandidate(input) {
     const context = await loadContext(input);
     const bundleId = key(input.bundle_id, "bundle_id");
-    authorize(input, "assign_channel", context.applicationId, "preview");
+    const authorization = authorize(input, "assign_channel", context.applicationId, "preview");
     const bundle = context.bundles.find((item) => item.bundle_id === bundleId);
     if (!bundle) throw mismatch("candidate_unknown");
     const published = (await adapter.listPublicationReceipts(context.tenantId, context.applicationId))
@@ -137,7 +138,7 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     const expected = integer(input.expected_sequence, "expected_sequence", 0);
     const scopeType = key(input.scope_type || "device", "scope_type");
     const scopeId = key(input.scope_id || input.device_id, "scope_id");
-    if (scopeType !== "device" || scopeId !== key(input.device_id, "device_id")) throw mismatch("candidate_device_scope_required");
+    enforceOwnDeviceScope(input, authorization, scopeType, scopeId, "candidate_device_scope_required", true);
     const idempotencyKey = requiredIdempotencyKey(input.idempotency_key);
     const prior = context.assignments.find((item) => item.scope_type === scopeType && item.scope_id === scopeId && item.idempotency_key === idempotencyKey);
     if (prior) {
@@ -160,9 +161,10 @@ export function createReleaseControlService({ adapter, now = () => new Date().to
     key(input.surface || input.surface_id, "surface");
     const scopeType = key(input.scope_type || "device", "scope_type");
     const scopeId = key(input.scope_id || input.device_id, "scope_id");
+    const authorization = authorize(input, "assign_channel", context.applicationId, "stable");
+    enforceOwnDeviceScope(input, authorization, scopeType, scopeId);
     const current = currentAssignment(context.assignments, scopeType, scopeId);
     if (!current) throw new Error("assignment not found");
-    authorize(input, "assign_channel", context.applicationId, "stable");
     const idempotencyKey = requiredIdempotencyKey(input.idempotency_key);
     const prior = idempotencyKey && context.assignments.find((item) => item.scope_type === scopeType
       && item.scope_id === scopeId && item.idempotency_key === idempotencyKey);
@@ -432,4 +434,11 @@ function authorize(input, action, applicationId, channel) {
     throw error;
   }
   return result;
+}
+
+function enforceOwnDeviceScope(input, authorization, scopeType, scopeId, reason = "device_scope_required", always = false) {
+  if (!always && authorization.role !== "device") return;
+  if (scopeType !== "device" || scopeId !== key(input.device_id, "device_id")) {
+    throw mismatch(reason);
+  }
 }

@@ -21,10 +21,25 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
       const action = match[2];
       const caller = method === "GET" ? request.query : request.body;
       const trustedSurface = principal.surface_id;
+      const trustedUser = principal.user_id || principal.owner_id;
+      assertTrustedCallerScope(caller, {
+        tenant_id: principal.tenant_id,
+        actor_id: principal.actor_id,
+        owner_id: trustedUser,
+        user_id: trustedUser,
+        device_id: principal.device_id,
+        surface: trustedSurface,
+        surface_id: trustedSurface,
+        application_id: applicationId,
+        scope_type: "device",
+        scope_id: principal.device_id,
+      });
       const input = {
         ...(caller || {}),
         tenant_id: principal.tenant_id,
         actor_id: principal.actor_id,
+        owner_id: trustedUser,
+        user_id: trustedUser,
         device_id: principal.device_id,
         application_id: applicationId,
         surface: trustedSurface,
@@ -86,6 +101,27 @@ export function createReleaseControlHttpHandler(service, { authenticate } = {}) 
       return response(400, { error: "invalid_request", message: String(error?.message || error).slice(0, 500) });
     }
   };
+}
+
+function assertTrustedCallerScope(caller, trusted) {
+  if (!caller || typeof caller !== "object") return;
+  for (const [field, expected] of Object.entries(trusted)) {
+    if (!Object.prototype.hasOwnProperty.call(caller, field)) continue;
+    if (canonicalIdentity(caller[field]) !== canonicalIdentity(expected)) {
+      const error = new Error("caller identity does not match authenticated principal");
+      error.code = "release_not_authorized";
+      throw error;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(caller, "cohort_id")) {
+    const error = new Error("caller scope does not match authenticated principal");
+    error.code = "release_not_authorized";
+    throw error;
+  }
+}
+
+function canonicalIdentity(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function publicCatalog(catalog, surface) {
