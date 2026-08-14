@@ -16,6 +16,7 @@ const ALL_SCOPES = [
   "profile.read",
   "release.read",
   "device.receipts.write",
+  "development.request",
 ];
 
 function deviceRequest(method, pathname, scopes = ALL_SCOPES) {
@@ -40,6 +41,11 @@ test("enrolled Device credentials retain Android chat, voice, history, and relea
     ["POST", "/v1/release-control/apps/chief-moa/fallback"],
     ["GET", "/v1/android/updates/latest"],
     ["GET", "/v1/android/updates/releases/ag.companion-1.apk"],
+    ["POST", "/v1/device-credentials/current/revoke"],
+    ["POST", "/v1/development-requests"],
+    ["GET", "/v1/development-requests/devreq_1"],
+    ["POST", "/v1/development-requests/devreq_1/rename"],
+    ["POST", "/v1/development-requests/devreq_1/progress"],
   ]) {
     const access = enrolledDeviceHttpAccess(...Object.values(deviceRequest(method, pathname)));
     assert.equal(access.allowed, true, `${method} ${pathname}`);
@@ -92,6 +98,26 @@ test("enrolled Device route policy enforces the route-specific scope", () => {
 
   const release = deviceRequest("GET", "/v1/release-control/apps/chief-moa/view", ["conversation.read"]);
   assert.equal(enrolledDeviceHttpAccess(release.request, release.url).allowed, false);
+
+  const development = deviceRequest("POST", "/v1/development-requests", ["conversation.read"]);
+  assert.deepEqual(enrolledDeviceHttpAccess(development.request, development.url), {
+    applies: true,
+    allowed: false,
+    reason: "scope_not_granted",
+    required_scopes: ["development.request"],
+  });
+});
+
+test("the narrow request capability does not grant privileged development routes", () => {
+  for (const pathname of [
+    "/v1/development/intents",
+    "/v1/development/intents/dev_1/dispatch",
+    "/v1/development-requests/dev_1/dispatch",
+    "/v1/development-requests/dev_1/unknown",
+  ]) {
+    const { request, url } = deviceRequest("POST", pathname, ["development.request"]);
+    assert.equal(enrolledDeviceHttpAccess(request, url).allowed, false, pathname);
+  }
 });
 
 test("legacy bearer and Better Auth principals are unaffected", () => {

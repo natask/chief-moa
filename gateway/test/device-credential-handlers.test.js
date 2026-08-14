@@ -19,6 +19,7 @@ function handler(overrides = {}) {
           surface_id: input.surface_id,
         },
       }),
+      revoke: async () => ({ replay: false, receipt: { credential_id: "devc_1", status: "revoked" } }),
     },
     authorized: () => true,
     tenantId: () => "stable_personal_tenant",
@@ -36,6 +37,7 @@ test("registers under the server-authenticated account and ignores a forged tena
         observed = input;
         return { replay: false, receipt: { credential_id: "devc_1" } };
       },
+      revoke: async () => ({ replay: false, receipt: {} }),
     },
   });
   const target = response();
@@ -75,6 +77,7 @@ test("maps duplicate binding to conflict and exact retry to success", async () =
         error.code = "device_already_registered";
         throw error;
       },
+      revoke: async () => ({ replay: false, receipt: {} }),
     },
   });
   await handleConflict({ method: "POST", body: {} }, conflict, "/v1/device-credentials/registrations");
@@ -87,8 +90,73 @@ test("maps duplicate binding to conflict and exact retry to success", async () =
         replay: true,
         receipt: { credential_id: "devc_1" },
       }),
+      revoke: async () => ({ replay: false, receipt: {} }),
     },
   });
   await handleReplay({ method: "POST", body: {} }, replay, "/v1/device-credentials/registrations");
   assert.equal(replay.status, 200);
+});
+
+test("an enrolled device revokes only its authenticated credential", async () => {
+  let observed;
+  const handle = handler({
+    registry: {
+      register: async () => ({ replay: false, receipt: {} }),
+      revoke: async (input) => {
+        observed = input;
+        return { replay: false, receipt: { credential_id: input.credential_id, status: "revoked" } };
+      },
+    },
+  });
+  const target = response();
+  await handle({
+    method: "POST",
+    moaAuthPrincipal: {
+      kind: "enrolled_device",
+      tenant_id: "tenant_owner",
+      user_id: "user_owner",
+      device_id: "phone_owner",
+      credential_id: "devc_owner",
+    },
+    body: { reason: "owner_requested" },
+  }, target, "/v1/device-credentials/current/revoke");
+
+  assert.equal(target.status, 200);
+  assert.deepEqual(observed, {
+    tenant_id: "tenant_owner",
+    credential_id: "devc_owner",
+    reason: "owner_requested",
+  });
+  assert.equal(target.body.revocation_receipt.status, "revoked");
+});
+
+test("own-device revocation denies forged identities and missing shared authentication", async () => {
+  let calls = 0;
+  const handle = handler({
+    registry: {
+      register: async () => ({ replay: false, receipt: {} }),
+      revoke: async () => { calls += 1; return { replay: false, receipt: {} }; },
+    },
+  });
+  const principal = {
+    kind: "enrolled_device", tenant_id: "tenant_owner", user_id: "user_owner",
+    device_id: "phone_owner", credential_id: "devc_owner",
+  };
+  for (const body of [
+    { reason: "owner_requested", tenant_id: "tenant_other" },
+    { reason: "owner_requested", credential_id: "devc_other" },
+    { reason: "owner_requested", device_id: "phone_other" },
+    { reason: "owner_requested", user_id: "user_other" },
+  ]) {
+    const target = response();
+    await handle({ method: "POST", moaAuthPrincipal: principal, body }, target,
+      "/v1/device-credentials/current/revoke");
+    assert.equal(target.status, 403);
+    assert.equal(target.body.error, "identity_mismatch");
+  }
+  const missing = response();
+  await handle({ method: "POST", body: { reason: "owner_requested" } }, missing,
+    "/v1/device-credentials/current/revoke");
+  assert.equal(missing.status, 401);
+  assert.equal(calls, 0);
 });

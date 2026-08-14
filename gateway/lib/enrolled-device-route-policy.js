@@ -49,6 +49,13 @@ function httpRule(method, pathname) {
   if (method === "GET" && pathname === "/v1/device-enrollments/continuity") {
     return rule("continuity.read");
   }
+  if (method === "POST" && pathname === "/v1/device-credentials/current/revoke") {
+    return rule();
+  }
+  if ((method === "GET" || method === "POST") && (
+    pathname === "/v1/development-requests"
+      || /^\/v1\/development-requests\/[^/]+(?:\/(?:rename|progress))?$/.test(pathname)
+  )) return rule("development.request");
   if (pathname.startsWith("/v1/release-control/apps/")) return rule("release.read");
   if (method === "GET" && pathname.startsWith("/v1/android/updates/")) {
     return rule("release.read");

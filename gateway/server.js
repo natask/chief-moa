@@ -132,6 +132,8 @@ const { createIntentPlaneHandlers } = require("./lib/intent-plane-handlers");
 const { createDevelopmentPlane } = require("./lib/development-plane");
 const { createDevelopmentPlaneHandlers } = require("./lib/development-plane-handlers");
 const { createDevelopmentPlaneCoordinator } = require("./lib/development-plane-coordinator");
+const { createDevelopmentRequestStore } = require("./lib/development-requests");
+const { createDevelopmentRequestHandlers } = require("./lib/development-request-handlers");
 const { createDevelopmentIntegrationQueue } = require("./lib/development-integration-queue");
 const { extractPlan, planningMessages } = require("./lib/development-planner");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
@@ -731,6 +733,13 @@ const eventSubstrate = createEventSubstrateStore({
   schemaPath: path.join(GATEWAY_DIR, "schema.sql"),
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
+const developmentRequests = createDevelopmentRequestStore({ events: eventSubstrate });
+const routeDevelopmentRequests = createDevelopmentRequestHandlers({
+  store: developmentRequests,
+  readJsonBody,
+  sendJson,
+  cleanError,
+});
 const reminders = createReminderStore({ events: eventSubstrate });
 const reminderDelivery = createReminderDeliveryCoordinator({
   reminders,
@@ -1188,6 +1197,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (await routeDeviceEnrollment(request, response, url.pathname)) {
+      return;
+    }
+
+    if (await routeDevelopmentRequests(request, response, url)) {
       return;
     }
 
