@@ -36,8 +36,7 @@ fi
 if ! git diff --quiet origin/master HEAD -- apple_surfaces; then
   bash scripts/release/local-release.sh macos
 fi
-if ! git diff --quiet origin/master HEAD -- windows_app \
-  .github/workflows/windows-native-core.yml .github/workflows/windows-surface-shell.yml; then
+if ! git diff --quiet origin/master HEAD -- windows_app; then
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) fail "Windows changes require the local pre-master gate on a Windows host" ;;

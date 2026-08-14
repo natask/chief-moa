@@ -8,6 +8,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const read = (name) => fs.readFileSync(path.join(root, name), "utf8");
 
 const removedRunnerReleaseFiles = [
+  ".github/workflows/source-size-policy.yml",
+  ".github/workflows/windows-native-core.yml",
+  ".github/workflows/windows-surface-shell.yml",
   ".github/scripts/assert-deploy-vps-contract.rb",
   ".github/workflows/android-ota-vps.yml",
   ".github/workflows/browser-extension-release.yml",

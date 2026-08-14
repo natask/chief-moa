@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/lib.sh"
   || { echo "Release-control activation requires explicit production authority." >&2; exit 64; }
 
 require_env_file
+cd "$APP_DIR"
 port="$(env_value GATEWAY_PORT)"; port="${port:-8787}"
 health_url="http://127.0.0.1:$port/health"
 backup="${ENV_FILE}.pre-release-control.$$"
