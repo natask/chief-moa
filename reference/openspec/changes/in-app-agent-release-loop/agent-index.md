@@ -65,7 +65,7 @@ remain disjoint and are required before the wave can be promoted.
 | `gateway_wave1_integration` | `master` | shared current worktree | released; server wiring, narrow credential/request handlers, enrolled-device policy | own-device revoke and tenant-owned named requests are reachable without exposing privileged development routes | complete: `a32f0d05` |
 | `android_native_rescue` | `master` | shared current worktree | released; `MainActivity`, recovery dialog, native rescue/cache helpers and tests | reconnect reaches enrollment; rescue works without voice/model and never claims unavailable restore | complete: `2cc8ddc8` |
 | `gateway_recovery_read` | `master` | shared current worktree | released; recovery manifest route, enrollment scope, route policy, focused tests | dedicated read-only recovery capability without conversation or mutation authority | complete: `7aa109e6` |
-| `wave1_verifier` | `master` | shared current worktree | read-only review and cross-surface gates | all P1 findings closed and exact gates green | final reverify active |
+| `wave1_verifier` | `master` | shared current worktree | released; read-only review and cross-surface gates | all P1 findings closed and exact gates green | complete; safe to push/deploy code |
 
 ## Corrective Wave 1C
 
