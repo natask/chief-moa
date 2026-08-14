@@ -130,6 +130,16 @@ test("rejects a recovery target that is not its exact confirmed parent", async (
   ));
 });
 
+test("rejects a replaced build that is not one of the confirmed parents", async () => {
+  const value = receipt();
+  value.replaces.bundle_id = "unrelated-bundle";
+  value.replaces.release_id = "unrelated-release";
+  value.provenance_sha256 = provenanceDigest(value);
+  await assert.rejects(() => project(value), (error) => (
+    error.code === "recovery_provenance_stale"
+  ));
+});
+
 test("rejects stale target, replacement, parent, source, or provenance bindings", async () => {
   for (const mutate of [
     (value) => { value.source_commit = "4".repeat(40); },

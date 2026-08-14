@@ -117,6 +117,11 @@ function normalizeReceipt(value) {
     release_id: normalized.target_predecessor.release_id,
     sequence: normalized.target_predecessor.sequence,
   })) stale("recovery target does not match its confirmed parent binding");
+  const replacementIsParent = [normalized.parent_stable, normalized.parent_trial].some((parent) => (
+    parent && parent.bundle_id === normalized.replaces.bundle_id
+      && parent.release_id === normalized.replaces.release_id
+  ));
+  if (!replacementIsParent) stale("replaced release does not match a confirmed parent binding");
   if (provenanceDigest(normalized) !== normalized.provenance_sha256) {
     stale("recovery provenance digest does not match the receipt");
   }
