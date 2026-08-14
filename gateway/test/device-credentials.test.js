@@ -138,6 +138,43 @@ test("revocation immediately fails closed with identical HTTP and WebSocket beha
   assert.equal((await credentials.register(registration)).receipt.status, "revoked");
 });
 
+test("revoked binding can re-pair once while the old token stays denied", async () => {
+  const credentials = registry();
+  const original = await credentials.register(registration);
+  await credentials.revoke({
+    tenant_id: registration.tenant_id,
+    credential_id: original.receipt.credential_id,
+    reason: "credential_rotated",
+  });
+
+  const replacementToken = `moa_dev_v1.${Buffer.alloc(32, 9).toString("base64url")}`;
+  const replacement = {
+    ...registration,
+    idempotency_key: "replace-phone-1-20260723",
+    credential_token: replacementToken,
+  };
+  const [left, right] = await Promise.all([
+    credentials.register(replacement),
+    credentials.register(replacement),
+  ]);
+  assert.deepEqual([left.replay, right.replay].sort(), [false, true]);
+  assert.equal(left.receipt.credential_id, right.receipt.credential_id);
+
+  assert.equal(await credentials.authenticateRequest({
+    headers: { authorization: `Device ${deviceToken}` },
+  }), null);
+  const principal = await credentials.authenticateRequest({
+    headers: { authorization: `Device ${replacementToken}` },
+  });
+  assert.equal(principal.credential_id, left.receipt.credential_id);
+
+  await assert.rejects(credentials.register({
+    ...replacement,
+    idempotency_key: "competing-phone-1-20260723",
+    credential_token: `moa_dev_v1.${Buffer.alloc(32, 10).toString("base64url")}`,
+  }), (error) => error.code === "device_already_registered");
+});
+
 test("revocation rejects forged tenant, unknown credential, and invalid reason", async () => {
   const credentials = registry();
   const created = await credentials.register(registration);
@@ -204,6 +241,21 @@ test("Postgres adapter queries exact hashes and inserts no plaintext secret", as
   assert.equal(calls.some((call) => call.sql.includes("release_authenticate_device_credential")), true);
   assert.equal(calls.some((call) => call.sql.includes("on conflict do nothing")), true);
   assert.equal(calls.some((call) => call.sql.includes("release_device_credential_revocations")), true);
+  assert.equal(calls.some((call) => call.sql.includes("pg_advisory_xact_lock")), true);
+  assert.equal(calls.some((call) => call.sql.includes("release_device_credential_generations")), true);
+});
+
+test("generation migration preserves immutable history and serializes re-pair", () => {
+  const sql = fs.readFileSync(path.join(__dirname,
+    "../../release_control_plane/migrations/007_device_credential_generations.sql"), "utf8");
+  assert.match(sql, /create table if not exists release_device_credential_generations/);
+  assert.match(sql, /insert into release_device_credential_generations[\s\S]*release_device_credentials/);
+  assert.match(sql, /release_device_credential_generations_append_only/);
+  assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\(capability\.binding_key, 0\)\)/);
+  assert.match(sql, /not exists \([\s\S]*release_device_credential_revocations/);
+  assert.match(sql, /create or replace function exchange_device_enrollment_capability/);
+  assert.doesNotMatch(sql, /update public\.release_device_credentials/i);
+  assert.doesNotMatch(sql, /delete from public\.release_device_credentials/i);
 });
 
 test("revocation migration is additive, tenant-scoped, append-only, and checked at authentication", () => {

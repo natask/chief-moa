@@ -29,7 +29,7 @@ function createDeviceCredentialRegistry(options = {}) {
     const tokenHash = digest(token);
     const idempotencyHash = digest(idempotencyKey);
     const existing = await store.findByBinding(tenantId, bindingKey);
-    if (existing) {
+    if (existing && existing.status !== "revoked") {
       if (!safeEqual(existing.idempotency_hash, idempotencyHash)
           || !safeEqual(existing.token_hash, tokenHash)) {
         throw credentialError("device_already_registered",
@@ -143,7 +143,8 @@ function createMemoryDeviceCredentialStore(initial = []) {
       return record;
     },
     async insert(record) {
-      if (byBinding.has(record.binding_key) || byTokenHash.has(record.token_hash)) return false;
+      const current = byBinding.get(record.binding_key);
+      if ((current && !revoked.has(current.credential_id)) || byTokenHash.has(record.token_hash)) return false;
       const copy = frozenCopy(record);
       byBinding.set(copy.binding_key, copy);
       byTokenHash.set(copy.token_hash, copy);
@@ -171,15 +172,17 @@ function createPostgresDeviceCredentialStore(pool) {
     async findByBinding(tenantId, bindingKey) {
       return tenantQuery(pool, tenantId, async (client) => {
         const result = await client.query(
-          `select c.credential_id, c.binding_key, c.tenant_id, c.device_id, c.surface_id,
+          `select c.credential_id, g.binding_key, c.tenant_id, c.device_id, c.surface_id,
                   c.token_hash, c.idempotency_hash,
                   case when exists (
                     select 1 from release_device_credential_revocations r
                      where r.credential_id = c.credential_id
                   ) then 'revoked' else c.status end as status,
                   c.created_at, c.application_id, c.scopes, c.owner_id
-             from release_device_credentials c
-            where c.tenant_id = $1 and c.binding_key = $2 limit 1`,
+             from release_device_credential_generations g
+             join release_device_credentials c on c.credential_id = g.credential_id
+            where g.tenant_id = $1 and g.binding_key = $2
+            order by g.generation desc limit 1`,
           [tenantId, bindingKey],
         );
         return normalizeDatabaseRecord(result.rows?.[0]);
@@ -194,12 +197,42 @@ function createPostgresDeviceCredentialStore(pool) {
     },
     async insert(record) {
       return tenantQuery(pool, record.tenant_id, async (client) => {
+        await client.query(
+          "select pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [record.binding_key],
+        );
         const result = await client.query(
-          `insert into release_device_credentials
-            (credential_id, binding_key, tenant_id, device_id, surface_id,
-             token_hash, idempotency_hash, status, created_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           on conflict do nothing
+          `with active_generation as (
+             select 1
+               from release_device_credential_generations g
+               join release_device_credentials c on c.credential_id = g.credential_id
+              where g.tenant_id = $3 and g.binding_key = $2
+                and not exists (
+                  select 1 from release_device_credential_revocations r
+                   where r.credential_id = c.credential_id
+                )
+              limit 1
+           ), next_generation as (
+             select coalesce(max(g.generation), 0) + 1 as generation
+               from release_device_credential_generations g
+              where g.tenant_id = $3 and g.binding_key = $2
+           ), inserted_credential as (
+             insert into release_device_credentials
+               (credential_id, binding_key, tenant_id, device_id, surface_id,
+                token_hash, idempotency_hash, status, created_at)
+             select $1,
+                    case when exists (
+                      select 1 from release_device_credentials where binding_key = $2
+                    ) then $6 else $2 end,
+                    $3,$4,$5,$6,$7,$8,$9
+              where not exists (select 1 from active_generation)
+             on conflict do nothing
+             returning credential_id
+           )
+           insert into release_device_credential_generations
+             (credential_id, tenant_id, binding_key, generation, created_at)
+           select i.credential_id, $3, $2, n.generation, $9
+             from inserted_credential i cross join next_generation n
            returning credential_id`,
           [
             record.credential_id, record.binding_key, record.tenant_id, record.device_id,
