@@ -1,3 +1,4 @@
+- Built continuity-signed forward Android recovery artifacts from exact predecessor source and installed them in place through a cached, fail-closed rescue contract without silent uninstall — agent: Codex/GPT-5 — df763951 / befe78c8 / fd0ef66d / db75fd92
 - Added a voice-independent native release rescue that caches exact device-bound Stable/Trial metadata, verifies APK digest/package/version/continuity signer, and routes reconnect into real enrollment without silent uninstall — agent: Codex/GPT-5 — this commit
 - Made gateway promotion prove Postgres-backed release control in preview, then enable it on drained production with automatic env rollback — agent: Codex/GPT-5 — this commit
 - Restored AG mobile chat and voice through owner-bound enrolled-device auth, blocked tokenless stable OTA publication, exposed stable/trial/feature releases, and kept guarded promotion on master without release branches — agent: Codex/GPT-5 — this commit
