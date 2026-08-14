@@ -37,6 +37,12 @@ device credential takes precedence over both the saved legacy bearer and the
 bundled fallback, so successful account enrollment immediately removes normal
 chat and voice traffic from the shared-bearer path.
 
+Gateway promotion boots release control in the isolated preview against its
+separate Postgres database and requires health to report it ready. After the
+exact gateway commit is promoted, the wrapper enables the private production
+flag, recreates only the drained gateway, and rolls the env file back if the
+Postgres-backed health check fails.
+
 This bootstrap is temporary. The bearer is embedded in the APK and can be
 extracted by anyone who downloads the artifact. It has the broad authority of
 the shared legacy gateway token and does not identify a user or device. The

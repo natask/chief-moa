@@ -11,7 +11,7 @@ ENV_FILE="${ENV_FILE:-$MOA_ROOT/gateway.env}"
 MODE="${1:---check}"
 
 [ -f "$ENV_FILE" ] || { echo "Missing gateway env file: $ENV_FILE" >&2; exit 1; }
-case "$MODE" in --check|--install) ;; *) echo "Usage: $0 [--check|--install]" >&2; exit 64 ;; esac
+case "$MODE" in --check|--install|--enable) ;; *) echo "Usage: $0 [--check|--install|--enable]" >&2; exit 64 ;; esac
 
 value() { sed -n "s/^${1}=//p" "$ENV_FILE" | tail -n 1; }
 
@@ -19,7 +19,7 @@ missing=()
 for key in RELEASE_CONTROL_POSTGRES_PASSWORD RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD; do
   current="$(value "$key")"
   if [ "${#current}" -lt 32 ]; then
-    [ "$MODE" = "--install" ] || { echo "$key is not configured" >&2; exit 1; }
+    [ "$MODE" != "--check" ] || { echo "$key is not configured" >&2; exit 1; }
     missing+=("$key")
   fi
 done
@@ -39,5 +39,22 @@ publisher_password="$(value RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD)"
 [ "${#app_password}" -ge 32 ] && [ "${#publisher_password}" -ge 32 ] \
   && [ "$app_password" != "$publisher_password" ] \
   || { echo "Release-control database credentials must be present and distinct" >&2; exit 1; }
+
+if [ "$MODE" = "--enable" ]; then
+  tenant_id="$(value MOA_RELEASE_CONTROL_TENANT_ID)"; tenant_id="${tenant_id:-tenant_personal}"
+  owner_id="$(value MOA_RELEASE_CONTROL_OWNER_ID)"; owner_id="${owner_id:-owner_personal}"
+  [[ "$tenant_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] \
+    && [[ "$owner_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] \
+    || { echo "Release-control tenant and owner identifiers are invalid" >&2; exit 1; }
+  temporary="${ENV_FILE}.$$"
+  awk '!/^MOA_RELEASE_CONTROL_(ENABLED|TENANT_ID|OWNER_ID)=/' "$ENV_FILE" > "$temporary"
+  {
+    printf 'MOA_RELEASE_CONTROL_ENABLED=1\n'
+    printf 'MOA_RELEASE_CONTROL_TENANT_ID=%s\n' "$tenant_id"
+    printf 'MOA_RELEASE_CONTROL_OWNER_ID=%s\n' "$owner_id"
+  } >> "$temporary"
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$ENV_FILE"
+fi
 
 echo "Release-control database credentials are ready; gateway restart is still operator-gated."

@@ -95,6 +95,9 @@ VOICE_PROVIDER=loopback
 VOICE_STT_PROVIDER=loopback
 VOICE_LLM_PROVIDER=loopback
 VOICE_TTS_PROVIDER=loopback
+MOA_RELEASE_CONTROL_ENABLED=1
+MOA_RELEASE_CONTROL_TENANT_ID=tenant_preview
+MOA_RELEASE_CONTROL_OWNER_ID=owner_preview
 ENV
 chmod 600 "$preview_env"
 
@@ -104,6 +107,14 @@ MOA_BUILD_SHA="$target" MOA_BUILD_REF="$REF" MOA_BUILD_TIME="$(date -u +%Y-%m-%d
 preview_upstream_url="http://127.0.0.1:$preview_port"
 preview_url="https://127.0.0.1:$preview_tls_port"
 curl -fsS --max-time 5 "$preview_upstream_url/health" >/dev/null
+curl -fsS --max-time 5 "$preview_upstream_url/health" | node_runtime -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  process.stdin.on("end", () => {
+    const release = JSON.parse(input).release_control || {};
+    if (release.configured !== true || release.ready !== true || release.storage !== "postgres") process.exit(1);
+  });
+'
 start_preview_tls_proxy "$preview_tls_container" "$preview_tls_port" "$preview_upstream_url"
 wait_for_preview_tls() {
   local attempt

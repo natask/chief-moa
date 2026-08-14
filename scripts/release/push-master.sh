@@ -58,7 +58,7 @@ if ! git diff --quiet origin/master HEAD -- windows_app \
 fi
 if ! git diff --quiet origin/master HEAD -- scripts/deploy.sh scripts/release release_control_plane; then
   bash -n scripts/deploy.sh scripts/release/local-release.sh scripts/release/push-master.sh \
-    scripts/vps/push.sh android_app/deploy/ota/sync-vps.sh
+    scripts/vps/push.sh scripts/vps/enable-release-control.sh android_app/deploy/ota/sync-vps.sh
   node --test scripts/release/test-release-evidence.mjs scripts/release/test-local-first-release.mjs
   bash scripts/test-deploy-android.sh
   bash android_app/deploy/ota/test-sync-vps.sh

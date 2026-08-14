@@ -24,4 +24,9 @@ test "$(grep -Ec '^RELEASE_CONTROL_(PUBLISHER_)?POSTGRES_PASSWORD=.{32,}$' "$roo
 app_password="$(sed -n 's/^RELEASE_CONTROL_POSTGRES_PASSWORD=//p' "$root/gateway.env" | tail -n 1)"
 publisher_password="$(sed -n 's/^RELEASE_CONTROL_PUBLISHER_POSTGRES_PASSWORD=//p' "$root/gateway.env" | tail -n 1)"
 test "$app_password" != "$publisher_password"
+MOA_ROOT="$root" ENV_FILE="$root/gateway.env" bash "$installer" --enable >/dev/null
+grep -Fxq 'MOA_RELEASE_CONTROL_ENABLED=1' "$root/gateway.env"
+grep -Fxq 'MOA_RELEASE_CONTROL_TENANT_ID=tenant_personal' "$root/gateway.env"
+grep -Fxq 'MOA_RELEASE_CONTROL_OWNER_ID=owner_personal' "$root/gateway.env"
+test "$(grep -c '^MOA_RELEASE_CONTROL_ENABLED=' "$root/gateway.env")" = 1
 echo "release-control database credential installer test passed"

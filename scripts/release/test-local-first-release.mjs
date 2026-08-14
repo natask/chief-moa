@@ -67,6 +67,18 @@ test("gateway promotion reuses master instead of creating a release branch", () 
   assert.doesNotMatch(gatewayPush, /direct-candidate-/);
 });
 
+test("release control activates only after preview and explicit production authority", () => {
+  const deploy = read("scripts/deploy.sh");
+  const preview = read("scripts/vps/promote-candidate.sh");
+  const enable = read("scripts/vps/enable-release-control.sh");
+  assert.match(preview, /MOA_RELEASE_CONTROL_ENABLED=1/);
+  assert.match(preview, /release\.configured !== true \|\| release\.ready !== true/);
+  assert.match(deploy, /enable-release-control\.sh --direct-enable --target/);
+  assert.match(enable, /--direct-enable/);
+  assert.match(enable, /voice_stream\?\.activity\?\.drain_safe/);
+  assert.match(enable, /mv -f "\$backup" "\$ENV_FILE"/);
+});
+
 test("Windows candidates fail closed unless all surviving Windows gates run locally", () => {
   const script = read("scripts/release/push-master.sh");
   assert.match(script, /Windows changes require the local pre-master gate on a Windows host/);

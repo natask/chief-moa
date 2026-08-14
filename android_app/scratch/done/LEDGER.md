@@ -1,3 +1,4 @@
+- Made gateway promotion prove Postgres-backed release control in preview, then enable it on drained production with automatic env rollback — agent: Codex/GPT-5 — this commit
 - Restored AG mobile chat and voice through owner-bound enrolled-device auth, blocked tokenless stable OTA publication, exposed stable/trial/feature releases, and kept guarded promotion on master without release branches — agent: Codex/GPT-5 — this commit
 - Exposed capture, socket, gateway STT/model/TTS, and real Android playout latency for completed phone voice turns — agent: Codex/GPT-5.6 — this commit
 - Added a fail-closed voice IME and moved voice-draft Cancel left and Pause/Resume right so transcript lanes stay clear — agent: Codex/GPT-5 — a0ef2481

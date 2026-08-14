@@ -177,6 +177,9 @@ deploy_gateway() {
   log "gateway: promoting exact candidate $candidate through the VPS safety gate"
   bash "$ROOT_DIR/scripts/vps/push.sh" --direct-deploy \
     --target "$EXPECTED_TARGET" --host "$vps_target" --commit "$candidate"
+  log "gateway: enabling the preview-verified release-control runtime"
+  ssh -o ConnectTimeout=8 -o BatchMode=yes "$vps_target" \
+    "APP_DIR=/opt/chief-moa/app /opt/chief-moa/app/scripts/vps/enable-release-control.sh --direct-enable --target $EXPECTED_TARGET"
 }
 
 deploy_android() {
