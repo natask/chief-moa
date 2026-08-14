@@ -47,7 +47,7 @@ test("issues a short-lived device-bound capability and restores account continui
   assert.equal(exchanged.device_credential.application_id, "ag.companion");
   assert.deepEqual(exchanged.device_credential.scopes, [
     "continuity.read", "conversation.read", "conversation.write", "profile.read",
-    "release.read", "development.request", "device.receipts.write",
+    "release.read", "release.recovery.read", "development.request", "device.receipts.write",
   ]);
   assert.deepEqual(exchanged.continuity, {
     account_id: "owner_1",

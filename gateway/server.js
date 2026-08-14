@@ -168,6 +168,7 @@ const { createWritingStyleRewriteService } = require("./lib/writing-style-rewrit
 const { createWritingStyleRewriteHandlers } = require("./lib/writing-style-rewrite-handlers");
 const { createGatewayHealthHandlers } = require("./lib/gateway-health-handlers");
 const { createReleaseControlRuntime } = require("./lib/release-control-runtime");
+const { createReleaseRecoveryHandlers } = require("./lib/release-recovery-handlers");
 const {
   createDeviceCredentialRegistry,
   createPostgresDeviceCredentialStore,
@@ -400,6 +401,7 @@ let cachedVertexToken = { value: "", expiresAt: 0 };
 let releaseControlRuntime = null;
 let routeDeviceCredentialRegistration = async () => false;
 let routeDeviceEnrollment = async () => false;
+let routeReleaseRecovery = async () => false;
 let releaseControlReady = false;
 
 fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true });
@@ -1188,6 +1190,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (await routeReleaseRecovery(request, response, url)) {
+      return;
+    }
+
     if (await routeAndroidOta(request, response, url)) {
       return;
     }
@@ -1564,6 +1570,12 @@ async function initializeReleaseControl() {
     readJsonBody,
     sendJson,
   });
+  routeReleaseRecovery = createReleaseRecoveryHandlers({
+    recoveryView: releaseControlRuntime.recoveryView,
+    resolveArtifactPath: (releaseId) => androidOta.resolveReleaseApkPath(ANDROID_OTA_DIR, releaseId),
+    sendJson,
+    externalOriginForRequest,
+  }).routeReleaseRecovery;
   releaseControlReady = true;
 }
 

@@ -174,7 +174,9 @@ function normalizeExchangeRow(row) {
 
 function scopesFor(applicationId, surfaceId) {
   const scopes = ["continuity.read", "conversation.read", "conversation.write", "profile.read"];
-  if (applicationId === "ag.companion") scopes.push("release.read", "development.request");
+  if (applicationId === "ag.companion") {
+    scopes.push("release.read", "release.recovery.read", "development.request");
+  }
   if (surfaceId === "android") scopes.push("device.receipts.write");
   return Object.freeze(scopes);
 }

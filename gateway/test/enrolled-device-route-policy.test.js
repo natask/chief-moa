@@ -15,6 +15,7 @@ const ALL_SCOPES = [
   "conversation.write",
   "profile.read",
   "release.read",
+  "release.recovery.read",
   "device.receipts.write",
   "development.request",
 ];
@@ -41,6 +42,8 @@ test("enrolled Device credentials retain Android chat, voice, history, and relea
     ["POST", "/v1/release-control/apps/chief-moa/fallback"],
     ["GET", "/v1/android/updates/latest"],
     ["GET", "/v1/android/updates/releases/ag.companion-1.apk"],
+    ["GET", "/v1/release-recovery/manifest"],
+    ["GET", "/v1/release-recovery/artifacts/ag.companion-1.apk"],
     ["POST", "/v1/device-credentials/current/revoke"],
     ["POST", "/v1/development-requests"],
     ["GET", "/v1/development-requests/devreq_1"],
@@ -99,6 +102,14 @@ test("enrolled Device route policy enforces the route-specific scope", () => {
   const release = deviceRequest("GET", "/v1/release-control/apps/chief-moa/view", ["conversation.read"]);
   assert.equal(enrolledDeviceHttpAccess(release.request, release.url).allowed, false);
 
+  const recovery = deviceRequest("GET", "/v1/release-recovery/manifest", ["release.read"]);
+  assert.deepEqual(enrolledDeviceHttpAccess(recovery.request, recovery.url), {
+    applies: true,
+    allowed: false,
+    reason: "scope_not_granted",
+    required_scopes: ["release.recovery.read"],
+  });
+
   const development = deviceRequest("POST", "/v1/development-requests", ["conversation.read"]);
   assert.deepEqual(enrolledDeviceHttpAccess(development.request, development.url), {
     applies: true,
@@ -117,6 +128,27 @@ test("the narrow request capability does not grant privileged development routes
   ]) {
     const { request, url } = deviceRequest("POST", pathname, ["development.request"]);
     assert.equal(enrolledDeviceHttpAccess(request, url).allowed, false, pathname);
+  }
+});
+
+test("the recovery capability grants only exact recovery GET routes", () => {
+  for (const [method, pathname] of [
+    ["GET", "/v1/release-recovery/manifest"],
+    ["GET", "/v1/release-recovery/artifacts/release-1.apk"],
+  ]) {
+    const { request, url } = deviceRequest(method, pathname, ["release.recovery.read"]);
+    assert.equal(enrolledDeviceHttpAccess(request, url).allowed, true, pathname);
+  }
+  for (const [method, pathname] of [
+    ["POST", "/v1/release-recovery/manifest"],
+    ["GET", "/v1/release-control/apps/ag.companion/view"],
+    ["POST", "/v1/release-control/apps/ag.companion/assignments"],
+    ["POST", "/v1/android/updates/rollback"],
+    ["POST", "/v1/agent/runs"],
+    ["POST", "/v1/development-requests"],
+  ]) {
+    const { request, url } = deviceRequest(method, pathname, ["release.recovery.read"]);
+    assert.equal(enrolledDeviceHttpAccess(request, url).allowed, false, `${method} ${pathname}`);
   }
 });
 

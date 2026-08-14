@@ -52,6 +52,10 @@ function httpRule(method, pathname) {
   if (method === "POST" && pathname === "/v1/device-credentials/current/revoke") {
     return rule();
   }
+  if (method === "GET" && (
+    pathname === "/v1/release-recovery/manifest"
+      || /^\/v1\/release-recovery\/artifacts\/[^/]+\.apk$/.test(pathname)
+  )) return rule("release.recovery.read");
   if ((method === "GET" || method === "POST") && (
     pathname === "/v1/development-requests"
       || /^\/v1\/development-requests\/[^/]+(?:\/(?:rename|progress))?$/.test(pathname)

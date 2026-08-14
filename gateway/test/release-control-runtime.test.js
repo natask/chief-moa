@@ -5,10 +5,16 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const crypto = require("node:crypto");
+const {
+  createDeviceCredentialRegistry,
+  createMemoryDeviceCredentialStore,
+} = require("../lib/device-credentials");
 const {
   applyMigrations,
   assertSeparateDatabase,
   createReleaseControlRuntime,
+  recoveryPrincipal,
   stableAuthority,
 } = require("../lib/release-control-runtime");
 
@@ -16,6 +22,42 @@ test("disabled runtime does not claim release-control routes", async () => {
   const runtime = await createReleaseControlRuntime({ enabled: false });
   assert.equal(runtime.enabled, false);
   assert.equal(await runtime.route(), false);
+});
+
+test("recovery principal is device-bound, scope-specific, and revocation-aware", async () => {
+  const active = {
+    tenant_id: "tenant-1", owner_id: "user-1", device_id: "phone-1",
+    surface_id: "android", credential_id: "credential-1", application_id: "ag.companion",
+    scopes: ["release.recovery.read"],
+  };
+  const principal = await recoveryPrincipal(async () => active, {});
+  assert.equal(principal.tenant_id, "tenant-1");
+  assert.equal(principal.user_id, "user-1");
+  assert.equal(principal.device_id, "phone-1");
+  assert.equal(principal.application_id, "chief-moa");
+  assert.equal(principal.device_application_id, "ag.companion");
+  assert.deepEqual(principal.role_bindings[0].scope,
+    { application_id: "chief-moa", channel: "*" });
+  assert.equal(await recoveryPrincipal(async () => ({ ...active, scopes: ["release.read"] }), {}), null);
+  assert.equal(await recoveryPrincipal(async () => null, {}), null);
+  assert.equal(await recoveryPrincipal(async () => ({ ...active, surface_id: "desktop" }), {}), null);
+  assert.equal(await recoveryPrincipal(async () => ({ ...active, application_id: "other.app" }), {}), null);
+
+  const token = `ag_dev_v1.${Buffer.alloc(32, 4).toString("base64url")}`;
+  const registry = createDeviceCredentialRegistry({
+    now: () => Date.parse("2026-08-14T12:00:00.000Z"),
+    store: createMemoryDeviceCredentialStore([{
+      ...active,
+      binding_key: "binding-1",
+      token_hash: crypto.createHash("sha256").update(token).digest("hex"),
+      status: "active",
+      created_at: "2026-08-14T11:00:00.000Z",
+    }]),
+  });
+  const request = { headers: { authorization: `Device ${token}` } };
+  assert.equal((await recoveryPrincipal(registry.authenticateRequest, request)).device_id, "phone-1");
+  await registry.revoke({ tenant_id: "tenant-1", credential_id: "credential-1", reason: "owner_requested" });
+  assert.equal(await recoveryPrincipal(registry.authenticateRequest, request), null);
 });
 
 test("enabled runtime requires separate persistence and authentication", async () => {

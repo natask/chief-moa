@@ -76,14 +76,31 @@ async function createReleaseControlRuntime(options = {}) {
     const handle = createReleaseControlHttpHandler(service, {
       authenticate,
     });
+    const authenticateDevice = authentication?.authenticateDevice || null;
+    const handleRecovery = authenticateDevice
+      ? createReleaseControlHttpHandler(service, {
+        authenticate: (request) => recoveryPrincipal(authenticateDevice, request),
+      })
+      : null;
 
     return Object.freeze({
       enabled: true,
       storage: "postgres",
       registrationAuthority: authentication?.registrationAuthority || null,
       enrollmentAuthority: authentication?.enrollmentAuthority || null,
-      authenticateDevice: authentication?.authenticateDevice || null,
+      authenticateDevice,
       authority,
+      async recoveryView(request) {
+        if (!handleRecovery) return { status: 503, body: { error: "release_recovery_unavailable" } };
+        const principal = await recoveryPrincipal(authenticateDevice, request);
+        if (!principal) return { status: 401, body: { error: "unauthorized" } };
+        return handleRecovery({
+          method: "GET",
+          path: `/v1/release-control/apps/${encodeURIComponent(principal.application_id)}/view`,
+          headers: request?.headers || {},
+          query: {},
+        });
+      },
       async route(request, response, url, transport = {}) {
         if (!String(url?.pathname || "").startsWith(RELEASE_CONTROL_PREFIX)) return false;
         const method = String(request.method || "GET").toUpperCase();
@@ -113,6 +130,32 @@ async function createReleaseControlRuntime(options = {}) {
     if (ownsPool) await pool.end().catch(() => {});
     throw error;
   }
+}
+
+async function recoveryPrincipal(authenticateDevice, request) {
+  const device = await authenticateDevice(request);
+  const scopes = Array.isArray(device?.scopes) ? device.scopes.map(String) : [];
+  if (!device?.tenant_id || !device?.owner_id || !device?.device_id
+      || device.surface_id !== "android" || !device?.credential_id
+      || device.application_id !== "ag.companion"
+      || !scopes.includes("release.recovery.read")) return null;
+  return Object.freeze({
+    tenant_id: String(device.tenant_id),
+    actor_id: String(device.credential_id),
+    owner_id: String(device.owner_id),
+    user_id: String(device.owner_id),
+    device_id: String(device.device_id),
+    surface_id: "android",
+    application_id: "chief-moa",
+    device_application_id: "ag.companion",
+    role_bindings: Object.freeze([Object.freeze({
+      tenant_id: String(device.tenant_id),
+      principal_id: String(device.credential_id),
+      role: "device",
+      scope: Object.freeze({ application_id: "chief-moa", channel: "*" }),
+    })]),
+    delegation_grants: Object.freeze([]),
+  });
 }
 
 function stableAuthority(input = {}) {
@@ -237,5 +280,6 @@ module.exports = {
   assertSchemaReady,
   assertSeparateDatabase,
   createReleaseControlRuntime,
+  recoveryPrincipal,
   stableAuthority,
 };
