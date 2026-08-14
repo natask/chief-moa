@@ -41,6 +41,16 @@ refines exact paths before each ticket and records status here.
 | Independent verifier | fixtures and black-box tests only; no implementation ownership | all lanes after handoff | replays frozen acceptance demo and full surface gates |
 | Release operator | guarded packaging, preview, promotion, rollback and smoke receipts | verifier completion | clean committed master, exact candidate SHA/digest, preview smoke, compatibility, drain, rollback, post-promotion smoke |
 
+## Active Implementation Wave 1
+
+| Agent/task | Branch | Worktree | Exact path claim | Tickets | State |
+| --- | --- | --- | --- | --- | --- |
+| `release_own_device` | `master` | shared current worktree | release-control service/auth implementation and focused release-control tests | 0.4 | active |
+| `device_revocation` | `master` | shared current worktree | `gateway/lib/device-credentials.js`, additive credential migration/store support, focused credential/auth tests | 0.5 | active |
+| `android_voice_recovery` | `master` | shared current worktree | Android voice failure/draft UI in `OverlayService.java` plus focused helpers/tests | 1.1–1.2 | active |
+| `named_request_foundation` | `master` | shared current worktree | new `gateway/lib/development-request*.js` modules and focused tests | 3.1–3.2 foundation | active |
+| Primary coordinator | `master` | shared current worktree | this index, integration verification, guarded push/deploy only | wave integration | active |
+
 ## Worktree State Convention
 
 Because all lanes intentionally share the primary worktree and `master`, idle is
