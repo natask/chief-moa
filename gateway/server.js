@@ -177,6 +177,10 @@ const {
 } = require("./lib/device-enrollment");
 const { createDeviceEnrollmentHandlers } = require("./lib/device-enrollment-handlers");
 const { attachEnrolledDevicePrincipal: attachDevicePrincipal } = require("./lib/enrolled-device-principal");
+const {
+  enforceEnrolledDeviceHttpAccess,
+  enforceEnrolledDeviceWebSocketAccess,
+} = require("./lib/enrolled-device-route-policy");
 const { createReleaseControlPrincipalResolver } = require("./lib/release-control-principal");
 const {
   normalizeSpeech,
@@ -1140,6 +1144,7 @@ const server = http.createServer(async (request, response) => {
     if (await betterAuthRuntime.route(request, response, url)) return;
     await betterAuthRuntime.attachPrincipal(request);
     await attachEnrolledDevicePrincipal(request);
+    if (enforceEnrolledDeviceHttpAccess(request, response, url, sendJson)) return;
     if (await voiceModeHandlers(request, response, url)) return;
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
       sendGatewayUi(response);
@@ -1416,6 +1421,7 @@ server.on("upgrade", (request, socket, head) => {
       rejectUpgrade(socket, 404, "Not Found");
       return;
     }
+    if (enforceEnrolledDeviceWebSocketAccess(request, socket, url, rejectUpgrade)) return;
     if (!authorizedVoiceSessionUpgrade(request, url)) {
       rejectUpgrade(socket, 401, "Unauthorized");
       return;
