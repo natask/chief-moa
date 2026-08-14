@@ -393,9 +393,7 @@ final class MoaGatewayClient {
         connection.setReadTimeout(readTimeoutMs);
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        if (!token.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-        }
+        setAuthorization(connection);
 
         byte[] payload = requestBody.getBytes(StandardCharsets.UTF_8);
         connection.setFixedLengthStreamingMode(payload.length);
@@ -427,9 +425,7 @@ final class MoaGatewayClient {
         connection.setReadTimeout(readTimeoutMs);
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", contentType);
-        if (!token.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-        }
+        setAuthorization(connection);
         if (extraHeaders != null) {
             for (Map.Entry<String, String> header : extraHeaders.entrySet()) {
                 String name = safe(header.getKey());
@@ -461,9 +457,7 @@ final class MoaGatewayClient {
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(3500);
         connection.setReadTimeout(readTimeoutMs);
-        if (!token.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-        }
+        setAuthorization(connection);
 
         int status = connection.getResponseCode();
         InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
@@ -481,9 +475,7 @@ final class MoaGatewayClient {
         connection.setRequestMethod("DELETE");
         connection.setConnectTimeout(3500);
         connection.setReadTimeout(readTimeoutMs);
-        if (!token.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-        }
+        setAuthorization(connection);
         int status = connection.getResponseCode();
         String responseText = readStream(status >= 400
                 ? connection.getErrorStream() : connection.getInputStream());
@@ -499,9 +491,7 @@ final class MoaGatewayClient {
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(3500);
         connection.setReadTimeout(readTimeoutMs);
-        if (!token.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-        }
+        setAuthorization(connection);
 
         int status = connection.getResponseCode();
         if (status < 200 || status >= 300) {
@@ -535,6 +525,13 @@ final class MoaGatewayClient {
             base = base.substring(0, base.length() - "/v1/chat".length());
         }
         return base + apiPath;
+    }
+
+    private void setAuthorization(HttpURLConnection connection) {
+        String authorization = MoaGatewayAuthorization.headerValue(token);
+        if (!authorization.isEmpty()) {
+            connection.setRequestProperty("Authorization", authorization);
+        }
     }
 
     private String scopedQuery(String scope, String deviceId) throws Exception {

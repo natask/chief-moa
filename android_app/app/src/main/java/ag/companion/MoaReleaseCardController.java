@@ -84,12 +84,12 @@ final class MoaReleaseCardController {
         installedStatus = statRow(card, "Installed", host.installedLabel());
         assignmentStatus = statRow(card, "Assigned", "Checking...");
         stableStatus = statRow(card, "Stable", "Checking...");
-        previewStatus = statRow(card, "Preview", "Checking...");
+        previewStatus = statRow(card, "Trial", "Checking...");
         actionStatus = text("Loading release control...", MoaColors.MUTED, 13, false);
         actionStatus.setPadding(0, dp(10), 0, 0);
         card.addView(actionStatus);
 
-        TextView browseTitle = text("Test candidates", MoaColors.PAPER, 16, true);
+        TextView browseTitle = text("Feature releases", MoaColors.PAPER, 16, true);
         browseTitle.setPadding(0, dp(18), 0, dp(4));
         card.addView(browseTitle);
         candidateCount = text("Loading candidates…", MoaColors.MUTED, 13, false);
@@ -111,7 +111,7 @@ final class MoaReleaseCardController {
         Button refresh = secondary("Refresh releases");
         refresh.setOnClickListener(v -> refresh());
         card.addView(refresh);
-        previewButton = secondary("Use preview");
+        previewButton = secondary("Promote to trial");
         previewButton.setEnabled(false);
         previewButton.setOnClickListener(v -> select("preview"));
         card.addView(previewButton);
@@ -257,7 +257,7 @@ final class MoaReleaseCardController {
             assignmentStatus.setText("None");
         } else {
             String source = view.assignment.source.isEmpty() ? "" : " · " + view.assignment.source;
-            assignmentStatus.setText(view.assignment.channel + " · " + view.assignment.releaseId
+            assignmentStatus.setText(displayChannel(view.assignment.channel) + " · " + view.assignment.releaseId
                     + source + " · selected, not installed");
         }
         renderCandidate(stableStatus, view.stable);
@@ -280,7 +280,7 @@ final class MoaReleaseCardController {
             return;
         }
         buttons(false, false);
-        status("Selecting " + channel + "...", MoaColors.GOLD);
+        status("Selecting " + displayChannel(channel) + "...", MoaColors.GOLD);
         int operationGeneration = ++generation;
         String gateway = pinnedGatewayUrl;
         String token = pinnedGatewayToken;
@@ -308,7 +308,7 @@ final class MoaReleaseCardController {
                             current.reportedInstalledSha256,
                             assignment, current.stable, current.preview,
                             current.hasLastKnownGood, current.candidates);
-                    render(capitalize(channel) + " selected — not installed.", MoaColors.GOLD);
+                    render(capitalize(displayChannel(channel)) + " selected — not installed.", MoaColors.GOLD);
                 });
             } catch (Exception error) {
                 main.post(() -> {
@@ -372,7 +372,7 @@ final class MoaReleaseCardController {
         List<MoaReleaseSelectionPolicy.Candidate> visible =
                 MoaReleaseSelectionPolicy.rank(catalog, query, selectedBundle, localInstalledSha256);
         candidateCount.setText(visible.size() + " of " + catalog.size()
-                + " published candidates · selection does not install");
+                + " feature releases · test one without changing stable");
         if (visible.isEmpty()) {
             TextView empty = text(catalog.isEmpty() ? "No published Android candidates yet."
                     : "No candidate matches that search.", MoaColors.MUTED, 14, false);
@@ -591,5 +591,11 @@ final class MoaReleaseCardController {
 
     private String capitalize(String value) {
         return Character.toUpperCase(value.charAt(0)) + value.substring(1);
+    }
+
+    private String displayChannel(String channel) {
+        if ("preview".equals(channel)) return "trial";
+        if ("candidate".equals(channel)) return "feature";
+        return channel == null ? "" : channel;
     }
 }

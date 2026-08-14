@@ -58,6 +58,17 @@ public final class MoaGatewayClientTest {
     }
 
     @Test
+    public void chatUsesDeviceSchemeForEnrolledCredential() throws Exception {
+        String credential = "ag_dev_v1." + "a".repeat(43);
+        MoaGatewayClient client = new MoaGatewayClient(baseUrl, credential);
+
+        client.chat(new JSONObject().put("messages", List.of(new JSONObject()
+                .put("role", "user").put("content", "hello"))));
+
+        assertEquals("Device " + credential, requests.get(0).authorization);
+    }
+
+    @Test
     public void baseUrlMayPointAtLegacyChatEndpoint() throws Exception {
         MoaGatewayClient client = new MoaGatewayClient(baseUrl + "/v1/chat", "secret-token");
 

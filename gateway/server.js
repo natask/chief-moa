@@ -176,6 +176,7 @@ const {
   createPostgresDeviceEnrollmentStore,
 } = require("./lib/device-enrollment");
 const { createDeviceEnrollmentHandlers } = require("./lib/device-enrollment-handlers");
+const { attachEnrolledDevicePrincipal: attachDevicePrincipal } = require("./lib/enrolled-device-principal");
 const { createReleaseControlPrincipalResolver } = require("./lib/release-control-principal");
 const {
   normalizeSpeech,
@@ -1138,6 +1139,7 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
     if (await betterAuthRuntime.route(request, response, url)) return;
     await betterAuthRuntime.attachPrincipal(request);
+    await attachEnrolledDevicePrincipal(request);
     if (await voiceModeHandlers(request, response, url)) return;
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
       sendGatewayUi(response);
@@ -1407,6 +1409,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.on("upgrade", (request, socket, head) => {
+  Promise.resolve(attachEnrolledDevicePrincipal(request)).then(() => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
     if (url.pathname !== voiceSessionServer.endpoint) {
@@ -1421,6 +1424,7 @@ server.on("upgrade", (request, socket, head) => {
   } catch (error) {
     rejectUpgrade(socket, 400, "Bad Request");
   }
+  }).catch(() => rejectUpgrade(socket, 401, "Unauthorized"));
 });
 
 async function startServer() {
@@ -13617,6 +13621,10 @@ function authorized(request) {
     return runtimeMode.protectedRoutesOpenWithoutToken;
   }
   return request.headers.authorization === `Bearer ${MOA_GATEWAY_TOKEN}`;
+}
+
+async function attachEnrolledDevicePrincipal(request) {
+  return attachDevicePrincipal(request, releaseControlRuntime?.authenticateDevice);
 }
 
 function bearerToken(request) {

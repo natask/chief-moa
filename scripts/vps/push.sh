@@ -98,7 +98,10 @@ if [ -n "$EXPECTED_COMMIT" ]; then
   local_head="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   [ "$local_head" = "$EXPECTED_COMMIT" ] \
     || { echo "Worktree HEAD moved after verification." >&2; exit 1; }
-  REF="direct-candidate-$EXPECTED_COMMIT"
+  local_master="$(git -C "$ROOT_DIR" rev-parse --verify refs/heads/master 2>/dev/null || true)"
+  [ "$local_master" = "$EXPECTED_COMMIT" ] \
+    || { echo "Pinned candidate must be the checked-out master commit; release branches are disabled." >&2; exit 1; }
+  REF="master"
 fi
 
 # Refuse to promote past uncommitted deploy-path work: the VPS pulls from

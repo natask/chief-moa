@@ -90,7 +90,8 @@ final class MoaReleaseControlClient {
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(120000);
         if (gatewayOrigin && !gatewayToken.isEmpty()) {
-            connection.setRequestProperty("Authorization", "Bearer " + gatewayToken);
+            connection.setRequestProperty("Authorization",
+                    MoaGatewayAuthorization.headerValue(gatewayToken));
         }
         int status = connection.getResponseCode();
         if (status < 200 || status >= 300) {
@@ -172,7 +173,7 @@ final class MoaReleaseControlClient {
                             .put("surface_id", SURFACE)
                             .put("idempotency_key", credential.idempotencyKey)
                             .put("credential_token", credential.token),
-                    "Bearer " + gatewayToken, false);
+                    MoaGatewayAuthorization.headerValue(gatewayToken), false);
             JSONObject receipt = response.optJSONObject("registration_receipt");
             if (response.optInt("schema_version", 0) != 1 || receipt == null
                     || !deviceId.equals(safe(receipt.optString("device_id")).toLowerCase())

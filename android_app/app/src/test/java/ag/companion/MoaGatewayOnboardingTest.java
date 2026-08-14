@@ -58,6 +58,27 @@ public final class MoaGatewayOnboardingTest {
     }
 
     @Test
+    public void verifiedEnrollmentReplacesLegacyFallbackAndUsesDeviceAuth() {
+        MoaDeviceCredentialStore.EnrollmentCredential enrolled =
+                new MoaDeviceCredentialStore.EnrollmentCredential(
+                        "ag_dev_v1." + "a".repeat(43), true, "owner_1");
+        String token = MoaPrefs.gatewayTokenAfterEnrollment("legacy-token", enrolled);
+
+        assertEquals(enrolled.token, token);
+        assertEquals("Device " + enrolled.token, MoaGatewayAuthorization.headerValue(token));
+        assertEquals("Bearer legacy-token", MoaGatewayAuthorization.headerValue("legacy-token"));
+    }
+
+    @Test
+    public void unverifiedEnrollmentCannotReplaceReleaseBootstrap() {
+        MoaDeviceCredentialStore.EnrollmentCredential enrolled =
+                new MoaDeviceCredentialStore.EnrollmentCredential(
+                        "ag_dev_v1." + "b".repeat(43), false, "");
+        assertEquals("legacy-token",
+                MoaPrefs.gatewayTokenAfterEnrollment("legacy-token", enrolled));
+    }
+
+    @Test
     public void tokenlessStaleDefaultMigratesToHostedOrigin() {
         assertEquals(
                 MoaPrefs.DEFAULT_GATEWAY_URL,

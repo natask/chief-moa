@@ -73,16 +73,25 @@ Android app
   Direct-distribution Android builds may receive the temporary build-only
   `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN`. Gradle places it in
   `BuildConfig.BUNDLED_GATEWAY_TOKEN`; no literal belongs in Git. At runtime a
-  non-empty token saved by the user takes precedence, and the bundled value is
-  only the fallback for an empty saved token. This is a shared gateway bearer
+  verified user-bound enrollment credential takes precedence; otherwise a
+  non-empty legacy token saved by the user wins and the bundled value is only
+  the fallback for an empty saved token. Enrolled clients send the revocable
+  credential with the `Device` scheme for HTTP and voice WebSocket admission.
+  The gateway resolves its database record to the bound tenant, owner, device,
+  Surface, application, and scopes before treating it as an authenticated Ag
+  principal. It never accepts caller-supplied owner or tenant identity.
+
+  The bundled fallback is a shared gateway bearer
   embedded in the APK. It is extractable and grants the broad legacy gateway
   scope, so it is not a device credential, user identity, or secret-storage
   boundary. A build without it stays tokenless until the user saves a token.
   During the temporary OTA-only bootstrap, an installed tokenless app may read
   the public current manifest and latest APK. The token-bearing APK is therefore
   public and the shared bearer is extractable. This is an explicitly temporary,
-  high-risk single-user compromise. Future account sign-in and scoped
-  per-user/device credentials replace it.
+  high-risk single-user compromise. Stable direct publication fails rather
+  than silently producing another tokenless compatibility APK. Once every
+  installed client has completed enrollment, scoped account/device credentials
+  replace this fallback entirely.
 
 Browser extension
   Owns: browser-local UI, text/voice capture, page context collection, and
@@ -447,6 +456,14 @@ activated, or smoked. Those transitions require separate platform receipts
 bound to the assignment, release id, surface, and artifact SHA-256. The control
 plane retains a last-known-good assignment so a client can request a bounded
 fallback without treating a UI selection as a completed rollback.
+
+The user-facing names for these release states are **stable**, **trial**, and
+**feature release**. The protocol retains `stable`, `preview`, and `candidate`
+for compatibility: trial maps to preview, while each independently testable
+feature maps to an immutable candidate. A composed candidate stacks multiple
+feature parents. Promoting it to trial changes the device assignment, not the
+stable head; promoting an accepted trial to stable remains a separately
+authorized repository-release operation.
 
 Published historical bundles remain available through a paginated candidate
 catalog after either channel head advances. Immutable lineage can name one

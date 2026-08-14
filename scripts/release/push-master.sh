@@ -13,8 +13,8 @@ log() { echo "[push-master] $*"; }
   || fail "usage: scripts/release/push-master.sh --direct-push --target master"
 
 branch="$(git branch --show-current)"
-[ -n "$branch" ] || fail "detached HEAD; check out the candidate branch"
-[ "$branch" != master ] || fail "run from the candidate branch, not master"
+[ -n "$branch" ] || fail "detached HEAD; check out master"
+[ "$branch" = master ] || fail "run from master; this repository does not create integration branches"
 [ -z "$(git status --porcelain)" ] || fail "working tree is dirty"
 
 git fetch origin master --quiet

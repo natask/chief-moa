@@ -148,6 +148,24 @@ NODE
 REMOTE_STABLE_SHA
 }
 
+android_bootstrap_gateway_token() {
+  local vps_target="$1"
+  if [ -n "${MOA_ANDROID_BUNDLED_GATEWAY_TOKEN:-}" ]; then
+    printf '%s' "$MOA_ANDROID_BUNDLED_GATEWAY_TOKEN"
+    return 0
+  fi
+  ssh -o ConnectTimeout=8 -o BatchMode=yes "$vps_target" sh -s <<'REMOTE_ANDROID_BOOTSTRAP_TOKEN'
+set -eu
+containers="$(docker ps -q \
+  --filter label=com.docker.compose.project=chief-moa \
+  --filter label=com.docker.compose.service=gateway \
+  --filter label=com.docker.compose.container-number=1)"
+set -- $containers
+[ "$#" -eq 1 ] || exit 1
+docker exec -i "$1" sh -c 'test -n "$MOA_GATEWAY_TOKEN" && printf %s "$MOA_GATEWAY_TOKEN"'
+REMOTE_ANDROID_BOOTSTRAP_TOKEN
+}
+
 deploy_gateway() {
   local vps_target candidate
   require_direct_target || return 1
@@ -164,6 +182,7 @@ deploy_gateway() {
 deploy_android() {
   local vps_target
   local candidate_head
+  local bootstrap_gateway_token
   require_direct_target || return 1
   if ! vps_target="$(production_vps_target)"; then
     log "android: canonical production VPS target is invalid or unavailable"
@@ -176,8 +195,17 @@ deploy_android() {
   log "android: using verified canonical production VPS target"
   candidate_head="$(android_release_candidate "$vps_target")" || return 1
   log "android: captured release candidate $candidate_head"
+  bootstrap_gateway_token="$(android_bootstrap_gateway_token "$vps_target")" || {
+    log "android: production gateway bootstrap credential is unavailable; refusing a tokenless stable OTA" >&2
+    return 1
+  }
+  [ -n "$bootstrap_gateway_token" ] || {
+    log "android: production gateway bootstrap credential is empty; refusing a tokenless stable OTA" >&2
+    return 1
+  }
   log "android: running the exact local release gate and building the OTA artifact"
-  bash "$LOCAL_RELEASE_SCRIPT" android
+  MOA_ANDROID_BUNDLED_GATEWAY_TOKEN="$bootstrap_gateway_token" \
+    bash "$LOCAL_RELEASE_SCRIPT" android
   if [ "$(git_head)" != "$candidate_head" ] || target_has_dirty_changes android; then
     log "android: candidate HEAD or Android input cleanliness changed during build; publication blocked"
     return 1

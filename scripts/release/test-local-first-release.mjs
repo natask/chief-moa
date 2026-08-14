@@ -55,8 +55,16 @@ test("master integration uses local gates without PR or Actions commands", () =>
   assert.match(pushMaster, /local-release\.sh/);
   assert.doesNotMatch(pushMaster, /\bgh\s|workflow_dispatch|actions\//);
   assert.match(pushMaster, /git push origin "\$candidate:refs\/heads\/master"/);
+  assert.match(pushMaster, /\[ "\$branch" = master \]/);
   assert.match(pushMaster, /cargo clippy --all-targets -- -D warnings/);
   assert.match(pushMaster, /verify-dictation-source\.mjs/);
+});
+
+test("gateway promotion reuses master instead of creating a release branch", () => {
+  const gatewayPush = read("scripts/vps/push.sh");
+  assert.match(gatewayPush, /local_master=.*refs\/heads\/master/);
+  assert.match(gatewayPush, /REF="master"/);
+  assert.doesNotMatch(gatewayPush, /direct-candidate-/);
 });
 
 test("Windows candidates fail closed unless all surviving Windows gates run locally", () => {

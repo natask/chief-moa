@@ -370,6 +370,16 @@ the full app does not mutate the overlay.
 - [ ] 20.5 Replace the shared bearer with account sign-in and revocable,
       scoped per-user/device credentials for chat, history, voice, and OTA
       onboarding.
+- [x] 20.6 Make a verified enrollment credential the Android client's primary
+      HTTP and voice-WebSocket credential, and resolve it server-side to its
+      database-bound owner/tenant instead of requiring the legacy bearer.
+- [x] 20.7 Refuse production stable OTA publication when the temporary
+      compatibility credential cannot be supplied securely to the build; local
+      and isolated preview builds may remain tokenless.
+- [x] 20.8 Present the existing protocol states as stable, trial, and feature
+      releases in the Android release card while preserving preview/candidate
+      wire compatibility, exact selection, composed lineage, and one-step
+      last-known-good fallback.
 
 Observable acceptance check: focused Android tests prove empty saved state uses
 the build fallback, a saved token overrides it, and an empty build fallback

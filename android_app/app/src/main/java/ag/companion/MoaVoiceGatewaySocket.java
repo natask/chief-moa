@@ -120,8 +120,9 @@ final class MoaVoiceGatewaySocket {
             Log.i(TAG, "connect -> " + redactedUrl(url) + " token=" + (token.isEmpty() ? "MISSING" : "set(" + token.length() + ")"));
             try {
                 Request.Builder builder = new Request.Builder().url(url);
-                if (!token.isEmpty()) {
-                    builder.header("Authorization", "Bearer " + token);
+                String authorization = MoaGatewayAuthorization.headerValue(token);
+                if (!authorization.isEmpty()) {
+                    builder.header("Authorization", authorization);
                 }
                 webSocket = client.newWebSocket(builder.build(), new Listener());
             } catch (IllegalArgumentException error) {

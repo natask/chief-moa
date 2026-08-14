@@ -2,6 +2,7 @@ package ag.companion;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.provider.Settings;
 
 import org.json.JSONObject;
 
@@ -154,9 +155,27 @@ final class MoaPrefs {
     }
 
     static String gatewayToken(Context context) {
-        return gatewayTokenAfterBundledFallback(
+        String fallback = gatewayTokenAfterBundledFallback(
                 prefs(context).getString(KEY_GATEWAY_TOKEN, ""),
                 BUNDLED_GATEWAY_TOKEN);
+        String deviceId = androidDeviceId(context);
+        MoaDeviceCredentialStore.EnrollmentCredential enrolled =
+                new MoaDeviceCredentialStore(context).loadEnrollmentCredential(
+                        gatewayUrl(context), deviceId);
+        return gatewayTokenAfterEnrollment(fallback, enrolled);
+    }
+
+    static String gatewayTokenAfterEnrollment(
+            String fallback, MoaDeviceCredentialStore.EnrollmentCredential enrolled) {
+        return enrolled != null && enrolled.verified && !safe(enrolled.token).isEmpty()
+                ? safe(enrolled.token) : safe(fallback);
+    }
+
+    private static String androidDeviceId(Context context) {
+        String raw = Settings.Secure.getString(
+                context.getContentResolver(), Settings.Secure.ANDROID_ID);
+        String value = raw == null ? "" : raw.replaceAll("[^a-zA-Z0-9_-]", "");
+        return "android_" + (value.isEmpty() ? "unknown" : value);
     }
 
     static String gatewayTokenAfterBundledFallback(String storedToken, String bundledToken) {

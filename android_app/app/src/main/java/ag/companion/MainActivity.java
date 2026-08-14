@@ -1372,10 +1372,10 @@ public final class MainActivity extends Activity {
                 // URL" from "reachable but token rejected" before the first turn.
                 int authCode = gatewayStatusCode(authProbeUrl, gatewayToken);
                 if (authCode >= 200 && authCode < 300) {
-                    label = "Reachable / token OK";
+                    label = "Reachable / signed in";
                 } else if (authCode == 401 || authCode == 403) {
                     tokenProblem = true;
-                    label = gatewayToken.isEmpty() ? "Token required" : "Token rejected";
+                    label = gatewayToken.isEmpty() ? "Sign-in required" : "Sign-in rejected";
                 }
             }
             if (urlIssue == MoaPrefs.GatewayUrlIssue.STALE_MAIN_MACHINE) {
@@ -1397,16 +1397,15 @@ public final class MainActivity extends Activity {
         }, "moa-gateway-health").start();
     }
 
-    private static int gatewayStatusCode(String url, String bearerToken) {
+    private static int gatewayStatusCode(String url, String gatewayCredential) {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(2500);
-            if (bearerToken != null && !bearerToken.isEmpty()) {
-                connection.setRequestProperty("Authorization", "Bearer " + bearerToken);
-            }
+            String authorization = MoaGatewayAuthorization.headerValue(gatewayCredential);
+            if (!authorization.isEmpty()) connection.setRequestProperty("Authorization", authorization);
             return connection.getResponseCode();
         } catch (Exception ignored) {
             return -1;

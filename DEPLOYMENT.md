@@ -28,6 +28,15 @@ If the user has saved a non-empty gateway token in AG, that saved token wins.
 The bundled token fills only an empty saved value. Omitting
 `MOA_ANDROID_BUNDLED_GATEWAY_TOKEN` builds a tokenless APK.
 
+The production direct-deploy wrapper must never publish that tokenless form as
+the stable OTA while the compatibility bootstrap remains active. It acquires
+the existing gateway bearer inside the verified VPS session, passes it only to
+the local Android build process, and never prints or writes it to release
+metadata. Local and preview builds may remain tokenless. A verified enrolled
+device credential takes precedence over both the saved legacy bearer and the
+bundled fallback, so successful account enrollment immediately removes normal
+chat and voice traffic from the shared-bearer path.
+
 This bootstrap is temporary. The bearer is embedded in the APK and can be
 extracted by anyone who downloads the artifact. It has the broad authority of
 the shared legacy gateway token and does not identify a user or device. The
