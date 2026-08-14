@@ -47,8 +47,10 @@ FAKE_SSH_RECEIPT="$TMP_DIR/ssh" PATH="$FAKE_BIN:$PATH" \
     >/dev/null
 )
 grep -Fq '/opt/chief-moa/app/scripts/vps/promote-candidate.sh' "$TMP_DIR/ssh"
-grep -Fq "direct-candidate-$sha" "$TMP_DIR/ssh"
-test "$(git --git-dir="$TMP_DIR/origin.git" rev-parse "refs/heads/direct-candidate-$sha")" = "$sha"
+grep -Fq ' master' "$TMP_DIR/ssh"
+test "$(git --git-dir="$TMP_DIR/origin.git" rev-parse refs/heads/master)" = "$sha"
+test -z "$(git --git-dir="$TMP_DIR/origin.git" for-each-ref \
+  --format='%(refname:short)' 'refs/heads/direct-candidate-*')"
 
 printf 'moved\n' >> "$TMP_DIR/source/README.md"
 git -C "$TMP_DIR/source" add README.md
