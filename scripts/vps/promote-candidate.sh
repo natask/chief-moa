@@ -126,9 +126,22 @@ wait_for_preview_tls() {
   return 1
 }
 wait_for_preview_tls
-unauthorized="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 "$preview_url/v1/supervisor/status")"
+# Prove the application auth boundary directly before attributing a transient
+# connection failure to the TLS proxy. Caddy can accept its first health probe
+# while its listener is still settling, so retry transport errors only; an HTTP
+# response (including an incorrect status) is never retried or hidden.
+upstream_unauthorized="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+  "$preview_upstream_url/v1/supervisor/status")"
+[ "$upstream_unauthorized" = "401" ] || {
+  echo "promotion blocked: preview upstream auth gate returned $upstream_unauthorized" >&2
+  exit 1
+}
+unauthorized="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 \
+  --retry 2 --retry-all-errors --retry-delay 1 \
+  "$preview_url/v1/supervisor/status")"
 [ "$unauthorized" = "401" ] || { echo "promotion blocked: preview auth gate returned $unauthorized" >&2; exit 1; }
-curl -kfsS --max-time 5 -H "Authorization: Bearer $preview_token" "$preview_url/v1/supervisor/status" >/dev/null
+curl -kfsS --max-time 5 --retry 2 --retry-all-errors --retry-delay 1 \
+  -H "Authorization: Bearer $preview_token" "$preview_url/v1/supervisor/status" >/dev/null
 MOA_AUTH_SMOKE_ORIGIN="$preview_url" \
 MOA_AUTH_SMOKE_EMAIL="preview-owner@agee.invalid" \
 MOA_AUTH_SMOKE_PASSWORD="$preview_auth_password" \
