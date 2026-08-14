@@ -2,7 +2,7 @@
 
 const AUTH_PATH = "/api/auth";
 
-function createBetterAuthRuntime(env = process.env) {
+function createBetterAuthRuntime(env = process.env, options = {}) {
   const enabled = String(env.MOA_AUTH || "").trim().toLowerCase() === "better-auth";
   const ownerEmail = String(env.BETTER_AUTH_OWNER_EMAIL || "").trim().toLowerCase();
   let loaded;
@@ -10,7 +10,9 @@ function createBetterAuthRuntime(env = process.env) {
   async function load() {
     if (!enabled) return null;
     if (!loaded) {
-      loaded = Promise.all([import("../auth.mjs"), import("better-auth/node")])
+      loaded = typeof options.loadRuntime === "function"
+        ? Promise.resolve().then(options.loadRuntime)
+        : Promise.all([import("../auth.mjs"), import("better-auth/node")])
         .then(([module, node]) => ({
           auth: module.auth,
           handler: node.toNodeHandler(module.auth),
@@ -47,12 +49,19 @@ function createBetterAuthRuntime(env = process.env) {
       session_id: String(session.session.id),
       email: String(session.user.email || ""),
       kind: header.startsWith("Bearer ") ? "device_session" : "browser_session",
+      ...recentAuthentication(session.session.createdAt),
     });
     request.moaAuthPrincipal = principal;
     return principal;
   }
 
   return { enabled, route, attachPrincipal };
+}
+
+function recentAuthentication(value) {
+  const timestamp = value instanceof Date ? value.getTime() : Date.parse(String(value || ""));
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return {};
+  return { recent_auth_at: new Date(timestamp).toISOString() };
 }
 
 module.exports = { AUTH_PATH, createBetterAuthRuntime };

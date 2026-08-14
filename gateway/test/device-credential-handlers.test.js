@@ -9,6 +9,7 @@ function response() {
 }
 
 function handler(overrides = {}) {
+  const { registry: registryOverrides = {}, ...otherOverrides } = overrides;
   return createDeviceCredentialHandlers({
     registry: {
       register: async (input) => ({
@@ -20,12 +21,14 @@ function handler(overrides = {}) {
         },
       }),
       revoke: async () => ({ replay: false, receipt: { credential_id: "devc_1", status: "revoked" } }),
+      list: async () => ({ schema: "moa.device-credential-list.v1", items: [], next_cursor: "" }),
+      ...registryOverrides,
     },
     authorized: () => true,
     tenantId: () => "stable_personal_tenant",
     readJsonBody: async (request) => request.body,
     sendJson: (target, status, body) => Object.assign(target, { status, body }),
-    ...overrides,
+    ...otherOverrides,
   });
 }
 
@@ -158,5 +161,87 @@ test("own-device revocation denies forged identities and missing shared authenti
   await handle({ method: "POST", body: { reason: "owner_requested" } }, missing,
     "/v1/device-credentials/current/revoke");
   assert.equal(missing.status, 401);
+  assert.equal(calls, 0);
+});
+
+test("recent Better Auth owner lists bounded tenant credentials and revokes a lost device", async () => {
+  const now = Date.parse("2026-08-14T12:00:00.000Z");
+  const owner = {
+    tenant_id: "tenant_owner", user_id: "owner", roles: ["owner"],
+    recent_auth_at: "2026-08-14T11:58:00.000Z",
+  };
+  const observed = [];
+  const handle = handler({
+    now: () => now,
+    ownerContext: () => owner,
+    registry: {
+      list: async (input) => {
+        observed.push(["list", input]);
+        return { schema: "moa.device-credential-list.v1", items: [{ credential_id: "devc_lost" }], next_cursor: "20" };
+      },
+      revoke: async (input) => {
+        observed.push(["revoke", input]);
+        return { replay: false, receipt: { credential_id: input.credential_id, status: "revoked" } };
+      },
+    },
+  });
+  const listed = response();
+  await handle({ method: "GET", url: "/v1/device-credentials?limit=20&cursor=0" }, listed,
+    "/v1/device-credentials");
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body.items, [{ credential_id: "devc_lost" }]);
+
+  const revoked = response();
+  await handle({ method: "POST", body: { reason: "device_lost" } }, revoked,
+    "/v1/device-credentials/devc_lost/revoke");
+  assert.equal(revoked.status, 200);
+  assert.deepEqual(observed, [
+    ["list", { tenant_id: "tenant_owner", limit: "20", cursor: "0" }],
+    ["revoke", { tenant_id: "tenant_owner", credential_id: "devc_lost", reason: "device_lost" }],
+  ]);
+});
+
+test("lost-device administration fails closed without recent owner auth", async () => {
+  const now = Date.parse("2026-08-14T12:00:00.000Z");
+  let calls = 0;
+  const registry = {
+    list: async () => { calls += 1; return { items: [] }; },
+    revoke: async () => { calls += 1; return { replay: false, receipt: {} }; },
+  };
+  for (const ownerContext of [
+    () => null,
+    () => ({ tenant_id: "tenant_owner", user_id: "owner", roles: ["owner"] }),
+    () => ({ tenant_id: "tenant_owner", user_id: "owner", roles: ["owner"], recent_auth_at: "2026-08-14T11:50:00.000Z" }),
+    () => ({ tenant_id: "tenant_owner", user_id: "member", roles: ["member"], recent_auth_at: "2026-08-14T11:59:00.000Z" }),
+  ]) {
+    const handle = handler({ now: () => now, ownerContext, registry });
+    const target = response();
+    await handle({ method: "GET", url: "/v1/device-credentials" }, target,
+      "/v1/device-credentials");
+    assert.equal(target.status, 403);
+  }
+  assert.equal(calls, 0);
+});
+
+test("owner revocation denies forged tenant, owner, and credential identities and requires a reason", async () => {
+  let calls = 0;
+  const handle = handler({
+    now: () => Date.parse("2026-08-14T12:00:00.000Z"),
+    ownerContext: () => ({
+      tenant_id: "tenant_owner", user_id: "owner", roles: ["admin"],
+      recent_auth_at: "2026-08-14T11:59:00.000Z",
+    }),
+    registry: { revoke: async () => { calls += 1; return { replay: false, receipt: {} }; } },
+  });
+  for (const body of [
+    {},
+    { reason: "device_lost", tenant_id: "tenant_other" },
+    { reason: "device_lost", owner_user_id: "other" },
+    { reason: "device_lost", credential_id: "devc_other" },
+  ]) {
+    const target = response();
+    await handle({ method: "POST", body }, target, "/v1/device-credentials/devc_lost/revoke");
+    assert.equal(target.status, Object.keys(body).length ? 403 : 400);
+  }
   assert.equal(calls, 0);
 });

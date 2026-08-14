@@ -133,7 +133,10 @@ const { createDevelopmentPlane } = require("./lib/development-plane");
 const { createDevelopmentPlaneHandlers } = require("./lib/development-plane-handlers");
 const { createDevelopmentPlaneCoordinator } = require("./lib/development-plane-coordinator");
 const { createDevelopmentRequestStore } = require("./lib/development-requests");
-const { createDevelopmentRequestHandlers } = require("./lib/development-request-handlers");
+const {
+  createDevelopmentRequestCoordinatorResolver,
+  createDevelopmentRequestHandlers,
+} = require("./lib/development-request-handlers");
 const { createDevelopmentIntegrationQueue } = require("./lib/development-integration-queue");
 const { extractPlan, planningMessages } = require("./lib/development-planner");
 const { parseWorkHistoryIntent } = require("./lib/work-history-intent");
@@ -333,6 +336,10 @@ const RELEASE_CONTROL_CONFIGURED = process.env.MOA_RELEASE_CONTROL_ENABLED === "
 const MOA_DEPLOY_REVIEWER_TOKEN = process.env.MOA_DEPLOY_REVIEWER_TOKEN || "";
 const MOA_PREVIEW_DEPLOYER_TOKEN = process.env.MOA_PREVIEW_DEPLOYER_TOKEN || "";
 const MOA_PRODUCTION_PROMOTER_TOKEN = process.env.MOA_PRODUCTION_PROMOTER_TOKEN || "";
+const MOA_DEVELOPMENT_COORDINATOR_TOKEN = process.env.MOA_DEVELOPMENT_COORDINATOR_TOKEN || "";
+const DEVICE_OWNER_RECENT_AUTH_MAX_AGE_MS = boundedRecentAuthAge(
+  process.env.MOA_DEVICE_OWNER_RECENT_AUTH_MAX_AGE_MS,
+);
 const DEPLOY_REVIEWER_ID = process.env.MOA_DEPLOY_REVIEWER_ID || "deployment-reviewer";
 const PREVIEW_DEPLOYER_ID = process.env.MOA_PREVIEW_DEPLOYER_ID || "preview-deployer";
 const PRODUCTION_PROMOTER_ID = process.env.MOA_PRODUCTION_PROMOTER_ID || "production-promoter";
@@ -736,11 +743,18 @@ const eventSubstrate = createEventSubstrateStore({
   originId: process.env.MOA_ORIGIN_ID || process.env.GATEWAY_ORIGIN_ID || "",
 });
 const developmentRequests = createDevelopmentRequestStore({ events: eventSubstrate });
+const developmentRequestCoordinatorPrincipal = createDevelopmentRequestCoordinatorResolver({
+  token: MOA_DEVELOPMENT_COORDINATOR_TOKEN,
+  reservedTokens: [MOA_GATEWAY_TOKEN, MOA_DEPLOY_REVIEWER_TOKEN,
+    MOA_PREVIEW_DEPLOYER_TOKEN, MOA_PRODUCTION_PROMOTER_TOKEN],
+  authority: () => releaseControlRuntime?.authority,
+});
 const routeDevelopmentRequests = createDevelopmentRequestHandlers({
   store: developmentRequests,
   readJsonBody,
   sendJson,
   cleanError,
+  coordinatorPrincipal: developmentRequestCoordinatorPrincipal,
 });
 const reminders = createReminderStore({ events: eventSubstrate });
 const reminderDelivery = createReminderDeliveryCoordinator({
@@ -1561,6 +1575,8 @@ async function initializeReleaseControl() {
     tenantId: () => releaseControlRuntime.authority.tenant_id,
     readJsonBody,
     sendJson,
+    ownerContext: deviceCredentialOwnerContext,
+    recentAuthMaxAgeMs: DEVICE_OWNER_RECENT_AUTH_MAX_AGE_MS,
   });
   routeDeviceEnrollment = createDeviceEnrollmentHandlers({
     service: releaseControlRuntime.enrollmentAuthority,
@@ -13664,10 +13680,29 @@ function bearerToken(request) {
 }
 
 function scopedTokenMatches(request, token) {
-  const configured = [MOA_GATEWAY_TOKEN, MOA_DEPLOY_REVIEWER_TOKEN, MOA_PREVIEW_DEPLOYER_TOKEN, MOA_PRODUCTION_PROMOTER_TOKEN]
+  const configured = [MOA_GATEWAY_TOKEN, MOA_DEPLOY_REVIEWER_TOKEN, MOA_PREVIEW_DEPLOYER_TOKEN,
+    MOA_PRODUCTION_PROMOTER_TOKEN, MOA_DEVELOPMENT_COORDINATOR_TOKEN]
     .filter(Boolean);
   if (!token || configured.filter((candidate) => candidate === token).length !== 1) return false;
   return bearerToken(request) === token;
+}
+
+function boundedRecentAuthAge(value) {
+  const configured = Number(value || 5 * 60_000);
+  if (!Number.isFinite(configured) || configured < 30_000) return 5 * 60_000;
+  return Math.min(configured, 15 * 60_000);
+}
+
+function deviceCredentialOwnerContext(request) {
+  const principal = request?.moaAuthPrincipal;
+  const authority = releaseControlRuntime?.authority;
+  if (principal?.kind !== "browser_session" || !authority?.tenant_id) return null;
+  return Object.freeze({
+    tenant_id: String(authority.tenant_id),
+    user_id: String(principal.user_id || ""),
+    roles: Object.freeze(principal.user_id === "owner" ? ["owner"] : []),
+    recent_auth_at: principal.recent_auth_at,
+  });
 }
 
 function deploymentPrincipal(request, operation) {

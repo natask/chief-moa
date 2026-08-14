@@ -2,10 +2,31 @@
 
 const BASE_PATH = "/v1/development-requests";
 
+function createDevelopmentRequestCoordinatorResolver(options = {}) {
+  const token = String(options.token || "");
+  const authority = requiredFunction(options.authority, "authority");
+  const reserved = (Array.isArray(options.reservedTokens) ? options.reservedTokens : [])
+    .map(String).filter(Boolean);
+  const usable = Boolean(token) && !reserved.includes(token);
+  return function resolve(request = {}) {
+    if (!usable || String(request.headers?.authorization || "") !== `Bearer ${token}`) return null;
+    const owner = authority();
+    if (!owner?.tenant_id || !owner?.owner_id) return null;
+    return Object.freeze({
+      kind: "development_request_coordinator",
+      tenant_id: String(owner.tenant_id),
+      user_id: String(owner.owner_id),
+      scopes: Object.freeze(["development.request.progress"]),
+    });
+  };
+}
+
 function createDevelopmentRequestHandlers(options = {}) {
   const store = options.store;
   const readJsonBody = requiredFunction(options.readJsonBody, "readJsonBody");
   const sendJson = requiredFunction(options.sendJson, "sendJson");
+  const coordinatorPrincipal = typeof options.coordinatorPrincipal === "function"
+    ? options.coordinatorPrincipal : () => null;
   const cleanError = typeof options.cleanError === "function"
     ? options.cleanError
     : (error) => String(error?.message || error);
@@ -17,6 +38,12 @@ function createDevelopmentRequestHandlers(options = {}) {
   return async function routeDevelopmentRequests(request, response, url) {
     const route = parseRoute(url?.pathname);
     if (!route) return false;
+    const method = String(request.method || "GET").toUpperCase();
+    if (route.action === "progress" && method === "POST") {
+      return updateProgress(request, response, route, {
+        coordinatorPrincipal, store, readJsonBody, sendJson, cleanError,
+      });
+    }
     const principal = ownedPrincipal(request?.moaAuthPrincipal);
     if (!principal) {
       sendJson(response, 401, { error: "unauthorized" });
@@ -28,7 +55,6 @@ function createDevelopmentRequestHandlers(options = {}) {
     }
 
     try {
-      const method = String(request.method || "GET").toUpperCase();
       if (route.action === "collection" && method === "POST") {
         const body = await ownedBody(request, principal, readJsonBody);
         sendJson(response, 201, { development_request: await store.create(principal, body) });
@@ -50,11 +76,6 @@ function createDevelopmentRequestHandlers(options = {}) {
         sendJson(response, 200, { development_request: await store.rename(principal, route.requestId, body) });
         return true;
       }
-      if (route.action === "progress" && method === "POST") {
-        const body = await ownedBody(request, principal, readJsonBody);
-        sendJson(response, 200, { development_request: await store.updateProgress(principal, route.requestId, body) });
-        return true;
-      }
       sendJson(response, 405, { error: "method_not_allowed" });
     } catch (error) {
       sendJson(response, Number(error?.statusCode) || 400, {
@@ -64,6 +85,28 @@ function createDevelopmentRequestHandlers(options = {}) {
     }
     return true;
   };
+}
+
+async function updateProgress(request, response, route, options) {
+  const authority = options.coordinatorPrincipal(request);
+  const coordinator = ownedPrincipal(authority);
+  const scopes = authority?.scopes;
+  if (!coordinator || !Array.isArray(scopes) || !scopes.includes("development.request.progress")) {
+    options.sendJson(response, 403, { error: "development_request_coordinator_required" });
+    return true;
+  }
+  try {
+    const body = await ownedBody(request, coordinator, options.readJsonBody);
+    options.sendJson(response, 200, {
+      development_request: await options.store.updateProgress(coordinator, route.requestId, body),
+    });
+  } catch (error) {
+    options.sendJson(response, Number(error?.statusCode) || 400, {
+      error: error?.code || "invalid_request",
+      message: options.cleanError(error).slice(0, 300),
+    });
+  }
+  return true;
 }
 
 function parseRoute(pathname) {
@@ -128,4 +171,4 @@ function requiredFunction(value, name) {
   return value;
 }
 
-module.exports = { createDevelopmentRequestHandlers };
+module.exports = { createDevelopmentRequestCoordinatorResolver, createDevelopmentRequestHandlers };

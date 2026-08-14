@@ -48,7 +48,6 @@ test("enrolled Device credentials retain Android chat, voice, history, and relea
     ["POST", "/v1/development-requests"],
     ["GET", "/v1/development-requests/devreq_1"],
     ["POST", "/v1/development-requests/devreq_1/rename"],
-    ["POST", "/v1/development-requests/devreq_1/progress"],
   ]) {
     const access = enrolledDeviceHttpAccess(...Object.values(deviceRequest(method, pathname)));
     assert.equal(access.allowed, true, `${method} ${pathname}`);
@@ -61,10 +60,13 @@ test("enrolled Device credentials receive 403 policy decisions for agent and dev
     ["POST", "/v1/agent/runs/run_1/followups"],
     ["POST", "/v1/development/intents/intent_1/dispatch"],
     ["POST", "/v1/development/intents"],
+    ["POST", "/v1/development-requests/devreq_1/progress"],
     ["POST", "/v1/agent/workers/registrations"],
     ["POST", "/v1/internal/voice/reason"],
     ["POST", "/v1/android/updates/rollback"],
     ["POST", "/v1/device-credentials/registrations"],
+    ["GET", "/v1/device-credentials"],
+    ["POST", "/v1/device-credentials/devc_lost/revoke"],
     ["GET", "/v1/supervisor/report"],
   ]) {
     const access = enrolledDeviceHttpAccess(...Object.values(deviceRequest(method, pathname)));
@@ -125,6 +127,7 @@ test("the narrow request capability does not grant privileged development routes
     "/v1/development/intents/dev_1/dispatch",
     "/v1/development-requests/dev_1/dispatch",
     "/v1/development-requests/dev_1/unknown",
+    "/v1/development-requests/dev_1/progress",
   ]) {
     const { request, url } = deviceRequest("POST", pathname, ["development.request"]);
     assert.equal(enrolledDeviceHttpAccess(request, url).allowed, false, pathname);

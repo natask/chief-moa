@@ -56,10 +56,14 @@ function httpRule(method, pathname) {
     pathname === "/v1/release-recovery/manifest"
       || /^\/v1\/release-recovery\/artifacts\/[^/]+\.apk$/.test(pathname)
   )) return rule("release.recovery.read");
-  if ((method === "GET" || method === "POST") && (
-    pathname === "/v1/development-requests"
-      || /^\/v1\/development-requests\/[^/]+(?:\/(?:rename|progress))?$/.test(pathname)
-  )) return rule("development.request");
+  if ((method === "GET" || method === "POST")
+      && pathname === "/v1/development-requests") return rule("development.request");
+  if (method === "GET" && /^\/v1\/development-requests\/[^/]+$/.test(pathname)) {
+    return rule("development.request");
+  }
+  if (method === "POST" && /^\/v1\/development-requests\/[^/]+\/rename$/.test(pathname)) {
+    return rule("development.request");
+  }
   if (pathname.startsWith("/v1/release-control/apps/")) return rule("release.read");
   if (method === "GET" && pathname.startsWith("/v1/android/updates/")) {
     return rule("release.read");

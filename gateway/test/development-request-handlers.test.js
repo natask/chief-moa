@@ -2,7 +2,10 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { createDevelopmentRequestHandlers } = require("../lib/development-request-handlers");
+const {
+  createDevelopmentRequestCoordinatorResolver,
+  createDevelopmentRequestHandlers,
+} = require("../lib/development-request-handlers");
 
 const principal = Object.freeze({
   kind: "enrolled_device",
@@ -32,6 +35,7 @@ function harness(overrides = {}) {
     readJsonBody: async (request) => request.body,
     sendJson: (target, status, body) => Object.assign(target, { status, body }),
     cleanError: (error) => error.message,
+    coordinatorPrincipal: overrides.coordinatorPrincipal,
   });
   return { route, calls };
 }
@@ -46,7 +50,7 @@ async function call(route, method, pathname, body, authPrincipal = principal, qu
   return { handled, ...target };
 }
 
-test("HTTP collection, detail, rename, and progress routes use only authenticated ownership", async () => {
+test("HTTP collection, detail, and rename routes use only authenticated ownership", async () => {
   const { route, calls } = harness();
   assert.equal((await call(route, "POST", "/v1/development-requests", {
     idempotency_key: "submit-request-0001", display_name: "Repair voice",
@@ -57,17 +61,71 @@ test("HTTP collection, detail, rename, and progress routes use only authenticate
   assert.equal((await call(route, "POST", "/v1/development-requests/devreq_1/rename", {
     display_name: "Repair mobile voice", idempotency_key: "rename-request-0001",
   })).status, 200);
-  assert.equal((await call(route, "POST", "/v1/development-requests/devreq_1/progress", {
-    state: "running", summary: "Gateway task running", idempotency_key: "progress-request-0001",
-  })).status, 200);
-
-  assert.deepEqual(calls.map(([name]) => name), ["create", "list", "get", "rename", "progress"]);
+  assert.deepEqual(calls.map(([name]) => name), ["create", "list", "get", "rename"]);
   for (const [, observedPrincipal] of calls) {
     assert.deepEqual(observedPrincipal, {
       tenant_id: "tenant_owner", user_id: "user_owner", device_id: "phone_owner",
     });
   }
   assert.deepEqual(calls[1][2], { limit: "10", cursor: "20" });
+});
+
+test("Device progress is denied while exact coordinator scope can update the owner record", async () => {
+  const coordinator = {
+    kind: "development_request_coordinator",
+    tenant_id: "tenant_owner",
+    user_id: "user_owner",
+    scopes: ["development.request.progress"],
+  };
+  const { route, calls } = harness({ coordinatorPrincipal: (request) => request.coordinator });
+  const denied = await call(route, "POST", "/v1/development-requests/devreq_1/progress", {
+    state: "running", summary: "forged phone progress", idempotency_key: "progress-phone-0001",
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error, "development_request_coordinator_required");
+
+  const target = response();
+  await route({
+    method: "POST",
+    coordinator,
+    body: { state: "running", summary: "Gateway task running", idempotency_key: "progress-server-0001" },
+  }, target, new URL("http://gateway/v1/development-requests/devreq_1/progress"));
+  assert.equal(target.status, 200);
+  assert.deepEqual(calls, [["progress", {
+    tenant_id: "tenant_owner", user_id: "user_owner", device_id: "",
+  }, "devreq_1", {
+    state: "running", summary: "Gateway task running", idempotency_key: "progress-server-0001",
+  }]]);
+
+  coordinator.scopes = ["development.request"];
+  const wrongScope = response();
+  await route({ method: "POST", coordinator, body: {} }, wrongScope,
+    new URL("http://gateway/v1/development-requests/devreq_1/progress"));
+  assert.equal(wrongScope.status, 403);
+});
+
+test("coordinator resolver requires one distinct exact Bearer token and server authority", () => {
+  const resolve = createDevelopmentRequestCoordinatorResolver({
+    token: "coordinator-secret",
+    reservedTokens: ["gateway-secret"],
+    authority: () => ({ tenant_id: "tenant_owner", owner_id: "user_owner" }),
+  });
+  assert.deepEqual(resolve({ headers: { authorization: "Bearer coordinator-secret" } }), {
+    kind: "development_request_coordinator",
+    tenant_id: "tenant_owner",
+    user_id: "user_owner",
+    scopes: ["development.request.progress"],
+  });
+  for (const authorization of [
+    "Device coordinator-secret", "Bearer gateway-secret", "Bearer coordinator-secret-extra", "",
+  ]) assert.equal(resolve({ headers: { authorization } }), null);
+
+  const duplicate = createDevelopmentRequestCoordinatorResolver({
+    token: "gateway-secret",
+    reservedTokens: ["gateway-secret"],
+    authority: () => ({ tenant_id: "tenant_owner", owner_id: "user_owner" }),
+  });
+  assert.equal(duplicate({ headers: { authorization: "Bearer gateway-secret" } }), null);
 });
 
 test("HTTP routes reject missing scope, missing principal, forged identities, and cross-owner detail", async () => {

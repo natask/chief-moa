@@ -14,7 +14,8 @@ function createDeviceCredentialRegistry(options = {}) {
   const store = options.store;
   if (!store || typeof store.findByBinding !== "function"
       || typeof store.findByTokenHash !== "function"
-      || typeof store.insert !== "function" || typeof store.revoke !== "function") {
+      || typeof store.insert !== "function" || typeof store.revoke !== "function"
+      || typeof store.list !== "function") {
     throw new Error("device credential store is required");
   }
   const now = typeof options.now === "function" ? options.now : () => Date.now();
@@ -108,10 +109,24 @@ function createDeviceCredentialRegistry(options = {}) {
     });
   }
 
+  async function list(input = {}) {
+    const tenantId = requiredId(input.tenant_id, "tenant_id");
+    const limit = Math.max(1, Math.min(Number.parseInt(input.limit, 10) || 20, 50));
+    const cursor = Math.max(0, Number.parseInt(input.cursor, 10) || 0);
+    const page = await store.list({ tenant_id: tenantId, limit: limit + 1, cursor });
+    const rows = Array.isArray(page) ? page : [];
+    return Object.freeze({
+      schema: "moa.device-credential-list.v1",
+      items: Object.freeze(rows.slice(0, limit).map(credentialProjection)),
+      next_cursor: rows.length > limit ? String(cursor + limit) : "",
+    });
+  }
+
   // HTTP requests and WebSocket upgrade requests use the same headers and the
   // same read-time credential check. Expose both names so callers cannot drift.
   return Object.freeze({
     register,
+    list,
     revoke,
     authenticateRequest,
     authenticateHttpRequest: authenticateRequest,
@@ -160,6 +175,14 @@ function createMemoryDeviceCredentialStore(initial = []) {
         record: projectedMemoryRecord(record, true),
         newly_revoked: newlyRevoked,
       });
+    },
+    async list({ tenant_id: tenantId, limit, cursor }) {
+      return [...byCredentialId.values()]
+        .filter((record) => record.tenant_id === tenantId)
+        .map((record) => projectedMemoryRecord(record, revoked.has(record.credential_id)))
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))
+          || right.credential_id.localeCompare(left.credential_id))
+        .slice(cursor, cursor + limit);
     },
   });
 }
@@ -272,6 +295,24 @@ function createPostgresDeviceCredentialStore(pool) {
         });
       });
     },
+    async list({ tenant_id: tenantId, limit, cursor }) {
+      return tenantQuery(pool, tenantId, async (client) => {
+        const result = await client.query(
+          `select c.credential_id, c.tenant_id, c.device_id, c.surface_id,
+                  case when exists (
+                    select 1 from release_device_credential_revocations r
+                     where r.credential_id = c.credential_id
+                  ) then 'revoked' else c.status end as status,
+                  c.created_at, c.application_id
+             from release_device_credentials c
+            where c.tenant_id = $1
+            order by c.created_at desc, c.credential_id desc
+            offset $2 limit $3`,
+          [tenantId, cursor, limit],
+        );
+        return result.rows.map(normalizeDatabaseRecord);
+      });
+    },
   });
 }
 
@@ -297,6 +338,18 @@ function publicReceipt(record) {
     device_id: record.device_id,
     surface_id: record.surface_id,
     status: record.status,
+    created_at: record.created_at instanceof Date
+      ? record.created_at.toISOString() : String(record.created_at),
+  });
+}
+
+function credentialProjection(record) {
+  return Object.freeze({
+    credential_id: String(record.credential_id),
+    device_id: String(record.device_id),
+    surface_id: String(record.surface_id),
+    application_id: String(record.application_id || "chief-moa"),
+    status: String(record.status),
     created_at: record.created_at instanceof Date
       ? record.created_at.toISOString() : String(record.created_at),
   });

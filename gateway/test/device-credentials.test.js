@@ -37,6 +37,7 @@ test("registers only a token hash and authenticates its exact Device credential"
     findByTokenHash: async (hash) => records.find((item) => item.token_hash === hash) || null,
     insert: async (record) => (records.push(record), true),
     revoke: async () => null,
+    list: async () => records,
   };
   const credentials = registry({ store });
   const created = await credentials.register(registration);
@@ -192,6 +193,30 @@ test("revocation rejects forged tenant, unknown credential, and invalid reason",
   }), (error) => error.code === "invalid_device_revocation");
 });
 
+test("tenant list is bounded, paginated, and excludes secret credential material", async () => {
+  const credentials = registry();
+  const first = await credentials.register(registration);
+  await credentials.revoke({
+    tenant_id: registration.tenant_id,
+    credential_id: first.receipt.credential_id,
+    reason: "credential_rotated",
+  });
+  await credentials.register({
+    ...registration,
+    idempotency_key: "replacement-phone-1-20260814",
+    credential_token: `moa_dev_v1.${Buffer.alloc(32, 11).toString("base64url")}`,
+  });
+  const page = await credentials.list({ tenant_id: registration.tenant_id, limit: 1 });
+  assert.equal(page.schema, "moa.device-credential-list.v1");
+  assert.equal(page.items.length, 1);
+  assert.equal(page.next_cursor, "1");
+  assert.deepEqual(Object.keys(page.items[0]).sort(), [
+    "application_id", "created_at", "credential_id", "device_id", "status", "surface_id",
+  ]);
+  assert.equal(JSON.stringify(page).includes("token_hash"), false);
+  assert.deepEqual((await credentials.list({ tenant_id: "another_owner" })).items, []);
+});
+
 test("validates registration input and store configuration", async () => {
   assert.throws(() => createDeviceCredentialRegistry(), /store is required/);
   for (const bad of [
@@ -225,6 +250,7 @@ test("Postgres adapter queries exact hashes and inserts no plaintext secret", as
   const store = createPostgresDeviceCredentialStore(pool);
   await store.findByBinding("owner", "a".repeat(64));
   await store.findByTokenHash("b".repeat(64));
+  await store.list({ tenant_id: "owner", limit: 20, cursor: 0 });
   await store.insert({
     credential_id: "devc_123", binding_key: "a".repeat(64), tenant_id: "owner",
     device_id: "phone", surface_id: "android", token_hash: "b".repeat(64),
@@ -236,13 +262,15 @@ test("Postgres adapter queries exact hashes and inserts no plaintext secret", as
     revoked_at: "2026-07-23T12:01:00.000Z",
   });
   assert.equal(revoked, null);
-  assert.equal(calls.filter((call) => call.sql.includes("release_device_credentials")).length, 3);
+  assert.equal(calls.filter((call) => call.sql.includes("release_device_credentials")).length, 4);
   assert.equal(JSON.stringify(calls).includes(deviceToken), false);
   assert.equal(calls.some((call) => call.sql.includes("release_authenticate_device_credential")), true);
   assert.equal(calls.some((call) => call.sql.includes("on conflict do nothing")), true);
   assert.equal(calls.some((call) => call.sql.includes("release_device_credential_revocations")), true);
   assert.equal(calls.some((call) => call.sql.includes("pg_advisory_xact_lock")), true);
   assert.equal(calls.some((call) => call.sql.includes("release_device_credential_generations")), true);
+  const listCall = calls.find((call) => call.sql.includes("order by c.created_at desc"));
+  assert.deepEqual(listCall.args, ["owner", 0, 20]);
 });
 
 test("generation migration preserves immutable history and serializes re-pair", () => {
