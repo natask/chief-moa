@@ -101,8 +101,12 @@ export function prepareRecovery(input, predecessorFacts, requestedVersionCode, b
   const targetBinding = {
     bundle_id: target.bundle_id, release_id: target.release_id, sequence: target.sequence,
   };
-  const expectedParent = target.channel === "stable" ? stable : trial;
-  if (!expectedParent || !sameBinding(targetBinding, expectedParent)) {
+  // Stable recovery targets the current stable head. Trial undo is different:
+  // target is the separately confirmed historical T1 while parent_trial is
+  // the current T2 being replaced. Exact target source/APK facts below bind T1;
+  // release-history freshness is checked by the gateway before this trusted
+  // operator-side build request is issued.
+  if (target.channel === "stable" && !sameBinding(targetBinding, stable)) {
     fail("target predecessor binding is stale");
   }
   const replacementBinding = [stable, trial].find((candidate) => candidate

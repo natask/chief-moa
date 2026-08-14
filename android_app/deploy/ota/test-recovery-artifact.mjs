@@ -80,19 +80,47 @@ test("prepares and finalizes a distinct forward recovery artifact with exact pro
   }
 });
 
-test("rejects Android downgrade and a stale stable or trial binding", () => {
+test("rejects Android downgrade and stale current-parent bindings", () => {
   assert.throws(() => prepareRecovery(request(), predecessorFacts(), 90, BUILDER),
     /not forward-versioned/);
   assert.throws(() => prepareRecovery(request({
     parent_stable: { bundle_id: "stable-new", release_id: "stable-release-8", sequence: 8 },
   }), predecessorFacts(), 91, BUILDER), /binding is stale/);
   assert.throws(() => prepareRecovery(request({
-    target_predecessor: { ...request().target_predecessor, channel: "trial" },
-    parent_trial: null,
-  }), predecessorFacts(), 91, BUILDER), /binding is stale/);
-  assert.throws(() => prepareRecovery(request({
     replaces: { ...request().replaces, bundle_id: "trial-stale" },
   }), predecessorFacts(), 91, BUILDER), /replaced release binding is stale/);
+});
+
+test("builds confirmed historical trial T1 while replacing current trial T2", () => {
+  const trialUndo = request({
+    target_predecessor: {
+      ...request().target_predecessor,
+      channel: "trial",
+      bundle_id: "trial-8",
+      release_id: "trial-release-8",
+      sequence: 8,
+    },
+  });
+  const plan = prepareRecovery(trialUndo, predecessorFacts(), 91, BUILDER);
+  assert.equal(plan.target_predecessor.bundle_id, "trial-8");
+  assert.equal(plan.target_predecessor.release_id, "trial-release-8");
+  assert.equal(plan.parent_trial.bundle_id, "trial-9");
+  assert.equal(plan.replaces.bundle_id, "trial-9");
+});
+
+test("rejects a stale exact trial target whose supplied APK facts do not match", () => {
+  const trialUndo = request({
+    target_predecessor: {
+      ...request().target_predecessor,
+      channel: "trial",
+      bundle_id: "trial-8",
+      release_id: "trial-release-8",
+      sequence: 8,
+      artifact_sha256: "7".repeat(64),
+    },
+  });
+  assert.throws(() => prepareRecovery(trialUndo, predecessorFacts(), 91, BUILDER),
+    /APK identity does not match target provenance/);
 });
 
 test("rejects predecessor digest, package, signer, size, and version mismatches", () => {
