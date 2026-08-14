@@ -49,6 +49,24 @@ final class MoaReleaseArtifactVerifier {
                 packageName, MoaUpdateArtifact.signatureFlags()));
     }
 
+    static void verifyForwardRecovery(
+            PackageManager packages, String packageName, File apk,
+            long expectedVersionCode, String expectedSha256, long expectedSizeBytes,
+            String expectedSignerSha256) throws Exception {
+        verify(packages, packageName, apk, packageName, expectedVersionCode,
+                expectedSha256, expectedSizeBytes);
+        String signer = safe(expectedSignerSha256).toLowerCase();
+        if (!declaresInstalledSigner(installedSignerDigests(packages, packageName), signer)) {
+            throw new IllegalStateException("APK continuity signer declaration mismatch");
+        }
+    }
+
+    static boolean declaresInstalledSigner(Set<String> installedSigners, String declaredSigner) {
+        String signer = safe(declaredSigner).toLowerCase();
+        return signer.matches("[a-f0-9]{64}") && installedSigners != null
+                && installedSigners.contains(signer);
+    }
+
     private static String safe(String value) {
         return value == null ? "" : value.trim();
     }

@@ -8,6 +8,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public final class MoaReleaseRescueCacheTest {
     @Test
@@ -45,6 +46,30 @@ public final class MoaReleaseRescueCacheTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> MoaReleaseRescueCache.parse(envelope.toString()));
+    }
+
+    @Test
+    public void validatedForwardRecoverySurvivesRestartAndBindsInstalledIdentity() throws Exception {
+        MoaForwardRecoveryManifest recovery = MoaForwardRecoveryManifest.recommended(
+                MoaForwardRecoveryManifestTest.manifest(), "https://api.example.test",
+                "phone-1", 20L, "1".repeat(64));
+        MoaReleaseRescueCache.Snapshot source = new MoaReleaseRescueCache.Snapshot(
+                "https://api.example.test", "phone-1", "2.0.0", 20L,
+                "1".repeat(64), List.of("4".repeat(64)), null, null, 1234L, recovery);
+
+        MoaReleaseRescueCache.Snapshot restored = MoaReleaseRescueCache.parse(
+                MoaReleaseRescueCache.encode(source).toString());
+
+        assertNotNull(restored.forwardRecovery);
+        assertEquals("forward-21", restored.forwardRecovery.recoveryId);
+        assertTrue(restored.forwardRecovery.matchesInstalled(
+                20L, "1".repeat(64), java.util.Set.of("4".repeat(64))));
+        org.junit.Assert.assertFalse(restored.forwardRecovery.matchesInstalled(
+                20L, "9".repeat(64), java.util.Set.of("4".repeat(64))));
+        org.junit.Assert.assertFalse(restored.forwardRecovery.matchesInstalled(
+                19L, "1".repeat(64), java.util.Set.of("4".repeat(64))));
+        org.junit.Assert.assertFalse(restored.forwardRecovery.matchesInstalled(
+                20L, "1".repeat(64), java.util.Set.of("8".repeat(64))));
     }
 
     private static MoaReleaseRescueCache.Snapshot snapshot() {

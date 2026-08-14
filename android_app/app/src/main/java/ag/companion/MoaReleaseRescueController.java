@@ -36,6 +36,7 @@ final class MoaReleaseRescueController {
     private Button stableAction;
     private AlertDialog dialog;
     private MoaReleaseRescueCache.Snapshot snapshot;
+    private MoaForwardRecoveryManifest forwardRecovery;
 
     MoaReleaseRescueController(
             Activity activity, String origin, String token, String deviceId) {
@@ -80,11 +81,19 @@ final class MoaReleaseRescueController {
     }
 
     private void loadCached() {
+        forwardRecovery = null;
         try {
             snapshot = cache.load(origin, deviceId);
             if (snapshot != null && !currentSignerDigests().equals(
                     new HashSet<>(snapshot.signerDigests))) {
                 snapshot = null;
+            }
+            if (snapshot != null && snapshot.forwardRecovery != null
+                    && snapshot.forwardRecovery.matchesInstalled(currentVersionCode(),
+                            MoaUpdateArtifact.sha256Hex(
+                                    new File(activity.getApplicationInfo().sourceDir)),
+                            currentSignerDigests())) {
+                forwardRecovery = snapshot.forwardRecovery;
             }
         } catch (Exception ignored) {
             snapshot = null;
@@ -102,17 +111,40 @@ final class MoaReleaseRescueController {
             try {
                 MoaReleaseRecoveryClient client = new MoaReleaseRecoveryClient(
                         origin, token, deviceId);
+                org.json.JSONObject manifest = client.view();
                 MoaReleaseSelectionPolicy.View view =
-                        MoaReleaseSelectionPolicy.parseView(client.view());
+                        MoaReleaseSelectionPolicy.parseView(manifest);
+                MoaForwardRecoveryManifest nextRecovery =
+                        MoaForwardRecoveryManifest.recommended(manifest, origin, deviceId,
+                                currentVersionCode(), MoaUpdateArtifact.sha256Hex(
+                                        new File(activity.getApplicationInfo().sourceDir)));
                 MoaReleaseRescueCache.Snapshot next = MoaReleaseRescueCache.fromView(
                         origin, deviceId, currentVersionName(), currentVersionCode(),
                         MoaUpdateArtifact.sha256Hex(new File(activity.getApplicationInfo().sourceDir)),
-                        new ArrayList<>(currentSignerDigests()), view, System.currentTimeMillis());
+                        new ArrayList<>(currentSignerDigests()), view, System.currentTimeMillis())
+                        .withForwardRecovery(nextRecovery);
                 cache.save(next);
                 main.post(() -> {
                     if (!active()) return;
                     snapshot = next;
-                    render("Recovery metadata refreshed and cached for this device.", MoaColors.OK);
+                    forwardRecovery = nextRecovery;
+                    render(nextRecovery == null
+                                    ? "Stable metadata refreshed. No forward recovery artifact is available."
+                                    : "Forward recovery verified against Stable and the installed app.",
+                            nextRecovery == null ? MoaColors.WARN : MoaColors.OK);
+                });
+            } catch (IllegalArgumentException stale) {
+                MoaReleaseRescueCache.Snapshot current = snapshot;
+                if (current != null) {
+                    try {
+                        cache.save(current.withForwardRecovery(null));
+                    } catch (Exception ignored) { }
+                }
+                main.post(() -> {
+                    if (!active()) return;
+                    forwardRecovery = null;
+                    render("Recovery provenance is stale or invalid. No install is offered.",
+                            MoaColors.WARN);
                 });
             } catch (Exception ignored) {
                 main.post(() -> {
@@ -144,20 +176,17 @@ final class MoaReleaseRescueController {
     }
 
     private MoaReleaseRescuePolicy.Action action() {
-        if (snapshot == null) return MoaReleaseRescuePolicy.Action.UNAVAILABLE;
-        try {
-            return MoaReleaseRescuePolicy.action(snapshot.stable, currentVersionCode(),
-                    MoaUpdateArtifact.sha256Hex(new File(activity.getApplicationInfo().sourceDir)),
-                    MoaUpdateArtifact.updateApkFile(activity.getCacheDir()));
-        } catch (Exception ignored) {
-            return MoaReleaseRescuePolicy.Action.UNAVAILABLE;
-        }
+        if (forwardRecovery == null) return MoaReleaseRescuePolicy.Action.UNAVAILABLE;
+        File cached = MoaUpdateArtifact.updateApkFile(activity.getCacheDir());
+        return cached.isFile() && cached.length() == forwardRecovery.artifactSizeBytes
+                ? MoaReleaseRescuePolicy.Action.INSTALL_CACHED
+                : MoaReleaseRescuePolicy.Action.DOWNLOAD_AND_INSTALL;
     }
 
     private void recoverStable() {
-        MoaReleaseRescueCache.Entry entry = snapshot == null ? null : snapshot.stable;
+        MoaForwardRecoveryManifest recovery = forwardRecovery;
         MoaReleaseRescuePolicy.Action action = action();
-        if (entry == null || (action != MoaReleaseRescuePolicy.Action.INSTALL_CACHED
+        if (recovery == null || (action != MoaReleaseRescuePolicy.Action.INSTALL_CACHED
                 && action != MoaReleaseRescuePolicy.Action.DOWNLOAD_AND_INSTALL)) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 && !activity.getPackageManager().canRequestPackageInstalls()) {
@@ -169,29 +198,33 @@ final class MoaReleaseRescueController {
         new AlertDialog.Builder(activity)
                 .setTitle("Review exact stable restore")
                 .setMessage("Ag will " + (action == MoaReleaseRescuePolicy.Action.INSTALL_CACHED
-                        ? "verify the cached APK" : "download and verify the exact stable APK")
+                        ? "verify the cached forward recovery APK"
+                        : "download and verify the exact forward recovery APK")
                         + ". Android will still ask you to approve installation. "
                         + "Ag will not uninstall the current app.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Continue", (ignored, which) -> downloadVerifyAndOpen(entry, action))
+                .setPositiveButton("Continue", (ignored, which) ->
+                        downloadVerifyAndOpen(recovery, action))
                 .show();
     }
 
     private void downloadVerifyAndOpen(
-            MoaReleaseRescueCache.Entry entry, MoaReleaseRescuePolicy.Action action) {
+            MoaForwardRecoveryManifest recovery, MoaReleaseRescuePolicy.Action action) {
         stableAction.setEnabled(false);
         status(action == MoaReleaseRescuePolicy.Action.INSTALL_CACHED
-                ? "Verifying cached stable APK…" : "Downloading exact stable APK…", MoaColors.GOLD);
+                ? "Verifying cached recovery APK…" : "Downloading exact recovery APK…",
+                MoaColors.GOLD);
         new Thread(() -> {
             try {
                 File apk = MoaUpdateArtifact.updateApkFile(activity.getCacheDir());
                 if (action != MoaReleaseRescuePolicy.Action.INSTALL_CACHED) {
-                    new MoaReleaseRecoveryClient(origin, token, deviceId).download(entry, apk);
+                    new MoaReleaseRecoveryClient(origin, token, deviceId).download(recovery, apk);
                 }
-                MoaReleaseArtifactVerifier.verify(activity.getPackageManager(),
-                        activity.getPackageName(), apk, "ag.companion", entry.versionCode,
-                        entry.sha256, entry.sizeBytes);
-                if (entry.versionCode < currentVersionCode()) {
+                MoaReleaseArtifactVerifier.verifyForwardRecovery(activity.getPackageManager(),
+                        activity.getPackageName(), apk, recovery.artifactVersionCode,
+                        recovery.artifactSha256, recovery.artifactSizeBytes,
+                        recovery.artifactSignerSha256);
+                if (recovery.artifactVersionCode <= currentVersionCode()) {
                     throw new IllegalStateException("forward recovery build is required");
                 }
                 main.post(this::openInstaller);
@@ -209,9 +242,7 @@ final class MoaReleaseRescueController {
         if (!active()) return;
         Uri apk = Uri.parse("content://" + activity.getPackageName()
                 + ".apkprovider/ota/" + MoaApkProvider.APK_NAME);
-        Intent install = new Intent(Intent.ACTION_VIEW)
-                .setDataAndType(apk, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent install = MoaRecoveryInstallContract.review(apk);
         try {
             activity.startActivity(install);
             render("Exact bytes and continuity signer verified. Android installer opened.", MoaColors.OK);

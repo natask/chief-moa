@@ -50,8 +50,16 @@ final class MoaReleaseRecoveryClient {
 
     void download(MoaReleaseRescueCache.Entry entry, File destination) throws Exception {
         if (entry == null) throw new IllegalArgumentException("release entry is required");
-        new MoaReleaseControlClient(origin, token).downloadArtifact(
-                entry.downloadUrl, entry.sizeBytes, destination);
+        download(entry.downloadUrl, entry.sizeBytes, destination);
+    }
+
+    void download(MoaForwardRecoveryManifest recovery, File destination) throws Exception {
+        if (recovery == null) throw new IllegalArgumentException("forward recovery is required");
+        download(recovery.downloadUrl, recovery.artifactSizeBytes, destination);
+    }
+
+    private void download(String url, long sizeBytes, File destination) throws Exception {
+        new MoaReleaseControlClient(origin, token).downloadArtifact(url, sizeBytes, destination);
     }
 
     private static String read(InputStream input) throws Exception {

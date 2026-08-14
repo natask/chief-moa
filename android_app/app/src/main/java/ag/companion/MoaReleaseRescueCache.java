@@ -46,7 +46,7 @@ final class MoaReleaseRescueCache {
         return new Snapshot(safe(origin), safe(deviceId), safe(installedVersion),
                 installedVersionCode, normalizedSha(installedSha256), signerDigests,
                 Entry.fromCandidate(view == null ? null : view.stable),
-                Entry.fromCandidate(view == null ? null : view.preview), capturedAt);
+                Entry.fromCandidate(view == null ? null : view.preview), capturedAt, null);
     }
 
     static JSONObject encode(Snapshot snapshot) throws Exception {
@@ -62,7 +62,8 @@ final class MoaReleaseRescueCache {
         if (!integrity.matches("[a-f0-9]{64}") || !integrity.equals(digest(envelope.toString()))) {
             throw new IllegalArgumentException("release rescue cache integrity mismatch");
         }
-        if (envelope.optInt("schema_version", 0) != 1) {
+        int schemaVersion = envelope.optInt("schema_version", 0);
+        if (schemaVersion != 1 && schemaVersion != 2) {
             throw new IllegalArgumentException("release rescue cache schema is unsupported");
         }
         JSONArray signers = envelope.optJSONArray("continuity_signers");
@@ -82,16 +83,23 @@ final class MoaReleaseRescueCache {
         if (!installedSha.matches("[a-f0-9]{64}") || installedCode <= 0L) {
             throw new IllegalArgumentException("release rescue installed identity is invalid");
         }
-        return new Snapshot(required(envelope, "origin"), required(envelope, "device_id"),
+        String origin = required(envelope, "origin");
+        MoaForwardRecoveryManifest forward = schemaVersion >= 2
+                ? MoaForwardRecoveryManifest.fromCacheJson(
+                        envelope.optJSONObject("forward_recovery")) : null;
+        if (forward != null && !origin.equals(forward.origin)) {
+            throw new IllegalArgumentException("release rescue recovery origin mismatch");
+        }
+        return new Snapshot(origin, required(envelope, "device_id"),
                 required(envelope, "installed_version"), installedCode, installedSha,
                 signerDigests, Entry.parse(envelope.optJSONObject("stable"), "stable"),
                 Entry.parse(envelope.optJSONObject("trial"), "preview"),
-                envelope.optLong("captured_at", 0L));
+                envelope.optLong("captured_at", 0L), forward);
     }
 
     private static JSONObject payload(Snapshot value) throws Exception {
         JSONObject payload = new JSONObject()
-                .put("schema_version", 1)
+                .put("schema_version", 2)
                 .put("origin", value.origin)
                 .put("device_id", value.deviceId)
                 .put("installed_version", value.installedVersion)
@@ -101,6 +109,9 @@ final class MoaReleaseRescueCache {
                 .put("captured_at", value.capturedAt);
         if (value.stable != null) payload.put("stable", value.stable.toJson());
         if (value.trial != null) payload.put("trial", value.trial.toJson());
+        if (value.forwardRecovery != null) {
+            payload.put("forward_recovery", value.forwardRecovery.toCacheJson());
+        }
         return payload;
     }
 
@@ -138,10 +149,19 @@ final class MoaReleaseRescueCache {
         final Entry stable;
         final Entry trial;
         final long capturedAt;
+        final MoaForwardRecoveryManifest forwardRecovery;
 
         Snapshot(String origin, String deviceId, String installedVersion,
                 long installedVersionCode, String installedSha256, List<String> signerDigests,
                 Entry stable, Entry trial, long capturedAt) {
+            this(origin, deviceId, installedVersion, installedVersionCode, installedSha256,
+                    signerDigests, stable, trial, capturedAt, null);
+        }
+
+        Snapshot(String origin, String deviceId, String installedVersion,
+                long installedVersionCode, String installedSha256, List<String> signerDigests,
+                Entry stable, Entry trial, long capturedAt,
+                MoaForwardRecoveryManifest forwardRecovery) {
             this.origin = origin;
             this.deviceId = deviceId;
             this.installedVersion = installedVersion;
@@ -151,6 +171,12 @@ final class MoaReleaseRescueCache {
             this.stable = stable;
             this.trial = trial;
             this.capturedAt = capturedAt;
+            this.forwardRecovery = forwardRecovery;
+        }
+
+        Snapshot withForwardRecovery(MoaForwardRecoveryManifest recovery) {
+            return new Snapshot(origin, deviceId, installedVersion, installedVersionCode,
+                    installedSha256, signerDigests, stable, trial, capturedAt, recovery);
         }
     }
 
