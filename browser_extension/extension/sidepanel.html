@@ -798,12 +798,12 @@
       <button id="floatBtn" class="icon-button" type="button" title="Pop Ag out into an always-on-top floating window" aria-label="Float Ag in a window">↗</button>
     </header>
     <nav class="workspace-nav" aria-label="Workspace" role="tablist">
-      <button type="button" role="tab" aria-controls="nowWorkspace" data-workspace-target="now" aria-selected="true"><span class="nav-icon">✦</span><span>Now</span></button>
-      <button type="button" role="tab" aria-controls="libraryWorkspace" data-workspace-target="library" aria-selected="false"><span class="nav-icon">▱</span><span>Library</span></button>
-      <button type="button" role="tab" aria-controls="controlWorkspace" data-workspace-target="control" aria-selected="false"><span class="nav-icon">⌁</span><span>Control</span></button>
+      <button id="nowTab" type="button" role="tab" tabindex="0" aria-controls="nowWorkspace" data-workspace-target="now" aria-selected="true"><span class="nav-icon">✦</span><span>Now</span></button>
+      <button id="libraryTab" type="button" role="tab" tabindex="-1" aria-controls="libraryWorkspace" data-workspace-target="library" aria-selected="false"><span class="nav-icon">▱</span><span>Library</span></button>
+      <button id="controlTab" type="button" role="tab" tabindex="-1" aria-controls="controlWorkspace" data-workspace-target="control" aria-selected="false"><span class="nav-icon">⌁</span><span>Control</span></button>
     </nav>
     <main id="workspace">
-      <section id="nowWorkspace" class="workspace-view now-view" role="tabpanel" data-workspace-view="now" aria-labelledby="nowTitle">
+      <section id="nowWorkspace" class="workspace-view now-view" role="tabpanel" data-workspace-view="now" aria-labelledby="nowTab">
         <div class="view-heading">
           <div>
             <p class="eyebrow">Live workspace</p>
@@ -820,7 +820,7 @@
         <section id="log" aria-label="Live conversation"></section>
       </section>
 
-      <section id="libraryWorkspace" class="workspace-view library-view" role="tabpanel" data-workspace-view="library" aria-labelledby="libraryTitle" hidden>
+      <section id="libraryWorkspace" class="workspace-view library-view" role="tabpanel" data-workspace-view="library" aria-labelledby="libraryTab" hidden>
         <div class="view-heading">
           <div><p class="eyebrow">Memory</p><h1 id="libraryTitle">Library</h1></div>
           <span class="library-count">Private</span>
@@ -855,7 +855,7 @@
         </section>
       </section>
 
-      <section id="controlWorkspace" class="workspace-view control-view" role="tabpanel" data-workspace-view="control" aria-labelledby="controlTitle" hidden>
+      <section id="controlWorkspace" class="workspace-view control-view" role="tabpanel" data-workspace-view="control" aria-labelledby="controlTab" hidden>
         <div class="view-heading">
           <div><p class="eyebrow">System</p><h1 id="controlTitle">Control room</h1></div>
           <span class="control-badge">Protected</span>

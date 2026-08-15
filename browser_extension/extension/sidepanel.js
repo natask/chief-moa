@@ -1,10 +1,3 @@
-// Ag side panel — the extension-owned companion surface. Runs as an extension
-// page so it renders on every tab (chrome:// pages included) and persists
-// across tab switches. All gateway traffic goes through the background service
-// worker over a long-lived port; mic capture happens in the background's
-// offscreen document, never here (extension pages cannot render the
-// getUserMedia permission prompt).
-
 import { getEffectiveGatewayConfig } from "./config.js";
 import { createAudioNoteOutbox } from "./audio-note-outbox.js";
 import { renderAudioNoteOutbox } from "./audio-note-outbox-view.js";
@@ -79,11 +72,23 @@ const workspaceButtons = [...document.querySelectorAll("[data-workspace-target]"
 function showWorkspace(destination) {
   if (!["now", "library", "control"].includes(destination)) return;
   document.body.dataset.workspace = destination;
-  for (const button of workspaceButtons) button.setAttribute("aria-selected", String(button.dataset.workspaceTarget === destination));
+  for (const button of workspaceButtons) { const active = button.dataset.workspaceTarget === destination; button.setAttribute("aria-selected", String(active)); button.tabIndex = active ? 0 : -1; }
   for (const view of document.querySelectorAll("[data-workspace-view]")) view.hidden = view.dataset.workspaceView !== destination;
   document.getElementById("workspace")?.scrollTo({ top: 0, behavior: "smooth" });
 }
 for (const button of workspaceButtons) button.addEventListener("click", () => showWorkspace(button.dataset.workspaceTarget));
+for (const button of workspaceButtons) button.addEventListener("keydown", (event) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const current = workspaceButtons.indexOf(event.currentTarget);
+  let next = current;
+  if (event.key === "ArrowRight") next = (current + 1) % workspaceButtons.length;
+  if (event.key === "ArrowLeft") next = (current - 1 + workspaceButtons.length) % workspaceButtons.length;
+  if (event.key === "Home") next = 0;
+  if (event.key === "End") next = workspaceButtons.length - 1;
+  workspaceButtons[next].focus();
+  showWorkspace(workspaceButtons[next].dataset.workspaceTarget);
+});
 
 const TURN_WATCHDOG_MS = 90000;
 const ACTIVE_COMPANION_CACHE_KEY = "ageeActiveCompanionPetCache";
@@ -1875,11 +1880,6 @@ function attachHoldKeyHandlers(doc) {
 attachHoldKeyHandlers(document);
 
 // ---- Float: pop the surface out of the browser -------------------------------
-// Document picture-in-picture gives an always-on-top window that floats above
-// other applications, the closest an extension can get to rendering outside
-// the browser (the Gemini floating bar is native browser UI). The window is
-// owned by this panel page: the panel must stay open while floated, so leave a
-// note behind and move the UI back when the float closes.
 const floatBtn = document.getElementById("floatBtn");
 let pipWindow = null;
 
