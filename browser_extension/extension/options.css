@@ -275,7 +275,7 @@ details[open] .disclosure-plus::after { transform: translate(-50%, -50%) rotate(
 .switch-row input:focus-visible + .switch { outline: 2px solid var(--gold); outline-offset: 3px; }
 .switch-copy { display: grid; gap: 3px; }
 .switch-copy strong { color: #d5d3cc; font-size: 11px; }
-.switch-copy small { max-width: 650px; color: #71737a; font-size: 10px; line-height: 1.45; }
+.switch-copy small { max-width: 650px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .switch-status { color: #777980 !important; font-size: 10px; font-weight: 650; }
 
 .code-editor { min-height: 280px; color: #c9c4b4; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
