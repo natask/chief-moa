@@ -66,10 +66,12 @@ public final class MainActivity extends Activity {
     private TextView requirementsSummary;
     private TextView sessionsStatus;
     private ScrollView contentScroll;
-    private LinearLayout historySection;
-    private LinearLayout developerSection;
-    private Button historySectionButton;
-    private Button developerSectionButton;
+    private LinearLayout talkSection;
+    private LinearLayout workSection;
+    private LinearLayout releasesSection;
+    private LinearLayout settingsSection;
+    private MoaMainNavigation mainNavigation;
+    private MoaDevelopmentRequestsView developmentRequestsView;
     private TextView sessionHistoryStatus;
     private LinearLayout sessionHistoryColumn;
     private MoaThreadControls threadControls;
@@ -199,7 +201,7 @@ public final class MainActivity extends Activity {
             return;
         }
         final ScrollView scroll = contentScroll;
-        showFullAppSection(false);
+        showFullAppSection(MoaMainNavigation.TALK);
         scroll.post(() -> scroll.smoothScrollTo(0, 0));
         refreshControlCenter();
     }
@@ -210,6 +212,7 @@ public final class MainActivity extends Activity {
                 intent.getStringExtra(EXTRA_RELEASE_BUNDLE_ID));
         if (bundleId.isEmpty()) return;
         intent.removeExtra(EXTRA_RELEASE_BUNDLE_ID);
+        showFullAppSection(MoaMainNavigation.RELEASES);
         releaseController.openCandidate(bundleId);
         if (contentScroll != null && releaseController.anchor() != null) {
             contentScroll.post(() -> contentScroll.smoothScrollTo(0, releaseController.anchor().getTop()));
@@ -222,7 +225,7 @@ public final class MainActivity extends Activity {
         String action = intent.getAction();
         if (MoaVoiceRecoveryDialog.ACTION_RECONNECT_DEVICE.equals(action)) {
             intent.setAction(null);
-            showFullAppSection(true);
+            showFullAppSection(MoaMainNavigation.SETTINGS);
             if (enrollmentCapabilityInput != null) {
                 enrollmentCapabilityInput.requestFocus();
                 contentScroll.requestChildFocus(enrollmentCapabilityInput, enrollmentCapabilityInput);
@@ -247,6 +250,10 @@ public final class MainActivity extends Activity {
     }
 
     private View createContent() {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(MoaColors.SURFACE_0);
+
         ScrollView scrollView = new ScrollView(this);
         contentScroll = scrollView;
         scrollView.setFillViewport(true);
@@ -261,47 +268,48 @@ public final class MainActivity extends Activity {
         ));
 
         root.addView(heroBrand());
-        root.addView(new AgOnboardingController(this).createView());
-        root.addView(fullAppNavigation());
 
-        historySection = new LinearLayout(this);
-        historySection.setOrientation(LinearLayout.VERTICAL);
-        historySection.addView(historyCard());
-        root.addView(historySection);
+        talkSection = section();
+        talkSection.addView(new MoaTalkHomeView(this).create(
+                () -> startActivity(MoaAssistantLaunchCoordinator.assistActivityIntent(this, "main_talk")),
+                this::refreshControlCenter));
+        talkSection.addView(historyCard());
+        root.addView(talkSection);
 
-        developerSection = new LinearLayout(this);
-        developerSection.setOrientation(LinearLayout.VERTICAL);
-        developerSection.addView(statusCard());
-        developerSection.addView(gatewayCard());
-        developerSection.addView(diagnosticsCard());
-        developerSection.addView(releaseController.createView());
-        developerSection.addView(actionCard());
-        developerSection.addView(MoaImeSettingsView.create(this));
-        developerSection.addView(MoaPresentationSettingsView.create(this));
-        developerSection.addView(MoaProviderSettingsView.create(this));
-        developerSection.addView(orbSizeCard());
-        developerSection.addView(gesturesCard());
-        root.addView(developerSection);
-        showFullAppSection(false);
-        return scrollView;
-    }
+        workSection = section();
+        developmentRequestsView = new MoaDevelopmentRequestsView(this, mainHandler,
+                MoaPrefs.gatewayUrl(this), verifiedEnrollment(), androidDeviceId());
+        workSection.addView(developmentRequestsView.createView());
+        root.addView(workSection);
 
-    private View fullAppNavigation() {
-        LinearLayout navigation = new LinearLayout(this);
-        navigation.setOrientation(LinearLayout.HORIZONTAL);
-        historySectionButton = secondaryButton("History");
-        developerSectionButton = secondaryButton("Setup & developer");
-        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        left.rightMargin = dp(6);
-        historySectionButton.setLayoutParams(left);
-        LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        right.leftMargin = dp(6);
-        developerSectionButton.setLayoutParams(right);
-        historySectionButton.setOnClickListener(view -> showFullAppSection(false));
-        developerSectionButton.setOnClickListener(view -> showFullAppSection(true));
-        navigation.addView(historySectionButton);
-        navigation.addView(developerSectionButton);
-        return navigation;
+        releasesSection = section();
+        releasesSection.addView(MoaSectionHeaderView.create(this, "Safe releases",
+                "Test features separately, combine them in Trial, and return to Stable when needed."));
+        releasesSection.addView(releaseController.createView());
+        releasesSection.addView(releaseRescueCard());
+        root.addView(releasesSection);
+
+        settingsSection = section();
+        settingsSection.addView(MoaSectionHeaderView.create(this, "Settings",
+                "Connect your account and choose how Ag appears and works on this phone."));
+        settingsSection.addView(new AgOnboardingController(this).createView());
+        settingsSection.addView(statusCard());
+        settingsSection.addView(actionCard());
+        settingsSection.addView(gatewayCard());
+        settingsSection.addView(MoaImeSettingsView.create(this));
+        settingsSection.addView(MoaPresentationSettingsView.create(this));
+        settingsSection.addView(MoaProviderSettingsView.create(this));
+        settingsSection.addView(orbSizeCard());
+        settingsSection.addView(gesturesCard());
+        settingsSection.addView(diagnosticsCard());
+        root.addView(settingsSection);
+
+        shell.addView(scrollView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        mainNavigation = new MoaMainNavigation(this, this::showFullAppSection);
+        shell.addView(mainNavigation.createView());
+        showFullAppSection(MoaMainNavigation.TALK);
+        return shell;
     }
 
     private View heroBrand() {
@@ -343,12 +351,33 @@ public final class MainActivity extends Activity {
         return wrap;
     }
 
-    private void showFullAppSection(boolean developer) {
-        if (historySection != null) historySection.setVisibility(developer ? View.GONE : View.VISIBLE);
-        if (developerSection != null) developerSection.setVisibility(developer ? View.VISIBLE : View.GONE);
-        if (historySectionButton != null) historySectionButton.setText(developer ? "History" : "History · open");
-        if (developerSectionButton != null) developerSectionButton.setText(developer ? "Setup · open" : "Setup & developer");
-        if (!developer) refreshControlCenter();
+    private LinearLayout section() {
+        LinearLayout section = new LinearLayout(this);
+        section.setOrientation(LinearLayout.VERTICAL);
+        return section;
+    }
+
+    private View releaseRescueCard() {
+        LinearLayout card = card();
+        addCardTitle(card, "Recovery");
+        addHint(card, "If a Trial breaks voice or the app surface, recover from this native screen without using the model.");
+        Button rescue = secondaryButton("Open release recovery");
+        rescue.setOnClickListener(view -> new MoaReleaseRescueController(this,
+                MoaPrefs.gatewayUrl(this), MoaPrefs.gatewayToken(this), androidDeviceId()).show());
+        card.addView(rescue);
+        return card;
+    }
+
+    private void showFullAppSection(int destination) {
+        if (talkSection != null) talkSection.setVisibility(destination == MoaMainNavigation.TALK ? View.VISIBLE : View.GONE);
+        if (workSection != null) workSection.setVisibility(destination == MoaMainNavigation.WORK ? View.VISIBLE : View.GONE);
+        if (releasesSection != null) releasesSection.setVisibility(destination == MoaMainNavigation.RELEASES ? View.VISIBLE : View.GONE);
+        if (settingsSection != null) settingsSection.setVisibility(destination == MoaMainNavigation.SETTINGS ? View.VISIBLE : View.GONE);
+        if (mainNavigation != null) mainNavigation.select(destination);
+        if (contentScroll != null) contentScroll.scrollTo(0, 0);
+        if (destination == MoaMainNavigation.TALK) refreshControlCenter();
+        if (destination == MoaMainNavigation.WORK && developmentRequestsView != null) developmentRequestsView.refresh();
+        if (destination == MoaMainNavigation.RELEASES && releaseController != null) releaseController.refresh();
     }
 
     private View statusCard() {

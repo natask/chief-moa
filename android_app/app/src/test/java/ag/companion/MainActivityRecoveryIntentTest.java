@@ -20,7 +20,7 @@ public final class MainActivityRecoveryIntentTest {
         Intent intent = new Intent().setAction(MoaVoiceRecoveryDialog.ACTION_RECONNECT_DEVICE);
         MainActivity activity = Robolectric.buildActivity(MainActivity.class, intent).create().get();
 
-        LinearLayout setup = ReflectionHelpers.getField(activity, "developerSection");
+        LinearLayout setup = ReflectionHelpers.getField(activity, "settingsSection");
         assertNull(activity.getIntent().getAction());
         assertTrue(setup.getVisibility() == View.VISIBLE);
     }
