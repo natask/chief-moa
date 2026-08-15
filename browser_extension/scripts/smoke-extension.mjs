@@ -933,6 +933,11 @@ async function main() {
         await chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
+            const pageFocus = document.createElement("button");
+            pageFocus.id = "agee-smoke-page-focus";
+            pageFocus.textContent = "Page focus anchor";
+            document.body.appendChild(pageFocus);
+            pageFocus.focus({ preventScroll: true });
             window.__ageePartialSmoke = { orig: chrome.runtime.sendMessage.bind(chrome.runtime) };
             chrome.runtime.sendMessage = (message, ...rest) => {
               const clean = JSON.parse(JSON.stringify(message || {}));
@@ -948,9 +953,8 @@ async function main() {
         });
         await chrome.tabs.sendMessage(tabId, { cmd: "toggleVoice" });
         await sleep(200);
-        // Before a single word exists. Opening capture must put the you-bubble
-        // on screen with a blinking caret in it, because the caret is the
-        // second "it is hearing me" signal and it has to beat the transcriber:
+        // Before a single word exists, capture must put the you-bubble on screen
+        // with a blinking caret while leaving the page's focused control alone:
         // the gateway's first partial is hundreds of milliseconds away and an
         // empty screen for that long reads as nothing happening. Spec 5.1.
         const [opened] = await chrome.scripting.executeScript({
@@ -968,7 +972,7 @@ async function main() {
               caretBlink: caretStyle?.animationName || "",
               caretWidth: Math.round(caret?.getBoundingClientRect().width || 0),
               caretHeight: Math.round(caret?.getBoundingClientRect().height || 0),
-              composerFocused: document.activeElement === you?.querySelector(".agee-ribbon-text"),
+              pageFocusPreserved: document.activeElement?.id === "agee-smoke-page-focus",
               companionRingPresent: !!document.querySelector("#agee-launcher .agee-ring"),
             };
           },
@@ -1022,6 +1026,7 @@ async function main() {
           func: () => {
             if (window.__ageePartialSmoke?.orig) chrome.runtime.sendMessage = window.__ageePartialSmoke.orig;
             delete window.__ageePartialSmoke;
+            document.querySelector("#agee-smoke-page-focus")?.remove();
           },
         });
         return {
@@ -1051,10 +1056,10 @@ async function main() {
       opened.caretBlink !== "agee-ribbon-caret" ||
       opened.caretWidth < 1 ||
       opened.caretHeight < 8 ||
-      !opened.composerFocused ||
+      !opened.pageFocusPreserved ||
       opened.companionRingPresent
     ) {
-      throw new Error(`capture must focus the you bubble with a blinking caret and no companion ring before any transcript: ${JSON.stringify(opened)}`);
+      throw new Error(`capture must announce the you bubble without stealing page focus: ${JSON.stringify(opened)}`);
     }
     // And the transcript lands inside that same bubble, behind that same caret.
     const streamingCaret = livePartials?.streaming || {};

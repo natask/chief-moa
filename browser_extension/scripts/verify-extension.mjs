@@ -1276,9 +1276,16 @@ const agentStateBody = sourceBetween(
   /function setTranscript\(/,
   "agent state"
 );
+const transcriptionAccessibilityBody = sourceBetween(
+  contentSource,
+  /function focusTranscriptionComposer\(/,
+  /const REPLY_TRAIL_MAX/,
+  "transcription accessibility state"
+);
 if (!/setUserPending\(next === "listening"\)[\s\S]{0,120}focusTranscriptionComposer\(next === "listening"\)/.test(agentStateBody)
-  || !/target\.focus\(\{ preventScroll: true \}\)/.test(contentSource)) {
-  throw new Error("voice capture must focus the user-message box before interim transcription arrives");
+  || !/aria-label", "Live voice transcription/.test(transcriptionAccessibilityBody)
+  || /\.focus\(/.test(transcriptionAccessibilityBody)) {
+  throw new Error("voice capture must announce the user-message box without stealing page focus");
 }
 
 // A click on a listening companion always sends. Provenance-matching made the
@@ -1310,8 +1317,14 @@ const launcherClickBody = sourceBetween(
   /launcher\.addEventListener\("pointerdown"/,
   "launcher click handler"
 );
-if (/commitLiveVoiceTurn\(\)|toggleVoice\(\)|startLiveVoiceTurn\(/.test(launcherClickBody)) {
-  throw new Error("single-clicking the launcher must only open the chat menu, not commit or start voice");
+if (
+  !/if \(e\.detail !== 0\) return;/.test(launcherClickBody) ||
+  !/voiceDraftControls\?\.active\(\)[\s\S]{0,80}commitLiveVoiceTurn\(\)/.test(launcherClickBody) ||
+  !/voiceFirstGestures[\s\S]{0,80}toggleVoiceFirstCapture\("keyboard"\)/.test(launcherClickBody) ||
+  !/else ribbons\?\.beginCompose\(\)/.test(launcherClickBody) ||
+  /toggleVoice\(\)|startLiveVoiceTurn\(/.test(launcherClickBody)
+) {
+  throw new Error("launcher keyboard activation must route immediately while pointer clicks stay in the gesture machine");
 }
 
 const startLauncherDragBody = sourceBetween(
