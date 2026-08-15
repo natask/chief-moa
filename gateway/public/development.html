@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ag Development</title>
+  <title>Work · Ag</title>
   <style>
     :root { color-scheme: light; --bg:#f5f4ee; --panel:#fff; --ink:#181814; --muted:#69685f; --line:#d8d6ca; --blue:#2851c5; --green:#147a4d; --red:#b3261e; --amber:#936200; --mono:"SFMono-Regular",Consolas,monospace; }
     * { box-sizing:border-box; }
@@ -49,59 +49,94 @@
     .empty { color:var(--muted); text-align:center; padding:34px 10px; }
     @media (max-width:800px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; flex-direction:column; } }
   </style>
+  <link rel="stylesheet" href="/ag-console.css" />
 </head>
 <body>
-  <header>
-    <h1>Ag Development</h1>
-    <div class="row">
-      <input id="token" type="password" autocomplete="off" placeholder="Gateway token" aria-label="Gateway token" />
-      <button id="saveToken" class="secondary">Save token</button>
-    </div>
-  </header>
-  <main>
-    <div class="grid">
+  <div class="app-shell">
+    <aside class="nav-rail" aria-label="Primary navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy"><div class="brand-name">Ag</div><div class="brand-sub">Personal atelier</div></div>
+      </div>
+      <nav class="primary-nav">
+        <a class="nav-link" href="/console"><span class="nav-icon">◉</span><span class="nav-label">Talk</span></a>
+        <a class="nav-link active" href="/development" aria-current="page"><span class="nav-icon">◇</span><span class="nav-label">Work</span></a>
+        <a class="nav-link" href="/ui"><span class="nav-icon">△</span><span class="nav-label">Releases</span></a>
+        <a class="nav-link" href="#connection"><span class="nav-icon">◌</span><span class="nav-label">Settings</span></a>
+      </nav>
+      <div class="rail-foot"><span class="connection-pill"><span class="dot ok"></span><span>Development plane</span></span></div>
+    </aside>
+
+    <section class="workspace">
+      <header class="workspace-header">
+        <div class="workspace-copy"><span class="eyebrow">Work</span><h1>From idea to release</h1><p>Capture the intent once. Ag plans, builds, verifies, and presents the exact candidate for your decision.</p></div>
+        <div class="header-actions">
+          <details class="token-settings" id="connection">
+            <summary class="pill"><span class="dot ok"></span>Connection</summary>
+            <div class="settings-popover">
+              <label for="token">Gateway token</label>
+              <input id="token" type="password" autocomplete="off" placeholder="Optional on a private network" aria-label="Gateway token" />
+              <button id="saveToken" class="secondary" style="width:100%;margin-top:9px">Save connection</button>
+            </div>
+          </details>
+        </div>
+      </header>
+
+      <div class="content">
+        <ol class="pipeline" aria-label="Development journey">
+          <li class="active"><span>01</span>Capture</li><li><span>02</span>Execute</li><li><span>03</span>Review</li><li><span>04</span>Promote</li>
+        </ol>
+        <div class="content-grid">
       <section>
         <div class="panel">
+          <span class="eyebrow">New request</span>
           <h2>Capture the riff</h2>
-          <p class="hint">Save the raw intent first. A screen recording becomes evidence attached to the same record.</p>
+          <p class="panel-lead">Describe the result in your own words. Add a screen recording when showing it is easier than explaining it.</p>
           <div class="field"><label for="riff">What you want</label><textarea id="riff" placeholder="Describe the product, behavior, constraints, and what good looks like."></textarea></div>
           <div class="field"><label for="criteria">Acceptance checks, one per line</label><textarea id="criteria" style="min-height:90px" placeholder="I can complete the core flow without leaving the app."></textarea></div>
-          <div class="row field">
+          <div class="row field field-actions">
             <button id="record" class="secondary">Record screen</button>
             <button id="stop" class="secondary" disabled>Stop recording</button>
             <span id="recordingState" class="hint">No recording attached.</span>
           </div>
           <ul id="evidence" class="evidence"></ul>
-          <div class="row field"><button id="capture">Save durable intent</button><span id="captureStatus" class="status"></span></div>
+          <div class="row field field-actions"><button id="capture">Start this work</button><span id="captureStatus" class="status"></span></div>
         </div>
         <div id="intentPanel" class="panel" hidden>
+          <span class="eyebrow">Live execution</span>
           <div class="intent-head"><div><h2 id="intentTitle"></h2><div id="intentMeta" class="meta"></div></div><span id="intentState" class="state"></span></div>
           <p id="objective"></p>
-          <h3>Work and QA</h3>
+          <h3>Work and verification</h3>
           <div id="tasks" class="tasks"></div>
         </div>
       </section>
       <aside>
         <div class="panel">
-          <h2>Open durable intent</h2>
+          <span class="eyebrow">Continue</span>
+          <h2>Open saved work</h2>
+          <p class="panel-lead">Return to a request on any device with its intent ID.</p>
           <div class="row"><input id="intentId" class="grow" placeholder="Intent ID" /><button id="load" class="secondary">Open</button></div>
-          <div class="row field"><button id="dispatch" class="secondary">Run ready work</button><button id="refresh" class="secondary">Refresh</button></div>
+          <div class="row field field-actions"><button id="dispatch">Run ready work</button><button id="refresh" class="secondary">Refresh</button></div>
           <div id="loadStatus" class="status"></div>
         </div>
         <div id="candidatePanel" class="panel candidate" hidden>
+          <span class="eyebrow">Ready for your decision</span>
           <h2>Final QA candidate</h2>
           <p id="candidateSummary"></p>
           <div id="candidateRef" class="meta"></div>
           <ul id="verification" class="evidence"></ul>
           <div class="decision">
             <div class="field"><label for="decisionNote">Review note</label><textarea id="decisionNote" style="min-height:76px"></textarea></div>
-            <div class="row"><button id="accept" class="good">Accept exact candidate</button><button id="reject" class="bad">Reject</button></div>
+            <div class="row field-actions"><button id="accept" class="good">Accept exact candidate</button><button id="reject" class="bad">Send back</button></div>
           </div>
         </div>
-        <div id="noCandidate" class="panel empty">No final candidate is ready.</div>
+        <div id="noCandidate" class="panel empty"><h2>Review appears here</h2><p>When every task and QA check passes, the exact candidate will wait here for you.</p></div>
       </aside>
+        </div>
+      </div>
     </div>
-  </main>
+    </section>
+  </div>
   <script>
     "use strict";
     const $ = (id) => document.getElementById(id);

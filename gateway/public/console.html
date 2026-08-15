@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ag Console</title>
+  <title>Talk · Ag</title>
   <style>
     :root {
       color-scheme: light;
@@ -143,58 +143,61 @@
       .previews, .thread, .composer { padding-left:12px; padding-right:12px; }
     }
   </style>
+  <link rel="stylesheet" href="/ag-console.css" />
 </head>
 <body>
-  <div class="topbar">
-    <div class="brand"><span class="mark"></span><h1>Ag Console</h1></div>
-    <div class="row">
-      <span class="pill"><span class="dot" id="healthDot"></span><span id="healthLabel">checking…</span></span>
-      <span class="pill" id="projectLabel">no project</span>
-      <a class="pill" href="/ui" style="text-decoration:none">gateway</a>
-    </div>
-  </div>
-
-  <div class="shell">
-    <aside class="side">
-      <div class="group">
-        <label for="token">Gateway token</label>
-        <div class="field"><input id="token" type="password" autocomplete="off" placeholder="Bearer token (blank on private net)" /></div>
-        <div class="field"><button class="secondary" id="saveToken">Save token</button></div>
+  <div class="app-shell">
+    <aside class="nav-rail" aria-label="Primary navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy"><div class="brand-name">Ag</div><div class="brand-sub">Personal atelier</div></div>
       </div>
-
-      <div class="group">
-        <label>Projects</label>
-        <ul class="projects" id="projects"></ul>
-      </div>
-
-      <div class="group">
-        <label>New project</label>
-        <div class="field"><input id="pName" placeholder="name" /></div>
-        <div class="field"><input id="pDir" placeholder="working dir (relative to harness root)" /></div>
-        <div class="field">
-          <select id="pHarness">
-            <option value="claude">claude</option>
-            <option value="codex">codex</option>
-            <option value="gemini">gemini</option>
-          </select>
-        </div>
-        <div class="field"><button id="createProject">Create project</button></div>
-      </div>
+      <nav class="primary-nav">
+        <a class="nav-link active" href="/console" aria-current="page"><span class="nav-icon">◉</span><span class="nav-label">Talk</span></a>
+        <a class="nav-link" href="/development"><span class="nav-icon">◇</span><span class="nav-label">Work</span></a>
+        <a class="nav-link" href="/ui"><span class="nav-icon">△</span><span class="nav-label">Releases</span></a>
+        <a class="nav-link" href="#advanced"><span class="nav-icon">◌</span><span class="nav-label">Settings</span></a>
+      </nav>
+      <div class="rail-foot"><span class="connection-pill"><span class="dot" id="healthDot"></span><span id="healthLabel">Checking connection…</span></span></div>
     </aside>
 
-    <section class="main">
+    <section class="workspace console-workspace">
+      <header class="workspace-header">
+        <div class="workspace-copy"><span class="eyebrow">Talk</span><h1>Your thinking space</h1><p>Ask, shape, and ship work with an agent that keeps the thread.</p></div>
+        <div class="header-actions"><span class="pill" id="projectLabel">Choose a project</span></div>
+      </header>
+
+      <div class="console-layout">
+        <aside class="project-dock">
+          <div class="dock-head"><span class="dock-title">Projects</span><span class="dock-count">Your workspaces</span></div>
+          <ul class="projects" id="projects"></ul>
+          <details class="advanced" id="advanced">
+            <summary>Advanced setup</summary>
+            <div class="advanced-body">
+              <div class="field"><label for="token">Gateway token</label><input id="token" type="password" autocomplete="off" placeholder="Optional on a private network" /></div>
+              <div class="field"><button class="secondary" id="saveToken">Save connection</button></div>
+              <div class="field" style="padding-top:8px"><label for="pName">New project</label><input id="pName" placeholder="Project name" /></div>
+              <div class="field"><input id="pDir" placeholder="Working directory" aria-label="Working directory" /></div>
+              <div class="field"><select id="pHarness" aria-label="Agent harness"><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option></select></div>
+              <div class="field"><button id="createProject">Create project</button></div>
+            </div>
+          </details>
+        </aside>
+
+        <main class="conversation">
       <div class="previews" aria-live="polite">
         <div class="previews-inner">
           <div class="previews-head"><h2>Work / Previews</h2><button class="secondary" id="refreshPreviews">Refresh</button></div>
-          <div class="preview-grid" id="previewGrid"><div class="preview-card"><span class="meta">Loading safe preview status…</span></div></div>
+          <div class="preview-grid" id="previewGrid"><div class="preview-card"><strong>Loading your work</strong><div class="meta">Checking previews and release evidence…</div></div></div>
         </div>
       </div>
-      <div class="brief" id="brief" hidden>
+      <details class="brief" id="brief" hidden>
+        <summary class="brief-summary"><span><strong>Project brief</strong><small>The durable context every agent carries forward.</small></span><span class="brief-chevron">+</span></summary>
         <div class="brief-inner">
           <div class="brief-head">
             <div>
-              <div class="brief-title">Project state</div>
-              <div class="brief-note">The durable object agents should advance. Agent sessions are disposable.</div>
+              <div class="brief-title">Shape the context</div>
+              <div class="brief-note">Keep the problem, outcome, and next move current.</div>
             </div>
             <button class="secondary" id="saveBrief">Save state</button>
           </div>
@@ -206,16 +209,18 @@
           </div>
           <div class="brief-note" id="briefStatus"></div>
         </div>
-      </div>
+      </details>
       <div class="thread" id="thread">
-        <div class="empty" id="empty">Pick or create a project, then send a message to start a coding session.</div>
+        <div class="empty" id="empty"><h2>What should we make?</h2><p>Choose a project, then describe the outcome. Ag will hold the context while the work moves forward.</p></div>
       </div>
       <div class="composer">
         <div class="inner">
-          <textarea id="input" placeholder="Tell the agent what to do…" disabled></textarea>
+          <textarea id="input" placeholder="Tell Ag what you want to change…" aria-label="Message Ag" disabled></textarea>
           <button id="send" disabled>Send</button>
         </div>
         <div class="hint" id="hint">Select a project to begin.</div>
+      </div>
+        </main>
       </div>
     </section>
   </div>
@@ -351,7 +356,7 @@
         history.replaceState(null, "", projectUrl(id));
       }
       $("projectLabel").textContent = p ? p.name : "no project";
-      document.title = p ? `${p.name} · Ag Console` : "Ag Console";
+      document.title = p ? `${p.name} · Talk · Ag` : "Talk · Ag";
       $("input").disabled = false;
       $("send").disabled = false;
       $("brief").hidden = !p;
