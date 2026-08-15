@@ -298,6 +298,7 @@
     </main>
   </div>
 
+  <script src="/ag-browser-errors.js"></script>
   <script>
     const TOKEN_KEY = "moa.gateway.token";
     const $ = (id) => document.getElementById(id);
@@ -338,7 +339,7 @@
       let data = {};
       try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
       if (!resp.ok) {
-        const error = new Error(data.error || `HTTP ${resp.status}`);
+        const error = new Error(AgBrowserErrors.message(resp, data, text));
         error.status = resp.status;
         throw error;
       }

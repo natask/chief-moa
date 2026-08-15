@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const browserErrors = require("../public/ag-browser-errors.js");
 
 const publicDir = path.resolve(__dirname, "../public");
 
@@ -47,7 +48,26 @@ test("gateway operator preserves its complete interaction contract", () => {
   assert.match(html, />Talk</);
   assert.match(html, />Work</);
   assert.match(html, />Settings</);
+  assert.match(html, /src="\/ag-browser-errors\.js"/);
+  assert.match(html, /AgBrowserErrors\.message\(resp, data, text\)/);
   assert.doesNotThrow(() => new vm.Script(inlineScript(html)));
+});
+
+test("gateway operator never renders proxy HTML as an error message", () => {
+  const proxyPage = "<!doctype html><html><head><title>Bad gateway</title></head><body><h1>Proxy error</h1></body></html>";
+  for (const status of [404, 502]) {
+    const message = browserErrors.message({ status }, { error: proxyPage }, proxyPage);
+    assert.ok(message.length <= 180);
+    assert.doesNotMatch(message, /[<>]|doctype|<\/h1>/i);
+  }
+  assert.equal(
+    browserErrors.message({ status: 404 }, { error: proxyPage }, proxyPage),
+    "That gateway service is not available.",
+  );
+  assert.equal(
+    browserErrors.message({ status: 502 }, { error: proxyPage }, proxyPage),
+    "The gateway is temporarily unavailable. Try again shortly.",
+  );
 });
 
 test("credential operator preserves controls and narrow-screen containment", () => {
