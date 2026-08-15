@@ -20,6 +20,18 @@ function inlineScript(html) {
   return match[1];
 }
 
+function luminance(hex) {
+  const channels = hex.match(/[0-9a-f]{2}/gi).map((value) => Number.parseInt(value, 16) / 255);
+  const linear = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+}
+
+function contrast(foreground, background) {
+  const light = Math.max(luminance(foreground), luminance(background));
+  const dark = Math.min(luminance(foreground), luminance(background));
+  return (light + 0.05) / (dark + 0.05);
+}
+
 test("gateway operator preserves its complete interaction contract", () => {
   const html = source("gateway-ui.html");
   const required = [
@@ -60,5 +72,9 @@ test("operator surfaces share the Obsidian Atelier design language", () => {
     assert.match(html, /Iowan Old Style/);
     assert.match(html, /radial-gradient/);
     assert.match(html, /color-scheme: dark/);
+    const quiet = html.match(/--quiet:\s*(#[0-9a-f]{6})/i);
+    const canvas = html.match(/(?:--canvas|--bg):\s*(#[0-9a-f]{6})/i);
+    assert.ok(quiet && canvas, `${name} must expose readable quiet and canvas tokens`);
+    assert.ok(contrast(quiet[1], canvas[1]) >= 4.5, `${name} quiet text must meet WCAG AA contrast`);
   }
 });
