@@ -52,6 +52,24 @@ public final class MoaOrbAccessibilityTest {
         inactive.recycle();
     }
 
+    @Test
+    public void primaryAccessibilityClickRoutesThroughTheGestureContract() {
+        Application context = RuntimeEnvironment.getApplication();
+        OrbView orb = new OrbView(context);
+        AtomicInteger opens = new AtomicInteger();
+        MoaOrbTouchListener listener = new MoaOrbTouchListener(
+                context, new android.view.WindowManager.LayoutParams(), 64, 12,
+                opens::incrementAndGet, () -> {}, () -> {}, () -> {}, () -> {},
+                () -> false, () -> MoaVoiceFirstTapResolver.CaptureOrigin.NONE,
+                () -> {}, () -> {}, () -> {}, () -> {}, () -> {}, () -> {},
+                () -> {}, () -> {}, completed -> {}
+        );
+        orb.setOnTouchListener(listener);
+
+        assertTrue(orb.performClick());
+        assertEquals(1, opens.get());
+    }
+
     private static int actionId(AccessibilityNodeInfo info, String label) {
         for (AccessibilityNodeInfo.AccessibilityAction action : info.getActionList()) {
             if (label.contentEquals(action.getLabel())) {

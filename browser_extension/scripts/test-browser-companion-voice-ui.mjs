@@ -17,18 +17,18 @@ test("the companion has no circular state ring", () => {
   assert.doesNotMatch(overlay, /agee-ring|agee-rim-think|agee-talk-ring/);
 });
 
-test("listening opens and focuses the user transcription box", () => {
-  const stateBody = content.match(/function setAgentState\(next\) \{([\s\S]*?)\n  \}\n\n  \/\/ The upper ribbon/)?.[1] || "";
+test("listening opens and labels the transcript without stealing page focus", () => {
+  const stateBody = content.match(/function setAgentState\(next\) \{([\s\S]*?)\n  \}\n\n  function setTranscript/)?.[1] || "";
   assert.match(stateBody, /ribbons\?\.setUserPending\(next === "listening"\);/);
   assert.match(stateBody, /focusTranscriptionComposer\(next === "listening"\);/);
   assert.ok(
     stateBody.indexOf("setUserPending") < stateBody.indexOf("focusTranscriptionComposer"),
-    "the empty pending bubble must open before focus moves into it",
+    "the empty pending bubble must open before its accessibility state updates",
   );
   assert.match(content, /#agee-ribbon-you \.agee-ribbon-text/);
-  assert.match(content, /if \(active\) \{[^}]*target\.setAttribute\(name, value\)/s);
-  assert.match(content, /target\.focus\(\{ preventScroll: true \}\)/);
-  assert.match(content, /document\.activeElement === target\) try \{ target\.blur\(\);/);
+  assert.match(content, /if \(active\) for \(const \[name, value\] of attributes\) target\.setAttribute\(name, value\)/);
+  const focusHelper = content.slice(content.indexOf("function focusTranscriptionComposer"), content.indexOf("const REPLY_TRAIL_MAX"));
+  assert.doesNotMatch(focusHelper, /\.focus\(/);
   assert.match(content, /target\.removeAttribute\(name\)/);
   assert.doesNotMatch(content, /AgeeCompanionRim|companionRim\?\./);
 });

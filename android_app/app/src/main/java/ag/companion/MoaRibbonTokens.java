@@ -46,8 +46,8 @@ final class MoaRibbonTokens {
     // --- Geometry (dp) ----------------------------------------------------
     static final int RIBBON_H_DP = 36;
     /** The single step the ribbon may grow by at very large system font scales. */
-    static final int RIBBON_H_LARGE_DP = 40;
-    static final float FONT_SCALE_CLAMP = 1.3f;
+    static final int RIBBON_H_LARGE_DP = 44;
+    static final float FONT_SCALE_CLAMP = 1.5f;
     /** Compact fixed viewport: stable while streaming, never a screen-wide banner. */
     static final int RIBBON_MAX_W_DP = 280;
     /** Streaming always stays inside one fixed line. */

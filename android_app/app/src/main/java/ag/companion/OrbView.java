@@ -80,6 +80,7 @@ final class OrbView extends View {
     private boolean voiceDraftActionsActive;
     private Runnable accessibilitySendVoiceDraft;
     private Runnable accessibilityDiscardVoiceDraft;
+    private Runnable keyboardPrimaryAction;
 
     OrbView(Context context) {
         super(context);
@@ -103,7 +104,33 @@ final class OrbView extends View {
         petMotionPaint.setStyle(Paint.Style.STROKE);
         petMotionPaint.setStrokeCap(Paint.Cap.ROUND);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+        setClickable(true);
+        setFocusable(true);
         setContentDescription("Ag companion");
+    }
+
+    @Override
+    public void setOnTouchListener(OnTouchListener listener) {
+        super.setOnTouchListener(listener);
+        if (listener instanceof MoaOrbTouchListener) {
+            ((MoaOrbTouchListener) listener).bindKeyboardAction(this);
+        } else {
+            keyboardPrimaryAction = null;
+        }
+    }
+
+    void setKeyboardPrimaryAction(Runnable action) {
+        keyboardPrimaryAction = action;
+    }
+
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        if (keyboardPrimaryAction == null) {
+            return false;
+        }
+        keyboardPrimaryAction.run();
+        return true;
     }
 
     void setVoiceDraftAccessibilityActions(boolean active, Runnable send, Runnable discard) {
@@ -180,6 +207,13 @@ final class OrbView extends View {
 
     private void startThinkingPulse() {
         if (thinkingPulse != null) {
+            return;
+        }
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            // Keep a steady, readable state cue when the user has disabled
+            // motion instead of silently dropping the thinking indication.
+            thinkingPulseFraction = 0.62f;
+            invalidate();
             return;
         }
         ValueAnimator animator = ValueAnimator.ofFloat(0f, 1f);

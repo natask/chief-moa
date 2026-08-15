@@ -35,8 +35,6 @@
     surfacePhase = "idle",
     listening = false,
     ambientState = "off",
-    // Conversation mode: once you start talking, the mark keeps listening after
-    // each reply so it works like speaking, not click-to-send. Stop ends it.
     conversationActive = false,
     dragState = null,
     launcherRemovalState = null,
@@ -49,11 +47,11 @@
     launcherSecondTapAction = null,
     voiceHotkeyState = null,
     voiceHotkeyHoldTimer = null,
+    pageFocusBeforeVoice = null, voiceFocusCaptureActive = false,
     lastLocalTextHotkeyAt = 0,
     lastLocalVoiceHotkeyAt = 0,
     lastExternalVoiceCommandAt = 0,
-    // The AG mark stays where the user drops it and reacts visually to state.
-    // audioCtx is created lazily when explicit voice playback needs it.
+    // audioCtx is created lazily for explicit voice playback.
     audioCtx = null, voiceDraftControls = null, surfaceControls = null;
   let tipEl = null,
     tipTimer = null,
@@ -367,6 +365,11 @@
     launcher.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (e.detail !== 0) return;
+      cancelGestureVoiceWarmup();
+      if (voiceDraftControls?.active()) commitLiveVoiceTurn();
+      else if (voiceFirstGestures) toggleVoiceFirstCapture("keyboard");
+      else ribbons?.beginCompose();
     });
     launcher.addEventListener("pointerdown", startLauncherDrag);
     launcher.addEventListener("wheel", handleLauncherWheel, { passive: false });
@@ -406,11 +409,6 @@
     // Explicit voice playback primes audio from the voice path itself.
   }
 
-  // ---- Custom tooltips --------------------------------------------------
-  // A single dark chip replaces native title tooltips on the overlay controls.
-  // 400 ms hover delay, instant hide, edge-aware so it never clips a viewport
-  // edge. aria-labels stay on the controls for assistive tech; the chip reads
-  // the live data-agee-tip text so state-driven labels stay in sync.
   function setupOverlayTooltips() {
     if (!tipEl) return;
     for (const target of [launcher, voiceButton, recordButton, stopButton]) {
@@ -2346,10 +2344,24 @@
       setTooltip(voiceButton, listening ? "Stop and send" : "Start voice");
       voiceButton.setAttribute("aria-label", listening ? "Stop and send voice" : "Start voice");
     }
+    if (!listening) restorePageFocusAfterVoice();
   }
 
-  // Drive voice state on the root. Live transcript and assistant text render in
-  // the two ribbons around the companion, never in a panel.
+  function rememberPageFocusBeforeVoice() {
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement || root?.contains(active)) return;
+    pageFocusBeforeVoice = active;
+  }
+  function restorePageFocusAfterVoice() {
+    if (!voiceFocusCaptureActive) return;
+    voiceFocusCaptureActive = false;
+    const target = pageFocusBeforeVoice; pageFocusBeforeVoice = null;
+    if (!target?.isConnected) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== document.documentElement && !root?.contains(active)) return;
+    try { target.focus({ preventScroll: true }); } catch {}
+  }
+
   function setAgentState(next) {
     agentState = next;
     if (!root) return;
@@ -2360,39 +2372,24 @@
     root.classList.toggle("agee-voicing", voicing);
     if (errorHoldTimer) clearTimeout(errorHoldTimer);
     errorHoldTimer = next === "error" ? setTimeout(() => setAgentState("idle"), ERROR_HOLD_MS) : null;
-    // Reacts to the microphone, not the transcriber.
     ribbons?.setUserPending(next === "listening");
     focusTranscriptionComposer(next === "listening");
     ribbons?.setReplyPending(next === "thinking");
     if (next === "idle") setTranscript("");
-    // Every stop/error/teardown path lands here, so conversation state cannot
-    // outlive its capture.
     syncTalkModeUi();
     syncAvatarBehaviorTrigger();
   }
 
-  // The upper ribbon is the live transcription stream, and the only place the
-  // overlay shows what you said. An empty transcript only stops the caret: the
-  // ribbon retires on its own linger timer so you can still read (and copy)
-  // what you said after the turn ends.
-  function setTranscript(text, interim = false) {
-    ribbons?.setUser(String(text || ""), { interim });
-  }
+  function setTranscript(text, interim = false) { ribbons?.setUser(String(text || ""), { interim }); }
 
   function focusTranscriptionComposer(active) {
     const target = root?.querySelector("#agee-ribbon-you .agee-ribbon-text");
     if (!target) return;
     const attributes = [["tabindex", "-1"], ["role", "textbox"], ["aria-label", "Live voice transcription"], ["aria-readonly", "true"]];
-    if (active) { for (const [name, value] of attributes) target.setAttribute(name, value); try { target.focus({ preventScroll: true }); } catch {} }
-    else if (!target.getAttribute("contenteditable")) {
-      if (document.activeElement === target) try { target.blur(); } catch {}
-      for (const [name] of attributes) target.removeAttribute(name);
-    }
+    if (active) for (const [name, value] of attributes) target.setAttribute(name, value);
+    else if (!target.getAttribute("contenteditable")) for (const [name] of attributes) target.removeAttribute(name);
   }
 
-  // The lower ribbon is the assistant response stream. The last value is also
-  // recorded because the ribbon retires on its own linger timer: a check that
-  // arrives after the reply faded still needs to know what was said.
   const REPLY_TRAIL_MAX = 50;
   const setReplyRibbon = (text, options) => {
     const value = String(text || "").trim();
@@ -2517,6 +2514,8 @@
   }
 
   async function startLiveVoiceTurn(options = {}) {
+    voiceFocusCaptureActive = true;
+    rememberPageFocusBeforeVoice();
     const preserveAssistantPlayback = options.suppressAssistantPlayback === true
       ? false
       : options.preserveAssistantPlayback === true || assistantSpeechOverlap === true;
@@ -3428,6 +3427,7 @@
   let recordStartedAt = 0;
 
   function beginGestureVoiceWarmup() {
+    rememberPageFocusBeforeVoice();
     if (gestureWarmCaptureId || (liveVoice && liveVoice.committed !== true) || listening || recordActive || recordPending || videoNoteActive) {
       return gestureWarmCaptureId;
     }

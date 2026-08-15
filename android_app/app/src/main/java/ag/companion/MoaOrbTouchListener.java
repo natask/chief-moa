@@ -102,6 +102,27 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
     private Runnable pendingVoiceFirstHold;
     private Runnable pendingVoiceFirstTapResolve;
 
+    void bindKeyboardAction(OrbView orb) {
+        if (orb != null) {
+            orb.setKeyboardPrimaryAction(this::performKeyboardPrimaryAction);
+        }
+    }
+
+    /** Immediate equivalent of the primary tap for keyboard and switch users. */
+    private void performKeyboardPrimaryAction() {
+        boolean voiceFirst = voiceFirstEnabled != null && voiceFirstEnabled.getAsBoolean();
+        if (!voiceFirst) {
+            onSingleTap.run();
+            return;
+        }
+        MoaVoiceFirstTapResolver resolver = new MoaVoiceFirstTapResolver();
+        resolver.tapUp();
+        MoaVoiceFirstTapResolver.CaptureOrigin origin = manualCaptureOrigin == null
+                ? MoaVoiceFirstTapResolver.CaptureOrigin.NONE
+                : manualCaptureOrigin.get();
+        runVoiceFirstTapActions(resolver.resolve(origin));
+    }
+
     MoaOrbTouchListener(
             Context context,
             WindowManager.LayoutParams orbParams,
@@ -256,7 +277,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
                     lastTapCandidate = false;
                     return true;
                 }
-                scheduleSingleTap(event);
+                scheduleSingleTap(view, event);
                 return true;
             default:
                 return false;
@@ -447,7 +468,7 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
         return dx * dx + dy * dy <= doubleTapSlop * doubleTapSlop;
     }
 
-    private void scheduleSingleTap(MotionEvent event) {
+    private void scheduleSingleTap(View view, MotionEvent event) {
         cancelPendingSingleTap();
         lastTapCandidate = true;
         lastTapUpTimeMs = event.getEventTime();
@@ -457,7 +478,9 @@ final class MoaOrbTouchListener implements View.OnTouchListener {
             pendingSingleTap = null;
             if (lastTapCandidate) {
                 lastTapCandidate = false;
-                onSingleTap.run();
+                if (!view.performClick()) {
+                    onSingleTap.run();
+                }
             }
         };
         mainHandler.postDelayed(pendingSingleTap, DOUBLE_TAP_TIMEOUT_MS);

@@ -80,10 +80,10 @@
       ? `<button class="agee-ribbon-voice" type="button" tabindex="-1" aria-pressed="true" aria-label="Turn voice replies off">${VOICE_GLYPH}</button>`
       : "";
     return `
-      <div class="agee-ribbon" id="${id}" data-agee-ribbon="${kind}" role="button" tabindex="0" aria-label="${label}">
+      <div class="agee-ribbon" id="${id}" data-agee-ribbon="${kind}" role="button" tabindex="0" aria-expanded="false" aria-label="${label}">
         <div class="agee-ribbon-viewport"><div class="agee-ribbon-line" aria-live="polite"><span class="agee-ribbon-text"></span><i class="agee-ribbon-caret" aria-hidden="true"></i></div></div>
         <button class="agee-ribbon-copy" type="button" tabindex="-1" aria-label="Copy ${kind === "you" ? "what you said" : "the reply"}">${COPY_GLYPH}${CHECK_GLYPH}</button>
-        <button class="agee-ribbon-copy agee-ribbon-chevron" type="button" tabindex="-1" aria-label="Choose which version to copy" aria-haspopup="menu">${CHEVRON_GLYPH}</button>
+        <button class="agee-ribbon-copy agee-ribbon-chevron" type="button" tabindex="-1" aria-label="Choose which version to copy" aria-haspopup="menu" aria-expanded="false">${CHEVRON_GLYPH}</button>
         ${voice}
         ${send}
         <span class="agee-ribbon-caption" aria-hidden="true">Copied</span>
@@ -137,6 +137,7 @@
     let latchTimer = null;
     let pointerNear = false;
     let menuOwner = null;
+    let copyMenuOwner = null;
     let composing = false;
     let pendingUserCopy = false;
     let presentationCue = "";
@@ -148,6 +149,7 @@
     let geometryBreaches = [];
     let geometryAuditPending = false;
     let currentPreferredCopyVariant = ["skill", "edited", "literal"].includes(preferredCopyVariant) ? preferredCopyVariant : "";
+    const reducedMotion = () => win.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
 
     function setPageObservation(rawPhase, rawId) {
       const phase = String(rawPhase || "");
@@ -435,7 +437,7 @@
       const next = TextModel.appendDelta(ribbon.target, delta);
       ribbon.target = next.buffer;
       ribbon.truncated = ribbon.truncated || next.truncated;
-      if (!paced) {
+      if (!paced || reducedMotion()) {
         ribbon.buffer = ribbon.target;
         render(ribbon);
         return;
@@ -456,7 +458,7 @@
       // Unpaced text lands whole: the user's own transcript, where partials
       // rewrite themselves and pacing would fight the correction.
       ribbon.targetGraphemes = TextModel.graphemes(ribbon.target);
-      if (!paced || !ribbon.target.startsWith(ribbon.buffer)) {
+      if (!paced || reducedMotion() || !ribbon.target.startsWith(ribbon.buffer)) {
         stopReveal(ribbon);
         ribbon.buffer = ribbon.target;
         ribbon.revealIndex = ribbon.targetGraphemes.length;
@@ -718,6 +720,10 @@
       for (const other of both) if (other !== ribbon) collapse(other);
       ribbon.expanded = true;
       ribbon.el.classList.add("agee-ribbon-expanded");
+      ribbon.el.setAttribute("aria-expanded", "true");
+      for (const control of [ribbon.copyEl, ribbon.chevronEl, ribbon.voiceEl]) {
+        if (control) control.tabIndex = 0;
+      }
       holdOpen();
       // Opening the box is the "all of it, now" gesture.
       revealAll(ribbon);
@@ -728,6 +734,10 @@
       if (!ribbon?.expanded) return;
       ribbon.expanded = false;
       ribbon.el.classList.remove("agee-ribbon-expanded");
+      ribbon.el.setAttribute("aria-expanded", "false");
+      for (const control of [ribbon.copyEl, ribbon.chevronEl, ribbon.voiceEl]) {
+        if (control) control.tabIndex = -1;
+      }
       closeCopyMenu();
       render(ribbon);
     }
@@ -1062,7 +1072,7 @@
           engage(true);
           toggleExpanded(ribbon);
           if (!ribbon.expanded) unlatch();
-        } else if (event.key === " ") {
+        } else if (event.key === " " || event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
           event.preventDefault();
           engage(true);
           openMenu(ribbon);
@@ -1102,6 +1112,33 @@
       el.style.top = `${place.top}px`;
     }
 
+    function enabledMenuItems(menu) {
+      return Array.from(menu?.querySelectorAll?.('[role="menuitem"]:not([disabled])') || []);
+    }
+
+    function handleMenuKeydown(event, menu, close) {
+      const items = enabledMenuItems(menu);
+      if (!items.length) return;
+      const index = Math.max(0, items.indexOf(doc.activeElement));
+      let next = -1;
+      if (event.key === "ArrowDown") next = (index + 1) % items.length;
+      else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = items.length - 1;
+      else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        close(true);
+        return;
+      } else if (event.key === "Tab") {
+        close(false);
+        return;
+      } else return;
+      event.preventDefault();
+      event.stopPropagation();
+      items[next]?.focus({ preventScroll: true });
+    }
+
     function openMenu(ribbon) {
       if (!menuEl) return;
       menuEl.textContent = "";
@@ -1115,7 +1152,7 @@
           event.preventDefault();
           event.stopPropagation();
           Promise.resolve(row.run()).catch(() => {});
-          closeMenu();
+          closeMenu(true);
         });
         menuEl.appendChild(button);
       }
@@ -1123,12 +1160,15 @@
       menuEl.classList.add("agee-ribbon-menu-open");
       placeMenu(menuEl, ribbon.el.getBoundingClientRect(), "left");
       engage(true);
+      enabledMenuItems(menuEl)[0]?.focus({ preventScroll: true });
     }
 
-    function closeMenu() {
-      menuOwner?.el?.classList.remove("agee-ribbon-held");
+    function closeMenu(restoreFocus = false) {
+      const owner = menuOwner;
+      owner?.el?.classList.remove("agee-ribbon-held");
       menuOwner = null;
       menuEl?.classList.remove("agee-ribbon-menu-open");
+      if (restoreFocus) owner?.el?.focus({ preventScroll: true });
     }
 
     // The copy rail is a three-way choice with a default, not one button.
@@ -1173,22 +1213,32 @@
               ribbon.variants.skill = text;
               ribbon.skillName = String(result?.skill_name || "plain style");
               return copy(ribbon, "skill");
-            }).catch(() => {}).finally(closeCopyMenu);
+            }).catch(() => {}).finally(() => closeCopyMenu(true));
             return;
           }
           copy(ribbon, row.key).catch(() => {});
-          closeCopyMenu();
+          closeCopyMenu(true);
         });
         copyMenuEl.appendChild(button);
       }
       copyMenuEl.classList.add("agee-ribbon-menu-open");
+      copyMenuOwner = ribbon;
+      ribbon.chevronEl?.setAttribute("aria-expanded", "true");
       placeMenu(copyMenuEl, (ribbon.chevronEl || ribbon.el).getBoundingClientRect(), "right");
       engage(true);
+      enabledMenuItems(copyMenuEl)[0]?.focus({ preventScroll: true });
     }
 
-    function closeCopyMenu() {
+    function closeCopyMenu(restoreFocus = false) {
+      const owner = copyMenuOwner;
+      copyMenuOwner = null;
       copyMenuEl?.classList.remove("agee-ribbon-menu-open");
+      owner?.chevronEl?.setAttribute("aria-expanded", "false");
+      if (restoreFocus) (owner?.chevronEl || owner?.el)?.focus({ preventScroll: true });
     }
+
+    menuEl?.addEventListener("keydown", (event) => handleMenuKeydown(event, menuEl, closeMenu));
+    copyMenuEl?.addEventListener("keydown", (event) => handleMenuKeydown(event, copyMenuEl, closeCopyMenu));
 
     // ---- Wiring -----------------------------------------------------------
     for (const ribbon of both) attachGestures(ribbon);

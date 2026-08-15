@@ -83,4 +83,11 @@ public final class MoaRibbonTokensTest {
             assertEquals(p.ink, MoaRibbonTokens.inkColor(p, true));
         }
     }
+
+    @Test
+    public void largeAccessibilityTextGetsMoreRoomWithoutUnboundedReflow() {
+        assertEquals(MoaRibbonTokens.RIBBON_H_DP, MoaRibbonTokens.ribbonHeightDp(1.3f));
+        assertEquals(MoaRibbonTokens.RIBBON_H_LARGE_DP, MoaRibbonTokens.ribbonHeightDp(1.6f));
+        assertEquals(1.5f, MoaRibbonTokens.textScale(2f), 0.001f);
+    }
 }

@@ -36,6 +36,12 @@ final class MoaMinimalEdgeView extends View {
 
     private void startMotion() {
         if (animator != null) return;
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            // Reduced motion keeps the semantic color/brightness cue without
+            // continuously sweeping it around the screen edge.
+            motionPhase = 0f;
+            return;
+        }
         animator = ValueAnimator.ofFloat(0f, (float) (Math.PI * 2));
         animator.setDuration(1800L);
         animator.setRepeatCount(ValueAnimator.INFINITE);
