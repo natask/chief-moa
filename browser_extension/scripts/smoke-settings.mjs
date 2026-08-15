@@ -467,7 +467,11 @@ async function main() {
     if (!tabId) throw new Error("real content script did not answer ping via the service worker");
 
     await evaluate(workerCdp, `chrome.tabs.sendMessage(${tabId}, { cmd: "open" })`);
-    await waitForEval(pageCdp, `document.querySelector("#agee-log") ? true : null`);
+    await waitForEval(pageCdp, `(() => {
+      const root = document.querySelector("#agee-root");
+      const ribbon = document.querySelector("#agee-ribbon-you .agee-ribbon-text");
+      return root?.dataset.ageeUnit && ribbon && !document.querySelector("#agee-log");
+    })()`);
 
     let contentCtx = null;
     for (const candidate of isolatedContexts) {
