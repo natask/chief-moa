@@ -52,6 +52,8 @@ final class MoaReleaseCardController {
     private EditText feedbackInput;
     private EditText searchInput;
     private LinearLayout candidateColumn;
+    private LinearLayout catalogPanel;
+    private LinearLayout feedbackPanel;
     private TextView candidateCount;
     private final ArrayList<MoaReleaseSelectionPolicy.Candidate> catalog = new ArrayList<>();
     private String exactBundleFromIntent = "";
@@ -72,53 +74,47 @@ final class MoaReleaseCardController {
     View createView() {
         LinearLayout card = card();
         cardRoot = card;
-        TextView title = text("Release", MoaColors.PAPER, 18, true);
-        title.setPadding(0, 0, 0, dp(12));
+        TextView eyebrow = text("STABLE  →  TRIAL  →  THIS PHONE", MoaColors.GOLD, 10, true);
+        eyebrow.setLetterSpacing(0.13f);
+        card.addView(eyebrow);
+        TextView title = text("Choose with confidence", MoaColors.PAPER, 21, true);
+        title.setPadding(0, dp(9), 0, dp(5));
         card.addView(title);
         TextView hint = text(
-                "Choose what this phone follows. Selecting a release never installs it.",
+                "Stable is your anchor. Trial is your proving ground. This Phone shows what is actually installed.",
                 MoaColors.MUTED, 13, false);
-        hint.setPadding(0, 0, 0, dp(8));
+        hint.setLineSpacing(dp(2), 1f);
+        hint.setPadding(0, 0, 0, dp(6));
         card.addView(hint);
 
-        installedStatus = statRow(card, "Installed", host.installedLabel());
-        assignmentStatus = statRow(card, "Assigned", "Checking...");
-        stableStatus = statRow(card, "Stable", "Checking...");
-        previewStatus = statRow(card, "Trial", "Checking...");
-        actionStatus = text("Loading release control...", MoaColors.MUTED, 13, false);
-        actionStatus.setPadding(0, dp(10), 0, 0);
-        card.addView(actionStatus);
-
-        TextView browseTitle = text("Feature releases", MoaColors.PAPER, 16, true);
-        browseTitle.setPadding(0, dp(18), 0, dp(4));
-        card.addView(browseTitle);
-        candidateCount = text("Loading candidates…", MoaColors.MUTED, 13, false);
-        card.addView(candidateCount);
-        searchInput = input("Search by feature, version, or bundle");
-        searchInput.setMinLines(1);
-        searchInput.setMaxLines(1);
-        searchInput.setSingleLine(true);
-        searchInput.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { renderCatalog(); }
-            @Override public void afterTextChanged(Editable s) { }
-        });
-        card.addView(searchInput);
-        candidateColumn = new LinearLayout(activity);
-        candidateColumn.setOrientation(LinearLayout.VERTICAL);
-        card.addView(candidateColumn);
-
-        Button refresh = secondary("Refresh releases");
-        refresh.setOnClickListener(v -> refresh());
-        card.addView(refresh);
-        previewButton = secondary("Promote to trial");
-        previewButton.setEnabled(false);
-        previewButton.setOnClickListener(v -> select("preview"));
-        card.addView(previewButton);
+        LinearLayout stableStage = stage("01", "Stable", "Known-good release");
+        stableStatus = stageValue(stableStage, "Checking…");
         stableButton = secondary("Return to stable");
         stableButton.setEnabled(false);
         stableButton.setOnClickListener(v -> select("stable"));
-        card.addView(stableButton);
+        stableStage.addView(stableButton);
+        card.addView(stableStage);
+
+        LinearLayout trialStage = stage("02", "Trial", "Your combined test release");
+        previewStatus = stageValue(trialStage, "Checking…");
+        previewButton = secondary("Use trial");
+        previewButton.setEnabled(false);
+        previewButton.setOnClickListener(v -> select("preview"));
+        trialStage.addView(previewButton);
+        card.addView(trialStage);
+
+        LinearLayout phoneStage = stage("03", "This Phone", "Reality, verified on-device");
+        installedStatus = stageValue(phoneStage, host.installedLabel());
+        assignmentStatus = text("Selected release: checking…", MoaColors.MUTED, 12, false);
+        assignmentStatus.setPadding(0, dp(6), 0, 0);
+        phoneStage.addView(assignmentStatus);
+        card.addView(phoneStage);
+
+        actionStatus = text("Loading release control...", MoaColors.MUTED, 13, false);
+        actionStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        actionStatus.setPadding(0, dp(10), 0, 0);
+        card.addView(actionStatus);
+
         installButton = primary("Download and review install");
         installButton.setVisibility(View.GONE);
         installButton.setOnClickListener(v -> {
@@ -128,12 +124,54 @@ final class MoaReleaseCardController {
         });
         card.addView(installButton);
 
+        Button browse = secondary("Browse feature releases  ＋");
+        card.addView(browse);
+        catalogPanel = new LinearLayout(activity);
+        catalogPanel.setOrientation(LinearLayout.VERTICAL);
+        catalogPanel.setVisibility(View.GONE);
+        TextView browseTitle = text("Feature releases", MoaColors.PAPER, 17, true);
+        browseTitle.setPadding(0, dp(16), 0, dp(4));
+        catalogPanel.addView(browseTitle);
+        candidateCount = text("Loading candidates…", MoaColors.MUTED, 13, false);
+        catalogPanel.addView(candidateCount);
+        searchInput = input("Search by feature, version, or bundle");
+        searchInput.setMinLines(1);
+        searchInput.setMaxLines(1);
+        searchInput.setSingleLine(true);
+        searchInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { renderCatalog(); }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        catalogPanel.addView(searchInput);
+        candidateColumn = new LinearLayout(activity);
+        candidateColumn.setOrientation(LinearLayout.VERTICAL);
+        catalogPanel.addView(candidateColumn);
+
+        Button refresh = secondary("Refresh releases");
+        refresh.setOnClickListener(v -> refresh());
+        catalogPanel.addView(refresh);
+        card.addView(catalogPanel);
+        browse.setOnClickListener(v -> {
+            boolean open = catalogPanel.getVisibility() != View.VISIBLE;
+            catalogPanel.setVisibility(open ? View.VISIBLE : View.GONE);
+            browse.setText(open ? "Hide feature releases  −" : "Browse feature releases  ＋");
+            browse.setSelected(open);
+        });
+
+        feedbackPanel = new LinearLayout(activity);
+        feedbackPanel.setOrientation(LinearLayout.VERTICAL);
+        feedbackPanel.setVisibility(View.GONE);
+        TextView feedbackTitle = text("Release feedback", MoaColors.PAPER, 16, true);
+        feedbackTitle.setPadding(0, dp(16), 0, 0);
+        feedbackPanel.addView(feedbackTitle);
         feedbackInput = input("Feedback on this exact release");
-        card.addView(feedbackInput);
+        feedbackPanel.addView(feedbackInput);
         feedbackButton = secondary("Submit release feedback");
         feedbackButton.setEnabled(false);
         feedbackButton.setOnClickListener(v -> submitFeedback());
-        card.addView(feedbackButton);
+        feedbackPanel.addView(feedbackButton);
+        card.addView(feedbackPanel);
         return card;
     }
 
@@ -208,7 +246,7 @@ final class MoaReleaseCardController {
         selected = null;
         catalog.clear();
         buttons(false, false);
-        if (assignmentStatus != null) assignmentStatus.setText("Unavailable");
+        if (assignmentStatus != null) assignmentStatus.setText("Selected release: unavailable");
         if (stableStatus != null) stableStatus.setText("Unavailable");
         if (previewStatus != null) previewStatus.setText("Unavailable");
         if (installButton != null) installButton.setVisibility(View.GONE);
@@ -254,10 +292,10 @@ final class MoaReleaseCardController {
             return;
         }
         if (view.assignment == null) {
-            assignmentStatus.setText("None");
+            assignmentStatus.setText("Selected release: none");
         } else {
             String source = view.assignment.source.isEmpty() ? "" : " · " + view.assignment.source;
-            assignmentStatus.setText(displayChannel(view.assignment.channel) + " · " + view.assignment.releaseId
+            assignmentStatus.setText("Selected release: " + displayChannel(view.assignment.channel) + " · " + view.assignment.releaseId
                     + source + " · selected, not installed");
         }
         renderCandidate(stableStatus, view.stable);
@@ -266,6 +304,7 @@ final class MoaReleaseCardController {
                 view.preview != null && view.preview.compatible);
         boolean bound = exactRunningSelection();
         feedbackButton.setEnabled(bound);
+        if (feedbackPanel != null) feedbackPanel.setVisibility(bound ? View.VISIBLE : View.GONE);
         installButton.setVisibility(selected != null && selected.installable()
                 ? View.VISIBLE : View.GONE);
         status(message, color);
@@ -491,6 +530,7 @@ final class MoaReleaseCardController {
         if (actionStatus != null) {
             actionStatus.setText(message);
             actionStatus.setTextColor(color);
+            actionStatus.announceForAccessibility(message);
         }
     }
 
@@ -498,14 +538,49 @@ final class MoaReleaseCardController {
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        card.setBackground(MoaDrawables.rounded(
-                MoaColors.RAISED, dp(20), MoaColors.RAISED_BORDER, dp(1)));
+        card.setBackground(MoaDrawables.roundedGradient(
+                MoaColors.RAISED_2, MoaColors.RAISED, dp(24), MoaColors.RAISED_BORDER, dp(1)));
         card.setElevation(dp(6));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.topMargin = dp(14);
         card.setLayoutParams(params);
         return card;
+    }
+
+    private LinearLayout stage(String number, String name, String detail) {
+        LinearLayout stage = new LinearLayout(activity);
+        stage.setOrientation(LinearLayout.VERTICAL);
+        stage.setPadding(dp(15), dp(14), dp(15), dp(13));
+        stage.setBackground(MoaDrawables.diagonalGradient(
+                0xFF202026, 0xFF19191D, 0xFF151518, dp(18), MoaColors.RAISED_BORDER, dp(1)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(10);
+        stage.setLayoutParams(params);
+        LinearLayout top = new LinearLayout(activity);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView step = text(number, MoaColors.GOLD, 11, true);
+        step.setBackground(MoaDrawables.circle(MoaColors.GOLD_WASH, MoaColors.GOLD_BORDER, dp(1)));
+        step.setGravity(Gravity.CENTER);
+        top.addView(step, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        LinearLayout copy = new LinearLayout(activity);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        copyParams.leftMargin = dp(11);
+        copy.addView(text(name, MoaColors.PAPER, 16, true));
+        copy.addView(text(detail, MoaColors.MUTED, 12, false));
+        top.addView(copy, copyParams);
+        stage.addView(top);
+        return stage;
+    }
+
+    private TextView stageValue(LinearLayout stage, String value) {
+        TextView status = text(value, MoaColors.GOLD_BRIGHT, 13, true);
+        status.setPadding(dp(45), dp(8), 0, 0);
+        stage.addView(status);
+        return status;
     }
 
     private TextView statRow(LinearLayout parent, String name, String value) {
@@ -544,9 +619,9 @@ final class MoaReleaseCardController {
 
     private Button primary(String label) {
         Button button = button(label);
-        button.setTextColor(MoaColors.INK);
-        button.setBackground(MoaDrawables.horizontalGradient(
-                MoaColors.GOLD, 0xFFFFF1A6, dp(16)));
+        button.setTextColor(MoaColors.PAPER);
+        button.setBackground(MoaDrawables.rounded(
+                MoaColors.GOLD_WASH, dp(15), MoaColors.GOLD_BORDER, dp(1)));
         return button;
     }
 
@@ -564,7 +639,7 @@ final class MoaReleaseCardController {
         button.setText(label);
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setMinHeight(dp(52));
+        button.setMinHeight(dp(48));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.topMargin = dp(12);

@@ -5,73 +5,96 @@ import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** The product home: one obvious way to start talking, without setup clutter. */
+/** Immersive voice-first home. The orb is the action; chrome stays out of the way. */
 final class MoaTalkHomeView {
     private final Context context;
 
     MoaTalkHomeView(Context context) { this.context = context; }
 
     View create(Runnable talk, Runnable refresh) {
-        LinearLayout card = new LinearLayout(context);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER_HORIZONTAL);
-        card.setPadding(dp(22), dp(26), dp(22), dp(22));
-        card.setBackground(MoaDrawables.roundedGradient(
-                0xFF211D18, MoaColors.RAISED, dp(24), MoaColors.PANEL_BORDER, dp(1)));
-        card.setElevation(dp(8));
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+        LinearLayout stage = new LinearLayout(context);
+        stage.setOrientation(LinearLayout.VERTICAL);
+        stage.setGravity(Gravity.CENTER_HORIZONTAL);
+        stage.setPadding(dp(22), dp(30), dp(22), dp(24));
+        stage.setBackground(MoaDrawables.diagonalGradient(
+                0xFF211B12, 0xFF161518, 0xFF101014, dp(28), MoaColors.GOLD_BORDER, dp(1)));
+        stage.setElevation(dp(10));
+        LinearLayout.LayoutParams stageParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardParams.topMargin = dp(18);
-        card.setLayoutParams(cardParams);
+        stageParams.topMargin = dp(8);
+        stage.setLayoutParams(stageParams);
 
-        ImageView mark = new ImageView(context);
-        mark.setImageResource(R.drawable.moa_mark);
-        mark.setBackground(MoaDrawables.circle(MoaColors.MARK_BACKING, MoaColors.GOLD, dp(1)));
-        mark.setPadding(dp(9), dp(9), dp(9), dp(9));
-        card.addView(mark, new LinearLayout.LayoutParams(dp(72), dp(72)));
+        TextView signal = text("AG IS READY", MoaColors.GOLD_BRIGHT, 11, true);
+        signal.setLetterSpacing(0.2f);
+        signal.setBackground(MoaDrawables.rounded(MoaColors.GOLD_WASH, dp(99), MoaColors.GOLD_BORDER, dp(1)));
+        signal.setPadding(dp(13), dp(6), dp(13), dp(6));
+        stage.addView(signal);
 
-        TextView title = text("What do you need?", MoaColors.PAPER, 25, true);
+        TextView title = text("Say what’s on your mind.", MoaColors.PAPER, 27, true);
+        title.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         title.setGravity(Gravity.CENTER);
-        title.setPadding(0, dp(16), 0, dp(6));
-        card.addView(title);
-        TextView message = text("Speak naturally. Ag keeps the conversation and can turn your feedback into work.",
+        title.setPadding(0, dp(18), 0, dp(5));
+        stage.addView(title);
+
+        TextView message = text("Ask a question, give feedback, or shape what Ag builds next.",
                 MoaColors.MUTED, 15, false);
         message.setGravity(Gravity.CENTER);
         message.setLineSpacing(dp(3), 1f);
-        card.addView(message);
+        stage.addView(message);
 
-        Button talkButton = button("Talk to Ag", true);
-        talkButton.setContentDescription("Open Ag and start talking");
-        talkButton.setOnClickListener(view -> talk.run());
-        card.addView(talkButton);
+        FrameLayout orb = voiceOrb();
+        orb.setContentDescription("Talk to Ag");
+        orb.setClickable(true);
+        orb.setFocusable(true);
+        orb.setOnClickListener(view -> talk.run());
+        LinearLayout.LayoutParams orbParams = new LinearLayout.LayoutParams(dp(150), dp(150));
+        orbParams.topMargin = dp(22);
+        stage.addView(orb, orbParams);
 
-        Button refreshButton = button("Refresh conversation", false);
-        refreshButton.setOnClickListener(view -> refresh.run());
-        card.addView(refreshButton);
-        return card;
+        TextView instruction = text("Tap to speak", MoaColors.PAPER, 16, true);
+        instruction.setGravity(Gravity.CENTER);
+        instruction.setPadding(0, dp(10), 0, dp(2));
+        stage.addView(instruction);
+        TextView privacy = text("Private to your account  ·  Interrupt anytime", MoaColors.MUTED, 12, false);
+        privacy.setGravity(Gravity.CENTER);
+        stage.addView(privacy);
+
+        TextView refreshAction = text("Refresh conversation", MoaColors.GOLD, 13, true);
+        refreshAction.setGravity(Gravity.CENTER);
+        refreshAction.setPadding(dp(14), dp(12), dp(14), dp(8));
+        refreshAction.setClickable(true);
+        refreshAction.setFocusable(true);
+        refreshAction.setContentDescription("Refresh conversation");
+        refreshAction.setOnClickListener(view -> refresh.run());
+        stage.addView(refreshAction);
+        return stage;
     }
 
-    private Button button(String label, boolean primary) {
-        Button button = new Button(context);
-        button.setAllCaps(false);
-        button.setText(label);
-        button.setTextSize(16);
-        button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setTextColor(primary ? MoaColors.INK : MoaColors.PAPER);
-        button.setBackground(primary
-                ? MoaDrawables.horizontalGradient(MoaColors.GOLD, 0xFFFFF1A6, dp(16))
-                : MoaDrawables.rounded(0x14FFFFFF, dp(16), MoaColors.RAISED_BORDER, dp(1)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(12);
-        button.setLayoutParams(params);
-        button.setMinHeight(dp(52));
-        return button;
+    private FrameLayout voiceOrb() {
+        FrameLayout outer = new FrameLayout(context);
+        outer.setBackground(MoaDrawables.circle(0x14E1BB68, MoaColors.GOLD_BORDER, dp(1)));
+        outer.setPadding(dp(14), dp(14), dp(14), dp(14));
+        outer.setElevation(dp(14));
+
+        FrameLayout middle = new FrameLayout(context);
+        middle.setBackground(MoaDrawables.diagonalGradient(
+                0xFFE7C77C, 0xFFB8792F, 0xFF3C2814, dp(99), MoaColors.GOLD_BRIGHT, dp(1)));
+        middle.setPadding(dp(13), dp(13), dp(13), dp(13));
+        outer.addView(middle, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        ImageView mark = new ImageView(context);
+        mark.setImageResource(R.drawable.moa_mark);
+        mark.setBackground(MoaDrawables.circle(MoaColors.MARK_BACKING, 0x66FFFFFF, dp(1)));
+        mark.setPadding(dp(13), dp(13), dp(13), dp(13));
+        middle.addView(mark, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return outer;
     }
 
     private TextView text(String value, int color, int size, boolean bold) {
@@ -79,7 +102,7 @@ final class MoaTalkHomeView {
         view.setText(value);
         view.setTextColor(color);
         view.setTextSize(size);
-        if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
+        if (bold) view.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         return view;
     }
 

@@ -38,6 +38,15 @@ final class MoaDrawables {
         return drawable;
     }
 
+    static GradientDrawable diagonalGradient(int start, int center, int end, int radius,
+            int strokeColor, int strokeWidth) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR, new int[]{start, center, end});
+        drawable.setCornerRadius(radius);
+        if (strokeWidth > 0) drawable.setStroke(strokeWidth, strokeColor);
+        return drawable;
+    }
+
     // Rounded vertical gradient with a hairline border. Used for the panel card
     // and for raised bubbles so they read with a little depth.
     static GradientDrawable roundedGradient(int top, int bottom, int radius, int strokeColor, int strokeWidth) {

@@ -1,13 +1,16 @@
 package ag.companion;
 
 import android.content.Context;
+import android.graphics.PorterDuff;
 import android.graphics.Typeface;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
-/** Four-destination app navigation. Keeps developer controls out of the home surface. */
+/** Quiet, thumb-reachable navigation with a real icon and label for every destination. */
 final class MoaMainNavigation {
     static final int TALK = 0;
     static final int WORK = 1;
@@ -16,9 +19,17 @@ final class MoaMainNavigation {
 
     interface Listener { void onDestinationSelected(int destination); }
 
+    private static final int[] ICONS = {
+            R.drawable.ic_nav_talk, R.drawable.ic_nav_work,
+            R.drawable.ic_nav_releases, R.drawable.ic_nav_settings
+    };
+    private static final String[] LABELS = {"Talk", "Work", "Releases", "Settings"};
+
     private final Context context;
     private final Listener listener;
-    private final Button[] buttons = new Button[4];
+    private final LinearLayout[] items = new LinearLayout[4];
+    private final ImageView[] icons = new ImageView[4];
+    private final TextView[] labels = new TextView[4];
 
     MoaMainNavigation(Context context, Listener listener) {
         this.context = context;
@@ -26,46 +37,61 @@ final class MoaMainNavigation {
     }
 
     View createView() {
-        LinearLayout rail = new LinearLayout(context);
-        rail.setOrientation(LinearLayout.HORIZONTAL);
-        rail.setPadding(dp(12), dp(8), dp(12), dp(10));
-        rail.setBackground(MoaDrawables.roundedGradient(
-                MoaColors.PANEL_BG, MoaColors.SURFACE_0, 0,
-                MoaColors.PANEL_BORDER, dp(1)));
-        add(rail, TALK, "Talk");
-        add(rail, WORK, "Work");
-        add(rail, RELEASES, "Releases");
-        add(rail, SETTINGS, "Settings");
+        LinearLayout bar = new LinearLayout(context);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER);
+        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
+        bar.setBackground(MoaDrawables.roundedGradient(
+                0xFC111114, 0xFF0B0B0D, 0, MoaColors.PANEL_BORDER, dp(1)));
+        bar.setElevation(dp(18));
+        for (int destination = 0; destination < LABELS.length; destination++) add(bar, destination);
         select(TALK);
-        return rail;
+        return bar;
     }
 
     void select(int destination) {
-        for (int index = 0; index < buttons.length; index++) {
-            Button button = buttons[index];
-            if (button == null) continue;
+        for (int index = 0; index < items.length; index++) {
+            if (items[index] == null) continue;
             boolean selected = index == destination;
-            button.setTextColor(selected ? MoaColors.INK : MoaColors.MUTED);
-            button.setBackground(MoaDrawables.rounded(
-                    selected ? MoaColors.GOLD : 0x00000000, dp(13),
-                    selected ? MoaColors.GOLD : 0x00000000, 0));
-            button.setContentDescription(button.getText() + (selected ? ", selected" : ""));
+            items[index].setBackground(MoaDrawables.rounded(
+                    selected ? MoaColors.GOLD_WASH : 0x00000000, dp(16),
+                    selected ? MoaColors.GOLD_BORDER : 0x00000000, selected ? dp(1) : 0));
+            icons[index].setColorFilter(selected ? MoaColors.GOLD_BRIGHT : MoaColors.MUTED_DARK,
+                    PorterDuff.Mode.SRC_IN);
+            labels[index].setTextColor(selected ? MoaColors.PAPER : MoaColors.MUTED);
+            items[index].setContentDescription(LABELS[index] + (selected ? ", selected" : ", tab"));
+            items[index].setSelected(selected);
         }
     }
 
-    private void add(LinearLayout rail, int destination, String label) {
-        Button button = new Button(context);
-        button.setAllCaps(false);
-        button.setText(label);
-        button.setTextSize(13);
-        button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setMinHeight(dp(44));
-        button.setMinWidth(0);
-        button.setPadding(dp(4), dp(8), dp(4), dp(8));
-        button.setOnClickListener(view -> listener.onDestinationSelected(destination));
-        buttons[destination] = button;
-        rail.addView(button, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+    private void add(LinearLayout bar, int destination) {
+        LinearLayout item = new LinearLayout(context);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.setGravity(Gravity.CENTER);
+        item.setPadding(dp(4), dp(7), dp(4), dp(6));
+        item.setClickable(true);
+        item.setFocusable(true);
+        item.setOnClickListener(view -> listener.onDestinationSelected(destination));
+        if (destination == SETTINGS) item.setId(R.id.moa_settings_nav_target);
+
+        ImageView icon = new ImageView(context);
+        icon.setImageResource(ICONS[destination]);
+        item.addView(icon, new LinearLayout.LayoutParams(dp(22), dp(22)));
+
+        TextView label = new TextView(context);
+        label.setText(LABELS[destination]);
+        label.setTextSize(11);
+        label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        label.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelParams.topMargin = dp(3);
+        item.addView(label, labelParams);
+
+        items[destination] = item;
+        icons[destination] = icon;
+        labels[destination] = label;
+        bar.addView(item, new LinearLayout.LayoutParams(0, dp(58), 1f));
     }
 
     private int dp(int value) {

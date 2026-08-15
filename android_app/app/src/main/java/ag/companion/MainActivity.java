@@ -48,8 +48,6 @@ public final class MainActivity extends Activity {
     static final String EXTRA_GATEWAY_TOKEN = "ag.companion.extra.GATEWAY_TOKEN";
     static final String EXTRA_START_OVERLAY = "ag.companion.extra.START_OVERLAY";
     static final String EXTRA_REVIEW_UPDATE = "ag.companion.extra.REVIEW_UPDATE";
-    // Double-tapping an overlay ribbon opens history here, as a real window. The
-    // overlay stays alive behind it and never becomes a scrollback itself.
     static final String EXTRA_SHOW_HISTORY = "ag.companion.extra.SHOW_HISTORY";
     static final String EXTRA_RELEASE_BUNDLE_ID = "ag.companion.extra.RELEASE_BUNDLE_ID";
 
@@ -109,6 +107,7 @@ public final class MainActivity extends Activity {
     private boolean reviewUpdateOnNextCheck;
     private MoaReleaseCardController releaseController;
     private int releasePollGeneration;
+    private int currentDestination = MoaMainNavigation.TALK;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -253,6 +252,7 @@ public final class MainActivity extends Activity {
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackgroundColor(MoaColors.SURFACE_0);
+        shell.addView(heroBrand());
 
         ScrollView scrollView = new ScrollView(this);
         contentScroll = scrollView;
@@ -261,13 +261,11 @@ public final class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(30), dp(20), dp(26));
+        root.setPadding(dp(18), dp(8), dp(18), dp(24));
         scrollView.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
-
-        root.addView(heroBrand());
 
         talkSection = section();
         talkSection.addView(new MoaTalkHomeView(this).create(
@@ -283,32 +281,37 @@ public final class MainActivity extends Activity {
         root.addView(workSection);
 
         releasesSection = section();
-        releasesSection.addView(MoaSectionHeaderView.create(this, "Safe releases",
-                "Test features separately, combine them in Trial, and return to Stable when needed."));
+        releasesSection.addView(MoaSectionHeaderView.create(this, "RELEASE CONTROL", "Release studio",
+                "Move deliberately from Stable to Trial, then confirm exactly what this phone runs."));
         releasesSection.addView(releaseController.createView());
         releasesSection.addView(releaseRescueCard());
         root.addView(releasesSection);
 
         settingsSection = section();
-        settingsSection.addView(MoaSectionHeaderView.create(this, "Settings",
-                "Connect your account and choose how Ag appears and works on this phone."));
-        settingsSection.addView(new AgOnboardingController(this).createView());
-        settingsSection.addView(statusCard());
-        settingsSection.addView(actionCard());
-        settingsSection.addView(gatewayCard());
-        settingsSection.addView(MoaImeSettingsView.create(this));
-        settingsSection.addView(MoaPresentationSettingsView.create(this));
-        settingsSection.addView(MoaProviderSettingsView.create(this));
-        settingsSection.addView(orbSizeCard());
-        settingsSection.addView(gesturesCard());
-        settingsSection.addView(diagnosticsCard());
+        settingsSection.addView(MoaSectionHeaderView.create(this, "PERSONAL SPACE", "Settings",
+                "Everything Ag needs, organized around your account, phone, and preferences."));
+        settingsSection.addView(MoaSectionHeaderView.disclosure(this, "◎", "Account & connection",
+                "Sign in, reconnect, or update the gateway",
+                MoaSectionHeaderView.stack(this, new AgOnboardingController(this).createView(), gatewayCard()), false));
+        settingsSection.addView(MoaSectionHeaderView.disclosure(this, "✓", "Access & companion",
+                "Permissions, readiness, and the floating companion",
+                MoaSectionHeaderView.stack(this, statusCard(), actionCard()), false));
+        settingsSection.addView(MoaSectionHeaderView.disclosure(this, "✦", "Voice & appearance",
+                "Input, voice provider, presentation, and orb size",
+                MoaSectionHeaderView.stack(this, MoaImeSettingsView.create(this),
+                        MoaPresentationSettingsView.create(this), MoaProviderSettingsView.create(this), orbSizeCard()), false));
+        settingsSection.addView(MoaSectionHeaderView.disclosure(this, "↕", "Gestures",
+                "Choose how taps, holds, and movement behave", gesturesCard(), false));
+        settingsSection.addView(MoaSectionHeaderView.disclosure(this, "⋯", "Advanced",
+                "Diagnostics and runtime details", diagnosticsCard(), false));
         root.addView(settingsSection);
 
         shell.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         mainNavigation = new MoaMainNavigation(this, this::showFullAppSection);
-        shell.addView(mainNavigation.createView());
-        showFullAppSection(MoaMainNavigation.TALK);
+        View navigation = mainNavigation.createView();
+        shell.addView(navigation);
+        showFullAppSection(currentDestination);
         return shell;
     }
 
@@ -316,39 +319,34 @@ public final class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
+        hero.setPadding(dp(18), dp(12), dp(18), dp(9));
+        hero.setBackgroundColor(MoaColors.SURFACE_0);
 
         ImageView mark = new ImageView(this);
         mark.setImageResource(R.drawable.moa_mark);
-        // Same opaque disc as the floating orb so the lion's dark eyes read here
-        // too, instead of relying on the incidentally-dark root behind it.
         mark.setBackground(MoaDrawables.circle(MoaColors.MARK_BACKING, MoaColors.RAISED_BORDER, dp(1)));
-        mark.setPadding(dp(6), dp(6), dp(6), dp(6));
-        LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(dp(46), dp(46));
-        markParams.rightMargin = dp(12);
+        mark.setPadding(dp(5), dp(5), dp(5), dp(5));
+        LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(dp(38), dp(38));
+        markParams.rightMargin = dp(10);
         mark.setLayoutParams(markParams);
         hero.addView(mark);
 
         LinearLayout text = new LinearLayout(this);
         text.setOrientation(LinearLayout.VERTICAL);
 
-        TextView eyebrow = label("PERSONAL AI COMPANION", MoaColors.GOLD, 11, true);
-        eyebrow.setLetterSpacing(0.14f);
-        text.addView(eyebrow);
-
-        TextView title = label("Ag", MoaColors.PAPER, 30, true);
+        TextView title = label("AG", MoaColors.PAPER, 18, true);
+        title.setLetterSpacing(0.08f);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         text.addView(title);
+        text.addView(label("Private companion", MoaColors.MUTED, 11, false));
 
-        hero.addView(text);
-
-        LinearLayout wrap = new LinearLayout(this);
-        wrap.setOrientation(LinearLayout.VERTICAL);
-        wrap.addView(hero);
-
-        TextView subtitle = label("A personal AI companion that stays useful across your devices.", MoaColors.MUTED, 15, false);
-        subtitle.setPadding(0, dp(10), 0, dp(2));
-        wrap.addView(subtitle);
-        return wrap;
+        hero.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView privatePill = label("●  READY", MoaColors.GREEN, 10, true);
+        privatePill.setLetterSpacing(0.09f);
+        privatePill.setPadding(dp(10), dp(6), dp(10), dp(6));
+        privatePill.setBackground(MoaDrawables.rounded(0x1A65C18C, dp(99), 0x5265C18C, dp(1)));
+        hero.addView(privatePill);
+        return hero;
     }
 
     private LinearLayout section() {
@@ -369,6 +367,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showFullAppSection(int destination) {
+        currentDestination = destination;
         if (talkSection != null) talkSection.setVisibility(destination == MoaMainNavigation.TALK ? View.VISIBLE : View.GONE);
         if (workSection != null) workSection.setVisibility(destination == MoaMainNavigation.WORK ? View.VISIBLE : View.GONE);
         if (releasesSection != null) releasesSection.setVisibility(destination == MoaMainNavigation.RELEASES ? View.VISIBLE : View.GONE);
@@ -1833,7 +1832,8 @@ public final class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        card.setBackground(MoaDrawables.rounded(MoaColors.RAISED, dp(20), MoaColors.RAISED_BORDER, dp(1)));
+        card.setBackground(MoaDrawables.roundedGradient(MoaColors.RAISED_2, MoaColors.RAISED,
+                dp(20), MoaColors.RAISED_BORDER, dp(1)));
         card.setElevation(dp(6));
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -1950,10 +1950,10 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setAllCaps(false);
         button.setText(text);
-        button.setTextColor(MoaColors.INK);
+        button.setTextColor(MoaColors.GOLD_BRIGHT);
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setBackground(MoaDrawables.horizontalGradient(MoaColors.GOLD, 0xFFFFF1A6, dp(16)));
+        button.setBackground(MoaDrawables.rounded(MoaColors.GOLD_WASH, dp(16), MoaColors.GOLD_BORDER, dp(1)));
         button.setPadding(dp(14), dp(12), dp(14), dp(12));
         button.setMinHeight(dp(52));
         button.setLayoutParams(buttonParams());

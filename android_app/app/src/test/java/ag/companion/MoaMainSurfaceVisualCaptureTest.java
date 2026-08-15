@@ -4,7 +4,6 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -23,50 +22,68 @@ import static org.junit.Assert.assertTrue;
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = 35)
 public final class MoaMainSurfaceVisualCaptureTest {
-    private static final int WIDTH = 1080;
-    private static final int HEIGHT = 1920;
+    @Test
+    @Config(qualifiers = "w360dp-h800dp-xxhdpi")
+    public void capturesCompactPhoneAtRealDensity() throws Exception {
+        captureProfile("360x800", 1080, 2400);
+    }
 
-    @Test public void capturesFourClearProductDestinations() throws Exception {
-        MainActivity activity = Robolectric.buildActivity(MainActivity.class).create().get();
-        View root = activity.findViewById(android.R.id.content);
+    @Test
+    @Config(qualifiers = "w412dp-h915dp-xhdpi")
+    public void capturesLargePhoneAtRealDensity() throws Exception {
+        captureProfile("412x915", 824, 1830);
+    }
+
+    private static void captureProfile(String profile, int width, int height) throws Exception {
         File output = new File(System.getProperty("moa.visual.output", "build/visual-qa"));
         assertTrue(output.mkdirs() || output.isDirectory());
-
-        capture(root, new File(output, "android-main-talk.png"));
-        click(root, "Work"); capture(root, new File(output, "android-main-work.png"));
-        click(root, "Releases"); capture(root, new File(output, "android-main-releases.png"));
-        click(root, "Settings"); capture(root, new File(output, "android-main-settings.png"));
-
-        assertNotNull(find(root, "Talk"));
-        assertNotNull(find(root, "Work"));
-        assertNotNull(find(root, "Releases"));
-        assertNotNull(find(root, "Settings"));
+        captureDestination(output, profile, "talk", "Talk", width, height);
+        captureDestination(output, profile, "work", "Work", width, height);
+        captureDestination(output, profile, "releases", "Releases", width, height);
+        captureDestination(output, profile, "settings", "Settings", width, height);
     }
 
-    private static void click(View root, String label) {
-        Button button = find(root, label);
-        assertNotNull(button);
-        button.performClick();
+    private static void captureDestination(File output, String profile, String name,
+            String destination, int width, int height) throws Exception {
+        MainActivity activity = Robolectric.buildActivity(MainActivity.class).create().get();
+        View root = activity.findViewById(android.R.id.content);
+        select(root, destination);
+        assertNotNull(findDestination(root, "Talk"));
+        assertNotNull(findDestination(root, "Work"));
+        assertNotNull(findDestination(root, "Releases"));
+        assertNotNull(findDestination(root, "Settings"));
+        capture(root, new File(output, "android-" + profile + "-" + name + ".png"), width, height);
+        activity.finish();
     }
 
-    private static Button find(View view, String label) {
-        if (view instanceof Button && label.contentEquals(((Button) view).getText())) return (Button) view;
+    private static void select(View root, String label) {
+        View destination = findDestination(root, label);
+        assertNotNull(destination);
+        destination.performClick();
+    }
+
+    private static View findDestination(View view, String label) {
+        CharSequence description = view.getContentDescription();
+        if (description != null && description.toString().startsWith(label + ",")) return view;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int index = 0; index < group.getChildCount(); index++) {
-                Button found = find(group.getChildAt(index), label);
+                View found = findDestination(group.getChildAt(index), label);
                 if (found != null) return found;
             }
         }
         return null;
     }
 
-    private static void capture(View root, File destination) throws Exception {
-        root.measure(View.MeasureSpec.makeMeasureSpec(WIDTH, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(HEIGHT, View.MeasureSpec.EXACTLY));
-        root.layout(0, 0, WIDTH, HEIGHT);
-        Bitmap bitmap = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
-        root.draw(new Canvas(bitmap));
+    private static void capture(View root, File destination, int width, int height) throws Exception {
+        root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+        root.layout(0, 0, width, height);
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        root.draw(canvas);
+        root.invalidate();
+        root.draw(canvas);
         try (FileOutputStream stream = new FileOutputStream(destination)) {
             assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream));
         }
