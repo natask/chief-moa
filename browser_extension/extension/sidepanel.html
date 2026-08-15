@@ -1,7 +1,8 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Ag</title>
     <style>
       :root {
@@ -781,79 +782,126 @@
         cursor: default;
       }
     </style>
+    <link rel="stylesheet" href="sidepanel.css" />
   </head>
-  <body>
-    <header>
+  <body data-workspace="now">
+    <header class="app-bar">
       <div class="mark" id="companionIdentity" aria-label="Ag companion">
         <img id="companionIdentityImage" src="moa-mark.png" alt="" />
-        <span id="companionIdentityName">Ag</span>
+        <span class="identity-copy">
+          <span id="companionIdentityName">Ag</span>
+          <small>Chief of staff</small>
+        </span>
       </div>
-      <div class="status" id="status">Ready.</div>
       <div class="spacer"></div>
-      <button id="floatBtn" type="button" title="Pop Ag out into an always-on-top floating window">Float</button>
+      <div class="status" id="status" role="status" aria-live="polite">Ready.</div>
+      <button id="floatBtn" class="icon-button" type="button" title="Pop Ag out into an always-on-top floating window" aria-label="Float Ag in a window">↗</button>
     </header>
-    <main>
-      <h2 class="section-title" id="nowTitle">Now</h2>
-      <section id="log" aria-labelledby="nowTitle"></section>
-      <div class="voice-notes-head">
-        <h2 class="section-title" id="voiceNotesTitle">Voice notes</h2>
-        <button id="voiceNotesRefresh" type="button">Refresh</button>
-      </div>
-      <div id="voiceNotesStatus" role="status"></div>
-      <section id="voiceNotes" aria-labelledby="voiceNotesTitle"></section>
-      <div class="captured-intents-head">
-        <h2 class="section-title" id="capturedIntentsTitle">Captured intents</h2>
-        <button id="capturedIntentsRefresh" type="button">Refresh</button>
-      </div>
-      <div id="capturedIntentsStatus" role="status"></div>
-      <section id="capturedIntents" aria-labelledby="capturedIntentsTitle"></section>
-      <h2 class="section-title" id="historyTitle">History</h2>
-      <div id="historyError" role="status" hidden>
-        <span id="historyErrorText"></span>
-        <button id="historyRetry" type="button">Retry</button>
-      </div>
-      <section id="history" aria-labelledby="historyTitle"></section>
-      <details class="advanced">
-        <summary>Advanced: releases &amp; browser tools</summary>
-      <section class="release-cockpit" aria-labelledby="releaseCockpitTitle">
-        <div class="release-cockpit-head">
-          <h2 id="releaseCockpitTitle">Release cockpit</h2>
-          <button id="releaseRefresh" type="button">Refresh</button>
-        </div>
-        <div id="releaseError" class="release-error" role="alert" hidden></div>
-        <div id="releaseNotice" class="release-pending" role="status" hidden></div>
-        <div id="releaseContent" hidden>
-          <div id="releaseCards" class="release-grid"></div>
-          <div class="release-controls">
-            <select id="releaseCandidate" aria-label="Choose an exact release"></select>
-            <div class="release-actions">
-              <button id="releaseAssign" type="button">Use selected release</button>
-              <button id="releaseFallback" type="button">Return to stable</button>
-            </div>
+    <nav class="workspace-nav" aria-label="Workspace" role="tablist">
+      <button type="button" role="tab" aria-controls="nowWorkspace" data-workspace-target="now" aria-selected="true"><span class="nav-icon">✦</span><span>Now</span></button>
+      <button type="button" role="tab" aria-controls="libraryWorkspace" data-workspace-target="library" aria-selected="false"><span class="nav-icon">▱</span><span>Library</span></button>
+      <button type="button" role="tab" aria-controls="controlWorkspace" data-workspace-target="control" aria-selected="false"><span class="nav-icon">⌁</span><span>Control</span></button>
+    </nav>
+    <main id="workspace">
+      <section id="nowWorkspace" class="workspace-view now-view" role="tabpanel" data-workspace-view="now" aria-labelledby="nowTitle">
+        <div class="view-heading">
+          <div>
+            <p class="eyebrow">Live workspace</p>
+            <h1 id="nowTitle">What are we making?</h1>
           </div>
-          <form id="releaseFeedbackForm" class="release-feedback">
-            <div id="releaseFeedbackBinding" class="release-feedback-binding"></div>
-            <textarea id="releaseFeedbackText" maxlength="4000" placeholder="Comment on this exact release" required></textarea>
-            <button id="releaseFeedbackSubmit" type="submit">Send release-bound feedback</button>
-          </form>
+          <span class="presence-dot" aria-label="Ag is online"></span>
         </div>
+        <p class="view-lede">Speak naturally or write a direction. Ag keeps the thread, works across your browser, and brings back the result.</p>
+        <div class="now-empty" aria-hidden="true">
+          <div class="empty-orb">✦</div>
+          <strong>Ready when you are</strong>
+          <span>Hold the voice key below, or type what should change.</span>
+        </div>
+        <section id="log" aria-label="Live conversation"></section>
       </section>
-      <section class="browser-tools" aria-labelledby="browserToolsTitle">
-        <header>
-          <h2 id="browserToolsTitle">Browser tools</h2>
-          <div class="spacer"></div>
-          <button id="browserToolRefresh" type="button">Refresh</button>
-        </header>
-        <p id="browserToolStatus">Reading browser capabilities…</p>
-        <ul id="browserToolList"></ul>
+
+      <section id="libraryWorkspace" class="workspace-view library-view" role="tabpanel" data-workspace-view="library" aria-labelledby="libraryTitle" hidden>
+        <div class="view-heading">
+          <div><p class="eyebrow">Memory</p><h1 id="libraryTitle">Library</h1></div>
+          <span class="library-count">Private</span>
+        </div>
+        <p class="view-lede">Everything you have captured and every conversation worth returning to.</p>
+
+        <section class="collection-block">
+          <div class="voice-notes-head collection-head">
+            <div><p class="eyebrow">Audio</p><h2 id="voiceNotesTitle">Voice notes</h2></div>
+            <button id="voiceNotesRefresh" type="button" aria-label="Refresh voice notes">↻</button>
+          </div>
+          <div id="voiceNotesStatus" role="status" aria-live="polite"></div>
+          <section id="voiceNotes" aria-labelledby="voiceNotesTitle"></section>
+        </section>
+
+        <section class="collection-block">
+          <div class="captured-intents-head collection-head">
+            <div><p class="eyebrow">From the browser</p><h2 id="capturedIntentsTitle">Captured intents</h2></div>
+            <button id="capturedIntentsRefresh" type="button" aria-label="Refresh captured intents">↻</button>
+          </div>
+          <div id="capturedIntentsStatus" role="status" aria-live="polite"></div>
+          <section id="capturedIntents" aria-labelledby="capturedIntentsTitle"></section>
+        </section>
+
+        <section class="collection-block history-block">
+          <div class="collection-head"><div><p class="eyebrow">Shared across devices</p><h2 id="historyTitle">Conversation history</h2></div></div>
+          <div id="historyError" role="status" aria-live="polite" hidden>
+            <span id="historyErrorText"></span>
+            <button id="historyRetry" type="button">Try again</button>
+          </div>
+          <section id="history" aria-labelledby="historyTitle"></section>
+        </section>
       </section>
-      </details>
+
+      <section id="controlWorkspace" class="workspace-view control-view" role="tabpanel" data-workspace-view="control" aria-labelledby="controlTitle" hidden>
+        <div class="view-heading">
+          <div><p class="eyebrow">System</p><h1 id="controlTitle">Control room</h1></div>
+          <span class="control-badge">Protected</span>
+        </div>
+        <p class="view-lede">Choose what runs, recover instantly, and see exactly what Ag can use in this browser.</p>
+
+        <section class="release-cockpit" aria-labelledby="releaseCockpitTitle">
+          <div class="release-cockpit-head">
+            <div><p class="eyebrow">Deployment</p><h2 id="releaseCockpitTitle">Release cockpit</h2></div>
+            <button id="releaseRefresh" type="button" aria-label="Refresh releases">↻</button>
+          </div>
+          <div id="releaseError" class="release-error" role="alert" hidden></div>
+          <div id="releaseNotice" class="release-pending" role="status" aria-live="polite" hidden></div>
+          <div id="releaseContent" hidden>
+            <div id="releaseCards" class="release-grid"></div>
+            <div class="release-controls">
+              <label for="releaseCandidate">Preview an exact build</label>
+              <select id="releaseCandidate" aria-label="Choose an exact release"></select>
+              <div class="release-actions">
+                <button id="releaseAssign" type="button">Use selected</button>
+                <button id="releaseFallback" type="button">Return to stable</button>
+              </div>
+            </div>
+            <form id="releaseFeedbackForm" class="release-feedback">
+              <div id="releaseFeedbackBinding" class="release-feedback-binding"></div>
+              <textarea id="releaseFeedbackText" maxlength="4000" placeholder="Leave feedback on this exact release…" required></textarea>
+              <button id="releaseFeedbackSubmit" type="submit">Send feedback</button>
+            </form>
+          </div>
+        </section>
+        <section class="browser-tools" aria-labelledby="browserToolsTitle">
+          <header>
+            <div><p class="eyebrow">Capabilities</p><h2 id="browserToolsTitle">Browser tools</h2></div>
+            <div class="spacer"></div>
+            <button id="browserToolRefresh" type="button" aria-label="Refresh browser tools">↻</button>
+          </header>
+          <p id="browserToolStatus" role="status" aria-live="polite">Reading browser capabilities…</p>
+          <ul id="browserToolList"></ul>
+        </section>
+      </section>
     </main>
     <footer>
-      <button id="talk" type="button" data-state="idle" title="Hold to talk (or hold Space); release to send. Works on every page, even chrome:// pages.">Hold to talk</button>
+      <button id="talk" type="button" data-state="idle" title="Hold to talk (or hold Space); release to send. Works on every page, even chrome:// pages."><span class="mic-dot"></span><span class="talk-label">Hold to talk</span><kbd>Space</kbd></button>
       <form id="form">
-        <input id="text" type="text" placeholder="Type to Ag" autocomplete="off" />
-        <button id="sendBtn" type="submit">Send</button>
+        <input id="text" type="text" placeholder="Give Ag a direction…" autocomplete="off" aria-label="Message Ag" />
+        <button id="sendBtn" type="submit" aria-label="Send message">↑</button>
       </form>
     </footer>
     <script type="module" src="sidepanel.js"></script>

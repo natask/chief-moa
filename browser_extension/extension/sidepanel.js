@@ -74,6 +74,16 @@ const capturedIntentsRefreshBtn = document.getElementById("capturedIntentsRefres
 const voiceNotesEl = document.getElementById("voiceNotes");
 const voiceNotesStatusEl = document.getElementById("voiceNotesStatus");
 const voiceNotesRefreshBtn = document.getElementById("voiceNotesRefresh");
+const workspaceButtons = [...document.querySelectorAll("[data-workspace-target]")];
+
+function showWorkspace(destination) {
+  if (!["now", "library", "control"].includes(destination)) return;
+  document.body.dataset.workspace = destination;
+  for (const button of workspaceButtons) button.setAttribute("aria-selected", String(button.dataset.workspaceTarget === destination));
+  for (const view of document.querySelectorAll("[data-workspace-view]")) view.hidden = view.dataset.workspaceView !== destination;
+  document.getElementById("workspace")?.scrollTo({ top: 0, behavior: "smooth" });
+}
+for (const button of workspaceButtons) button.addEventListener("click", () => showWorkspace(button.dataset.workspaceTarget));
 
 const TURN_WATCHDOG_MS = 90000;
 const ACTIVE_COMPANION_CACHE_KEY = "ageeActiveCompanionPetCache";
@@ -793,6 +803,10 @@ function addReleaseCard(label, candidate, current) {
   card.className = "release-card";
   card.dataset.current = String(Boolean(candidate && current
     && candidate.bundle_id === current.bundle_id && candidate.release_id === current.release_id));
+  if (card.dataset.current === "true") {
+    card.setAttribute("aria-current", "true");
+    label += " · current";
+  }
   const title = document.createElement("div");
   title.className = "release-card-title";
   title.textContent = label;
@@ -1778,6 +1792,7 @@ let holdCancelled = false;
 
 async function beginHold() {
   if (holdActive || (turn && !turn.done)) return;
+  showWorkspace("now");
   holdActive = true;
   holdCancelled = false;
   talkBtn.dataset.state = "listening";
@@ -1846,13 +1861,13 @@ talkBtn.addEventListener("pointercancel", () => cancelHold());
 function attachHoldKeyHandlers(doc) {
   doc.addEventListener("keydown", (e) => {
     if (e.code !== "Space" || e.repeat) return;
-    if (doc.activeElement === textInput) return;
+    if (e.target.closest?.("input, textarea, select, button, a[href], [contenteditable='true']")) return;
     e.preventDefault();
     beginHold();
   });
   doc.addEventListener("keyup", (e) => {
     if (e.code !== "Space") return;
-    if (doc.activeElement === textInput) return;
+    if (e.target.closest?.("input, textarea, select, button, a[href], [contenteditable='true']")) return;
     e.preventDefault();
     commitHold();
   });
@@ -1893,8 +1908,8 @@ async function floatOut() {
     setStatus(`Could not float: ${String(error?.message || error)}`, "error");
     return;
   }
-  for (const style of document.querySelectorAll("style")) {
-    pipWindow.document.head.append(style.cloneNode(true));
+  for (const style of document.querySelectorAll("style, link[rel='stylesheet']")) {
+    pipWindow.document.head.append(Object.assign(style.cloneNode(true), style.href ? { href: style.href } : {}));
   }
   pipWindow.document.title = "Ag";
   // Moving (adopting) the nodes keeps element references and listeners alive.
@@ -1918,6 +1933,7 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = textInput.value.trim();
   if (!text || (turn && !turn.done)) return;
+  showWorkspace("now");
   textInput.value = "";
   sendBtn.disabled = true;
   setStatus("Sending…");
