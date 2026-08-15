@@ -1,76 +1,295 @@
 <!doctype html>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Connect Ag</title>
-<style>
-  :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f4f5f7}.card{width:min(430px,calc(100% - 40px));padding:28px;border:1px solid #343842;border-radius:22px;background:#1b1e25}h1{margin:0 0 8px}p{color:#aeb4c0}.code{font:700 28px ui-monospace,monospace;letter-spacing:3px;color:#fff}.actions{display:flex;gap:8px}button{font:inherit;padding:12px 18px;border-radius:12px;border:1px solid #444b58;cursor:pointer;font-weight:650}.approve{background:#eef0ff;color:#171922}.deny{background:transparent;color:#eef0ff}#status{min-height:44px;margin-top:18px;padding:12px;border-radius:12px;background:#252a34;color:#d6dae3}.card[data-state="connected"]{border-color:#498b5b}.card[data-state="connected"] #status{background:#183321;color:#b9f5c8}.card[data-state="failed"]{border-color:#9b4a50}.card[data-state="failed"] #status{background:#381d20;color:#ffc5ca}
-</style>
-<main class="card" id="card" data-state="checking">
-  <h1 id="heading">Connect Ag</h1><p id="detail">Approve this only if you just started sign-in from your Ag app.</p>
-  <p class="code" id="code"></p>
-  <div class="actions" id="actions"><button class="approve" id="approve">Connect device</button>
-  <button class="deny" id="deny">Deny</button></div>
-  <p id="status" role="status" aria-live="polite">Checking your Ag account…</p>
-</main>
-<script>
-  const params = new URLSearchParams(location.search);
-  const userCode = (params.get('user_code') || '').replace(/-/g,'').toUpperCase();
-  const card = document.querySelector('#card');
-  const heading = document.querySelector('#heading');
-  const detail = document.querySelector('#detail');
-  const code = document.querySelector('#code');
-  const actions = document.querySelector('#actions');
-  const approve = document.querySelector('#approve');
-  const deny = document.querySelector('#deny');
-  const status = document.querySelector('#status');
-  code.textContent = userCode || 'Missing code';
-  function show(state, title, message) {
-    card.dataset.state = state; heading.textContent = title; status.textContent = message;
-  }
-  async function session() { return fetch('/api/auth/get-session',{credentials:'include'}).then(r=>r.json()).catch(()=>null); }
-  async function prepare() {
-    const current = await session();
-    if (!current?.user) {
-      const back = '/device?user_code=' + encodeURIComponent(userCode);
-      location.replace('/sign-in?return=' + encodeURIComponent(back)); return;
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0d0c0b" />
+  <title>Connect Ag</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f4efe5;
+      --muted: #aaa397;
+      --dim: #777168;
+      --gold: #d4ad62;
+      --gold-bright: #edcd8c;
+      --line: rgba(224, 201, 157, .16);
+      --panel: rgba(25, 23, 21, .9);
+      --success: #a8d7b2;
+      --success-bg: rgba(46, 114, 66, .17);
+      --danger: #efa39d;
+      --danger-bg: rgba(132, 42, 38, .18);
+      --focus: rgba(225, 185, 107, .28);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
     }
-    const response = await verify();
-    if (!response.ok) { actions.hidden = true; show('failed','Connection unavailable','This code is invalid or expired. Return to Ag and try again.'); return; }
-    show('ready','Ready to connect','Code verified. Press Connect device to approve this Ag app.');
-  }
-  function verify() { return fetch('/api/auth/device?user_code=' + encodeURIComponent(userCode), {credentials:'include'}); }
-  const delay = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
-  async function waitForAg() {
-    const deadline = Date.now() + 30000;
-    while (Date.now() < deadline) {
-      await delay(750);
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: #0d0c0b; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      min-height: 100svh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 16% 8%, rgba(128, 91, 42, .17), transparent 34rem),
+        radial-gradient(circle at 88% 86%, rgba(77, 92, 65, .11), transparent 34rem),
+        linear-gradient(145deg, #11100e, #090909 72%);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .2;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.13'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 1080px);
+      min-height: 100vh;
+      min-height: 100svh;
+      margin: 0 auto;
+      padding: clamp(20px, 4vw, 56px);
+      display: grid;
+      grid-template-columns: minmax(0, .88fr) minmax(360px, 490px);
+      gap: clamp(48px, 9vw, 120px);
+      align-items: center;
+    }
+
+    .context, .card { min-width: 0; }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .mark {
+      width: 39px;
+      height: 39px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(237, 205, 140, .5);
+      border-radius: 50%;
+      color: var(--gold-bright);
+      font: 600 17px/1 Georgia, "Times New Roman", serif;
+      box-shadow: inset 0 0 0 4px rgba(212, 173, 98, .05), 0 0 32px rgba(212, 173, 98, .08);
+    }
+
+    .context h1 {
+      margin: clamp(54px, 9vh, 94px) 0 20px;
+      font: 400 clamp(46px, 6vw, 75px)/.98 Georgia, "Times New Roman", serif;
+      letter-spacing: -.04em;
+      text-wrap: balance;
+    }
+
+    .context-copy { max-width: 490px; margin: 0; color: var(--muted); font-size: 18px; line-height: 1.65; }
+
+    .sequence { margin: clamp(45px, 7vh, 70px) 0 0; padding: 0; list-style: none; display: grid; gap: 21px; }
+    .sequence li { display: grid; grid-template-columns: 32px 1fr; gap: 14px; align-items: center; color: var(--dim); font-size: 13px; }
+    .sequence span { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; font-size: 10px; }
+    .sequence .done { color: #a39b8e; }
+    .sequence .done span { color: var(--success); border-color: rgba(168, 215, 178, .35); background: rgba(60, 125, 77, .1); }
+    .sequence .active { color: var(--gold-bright); }
+    .sequence .active span { color: #251d10; border-color: var(--gold-bright); background: var(--gold); box-shadow: 0 0 0 5px rgba(212, 173, 98, .09); }
+
+    .card {
+      position: relative;
+      width: 100%;
+      padding: clamp(25px, 4vw, 43px);
+      border: 1px solid var(--line);
+      border-radius: 29px;
+      overflow: hidden;
+      background: linear-gradient(155deg, rgba(31, 29, 26, .97), rgba(18, 17, 16, .96));
+      box-shadow: 0 32px 90px rgba(0, 0, 0, .44), inset 0 1px 0 rgba(255, 255, 255, .035);
+      backdrop-filter: blur(22px);
+      transition: border-color .25s ease, box-shadow .25s ease;
+    }
+
+    .card::before { content: ""; position: absolute; inset: 0 28px auto; height: 1px; background: linear-gradient(90deg, transparent, rgba(237, 205, 140, .55), transparent); }
+
+    .state-mark {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 18px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(237, 205, 140, .38);
+      border-radius: 50%;
+      color: var(--gold-bright);
+      background: rgba(212, 173, 98, .07);
+    }
+
+    .state-mark svg { width: 21px; height: 21px; }
+    .state-mark .success-icon, .state-mark .error-icon { display: none; }
+    .card[data-state="connected"] .state-mark .device-icon, .card[data-state="failed"] .state-mark .device-icon { display: none; }
+    .card[data-state="connected"] .state-mark .success-icon, .card[data-state="failed"] .state-mark .error-icon { display: block; }
+
+    .card-kicker { margin: 0 0 10px; color: var(--gold); font-size: 10px; font-weight: 750; letter-spacing: .2em; text-transform: uppercase; }
+    .card h2 { margin: 0; font: 400 clamp(31px, 4vw, 40px)/1.08 Georgia, "Times New Roman", serif; letter-spacing: -.025em; }
+    #detail { margin: 13px 0 0; color: var(--muted); line-height: 1.6; }
+
+    .code-wrap { margin: 29px 0 27px; padding: 19px 20px; border: 1px solid var(--line); border-radius: 15px; background: rgba(7, 7, 7, .38); }
+    .code-label { display: block; margin-bottom: 9px; color: var(--dim); font-size: 9px; font-weight: 750; letter-spacing: .18em; text-transform: uppercase; }
+    .code { margin: 0; max-width: 100%; overflow-wrap: anywhere; color: #f7dfac; font: 650 clamp(23px, 5vw, 30px)/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .15em; }
+
+    .actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    button { min-height: 51px; padding: 0 19px; border-radius: 13px; cursor: pointer; font: 750 14px/1 Inter, ui-sans-serif, sans-serif; transition: transform .16s ease, background .16s ease, border-color .16s ease, opacity .16s ease; }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+    button:disabled { cursor: wait; opacity: .55; transform: none; }
+    .approve { border: 1px solid var(--gold-bright); color: #241b0d; background: linear-gradient(180deg, #efd294, #cba353); box-shadow: 0 10px 28px rgba(157, 112, 43, .2); }
+    .approve:hover { transform: translateY(-1px); background: linear-gradient(180deg, #f7dca3, #d4ad62); }
+    .deny { border: 1px solid rgba(224, 201, 157, .2); color: #d7d0c4; background: transparent; }
+    .deny:hover { border-color: rgba(239, 163, 157, .35); color: var(--danger); background: rgba(132, 42, 38, .08); }
+
+    #status {
+      min-height: 49px;
+      margin: 18px 0 0;
+      padding: 13px 14px;
+      border: 1px solid rgba(212, 173, 98, .13);
+      border-radius: 13px;
+      color: #d7c396;
+      background: rgba(118, 82, 29, .12);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .card[data-state="connected"] { border-color: rgba(119, 190, 134, .4); box-shadow: 0 32px 90px rgba(0,0,0,.44), 0 0 70px rgba(48, 119, 67, .08); }
+    .card[data-state="connected"]::before { background: linear-gradient(90deg, transparent, rgba(168, 215, 178, .65), transparent); }
+    .card[data-state="connected"] .state-mark { color: var(--success); border-color: rgba(168, 215, 178, .45); background: var(--success-bg); }
+    .card[data-state="connected"] #status { color: var(--success); border-color: rgba(168, 215, 178, .16); background: var(--success-bg); }
+
+    .card[data-state="failed"] { border-color: rgba(220, 102, 94, .38); box-shadow: 0 32px 90px rgba(0,0,0,.44), 0 0 70px rgba(132, 42, 38, .08); }
+    .card[data-state="failed"]::before { background: linear-gradient(90deg, transparent, rgba(239, 163, 157, .6), transparent); }
+    .card[data-state="failed"] .state-mark { color: var(--danger); border-color: rgba(239, 163, 157, .4); background: var(--danger-bg); }
+    .card[data-state="failed"] #status { color: var(--danger); border-color: rgba(239, 163, 157, .16); background: var(--danger-bg); }
+
+    .trust { margin: 20px 0 0; color: var(--dim); font-size: 11px; line-height: 1.55; text-align: center; }
+
+    @media (max-width: 800px) {
+      .page { grid-template-columns: 1fr; gap: 30px; align-content: center; max-width: 550px; padding: 24px; }
+      .context h1 { margin: 42px 0 16px; font-size: clamp(42px, 11vw, 60px); }
+      .sequence { display: none; }
+    }
+
+    @media (max-width: 430px) {
+      .page { display: block; padding: 18px 14px 24px; }
+      .brand { margin: 2px 4px 26px; }
+      .context h1, .context-copy { display: none; }
+      .card { padding: 25px 20px 22px; border-radius: 23px; }
+      .state-mark { width: 43px; height: 43px; margin-bottom: 16px; }
+      .card h2 { font-size: 32px; }
+      .code-wrap { margin: 23px 0 21px; }
+      .actions { grid-template-columns: 1fr; }
+      button { min-height: 49px; }
+      .deny { order: 2; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="context" aria-labelledby="context-title">
+      <div class="brand"><span class="mark" aria-hidden="true">A</span><span>Ag · Chief Moa</span></div>
+      <h1 id="context-title">One last check.</h1>
+      <p class="context-copy">You are authorizing an Ag device to enter your private workspace. Confirm the code matches the one shown in your app.</p>
+      <ol class="sequence" aria-label="Connection progress">
+        <li class="done"><span>✓</span>Account confirmed</li>
+        <li class="active"><span>2</span>Approve this device</li>
+        <li><span>3</span>Return to Ag</li>
+      </ol>
+    </section>
+
+    <section class="card" id="card" data-state="checking" aria-labelledby="heading">
+      <div class="state-mark" aria-hidden="true">
+        <svg class="device-icon" viewBox="0 0 24 24" fill="none"><rect x="6" y="2.5" width="12" height="19" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M10 18.2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <svg class="success-icon" viewBox="0 0 24 24" fill="none"><path d="m5 12.5 4.2 4.2L19 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none"><path d="M12 7v6m0 3.5v.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/></svg>
+      </div>
+      <p class="card-kicker">Step 2 of 3</p>
+      <h2 id="heading">Connect this Ag?</h2>
+      <p id="detail">Approve only if you just started this connection from your Ag app.</p>
+      <div class="code-wrap"><span class="code-label">Device verification code</span><p class="code" id="code"></p></div>
+      <div class="actions" id="actions"><button class="approve" id="approve">Connect device</button><button class="deny" id="deny">Deny</button></div>
+      <p id="status" role="status" aria-live="polite">Checking your Ag account…</p>
+      <p class="trust">Ag never approves a new device without this confirmation.</p>
+    </section>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const userCode = (params.get('user_code') || '').replace(/-/g,'').toUpperCase();
+    const card = document.querySelector('#card');
+    const heading = document.querySelector('#heading');
+    const detail = document.querySelector('#detail');
+    const code = document.querySelector('#code');
+    const actions = document.querySelector('#actions');
+    const approve = document.querySelector('#approve');
+    const deny = document.querySelector('#deny');
+    const status = document.querySelector('#status');
+    code.textContent = userCode || 'Missing code';
+    function show(state, title, message) {
+      card.dataset.state = state; heading.textContent = title; status.textContent = message;
+    }
+    async function session() { return fetch('/api/auth/get-session',{credentials:'include'}).then(r=>r.json()).catch(()=>null); }
+    async function prepare() {
+      const current = await session();
+      if (!current?.user) {
+        const back = '/device?user_code=' + encodeURIComponent(userCode);
+        location.replace('/sign-in?return=' + encodeURIComponent(back)); return;
+      }
       const response = await verify();
-      if (response.status === 400) {
-        actions.hidden = code.hidden = detail.hidden = true;
-        show('connected','Ag is connected','The Ag app received the session. You can close this window.');
-        return;
+      if (!response.ok) { actions.hidden = true; show('failed','Connection unavailable','This code is invalid or expired. Return to Ag and try again.'); return; }
+      show('ready','Ready to connect','Code verified. Confirm it matches Ag, then approve this device.');
+    }
+    function verify() { return fetch('/api/auth/device?user_code=' + encodeURIComponent(userCode), {credentials:'include'}).catch(() => ({ok:false,status:0})); }
+    const delay = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
+    async function waitForAg() {
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        await delay(750);
+        const response = await verify();
+        if (response.status === 400) {
+          actions.hidden = code.parentElement.hidden = detail.hidden = true;
+          show('connected','Ag is connected','The Ag app received the session. You can close this window.');
+          return;
+        }
+        if (!response.ok) {
+          show('failed','Connection check failed','Return to Ag to confirm the connection or try again.');
+          return;
+        }
       }
-      if (!response.ok) {
-        show('failed','Connection check failed','Return to Ag to confirm the connection or try again.');
-        return;
+      show('approved','Approved','Return to the Ag app. It is still waiting to finish the connection.');
+    }
+    async function decide(action) {
+      approve.disabled = deny.disabled = true;
+      show('checking',action === 'approve' ? 'Approving Ag…' : 'Denying request…','Waiting for the gateway to confirm your choice.');
+      const response = await fetch('/api/auth/device/' + action, {method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({userCode})}).catch(() => ({ok:false}));
+      if (response.ok && action === 'approve') {
+        actions.hidden = true;
+        show('approved','Approved','Waiting for the Ag app to receive the session…');
+        await waitForAg();
+      } else if (response.ok) {
+        actions.hidden = true; show('failed','Request denied','Ag was not connected. You can close this window.');
+      } else {
+        approve.disabled = deny.disabled = false;
+        show('failed','Could not connect Ag','The gateway could not update this request. Return to Ag and try again.');
       }
     }
-    show('approved','Approved','Return to the Ag app. It is still waiting to finish the connection.');
-  }
-  async function decide(action) {
-    approve.disabled = deny.disabled = true;
-    show('checking',action === 'approve' ? 'Approving Ag…' : 'Denying request…','Waiting for the gateway to confirm your choice.');
-    const response = await fetch('/api/auth/device/' + action, {method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({userCode})});
-    if (response.ok && action === 'approve') {
-      actions.hidden = true;
-      show('approved','Approved','Waiting for the Ag app to receive the session…');
-      await waitForAg();
-    } else if (response.ok) {
-      actions.hidden = true; show('failed','Request denied','Ag was not connected. You can close this window.');
-    } else {
-      approve.disabled = deny.disabled = false;
-      show('failed','Could not connect Ag','The gateway could not update this request. Return to Ag and try again.');
-    }
-  }
-  approve.addEventListener('click',()=>decide('approve')); deny.addEventListener('click',()=>decide('deny')); prepare();
-</script>
+    approve.addEventListener('click',()=>decide('approve')); deny.addEventListener('click',()=>decide('deny')); prepare();
+  </script>
+</body>
+</html>

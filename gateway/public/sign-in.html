@@ -1,35 +1,388 @@
 <!doctype html>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Sign in to Ag</title>
-<style>
-  :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f4f5f7}.card{width:min(390px,calc(100% - 40px));padding:28px;border:1px solid #343842;border-radius:22px;background:#1b1e25}h1{margin:0 0 8px}p{color:#aeb4c0}label{display:grid;gap:6px;margin:14px 0}input,button{font:inherit;padding:12px;border-radius:12px;border:1px solid #444b58}button{cursor:pointer;background:#eef0ff;color:#171922;font-weight:650}.secondary{background:transparent;color:#eef0ff}#status{min-height:22px;color:#f3aaae}
-</style>
-<main class="card">
-  <h1>Ag</h1><p>Sign in once. Ag will connect this device to your account.</p>
-  <form id="form">
-    <label>Name <input id="name" autocomplete="name" /></label>
-    <label>Email <input id="email" type="email" autocomplete="email" required /></label>
-    <label>Password <input id="password" type="password" autocomplete="current-password" minlength="8" required /></label>
-    <button type="submit">Sign in</button>
-    <button class="secondary" id="signup" type="button">Create account</button>
-  </form>
-  <p id="status" role="status"></p>
-</main>
-<script>
-  const status = document.querySelector('#status');
-  const params = new URLSearchParams(location.search);
-  const next = params.get('return') || '/';
-  const safeNext = next.startsWith('/') && !next.startsWith('//') ? next : '/';
-  async function submit(path, includeName) {
-    status.textContent = '';
-    const body = { email: email.value, password: password.value };
-    if (includeName) body.name = name.value || email.value.split('@')[0];
-    const response = await fetch('/api/auth/' + path, { method:'POST', credentials:'include', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) { status.textContent = result.message || result.error || 'Sign-in failed'; return; }
-    location.assign(safeNext);
-  }
-  form.addEventListener('submit', event => { event.preventDefault(); submit('sign-in/email', false); });
-  signup.addEventListener('click', () => submit('sign-up/email', true));
-</script>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0d0c0b" />
+  <title>Sign in to Ag</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f4efe5;
+      --muted: #a8a195;
+      --dim: #756f66;
+      --gold: #d4ad62;
+      --gold-bright: #edcd8c;
+      --gold-ink: #241b0d;
+      --line: rgba(224, 201, 157, .16);
+      --panel: rgba(25, 23, 21, .88);
+      --field: rgba(8, 8, 8, .48);
+      --danger: #f0a39d;
+      --danger-bg: rgba(130, 40, 36, .18);
+      --success: #a9d6b1;
+      --focus: rgba(225, 185, 107, .28);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { min-width: 320px; background: #0d0c0b; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      min-height: 100svh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 14% 6%, rgba(128, 91, 42, .17), transparent 34rem),
+        radial-gradient(circle at 92% 88%, rgba(91, 61, 71, .13), transparent 36rem),
+        linear-gradient(145deg, #11100e 0%, #090909 72%);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .2;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.13'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 1120px);
+      min-height: 100vh;
+      min-height: 100svh;
+      margin: 0 auto;
+      padding: clamp(20px, 4vw, 56px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 464px);
+      gap: clamp(48px, 9vw, 128px);
+      align-items: center;
+    }
+
+    .story, .card { min-width: 0; }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .mark {
+      width: 39px;
+      height: 39px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(237, 205, 140, .5);
+      border-radius: 50%;
+      color: var(--gold-bright);
+      font: 600 17px/1 Georgia, "Times New Roman", serif;
+      box-shadow: inset 0 0 0 4px rgba(212, 173, 98, .05), 0 0 32px rgba(212, 173, 98, .08);
+    }
+
+    .eyebrow {
+      margin: clamp(50px, 9vh, 96px) 0 18px;
+      color: var(--gold);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+    }
+
+    .story h1 {
+      max-width: 640px;
+      margin: 0;
+      color: #f8f3e9;
+      font: 400 clamp(48px, 6.4vw, 82px)/.96 Georgia, "Times New Roman", serif;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 540px;
+      margin: 28px 0 0;
+      color: var(--muted);
+      font-size: clamp(16px, 1.55vw, 19px);
+      line-height: 1.65;
+    }
+
+    .steps {
+      margin: clamp(44px, 7vh, 72px) 0 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      list-style: none;
+    }
+
+    .steps li {
+      position: relative;
+      min-width: 0;
+      padding: 18px 16px 0 0;
+      border-top: 1px solid var(--line);
+      color: var(--dim);
+      font-size: 12px;
+      letter-spacing: .04em;
+    }
+
+    .steps li::before {
+      content: "";
+      position: absolute;
+      top: -3px;
+      left: 0;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #5b554c;
+    }
+
+    .steps li:first-child { color: var(--gold-bright); }
+    .steps li:first-child::before { background: var(--gold-bright); box-shadow: 0 0 0 5px rgba(212, 173, 98, .1); }
+
+    .card {
+      position: relative;
+      width: 100%;
+      padding: clamp(25px, 4vw, 42px);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(155deg, rgba(31, 29, 26, .96), rgba(18, 17, 16, .95));
+      box-shadow: 0 32px 90px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .035);
+      backdrop-filter: blur(22px);
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 28px auto;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(237, 205, 140, .55), transparent);
+    }
+
+    .card-kicker {
+      margin: 0 0 12px;
+      color: var(--gold);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+    }
+
+    .card h2 {
+      margin: 0;
+      font: 400 clamp(31px, 4vw, 39px)/1.08 Georgia, "Times New Roman", serif;
+      letter-spacing: -.025em;
+    }
+
+    .card-intro {
+      margin: 12px 0 29px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    form { display: grid; gap: 17px; }
+
+    label {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      color: #cbc5ba;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .035em;
+    }
+
+    .optional {
+      color: var(--dim);
+      float: right;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+
+    input, button { font: inherit; }
+
+    input {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      height: 51px;
+      padding: 0 15px;
+      border: 1px solid rgba(224, 201, 157, .18);
+      border-radius: 13px;
+      outline: none;
+      color: var(--ink);
+      background: var(--field);
+      box-shadow: inset 0 1px 4px rgba(0, 0, 0, .18);
+      transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+
+    input:hover { border-color: rgba(224, 201, 157, .28); }
+    input:focus { border-color: var(--gold); background: rgba(8, 8, 8, .7); box-shadow: 0 0 0 4px var(--focus); }
+
+    .primary, .secondary {
+      width: 100%;
+      min-height: 51px;
+      border-radius: 13px;
+      cursor: pointer;
+      font-weight: 750;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease, opacity .16s ease;
+    }
+
+    .primary {
+      margin-top: 6px;
+      border: 1px solid var(--gold-bright);
+      color: var(--gold-ink);
+      background: linear-gradient(180deg, #efd294, #cba353);
+      box-shadow: 0 10px 28px rgba(157, 112, 43, .2), inset 0 1px 0 rgba(255, 255, 255, .45);
+    }
+
+    .primary:hover { transform: translateY(-1px); background: linear-gradient(180deg, #f7dca3, #d4ad62); }
+    .primary:active { transform: translateY(0); }
+
+    .divider {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 12px;
+      align-items: center;
+      color: var(--dim);
+      font-size: 10px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); }
+
+    .secondary {
+      border: 1px solid rgba(224, 201, 157, .21);
+      color: #dfd8ca;
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .secondary:hover { border-color: rgba(237, 205, 140, .5); background: rgba(212, 173, 98, .07); }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+    button:disabled { cursor: wait; opacity: .55; transform: none; }
+
+    #status {
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      color: var(--danger);
+      font-size: 13px;
+      line-height: 1.45;
+      transition: min-height .18s ease, padding .18s ease, background .18s ease;
+    }
+
+    #status:not(:empty) { min-height: 44px; padding: 11px 13px; background: var(--danger-bg); border-color: rgba(240, 163, 157, .14); }
+    #status[data-tone="waiting"] { color: var(--gold-bright); background: rgba(126, 91, 34, .16); border-color: rgba(212, 173, 98, .16); }
+
+    .privacy {
+      margin: 22px 0 0;
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      justify-content: center;
+      color: var(--dim);
+      font-size: 11px;
+      line-height: 1.4;
+      text-align: center;
+    }
+
+    .privacy svg { flex: 0 0 auto; color: var(--gold); }
+
+    @media (max-width: 800px) {
+      .page { grid-template-columns: 1fr; gap: 28px; align-content: center; max-width: 540px; padding: 24px; }
+      .story { display: grid; }
+      .eyebrow { margin: 42px 0 12px; }
+      .story h1 { font-size: clamp(42px, 11vw, 62px); }
+      .lede { margin-top: 18px; }
+      .steps { display: none; }
+    }
+
+    @media (max-width: 430px) {
+      .page { display: block; padding: 18px 14px 24px; }
+      .brand { margin: 2px 4px 26px; }
+      .eyebrow, .story h1, .lede { display: none; }
+      .card { padding: 25px 20px 22px; border-radius: 23px; }
+      .card h2 { font-size: 32px; }
+      .card-intro { margin-bottom: 23px; }
+      form { gap: 14px; }
+      input, .primary, .secondary { min-height: 48px; height: 48px; }
+      .privacy { margin-top: 18px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="story" aria-labelledby="welcome-title">
+      <div class="brand"><span class="mark" aria-hidden="true">A</span><span>Ag · Chief Moa</span></div>
+      <p class="eyebrow">Your private command room</p>
+      <h1 id="welcome-title">Make the thought.<br />Ag moves the work.</h1>
+      <p class="lede">One secure account keeps your conversations, active work, and trusted releases in sync across every surface.</p>
+      <ol class="steps" aria-label="Connection steps">
+        <li>01&nbsp; Account</li>
+        <li>02&nbsp; Approve device</li>
+        <li>03&nbsp; Return to Ag</li>
+      </ol>
+    </section>
+
+    <section class="card" aria-labelledby="auth-title">
+      <p class="card-kicker">Step 1 of 3</p>
+      <h2 id="auth-title">Welcome back.</h2>
+      <p class="card-intro">Sign in to continue connecting your Ag device.</p>
+      <form id="form">
+        <label for="name"><span>Display name <span class="optional">new accounts only</span></span><input id="name" autocomplete="name" placeholder="How Ag should address you" /></label>
+        <label for="email">Email address<input id="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required /></label>
+        <label for="password">Password<input id="password" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters" required /></label>
+        <button class="primary" type="submit">Continue with email</button>
+        <div class="divider" aria-hidden="true">New to Ag?</div>
+        <button class="secondary" id="signup" type="button">Create an account</button>
+        <p id="status" role="status" aria-live="polite"></p>
+      </form>
+      <p class="privacy">
+        <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true"><path d="M2.25 6.1V4.35a4.25 4.25 0 0 1 8.5 0V6.1M1.6 6.1h9.8v7.55H1.6V6.1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+        Your session is encrypted and tied to this account.
+      </p>
+    </section>
+  </main>
+  <script>
+    const status = document.querySelector('#status');
+    const params = new URLSearchParams(location.search);
+    const next = params.get('return') || '/';
+    const safeNext = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+    async function submit(path, includeName) {
+      status.textContent = 'Securing your session…'; status.dataset.tone = 'waiting';
+      const buttons = form.querySelectorAll('button'); buttons.forEach(button => { button.disabled = true; });
+      const body = { email: email.value, password: password.value };
+      if (includeName) body.name = name.value || email.value.split('@')[0];
+      try {
+        const response = await fetch('/api/auth/' + path, { method:'POST', credentials:'include', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) { delete status.dataset.tone; status.textContent = result.message || result.error || 'We could not sign you in. Check your details and try again.'; return; }
+        location.assign(safeNext);
+      } catch (_) {
+        delete status.dataset.tone; status.textContent = 'Ag could not reach the gateway. Check your connection and try again.';
+      } finally {
+        buttons.forEach(button => { button.disabled = false; });
+      }
+    }
+    form.addEventListener('submit', event => { event.preventDefault(); submit('sign-in/email', false); });
+    signup.addEventListener('click', () => submit('sign-up/email', true));
+  </script>
+</body>
+</html>
