@@ -48,7 +48,8 @@ public final class MoaOverlayVisualCaptureTest {
         assertTrue("collapsed capture must contain painted UI", nonBackgroundPixels(collapsed) > 1000);
         assertTrue("expanded capture must differ from collapsed",
                 !collapsed.sameAs(expanded));
-        assertEquals(36, MoaRibbonTokens.RIBBON_H_DP);
+        assertEquals(48, MoaRibbonTokens.RIBBON_H_DP);
+        assertEquals(36, MoaRibbonTokens.RIBBON_VISUAL_H_DP);
         assertEquals(280, MoaRibbonTokens.RIBBON_MAX_W_DP);
         assertEquals(67, MoaOrbPresentation.scaledWindowDp(MoaPrefs.ORB_SCALE_DEFAULT));
         assertEquals(6, MoaRibbonTokens.GAP_DP);

@@ -44,9 +44,13 @@ final class MoaRibbonTokens {
     static final long MENU_IDLE_DISMISS_MS = 5000;
 
     // --- Geometry (dp) ----------------------------------------------------
-    static final int RIBBON_H_DP = 36;
+    /** Interactive height. Keep at least the Android 48dp touch-target floor. */
+    static final int RIBBON_H_DP = 48;
     /** The single step the ribbon may grow by at very large system font scales. */
-    static final int RIBBON_H_LARGE_DP = 44;
+    static final int RIBBON_H_LARGE_DP = 52;
+    /** Painted collapsed plate stays visually compact inside the larger hit box. */
+    static final int RIBBON_VISUAL_H_DP = 36;
+    static final int RIBBON_VISUAL_H_LARGE_DP = 44;
     static final float FONT_SCALE_CLAMP = 1.5f;
     /** Compact fixed viewport: stable while streaming, never a screen-wide banner. */
     static final int RIBBON_MAX_W_DP = 280;
@@ -187,6 +191,11 @@ final class MoaRibbonTokens {
      */
     static int ribbonHeightDp(float fontScale) {
         return fontScale > FONT_SCALE_CLAMP ? RIBBON_H_LARGE_DP : RIBBON_H_DP;
+    }
+
+    static int ribbonVisualHeightDp(float fontScale) {
+        return fontScale > FONT_SCALE_CLAMP
+                ? RIBBON_VISUAL_H_LARGE_DP : RIBBON_VISUAL_H_DP;
     }
 
     /** Text size in sp, clamped the same way so the glyphs fit the clamped box. */

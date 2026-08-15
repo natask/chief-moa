@@ -80,6 +80,7 @@ final class MoaRibbonView extends View {
     private Runnable accessibilityCopy;
 
     private final int ribbonHeightPx;
+    private final int ribbonVisualHeightPx;
     private final int padXPx;
     private final int gutterPx;
     private final int dotSizePx;
@@ -98,6 +99,7 @@ final class MoaRibbonView extends View {
         float fontScale = context.getResources().getConfiguration().fontScale;
 
         ribbonHeightPx = dp(MoaRibbonTokens.ribbonHeightDp(fontScale));
+        ribbonVisualHeightPx = dp(MoaRibbonTokens.ribbonVisualHeightDp(fontScale));
         padXPx = dp(MoaRibbonTokens.RIBBON_PAD_X_DP);
         dotSizePx = dp(MoaRibbonTokens.DOT_SIZE_DP);
         gutterPx = dp(MoaRibbonTokens.DOT_OFFSET_DP) + dotSizePx;
@@ -292,7 +294,7 @@ final class MoaRibbonView extends View {
 
     private StaticLayout textLayout() {
         int width = Math.round(viewportRight() - viewportLeft());
-        String shown = displayedText();
+        String shown = expanded ? displayedText() : collapsedTail(width);
         if (width <= 0 || shown.isEmpty()) {
             return null;
         }
@@ -311,9 +313,41 @@ final class MoaRibbonView extends View {
                     .obtain(display, 0, display.length(), paint, width)
                     .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                     .setIncludePad(false)
+                    .setMaxLines(expanded ? Integer.MAX_VALUE : MoaRibbonTokens.COLLAPSED_MAX_LINES)
                     .build();
         }
         return textLayout;
+    }
+
+    /**
+     * Select the newest text that actually fits the collapsed one-line window.
+     * StaticLayout wrapping followed by vertical tail-scroll can expose only a
+     * tiny final wrapped line; measuring backwards keeps the useful sliding
+     * tail spread across the available width instead.
+     */
+    private String collapsedTail(int width) {
+        String source = displayedText().replaceAll("\\s+", " ").trim();
+        if (source.isEmpty() || width <= 0 || textPaint.measureText(source) <= width) {
+            return source;
+        }
+        String ellipsis = "\u2026";
+        float available = Math.max(1f, width - textPaint.measureText(ellipsis));
+        int count = textPaint.breakText(source, false, available, null);
+        int start = Math.max(0, source.length() - Math.max(1, count));
+        if (start < source.length()
+                && Character.isLowSurrogate(source.charAt(start))
+                && start > 0
+                && Character.isHighSurrogate(source.charAt(start - 1))) {
+            start++;
+        }
+        while (start < source.length() && Character.isWhitespace(source.charAt(start))) {
+            start++;
+        }
+        return ellipsis + source.substring(Math.min(start, source.length()));
+    }
+
+    String collapsedTailForTest() {
+        return collapsedTail(Math.round(viewportRight() - viewportLeft()));
     }
 
     void setPresenceState(MoaRibbonPresence.State next) {
@@ -529,7 +563,8 @@ final class MoaRibbonView extends View {
         if (flashFraction > 0.001f) {
             fillPaint.setShader(null);
             fillPaint.setColor(withAlpha(palette.accent, flashFraction));
-            scratch.set(0, 0, getWidth(), getHeight());
+            float inset = collapsedVisualInset();
+            scratch.set(0, inset, getWidth(), getHeight() - inset);
             canvas.drawRoundRect(scratch, radiusPx, radiusPx, fillPaint);
         }
         drawText(canvas);
@@ -607,7 +642,8 @@ final class MoaRibbonView extends View {
     }
 
     private void drawPlate(Canvas canvas) {
-        scratch.set(0, 0, getWidth(), getHeight());
+        float inset = collapsedVisualInset();
+        scratch.set(0, inset, getWidth(), getHeight() - inset);
         fillPaint.setShader(null);
         fillPaint.setColor(withAlpha(
                 MoaRibbonTokens.plateColor(
@@ -618,6 +654,10 @@ final class MoaRibbonView extends View {
         strokePaint.setColor(withAlpha(palette.hairline, plateFraction));
         scratch.inset(hairlinePx / 2f, hairlinePx / 2f);
         canvas.drawRoundRect(scratch, radiusPx, radiusPx, strokePaint);
+    }
+
+    private float collapsedVisualInset() {
+        return expanded ? 0f : Math.max(0f, (getHeight() - ribbonVisualHeightPx) / 2f);
     }
 
     @Override

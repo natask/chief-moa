@@ -13,6 +13,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.GraphicsMode;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -106,6 +107,29 @@ public final class MoaRibbonViewTest {
         // Robolectric's API-26 font shaper can report a one-line StaticLayout
         // for wrapped text. Scroll bounds are covered by MoaRibbonUnitLayoutTest;
         // this View test pins the deterministic three-line viewport geometry.
+    }
+
+    @Test
+    @Config(sdk = 35)
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    public void collapsedLongTranscriptUsesAUsefulOneLineTail() {
+        String text = ("A very long transcript that keeps streaming through the fixed viewport "
+                + "without ever changing the compact overlay geometry. ").repeat(4)
+                + "It must finish with several meaningful newest words at the right edge";
+        MoaRibbonView ribbon = laidOut(false, text);
+
+        String tail = ribbon.collapsedTailForTest();
+
+        assertTrue("overflow is identified as a sliding tail", tail.startsWith("\u2026"));
+        assertTrue("the newest words remain visible", tail.endsWith("at the right edge"));
+        assertTrue("the tail must not collapse to one final word", tail.trim().split("\\s+").length >= 4);
+        assertTrue("the tail should use a meaningful portion of the viewport", tail.length() >= 20);
+    }
+
+    @Test
+    public void collapsedRibbonMeetsTheAndroidTouchTargetFloor() {
+        MoaRibbonView ribbon = laidOut(false, "Tap me");
+        assertTrue(ribbon.desiredHeightPx() >= 48 * context().getResources().getDisplayMetrics().density);
     }
 
     @Test
