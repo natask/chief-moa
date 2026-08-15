@@ -225,6 +225,7 @@
     </section>
   </div>
 
+  <script src="/ag-browser-errors.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const TOKEN_KEY = "moa.gateway.token";
@@ -245,7 +246,7 @@
       const text = await resp.text();
       let body;
       try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
-      if (!resp.ok) throw new Error(body.error || `${resp.status} ${resp.statusText}`);
+      if (!resp.ok) throw new Error(AgBrowserErrors.message(resp, body, text));
       return body;
     }
 

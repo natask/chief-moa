@@ -137,6 +137,7 @@
     </div>
     </section>
   </div>
+  <script src="/ag-browser-errors.js"></script>
   <script>
     "use strict";
     const $ = (id) => document.getElementById(id);
@@ -155,8 +156,10 @@
       if (token) headers.set("authorization", `Bearer ${token}`);
       if (options.body && !(options.body instanceof Blob) && !headers.has("content-type")) headers.set("content-type", "application/json");
       const response = await fetch(path, { ...options, headers });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+      const rawText = await response.text();
+      let payload;
+      try { payload = rawText ? JSON.parse(rawText) : {}; } catch { payload = { error: rawText }; }
+      if (!response.ok) throw new Error(AgBrowserErrors.message(response, payload, rawText));
       return payload;
     }
 

@@ -9,6 +9,7 @@ const publicDir = path.join(__dirname, "../public");
 const consoleHtml = fs.readFileSync(path.join(publicDir, "console.html"), "utf8");
 const developmentHtml = fs.readFileSync(path.join(publicDir, "development.html"), "utf8");
 const css = fs.readFileSync(path.join(publicDir, "ag-console.css"), "utf8");
+const browserErrors = require("../public/ag-browser-errors.js");
 
 function countId(html, id) {
   return (html.match(new RegExp(`id=["']${id}["']`, "g")) || []).length;
@@ -50,4 +51,25 @@ test("shared CSS provides a narrow no-overflow shell and accessible interaction 
   assert.match(css, /focus-visible/);
   assert.match(css, /prefers-reduced-motion/);
   assert.doesNotMatch(css, /min-width:\s*(?:4\d\d|[5-9]\d\d)px/);
+});
+
+test("HTML proxy failures become bounded status-aware messages before reaching the UI", () => {
+  const proxyPage = '<!DOCTYPE HTML><html><head><title>Error response</title></head><body><h1>Error response</h1><p>File not found.</p></body></html>';
+  assert.equal(
+    browserErrors.message({ status: 404 }, { error: proxyPage }, proxyPage),
+    "That gateway service is not available.",
+  );
+  assert.equal(
+    browserErrors.message({ status: 502 }, { error: proxyPage }, proxyPage),
+    "The gateway is temporarily unavailable. Try again shortly.",
+  );
+  assert.equal(browserErrors.message({ status: 401 }, {}, ""), "Connection needs attention. Check the gateway token in Settings.");
+  assert.equal(browserErrors.message({ status: 400 }, { error: "Project name is required." }, ""), "Project name is required.");
+  const longMessage = browserErrors.message({ status: 400 }, { error: "x".repeat(400) }, "");
+  assert.ok(longMessage.length <= 180);
+  assert.doesNotMatch(longMessage, /[<>]/);
+  for (const html of [consoleHtml, developmentHtml]) {
+    assert.match(html, /src="\/ag-browser-errors\.js"/);
+    assert.match(html, /AgBrowserErrors\.message/);
+  }
 });
