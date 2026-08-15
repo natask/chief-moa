@@ -336,7 +336,9 @@
 #agee-root[data-agee-unit="engaged"] #agee-ribbon-reply .agee-ribbon-line { color: var(--agee-ribbon-agent-ink); }
 /* An interim transcript is a hypothesis and reads as one; it hardens to full
    ink when the recognizer settles the words. You can watch it think. */
-#agee-ribbon-you.agee-ribbon-streaming .agee-ribbon-line { color: var(--agee-ribbon-you-ambient); }
+#agee-root #agee-ribbon-you.agee-ribbon-streaming .agee-ribbon-line {
+  color: var(--agee-ribbon-you-ambient);
+}
 /* Scoped to #agee-root so tone still beats the engaged ink rule below: a failed
    turn has to stay amber when you touch it to read it. */
 #agee-root .agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }

@@ -1791,11 +1791,11 @@ if (
 // Both ends of that are palette tokens, so it flips with the page like
 // everything else.
 if (
-  !/#agee-ribbon-you\.agee-ribbon-streaming \.agee-ribbon-line \{ color: var\(--agee-ribbon-muted\); \}/.test(ribbonsCssSource) ||
-  !/#agee-root\[data-agee-unit="engaged"\] \.agee-ribbon-line \{ color: var\(--agee-ribbon-ink\); \}/.test(ribbonsCssSource) ||
+  !/#agee-root #agee-ribbon-you\.agee-ribbon-streaming \.agee-ribbon-line\s*\{[^}]*color:\s*var\(--agee-ribbon-you-ambient\);/.test(ribbonsCssSource) ||
+  !/#agee-root\[data-agee-unit="engaged"\] #agee-ribbon-you \.agee-ribbon-line \{ color: var\(--agee-ribbon-you-ink\); \}/.test(ribbonsCssSource) ||
   !/setStreaming\(you, !!interim\)/.test(ribbonRuntimeSource)
 ) {
-  throw new Error("an interim transcript must render muted and harden to full ink on final");
+  throw new Error("an interim user transcript must render in violet ambient ink and harden to violet user ink on final");
 }
 // One plate, always (section 5.2). The per-glyph scrim is what smeared into a
 // ragged black band, so the tokens that fed it are gone along with the rules.
