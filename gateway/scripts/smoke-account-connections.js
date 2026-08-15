@@ -205,8 +205,18 @@ async function assertSecretFormConnect(baseUrl) {
   // The form itself is served by the gateway (no bearer token; URL token auth).
   const form = await fetch(formUrl);
   assert.equal(form.status, 200);
+  assert.equal(form.headers.get("cache-control"), "no-store", "secret form must never be cached");
+  assert.equal(
+    form.headers.get("content-security-policy"),
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+    "secret form must retain the same-origin POST boundary",
+  );
   const formHtml = await form.text();
   assert.ok(formHtml.includes("OpenAI"), "secret form must show the provider label");
+  assert.ok(formHtml.includes("Ag · Private connection"), "secret form must use the Ag account shell");
+  assert.ok(formHtml.includes("@media(max-width:480px)"), "secret form must include its narrow-screen layout");
+  assert.ok(formHtml.includes("Encrypt &amp; connect"), "secret form must present the secure primary action");
+  assert.ok(formHtml.includes('method="post" action="/v1/account-connections/secret-form"'), "secret must post only to the gateway form route");
 
   // Posting the secret as a browser form does not echo it back.
   const token = new URL(formUrl).searchParams.get("token");
@@ -218,6 +228,8 @@ async function assertSecretFormConnect(baseUrl) {
   assert.equal(submit.status, 200);
   const submitHtml = await submit.text();
   assert.ok(!submitHtml.includes("sk-fixture-plaintext-secret"), "form response echoed the secret");
+  assert.ok(submitHtml.includes("Connection complete"), "successful submit must render a clear completion state");
+  assert.ok(submitHtml.includes("Your credential remains inside your gateway."), "completion must retain the privacy assurance");
 
   const { connection } = await getJson(`${baseUrl}/v1/account-connections/${create.json.connection.id}`);
   assert.equal(connection.status, "connected");

@@ -1693,7 +1693,37 @@ function sendAccountHtml(response, status, title, message) {
     "cache-control": "no-store",
     "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
   });
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem;color:#222}</style></head><body><h1>${escapeHtml(title)}</h1><p>${message}</p></body></html>`);
+  const successful = status >= 200 && status < 300;
+  response.end(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c">
+<title>${escapeHtml(title)} · Ag</title>
+<style>
+:root{color-scheme:dark;--obsidian:#0b0b0c;--stone:#151416;--stone-2:#1d1b1c;--ivory:#f3eee4;--ash:#aaa39a;--brass:#d9b86c;--brass-bright:#efd18b;--line:rgba(243,238,228,.12);--success:#8dccac;--danger:#ef9a8d;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0}
+body{background:radial-gradient(circle at 50% -10%,rgba(217,184,108,.13),transparent 38rem),var(--obsidian);color:var(--ivory);display:grid;grid-template-columns:minmax(0,1fr);place-items:center;padding:max(24px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));line-height:1.55}
+body:before{background:linear-gradient(90deg,transparent 49.8%,rgba(255,255,255,.025) 50%,transparent 50.2%),linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px);background-size:100% 100%,100% 28px;content:"";inset:0;pointer-events:none;position:fixed}
+.shell{max-width:440px;min-width:0;position:relative;width:100%}
+.brand{align-items:center;color:var(--ash);display:flex;font-size:11px;font-weight:700;gap:10px;letter-spacing:.18em;margin:0 0 24px;text-transform:uppercase}
+.mark{background:linear-gradient(145deg,var(--brass-bright),#8d6c31);border-radius:10px;box-shadow:0 0 0 1px rgba(255,255,255,.1),0 8px 28px rgba(0,0,0,.4);display:grid;height:32px;place-items:center;transform:rotate(45deg);width:32px}
+.mark:after{border:1px solid rgba(11,11,12,.58);content:"";height:10px;width:10px}
+.card{background:linear-gradient(150deg,rgba(29,27,28,.98),rgba(19,18,19,.98));border:1px solid var(--line);border-radius:28px;box-shadow:0 28px 90px rgba(0,0,0,.55),inset 0 1px rgba(255,255,255,.04);overflow:hidden;padding:36px}
+.status{align-items:center;color:${successful ? "var(--success)" : "var(--danger)"};display:flex;font-size:11px;font-weight:750;gap:9px;letter-spacing:.14em;margin-bottom:22px;text-transform:uppercase}
+.status-dot{background:currentColor;border-radius:50%;box-shadow:0 0 0 5px ${successful ? "rgba(141,204,172,.09)" : "rgba(239,154,141,.09)"};height:7px;width:7px}
+h1{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:clamp(34px,10vw,48px);font-weight:500;letter-spacing:-.035em;line-height:1.02;margin:0 0 18px}
+.message{color:var(--ash);font-size:15px;margin:0}
+.rule{background:linear-gradient(90deg,var(--brass),transparent);height:1px;margin:32px 0 18px;opacity:.5;width:100%}
+.close-note{color:#77716b;font-size:12px;letter-spacing:.04em;margin:0}
+@media(max-width:480px){body{align-items:start;padding-top:max(42px,env(safe-area-inset-top))}.card{border-radius:24px;padding:30px 24px}.brand{margin-bottom:20px}.rule{margin-top:28px}}
+@media(prefers-reduced-motion:no-preference){.shell{animation:arrive .55s cubic-bezier(.22,1,.36,1) both}.status-dot{animation:pulse 1.8s ease-out infinite}@keyframes arrive{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}@keyframes pulse{50%{box-shadow:0 0 0 8px transparent}}}
+</style>
+</head>
+<body><main class="shell"><div class="brand"><span class="mark" aria-hidden="true"></span><span>Ag · Private connection</span></div><section class="card"><div class="status"><span class="status-dot" aria-hidden="true"></span>${successful ? "Connection complete" : "Connection interrupted"}</div><h1>${escapeHtml(title)}</h1><p class="message">${message}</p><div class="rule"></div><p class="close-note">Your credential remains inside your gateway.</p></section></main></body>
+</html>`);
 }
 
 // The gateway-served secret entry form. The secret posts directly back to the
@@ -1705,18 +1735,58 @@ function sendAccountSecretForm(response, info) {
     "cache-control": "no-store",
     "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
   });
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect ${escapeHtml(info.provider_label)}</title><style>body{font-family:system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem;color:#222}label{display:block;margin:1rem 0 .25rem}input{width:100%;padding:.5rem;font-size:1rem}button{margin-top:1.25rem;padding:.6rem 1.2rem;font-size:1rem}</style></head><body>
-<h1>Connect ${escapeHtml(info.provider_label)}</h1>
-<p>Enter a ${escapeHtml(info.credential_kind_label)} for "${escapeHtml(info.connection_label)}". It is stored encrypted on your gateway and never sent to your phone or browser extension. This form expires at ${escapeHtml(info.expires_at)}.</p>
+  response.end(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c">
+<title>Connect ${escapeHtml(info.provider_label)} · Ag</title>
+<style>
+:root{color-scheme:dark;--obsidian:#0b0b0c;--stone:#151416;--stone-2:#201e1f;--ivory:#f3eee4;--ash:#aaa39a;--faint:#746f69;--brass:#d9b86c;--brass-bright:#efd18b;--line:rgba(243,238,228,.12);font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0}
+body{background:radial-gradient(circle at 50% -12%,rgba(217,184,108,.14),transparent 40rem),var(--obsidian);color:var(--ivory);display:grid;grid-template-columns:minmax(0,1fr);place-items:center;padding:max(24px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));line-height:1.5}
+body:before{background:linear-gradient(90deg,transparent 49.8%,rgba(255,255,255,.025) 50%,transparent 50.2%),linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px);background-size:100% 100%,100% 28px;content:"";inset:0;pointer-events:none;position:fixed}
+.shell{max-width:480px;min-width:0;position:relative;width:100%}
+.brand{align-items:center;color:var(--ash);display:flex;font-size:11px;font-weight:700;gap:10px;letter-spacing:.18em;margin:0 0 24px;text-transform:uppercase}
+.mark{background:linear-gradient(145deg,var(--brass-bright),#8d6c31);border-radius:10px;box-shadow:0 0 0 1px rgba(255,255,255,.1),0 8px 28px rgba(0,0,0,.4);display:grid;height:32px;place-items:center;transform:rotate(45deg);width:32px}
+.mark:after{border:1px solid rgba(11,11,12,.58);content:"";height:10px;width:10px}
+.card{background:linear-gradient(150deg,rgba(29,27,28,.98),rgba(18,17,18,.98));border:1px solid var(--line);border-radius:28px;box-shadow:0 28px 90px rgba(0,0,0,.58),inset 0 1px rgba(255,255,255,.04);min-width:0;overflow:hidden;padding:36px}
+.eyebrow{color:var(--brass);font-size:11px;font-weight:750;letter-spacing:.15em;margin:0 0 16px;text-transform:uppercase}
+h1{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:clamp(35px,10vw,48px);font-weight:500;letter-spacing:-.04em;line-height:1.02;margin:0 0 15px}
+.intro{color:var(--ash);font-size:14px;line-height:1.6;margin:0 0 26px}
+.connection{color:var(--ivory);font-weight:650}
+.assurance{align-items:flex-start;background:rgba(217,184,108,.07);border:1px solid rgba(217,184,108,.18);border-radius:14px;color:#c6bfb5;display:flex;font-size:12px;gap:11px;line-height:1.55;margin-bottom:26px;padding:13px 14px}
+.shield{border:1px solid var(--brass);border-radius:50% 50% 55% 55%;color:var(--brass);display:grid;flex:0 0 22px;font-size:11px;height:24px;margin-top:1px;place-items:center}
+.assurance span:last-child{min-width:0}
+.field{margin-top:18px}
+.label-row{align-items:center;display:flex;gap:10px;justify-content:space-between;margin-bottom:8px;min-width:0}
+label{color:#d8d1c8;font-size:12px;font-weight:700;letter-spacing:.035em;min-width:0}
+.optional{border:1px solid var(--line);border-radius:999px;color:var(--faint);flex:0 0 auto;font-size:9px;font-weight:750;letter-spacing:.1em;padding:3px 7px;text-transform:uppercase}
+input{appearance:none;background:#0e0d0e;border:1px solid rgba(243,238,228,.16);border-radius:13px;color:var(--ivory);font:inherit;font-size:16px;height:52px;outline:none;padding:0 15px;transition:border-color .18s,box-shadow .18s;width:100%}
+input::placeholder{color:#625e59}
+input:hover{border-color:rgba(243,238,228,.27)}
+input:focus{border-color:var(--brass);box-shadow:0 0 0 4px rgba(217,184,108,.11)}
+button{align-items:center;background:linear-gradient(135deg,var(--brass-bright),#c39949);border:0;border-radius:14px;box-shadow:0 12px 30px rgba(137,97,32,.18);color:#17130c;cursor:pointer;display:flex;font:inherit;font-size:14px;font-weight:800;height:54px;justify-content:space-between;margin-top:26px;padding:0 19px;width:100%}
+button:hover{filter:brightness(1.06);transform:translateY(-1px)}
+button:active{transform:translateY(0)}
+button:focus-visible{outline:2px solid var(--ivory);outline-offset:3px}
+.arrow{font-size:22px;font-weight:400;line-height:1}
+.expiry{border-top:1px solid var(--line);color:var(--faint);font-size:11px;line-height:1.5;margin:24px 0 0;overflow-wrap:anywhere;padding-top:18px}
+.expiry time{color:#918a82}
+@media(max-width:480px){body{align-items:start;padding-top:max(32px,env(safe-area-inset-top))}.card{border-radius:24px;padding:29px 23px}.brand{margin-bottom:19px}.intro{margin-bottom:22px}.assurance{margin-bottom:22px}}
+@media(prefers-reduced-motion:no-preference){.shell{animation:arrive .55s cubic-bezier(.22,1,.36,1) both}@keyframes arrive{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}}
+</style>
+</head>
+<body><main class="shell"><div class="brand"><span class="mark" aria-hidden="true"></span><span>Ag · Private connection</span></div><section class="card" aria-labelledby="connect-title"><p class="eyebrow">Secure provider access</p><h1 id="connect-title">Connect ${escapeHtml(info.provider_label)}</h1><p class="intro">Add a ${escapeHtml(info.credential_kind_label)} for <span class="connection">“${escapeHtml(info.connection_label)}”</span>.</p><div class="assurance"><span class="shield" aria-hidden="true">✓</span><span>Encrypted on your gateway. Never sent to your phone, browser extension, or an Ag response.</span></div>
 <form method="post" action="/v1/account-connections/secret-form">
 <input type="hidden" name="token" value="${escapeHtml(info.token)}">
-<label for="secret">${escapeHtml(info.credential_kind_label)}</label>
-<input type="password" id="secret" name="secret" autocomplete="off" required>
-<label for="account_display">Account label shown in Moa (optional)</label>
-<input type="text" id="account_display" name="account_display" autocomplete="off">
-<button type="submit">Store credential</button>
-</form>
-</body></html>`);
+<div class="field"><div class="label-row"><label for="secret">${escapeHtml(info.credential_kind_label)}</label></div><input type="password" id="secret" name="secret" autocomplete="off" placeholder="Enter credential" required></div>
+<div class="field"><div class="label-row"><label for="account_display">Account label shown in Ag</label><span class="optional">Optional</span></div><input type="text" id="account_display" name="account_display" autocomplete="off" placeholder="e.g. Personal or Work"></div>
+<button type="submit"><span>Encrypt &amp; connect</span><span class="arrow" aria-hidden="true">→</span></button>
+</form><p class="expiry">For your protection, this one-time form expires at <time>${escapeHtml(info.expires_at)}</time>.</p></section></main></body>
+</html>`);
 }
 
 function escapeHtml(value) {
