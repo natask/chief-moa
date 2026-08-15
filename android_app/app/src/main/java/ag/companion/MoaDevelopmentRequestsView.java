@@ -60,7 +60,9 @@ final class MoaDevelopmentRequestsView {
         titleRow.addView(text("Your work", MoaColors.PAPER, 20, true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView refresh = text("Refresh", MoaColors.GOLD, 13, true);
-        refresh.setPadding(dp(12), dp(10), 0, dp(10));
+        refresh.setGravity(Gravity.CENTER);
+        refresh.setMinHeight(dp(48));
+        refresh.setPadding(dp(12), dp(8), 0, dp(8));
         refresh.setClickable(true);
         refresh.setFocusable(true);
         refresh.setOnClickListener(view -> refresh());
@@ -74,7 +76,9 @@ final class MoaDevelopmentRequestsView {
         root.addView(status);
         if (enrollment == null) {
             TextView connect = text("Open Settings to connect  →", MoaColors.GOLD, 14, true);
-            connect.setPadding(0, dp(10), 0, dp(10));
+            connect.setGravity(Gravity.CENTER_VERTICAL);
+            connect.setMinHeight(dp(48));
+            connect.setPadding(0, dp(8), 0, dp(8));
             connect.setClickable(true);
             connect.setFocusable(true);
             connect.setContentDescription("Open Settings to connect this phone");
@@ -170,8 +174,10 @@ final class MoaDevelopmentRequestsView {
         sheet.addView(createButton);
         TextView cancel = text("Cancel", MoaColors.MUTED, 14, true);
         cancel.setGravity(Gravity.CENTER);
-        cancel.setPadding(dp(12), dp(14), dp(12), dp(4));
+        cancel.setMinHeight(dp(48));
+        cancel.setPadding(dp(12), dp(8), dp(12), dp(8));
         cancel.setClickable(true);
+        cancel.setFocusable(true);
         cancel.setOnClickListener(view -> composerDialog.dismiss());
         sheet.addView(cancel);
 

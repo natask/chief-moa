@@ -15,6 +15,7 @@ import org.robolectric.annotation.GraphicsMode;
 import java.io.File;
 import java.io.FileOutputStream;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -48,12 +49,41 @@ public final class MoaMainSurfaceVisualCaptureTest {
         MainActivity activity = Robolectric.buildActivity(MainActivity.class).create().get();
         View root = activity.findViewById(android.R.id.content);
         select(root, destination);
-        assertNotNull(findDestination(root, "Talk"));
-        assertNotNull(findDestination(root, "Work"));
-        assertNotNull(findDestination(root, "Releases"));
-        assertNotNull(findDestination(root, "Settings"));
         capture(root, new File(output, "android-" + profile + "-" + name + ".png"), width, height);
+        assertNavigationSemantics(root, destination);
         activity.finish();
+    }
+
+    private static void assertNavigationSemantics(View root, String selectedDestination) {
+        String[] destinations = {"Talk", "Work", "Releases", "Settings"};
+        int selectedCount = 0;
+        float density = root.getResources().getDisplayMetrics().density;
+        for (String label : destinations) {
+            View destination = findDestination(root, label);
+            assertNotNull(label + " destination", destination);
+            assertEquals(label + " visible", View.VISIBLE, destination.getVisibility());
+            assertTrue(label + " visible hierarchy", visibleThroughRoot(destination, root));
+            assertTrue(label + " measured width", destination.getMeasuredWidth() > 0);
+            assertTrue(label + " clickable", destination.isClickable());
+            assertTrue(label + " focusable", destination.isFocusable());
+            assertTrue(label + " touch height", destination.getMeasuredHeight() >= Math.round(48 * density));
+            boolean selected = destination.isSelected();
+            if (selected) selectedCount++;
+            assertEquals(label + " selection", label.equals(selectedDestination), selected);
+            assertEquals(label + " semantics", label + (selected ? ", selected" : ", tab"),
+                    destination.getContentDescription().toString());
+        }
+        assertEquals("one selected destination", 1, selectedCount);
+    }
+
+    private static boolean visibleThroughRoot(View view, View root) {
+        View current = view;
+        while (current != null) {
+            if (current.getVisibility() != View.VISIBLE) return false;
+            if (current == root) return true;
+            current = current.getParent() instanceof View ? (View) current.getParent() : null;
+        }
+        return false;
     }
 
     private static void select(View root, String label) {

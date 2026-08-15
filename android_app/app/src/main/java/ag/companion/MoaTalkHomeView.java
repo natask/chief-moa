@@ -66,7 +66,8 @@ final class MoaTalkHomeView {
 
         TextView refreshAction = text("Refresh conversation", MoaColors.GOLD, 13, true);
         refreshAction.setGravity(Gravity.CENTER);
-        refreshAction.setPadding(dp(14), dp(12), dp(14), dp(8));
+        refreshAction.setMinHeight(dp(48));
+        refreshAction.setPadding(dp(14), dp(8), dp(14), dp(8));
         refreshAction.setClickable(true);
         refreshAction.setFocusable(true);
         refreshAction.setContentDescription("Refresh conversation");
