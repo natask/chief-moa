@@ -1,234 +1,383 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Ag — settings</title>
-    <style>
-      body {
-        font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
-        max-width: 560px;
-        margin: 48px auto;
-        padding: 0 20px;
-        color: #1a1a1a;
-      }
-      h1 { font-size: 20px; margin-bottom: 4px; }
-      h2 { font-size: 15px; margin: 32px 0 0; }
-      p.sub { color: #666; margin-top: 0; }
-      label { display: block; margin: 18px 0 6px; font-weight: 600; font-size: 13px; }
-      input, textarea, select { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; box-sizing: border-box; font-family: inherit; }
-      textarea { min-height: 80px; resize: vertical; }
-      button { margin-top: 20px; padding: 10px 18px; border: 0; border-radius: 8px; background: #111; color: #fff; font-size: 14px; cursor: pointer; }
-      #status { margin-left: 12px; color: #35a35a; font-size: 13px; }
-      .hint { color: #888; font-size: 12px; margin-top: 6px; }
-      a { color: #2563eb; }
-      .profile-state { font-size: 12px; color: #666; margin-top: 6px; }
-      .profile-state .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; background: #eee; color: #555; font-weight: 600; }
-      .profile-state .badge.overridden { background: #fde8c8; color: #8a5a00; }
-      .talk-box { display: flex; gap: 8px; align-items: stretch; }
-      .talk-box input { flex: 1; }
-      .talk-box button { margin-top: 0; white-space: nowrap; }
-      #talkResult { margin-top: 8px; font-size: 13px; color: #444; min-height: 16px; }
-      #talkResult.err { color: #c0392b; }
-      .catalog-picker { border: 1px solid #ccc; border-radius: 8px; padding: 8px; }
-      .catalog-selected { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; }
-      .catalog-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: #eef2ff; color: #1e2a62; font-size: 12px; font-weight: 600; }
-      .catalog-pill button { margin: 0; padding: 0; width: 18px; height: 18px; border-radius: 50%; background: #d8defa; color: #1e2a62; line-height: 18px; }
-      .catalog-search { margin-top: 8px; }
-      .catalog-options { margin-top: 8px; max-height: 170px; overflow: auto; border-top: 1px solid #eee; padding-top: 6px; }
-      .catalog-option { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 6px; font-size: 13px; }
-      .catalog-option:hover { background: #f6f6f6; }
-      .catalog-option input { width: auto; }
-      .catalog-option small { color: #777; }
-      .catalog-empty { padding: 8px 4px; color: #777; font-size: 13px; }
-      .companion-grid { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
-      .companion-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-      .companion-actions button { margin-top: 0; }
-      #companionDetails { margin-top: 10px; padding: 10px 12px; border: 1px solid #e2e2e2; border-radius: 8px; font-size: 13px; color: #333; background: #fafafa; min-height: 36px; }
-      #companionDetails strong { display: block; margin-bottom: 4px; }
-      hr { margin: 28px 0; border: 0; border-top: 1px solid #eee; }
-      .recovery-banner { margin: 20px 0 8px; padding: 16px; border: 1px solid #93b4f5; border-radius: 12px; background: #eef4ff; }
-      .recovery-banner h2 { margin: 0 0 8px; color: #173b78; }
-      .recovery-steps { margin: 10px 0 8px; padding-left: 22px; color: #263a5d; }
-      .recovery-steps li { margin: 6px 0; }
-      #micRecoveryStatus { margin-top: 8px; font-size: 13px; font-weight: 600; color: #173b78; }
-      #grantMic.mic-recovery-focus { outline: 4px solid rgba(37, 99, 235, 0.28); outline-offset: 3px; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ag — Settings</title>
+    <link rel="stylesheet" href="options.css" />
   </head>
   <body>
-    <h1>Ag</h1>
-    <p class="sub">Open-source browser agent. Cmd/Ctrl+, on any page. Pipes to your self-hosted gateway, your machine.</p>
+    <div class="atelier-shell">
+      <aside class="atelier-rail" aria-label="Settings navigation">
+        <a class="brand-lockup" href="#connection" aria-label="Ag settings home">
+          <span class="brand-mark" aria-hidden="true"><span>Ag</span></span>
+          <span class="brand-copy">
+            <strong>Ag</strong>
+            <small>Browser atelier</small>
+          </span>
+        </a>
 
-    <section id="micRecoveryBanner" class="recovery-banner" aria-labelledby="micRecoveryTitle" hidden>
-      <h2 id="micRecoveryTitle">Let’s restore browser voice</h2>
-      <p>Ag brought you here because the extension microphone needs your attention. Chrome requires you to approve this permission yourself.</p>
-      <ol class="recovery-steps">
-        <li>Click <strong>Grant microphone</strong> below.</li>
-        <li>Choose <strong>Allow</strong> in Chrome’s permission prompt.</li>
-        <li>Return to the page you were on and start voice again.</li>
-      </ol>
-      <div id="micRecoveryStatus" role="status" aria-live="polite">Checking microphone permission…</div>
-    </section>
+        <nav class="section-nav">
+          <span class="nav-kicker">Settings</span>
+          <a href="#connection"><span class="nav-icon" aria-hidden="true">01</span><span>Connection</span></a>
+          <a href="#voice"><span class="nav-icon" aria-hidden="true">02</span><span>Voice</span></a>
+          <a href="#companion"><span class="nav-icon" aria-hidden="true">03</span><span>Companion</span></a>
+          <a href="#automation"><span class="nav-icon" aria-hidden="true">04</span><span>Automation</span></a>
+          <a href="#advanced"><span class="nav-icon" aria-hidden="true">05</span><span>Advanced</span></a>
+        </nav>
 
-    <h2>Agent gateway</h2>
-    <label for="gatewayUrl">Agent gateway URL</label>
-    <input id="gatewayUrl" type="text" placeholder="https://api.agee.app" />
-    <div class="hint">Every turn is routed to your own agent gateway, which owns model routing and credentials. The browser never holds a provider key.</div>
+        <div class="rail-foot">
+          <span class="privacy-light" aria-hidden="true"></span>
+          <p><strong>Private by design</strong><br />Credentials stay in this browser.</p>
+        </div>
+      </aside>
 
-    <label for="gatewayToken">Gateway token</label>
-    <input id="gatewayToken" type="password" placeholder="(optional)" />
-    <div class="hint">Sent as <code>Authorization: Bearer …</code>. Stored locally in this browser only. Leave blank on a trusted private network.</div>
+      <main class="atelier-main">
+        <header class="page-hero">
+          <div>
+            <p class="eyebrow">Personal intelligence · Browser</p>
+            <h1>Your agent, tuned to you.</h1>
+            <p class="hero-copy">Connect Ag once, shape how it speaks, and decide exactly what it may do in your browser.</p>
+          </div>
+          <div class="hero-orbit" aria-hidden="true">
+            <span class="orbit-line"></span>
+            <span class="orbit-core">Ag</span>
+          </div>
+        </header>
 
-    <div>
-      <button id="save">Save</button>
-      <button id="testGateway" style="background:#2563eb">Test gateway</button>
-      <span id="status"></span>
-    </div>
+        <section class="readiness" aria-labelledby="readiness-title">
+          <div class="readiness-heading">
+            <p class="eyebrow" id="readiness-title">Readiness</p>
+            <p>Three things make Ag feel effortless.</p>
+          </div>
+          <a class="readiness-item" href="#connection">
+            <span class="readiness-number">01</span>
+            <span><strong>Gateway</strong><small>Secure route to your agent</small></span>
+            <span class="readiness-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a class="readiness-item" href="#voice">
+            <span class="readiness-number">02</span>
+            <span><strong>Microphone</strong><small>One-time browser permission</small></span>
+            <span class="readiness-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a class="readiness-item" href="#companion">
+            <span class="readiness-number">03</span>
+            <span><strong>Companion</strong><small>Voice, tone, and language</small></span>
+            <span class="readiness-arrow" aria-hidden="true">↗</span>
+          </a>
+        </section>
 
-    <h2>Voice permission</h2>
-    <p class="sub">Grant the microphone to Ag once. Browser voice then uses the extension origin instead of asking each website.</p>
-    <div>
-      <button id="grantMic" style="background:#2563eb">Grant microphone</button>
-      <button id="checkMic" style="background:#777">Check microphone</button>
-      <span id="micStatus"></span>
-    </div>
+        <section id="micRecoveryBanner" class="recovery-banner" aria-labelledby="micRecoveryTitle" hidden>
+          <div class="recovery-symbol" aria-hidden="true">!</div>
+          <div>
+            <p class="eyebrow">Voice recovery</p>
+            <h2 id="micRecoveryTitle">Let’s restore browser voice</h2>
+            <p>Ag brought you here because Chrome needs you to approve microphone access.</p>
+            <ol class="recovery-steps">
+              <li>Choose <strong>Grant microphone</strong> in Voice.</li>
+              <li>Select <strong>Allow</strong> in Chrome’s permission prompt.</li>
+              <li>Return to your page and start voice again.</li>
+            </ol>
+            <div id="micRecoveryStatus" role="status" aria-live="polite">Checking microphone permission…</div>
+          </div>
+        </section>
 
-    <h2>Experimental</h2>
-    <p class="sub">Prototype voice transport, off by default. When on, browser voice tries a LiveKit room minted by the gateway; on any error it falls back to the standard WebSocket voice path.</p>
-    <div>
-      <label><input id="livekitVoice" type="checkbox" /> LiveKit voice (experimental)</label>
-      <span id="livekitVoiceStatus"></span>
-    </div>
-    <p class="sub">Voice-first mark gestures, off by default. When on: click once to start or stop and send voice in the current thread; hold for push-to-talk and release to send; double-click to start or stop voice in a fresh thread; triple-click to open chat. When off, single click opens the text surface as before.</p>
-    <div>
-      <label><input id="voiceFirstGestures" type="checkbox" /> Voice-first orb gestures (experimental)</label>
-      <span id="voiceFirstGesturesStatus"></span>
-    </div>
+        <section class="settings-section" id="connection" aria-labelledby="connection-title">
+          <header class="section-heading">
+            <div>
+              <p class="eyebrow">01 · Foundation</p>
+              <h2 id="connection-title">Connection</h2>
+            </div>
+            <p>Route every conversation through a gateway you control. Provider credentials never enter the extension.</p>
+          </header>
 
-    <h2>Background automation</h2>
-    <p class="sub">Off by default. Turning this on lets the configured gateway poll for browser work, advertise browser tools, open background tabs, and run bounded actions through the extension's local allowlist. Turning it off stops new claims and heartbeats; already-claimed work may finish so it is not stranded.</p>
-    <div>
-      <label><input id="backgroundAutomation" type="checkbox" /> Background automation: let the gateway run background browser tasks</label>
-      <span id="backgroundAutomationStatus"></span>
-    </div>
+          <div class="surface-card connection-card">
+            <div class="card-heading">
+              <div class="card-icon" aria-hidden="true">⌁</div>
+              <div><h3>Agent gateway</h3><p>Your private route for models, memory, and agent work.</p></div>
+              <span class="security-chip">Encrypted route</span>
+            </div>
+            <div class="form-grid">
+              <div class="field field-wide">
+                <label for="gatewayUrl">Gateway URL</label>
+                <input id="gatewayUrl" type="text" placeholder="https://api.agee.app" />
+                <div class="hint">Use your hosted Ag gateway or a trusted self-hosted address.</div>
+              </div>
+              <div class="field field-wide">
+                <label for="gatewayToken">Gateway token <span>Optional on a private network</span></label>
+                <input id="gatewayToken" type="password" placeholder="••••••••••••••••" />
+                <div class="hint">Sent as <code>Authorization: Bearer …</code> and stored only in this browser.</div>
+              </div>
+            </div>
+            <div class="action-row">
+              <button id="save" class="button-primary">Save connection</button>
+              <button id="testGateway" class="button-secondary">Test gateway</button>
+              <span id="status" class="inline-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
 
-    <h2>User scripts</h2>
-    <p class="sub">Off by default. These switches control Chrome's isolated user-script runtime. Installed tools can run only after you review their exact source, input schema, and URL scope; generated programs still require their own scoped authority.</p>
-    <div>
-      <label><input id="reviewedUserScripts" type="checkbox" /> Reviewed standalone scripts</label>
-      <span id="reviewedUserScriptsStatus"></span>
-    </div>
-    <div class="hint">Each changed source revision still requires an exact source, digest, scope, timing, and approval match. Scripts use the isolated USER_SCRIPT world only.</div>
-    <div>
-      <label><input id="delegatedUserScripts" type="checkbox" /> Delegated script runtime</label>
-      <span id="delegatedUserScriptsStatus"></span>
-    </div>
-    <div class="hint">Separate opt-in for installed browser tools and confirmed Delegate programs. MAIN remains a separate visible grant. If Chrome reports “Allow User Scripts” is off, enable it on this extension's details page.</div>
+        <section class="settings-section" id="voice" aria-labelledby="voice-title">
+          <header class="section-heading">
+            <div>
+              <p class="eyebrow">02 · Expression</p>
+              <h2 id="voice-title">Voice</h2>
+            </div>
+            <p>Give Ag permission to hear you, then choose how conversation should sound and feel.</p>
+          </header>
 
-    <h3>Installed browser tools</h3>
-    <p class="sub">Review and save exact read tools that agents may call on matching pages. The extension validates arguments, runs the code in Chrome's USER_SCRIPT world, and records source and input digests. Page content cannot add tools. Turn on Background automation so the gateway can discover and invoke them.</p>
-    <label for="injectedToolList">Installed tool</label>
-    <select id="injectedToolList"></select>
-    <label for="injectedToolDefinition">Tool definition</label>
-    <textarea id="injectedToolDefinition" rows="15" spellcheck="false"></textarea>
-    <div>
-      <button id="saveInjectedTool" type="button">Review and save tool</button>
-      <button id="removeInjectedTool" type="button" style="background:#777" disabled>Remove selected</button>
-      <span id="injectedToolStatus"></span>
-    </div>
+          <div class="surface-card permission-card">
+            <div class="card-heading">
+              <div class="card-icon mic-icon" aria-hidden="true">●</div>
+              <div><h3>Microphone access</h3><p>Grant access once from this extension origin—never once per website.</p></div>
+            </div>
+            <div class="action-row">
+              <button id="grantMic" class="button-primary">Grant microphone</button>
+              <button id="checkMic" class="button-quiet">Check permission</button>
+              <span id="micStatus" class="inline-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
 
-    <hr />
+          <div class="surface-card voice-card">
+            <div class="card-heading">
+              <div class="card-icon" aria-hidden="true">◒</div>
+              <div><h3>Spoken experience</h3><p>These choices apply on the next turn—no restart required.</p></div>
+            </div>
+            <div class="form-grid form-grid-two">
+              <div class="field">
+                <label for="voiceName">Voice</label>
+                <select id="voiceName"><option value="">Gateway default</option></select>
+              </div>
+              <div class="field">
+                <label for="voiceMaxChars">Spoken reply length</label>
+                <input id="voiceMaxChars" type="number" min="1" step="10" placeholder="280" />
+              </div>
+              <div class="field field-wide">
+                <label for="language">Reply languages</label>
+                <input id="language" type="hidden" />
+                <div class="catalog-picker" id="replyLanguagePicker">
+                  <div class="catalog-selected" id="replyLanguageSelected"></div>
+                  <input class="catalog-search" id="replyLanguageSearch" type="search" placeholder="Search gateway languages" autocomplete="off" />
+                  <div class="catalog-options" id="replyLanguageOptions"></div>
+                </div>
+                <div class="hint">The first language becomes the provider default.</div>
+              </div>
+              <div class="field field-wide">
+                <label for="inputLanguages">Languages Ag hears</label>
+                <input id="inputLanguages" type="hidden" />
+                <div class="catalog-picker" id="heardLanguagePicker">
+                  <div class="catalog-selected" id="heardLanguageSelected"></div>
+                  <input class="catalog-search" id="heardLanguageSearch" type="search" placeholder="Search gateway languages" autocomplete="off" />
+                  <div class="catalog-options" id="heardLanguageOptions"></div>
+                </div>
+                <div class="hint">Choose every language you may speak to Ag.</div>
+              </div>
+              <div class="field field-wide">
+                <label for="speakerContext">Speaker context</label>
+                <textarea id="speakerContext" maxlength="1200" placeholder="I frequently discuss software engineering, authentication, speech systems, cloud infrastructure, and mathematics."></textarea>
+                <div class="hint">A short domain description improves recognition without inventing words you did not say.</div>
+              </div>
+            </div>
+            <div class="catalog-state" id="profileCatalogState">Voice and language options load from the gateway catalog.</div>
+            <datalist id="languageOptions"></datalist>
+          </div>
+        </section>
 
-    <h2>Runtime agent profile</h2>
-    <p class="sub">How the agent behaves on every gateway turn. Read live from the gateway and written back to it; takes effect on the next turn with no restart.</p>
-    <div class="profile-state" id="profileState">Loading profile from the gateway…</div>
+        <section class="settings-section" id="companion" aria-labelledby="companion-title">
+          <header class="section-heading">
+            <div>
+              <p class="eyebrow">03 · Character</p>
+              <h2 id="companion-title">Companion</h2>
+            </div>
+            <p>Shape Ag’s temperament in plain language or choose a crafted companion from the catalog.</p>
+          </header>
 
-    <label for="profileScope">Save profile changes for</label>
-    <select id="profileScope">
-      <option value="global">All devices</option>
-      <option value="device">This device</option>
-    </select>
-    <div class="hint">All devices updates the gateway-wide profile. This device stores an override for this browser only.</div>
+          <div class="surface-card profile-card">
+            <div class="card-heading profile-heading">
+              <div class="card-icon" aria-hidden="true">✦</div>
+              <div><h3>Runtime profile</h3><p>Live on every gateway turn and synchronized across your chosen scope.</p></div>
+              <div class="profile-state" id="profileState">Loading profile from the gateway…</div>
+            </div>
+            <div class="field compact-field">
+              <label for="profileScope">Apply changes to</label>
+              <select id="profileScope">
+                <option value="global">All devices</option>
+                <option value="device">This device</option>
+              </select>
+              <div class="hint">Choose a global profile or keep this browser distinct.</div>
+            </div>
+            <div class="concierge-box">
+              <span class="concierge-spark" aria-hidden="true">✦</span>
+              <div class="concierge-copy"><label for="changeBox">Ask Ag to change itself</label><p>Describe the tone, role, model, or response style you want.</p></div>
+              <div class="talk-box">
+                <input id="changeBox" type="text" placeholder='“Be a calm, concise research scout.”' autocomplete="off" />
+                <button id="applyChange" class="button-primary">Apply</button>
+              </div>
+              <div id="talkResult" role="status" aria-live="polite"></div>
+            </div>
+          </div>
 
-    <label for="changeBox">Change a setting by talking to the agent</label>
-    <div class="talk-box">
-      <input id="changeBox" type="text" placeholder='e.g. "be terser", "I want you to be a research scout", "use model gpt-4o-mini"' autocomplete="off" />
-      <button id="applyChange">Apply</button>
-    </div>
-    <div class="hint">Plain language. The agent turns it into a concrete profile change and applies it through the gateway.</div>
-    <div id="talkResult"></div>
+          <div class="surface-card companion-card">
+            <div class="card-heading">
+              <div class="card-icon" aria-hidden="true">◇</div>
+              <div><h3>Companion collection</h3><p>Discover a Shigmi-line companion or create one from a feeling.</p></div>
+            </div>
+            <div class="form-grid form-grid-two">
+              <div class="field field-wide">
+                <label for="companionSearch">Find companions</label>
+                <div class="input-action">
+                  <input id="companionSearch" type="text" placeholder="Research, writing, browser, calm…" autocomplete="off" />
+                  <button id="searchCompanions" class="button-secondary">Search</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="companionList">Companion catalog</label>
+                <select id="companionList"></select>
+              </div>
+              <div id="companionDetails" class="companion-preview">Companion catalog loads from the gateway.</div>
+              <div class="field field-wide">
+                <label for="companionPrompt">Create from a description</label>
+                <div class="input-action">
+                  <input id="companionPrompt" type="text" placeholder='“A calm writing coach with exacting taste.”' autocomplete="off" />
+                  <button id="createCompanion" class="button-secondary">Create</button>
+                </div>
+              </div>
+            </div>
+            <div class="action-row">
+              <button id="previewCompanion" class="button-quiet">Preview</button>
+              <button id="applyCompanion" class="button-primary">Apply companion</button>
+              <span id="companionStatus" class="inline-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
 
-    <h2>Companions</h2>
-    <p class="sub">Choose a Shigmi-line companion or draft one from a request. Preview does not change the active profile.</p>
+          <details class="surface-card disclosure-card">
+            <summary><span><strong>Fine-tune the profile</strong><small>System prompt, model, and creativity</small></span><span class="disclosure-plus" aria-hidden="true"></span></summary>
+            <div class="disclosure-body form-grid form-grid-two">
+              <div class="field field-wide">
+                <label for="systemPrompt">System prompt</label>
+                <textarea id="systemPrompt" placeholder="Gateway default"></textarea>
+                <div class="hint">The agent’s standing instructions.</div>
+              </div>
+              <div class="field">
+                <label for="profileModel">Model</label>
+                <input id="profileModel" type="text" list="modelOptions" placeholder="Gateway default" />
+                <datalist id="modelOptions"></datalist>
+              </div>
+              <div class="field">
+                <label for="temperature">Creativity</label>
+                <input id="temperature" type="number" min="0" max="2" step="0.1" placeholder="0.4" />
+              </div>
+            </div>
+          </details>
 
-    <label for="companionSearch">Find companions</label>
-    <div class="companion-grid">
-      <input id="companionSearch" type="text" placeholder="research, writing, browser, calm…" autocomplete="off" />
-      <button id="searchCompanions" style="background:#2563eb">Search</button>
-    </div>
+          <div class="profile-savebar">
+            <div><strong>Profile controls</strong><span>Changes apply on the next turn.</span></div>
+            <div class="action-row">
+              <button id="resetProfile" class="button-quiet">Reset</button>
+              <button id="refreshProfile" class="button-secondary">Refresh</button>
+              <button id="saveProfile" class="button-primary">Save profile</button>
+              <span id="profileStatus" class="inline-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
 
-    <label for="companionList">Companion catalog</label>
-    <select id="companionList"></select>
-    <div id="companionDetails">Companion catalog loads from the gateway.</div>
+        <section class="settings-section" id="automation" aria-labelledby="automation-title">
+          <header class="section-heading">
+            <div>
+              <p class="eyebrow">04 · Authority</p>
+              <h2 id="automation-title">Automation</h2>
+            </div>
+            <p>Choose when Ag may continue browser work in the background. Every capability remains visible and reversible.</p>
+          </header>
 
-    <label for="companionPrompt">Create a companion by describing it</label>
-    <div class="talk-box">
-      <input id="companionPrompt" type="text" placeholder='e.g. "I want you to be a calm writing coach"' autocomplete="off" />
-      <button id="createCompanion">Create</button>
-    </div>
-    <div class="companion-actions">
-      <button id="previewCompanion" style="background:#777">Preview</button>
-      <button id="applyCompanion">Apply companion</button>
-      <span id="companionStatus"></span>
-    </div>
+          <div class="surface-card authority-card">
+            <div class="authority-copy">
+              <span class="authority-label">Primary authority</span>
+              <h3>Background browser work</h3>
+              <p>Let your gateway claim bounded work, open background tabs, and run actions through the extension’s local allowlist.</p>
+            </div>
+            <label class="switch-row" for="backgroundAutomation">
+              <input id="backgroundAutomation" type="checkbox" />
+              <span class="switch" aria-hidden="true"></span>
+              <span class="switch-copy"><strong>Allow background automation</strong><small>Turning this off stops new claims and heartbeats.</small></span>
+              <span id="backgroundAutomationStatus" class="switch-status">Off</span>
+            </label>
+          </div>
 
-    <label for="systemPrompt">System prompt</label>
-    <textarea id="systemPrompt" placeholder="(gateway default)"></textarea>
-    <div class="hint">The agent's standing instructions.</div>
+          <details class="surface-card disclosure-card">
+            <summary><span><strong>Reviewed user scripts</strong><small>Isolated, inspectable page tools</small></span><span class="disclosure-plus" aria-hidden="true"></span></summary>
+            <div class="disclosure-body">
+              <p class="body-copy">Installed tools run only after you review their exact source, input schema, and URL scope. Each changed source revision requires a new digest and approval match.</p>
+              <label class="switch-row" for="reviewedUserScripts">
+                <input id="reviewedUserScripts" type="checkbox" />
+                <span class="switch" aria-hidden="true"></span>
+                <span class="switch-copy"><strong>Reviewed standalone scripts</strong><small>Runs in Chrome’s isolated USER_SCRIPT world.</small></span>
+                <span id="reviewedUserScriptsStatus" class="switch-status"></span>
+              </label>
+              <label class="switch-row" for="delegatedUserScripts">
+                <input id="delegatedUserScripts" type="checkbox" />
+                <span class="switch" aria-hidden="true"></span>
+                <span class="switch-copy"><strong>Delegated script runtime</strong><small>Separate opt-in for installed tools and confirmed Delegate programs.</small></span>
+                <span id="delegatedUserScriptsStatus" class="switch-status"></span>
+              </label>
+            </div>
+          </details>
+        </section>
 
-    <label for="profileModel">Model (gateway)</label>
-    <input id="profileModel" type="text" list="modelOptions" placeholder="(gateway default)" />
-    <datalist id="modelOptions"></datalist>
+        <section class="settings-section" id="advanced" aria-labelledby="advanced-title">
+          <header class="section-heading">
+            <div>
+              <p class="eyebrow">05 · Laboratory</p>
+              <h2 id="advanced-title">Advanced</h2>
+            </div>
+            <p>Experimental transports and script internals live here, away from everyday settings.</p>
+          </header>
 
-    <label for="temperature">Temperature</label>
-    <input id="temperature" type="number" min="0" max="2" step="0.1" placeholder="0.4" />
+          <details class="surface-card disclosure-card">
+            <summary><span><strong>Experimental voice</strong><small>Prototype transport and orb gestures</small></span><span class="experimental-chip">Experimental</span><span class="disclosure-plus" aria-hidden="true"></span></summary>
+            <div class="disclosure-body">
+              <label class="switch-row" for="livekitVoice">
+                <input id="livekitVoice" type="checkbox" />
+                <span class="switch" aria-hidden="true"></span>
+                <span class="switch-copy"><strong>LiveKit voice</strong><small>Try a minted LiveKit room first, with automatic fallback to standard WebSocket voice.</small></span>
+                <span id="livekitVoiceStatus" class="switch-status"></span>
+              </label>
+              <label class="switch-row" for="voiceFirstGestures">
+                <input id="voiceFirstGestures" type="checkbox" />
+                <span class="switch" aria-hidden="true"></span>
+                <span class="switch-copy"><strong>Voice-first orb gestures</strong><small>Click to speak, hold for push-to-talk, double-click for a fresh thread, triple-click for chat.</small></span>
+                <span id="voiceFirstGesturesStatus" class="switch-status"></span>
+              </label>
+            </div>
+          </details>
 
-    <label for="voiceMaxChars">Spoken reply max characters</label>
-    <input id="voiceMaxChars" type="number" min="1" step="10" placeholder="280" />
+          <details class="surface-card disclosure-card">
+            <summary><span><strong>Installed browser tools</strong><small>Inspect exact source and authority</small></span><span class="disclosure-plus" aria-hidden="true"></span></summary>
+            <div class="disclosure-body">
+              <p class="body-copy">Review exact read tools that agents may call on matching pages. Page content cannot add tools.</p>
+              <div class="field">
+                <label for="injectedToolList">Installed tool</label>
+                <select id="injectedToolList"></select>
+              </div>
+              <div class="field">
+                <label for="injectedToolDefinition">Tool definition</label>
+                <textarea id="injectedToolDefinition" class="code-editor" rows="15" spellcheck="false"></textarea>
+              </div>
+              <div class="action-row">
+                <button id="saveInjectedTool" class="button-primary" type="button">Review and save</button>
+                <button id="removeInjectedTool" class="button-danger" type="button" disabled>Remove selected</button>
+                <span id="injectedToolStatus" class="inline-status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+          </details>
+        </section>
 
-    <label for="voiceName">Voice</label>
-    <select id="voiceName">
-      <option value="">Gateway default</option>
-    </select>
-    <div class="hint" id="profileCatalogState">Voice and language options load from the gateway catalog.</div>
-
-    <label for="language">Reply language(s)</label>
-    <input id="language" type="hidden" />
-    <div class="catalog-picker" id="replyLanguagePicker">
-      <div class="catalog-selected" id="replyLanguageSelected"></div>
-      <input class="catalog-search" id="replyLanguageSearch" type="search" placeholder="Search gateway languages" autocomplete="off" />
-      <div class="catalog-options" id="replyLanguageOptions"></div>
-    </div>
-    <div class="hint">The first selected language becomes the provider default.</div>
-
-    <label for="inputLanguages">Heard language(s)</label>
-    <input id="inputLanguages" type="hidden" />
-    <div class="catalog-picker" id="heardLanguagePicker">
-      <div class="catalog-selected" id="heardLanguageSelected"></div>
-      <input class="catalog-search" id="heardLanguageSearch" type="search" placeholder="Search gateway languages" autocomplete="off" />
-      <div class="catalog-options" id="heardLanguageOptions"></div>
-    </div>
-    <div class="hint">Languages you may speak to the assistant.</div>
-
-    <label for="speakerContext">Your speaker context</label>
-    <textarea id="speakerContext" maxlength="1200" placeholder="I frequently discuss software engineering, authentication, speech systems, cloud infrastructure, and mathematics."></textarea>
-    <div class="hint">A general technical-domain description that biases recognition without maintaining a term dictionary or adding words you did not say.</div>
-    <datalist id="languageOptions"></datalist>
-
-    <div>
-      <button id="saveProfile">Save profile to gateway</button>
-      <button id="refreshProfile" style="background:#2563eb">Refresh from gateway</button>
-      <button id="resetProfile" style="background:#777">Reset to defaults</button>
-      <span id="profileStatus"></span>
+        <footer class="page-footer">
+          <span class="brand-mark brand-mark-small" aria-hidden="true"><span>Ag</span></span>
+          <p><strong>Made for a quieter relationship with intelligence.</strong><br />Your browser stays yours.</p>
+          <a href="#connection">Back to top ↑</a>
+        </footer>
+      </main>
     </div>
 
     <script type="module" src="options.js"></script>

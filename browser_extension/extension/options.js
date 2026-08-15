@@ -49,6 +49,11 @@ const companionDetailsEl = document.getElementById("companionDetails");
 const companionPromptEl = document.getElementById("companionPrompt");
 const companionStatusEl = document.getElementById("companionStatus");
 
+function setStatusTone(element, tone = "neutral") {
+  if (!element) return;
+  element.dataset.tone = tone;
+}
+
 // Cache key written by both this page and background.js after a successful PUT,
 // so a profile change applied from the overlay refreshes this page live.
 const PROFILE_CACHE_KEY = "ageeProfileCache";
@@ -76,7 +81,7 @@ if (livekitVoiceEl) {
     await chrome.storage.local.set({ [LIVEKIT_VOICE_FLAG_KEY]: livekitVoiceEl.checked === true });
     if (livekitVoiceStatusEl) {
       livekitVoiceStatusEl.textContent = livekitVoiceEl.checked ? "On (experimental)" : "Off";
-      livekitVoiceStatusEl.style.color = "#777";
+      setStatusTone(livekitVoiceStatusEl);
     }
   });
 }
@@ -96,7 +101,7 @@ if (voiceFirstGesturesEl) {
     await chrome.storage.local.set({ [VOICE_FIRST_GESTURES_KEY]: voiceFirstGesturesEl.checked === true });
     if (voiceFirstGesturesStatusEl) {
       voiceFirstGesturesStatusEl.textContent = voiceFirstGesturesEl.checked ? "On (experimental)" : "Off";
-      voiceFirstGesturesStatusEl.style.color = "#777";
+      setStatusTone(voiceFirstGesturesStatusEl);
     }
   });
 }
@@ -120,7 +125,7 @@ if (backgroundAutomationEl) {
       stored[BACKGROUND_AUTOMATION_CONSENT_KEY] === BACKGROUND_AUTOMATION_CONSENT_VERSION;
     if (backgroundAutomationStatusEl) {
       backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
-      backgroundAutomationStatusEl.style.color = "#777";
+      setStatusTone(backgroundAutomationStatusEl);
     }
   });
   backgroundAutomationEl.addEventListener("change", async () => {
@@ -131,7 +136,7 @@ if (backgroundAutomationEl) {
     });
     if (backgroundAutomationStatusEl) {
       backgroundAutomationStatusEl.textContent = backgroundAutomationEl.checked ? "On" : "Off";
-      backgroundAutomationStatusEl.style.color = "#777";
+      setStatusTone(backgroundAutomationStatusEl);
     }
   });
 }
@@ -165,14 +170,14 @@ async function refreshUserScriptControl(control) {
   const result = await userScriptsRuntime.capability(control.profile);
   control.element.checked = result.state !== CAPABILITY_STATES.DISABLED;
   control.status.textContent = userScriptStateLabel(result.state);
-  control.status.style.color = result.state === CAPABILITY_STATES.AVAILABLE ? "#35a35a" : "#777";
+  setStatusTone(control.status, result.state === CAPABILITY_STATES.AVAILABLE ? "success" : "neutral");
 }
 
 for (const control of USER_SCRIPT_CONTROLS) {
   if (!control.element || !control.status) continue;
   refreshUserScriptControl(control).catch(() => {
     control.status.textContent = "Unavailable";
-    control.status.style.color = "#c0392b";
+    setStatusTone(control.status, "error");
   });
   control.element.addEventListener("change", async () => {
     control.element.disabled = true;
@@ -182,10 +187,10 @@ for (const control of USER_SCRIPT_CONTROLS) {
       refresh = result.state !== "disable_blocked";
       control.element.checked = result.state !== CAPABILITY_STATES.DISABLED;
       control.status.textContent = userScriptStateLabel(result.state);
-      control.status.style.color = result.state === CAPABILITY_STATES.AVAILABLE ? "#35a35a" : "#777";
+      setStatusTone(control.status, result.state === CAPABILITY_STATES.AVAILABLE ? "success" : "neutral");
     } catch {
       control.status.textContent = "Could not update the local user-script setting";
-      control.status.style.color = "#c0392b";
+      setStatusTone(control.status, "error");
     } finally {
       control.element.disabled = false;
       if (refresh) await refreshUserScriptControl(control).catch(() => {});
@@ -195,23 +200,23 @@ for (const control of USER_SCRIPT_CONTROLS) {
 
 function flash(text, ok = true) {
   statusEl.textContent = text;
-  statusEl.style.color = ok ? "#35a35a" : "#c0392b";
+  setStatusTone(statusEl, ok ? "success" : "error");
 }
 
 function flashProfile(text, ok = true) {
   profileStatusEl.textContent = text;
-  profileStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
+  setStatusTone(profileStatusEl, ok ? "success" : "error");
 }
 
 function flashMic(text, ok = true) {
   micStatusEl.textContent = text;
-  micStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
+  setStatusTone(micStatusEl, ok ? "success" : "error");
 }
 
 function flashCompanion(text, ok = true) {
   if (!companionStatusEl) return;
   companionStatusEl.textContent = text;
-  companionStatusEl.style.color = ok ? "#35a35a" : "#c0392b";
+  setStatusTone(companionStatusEl, ok ? "success" : "error");
 }
 
 function gatewayConfig() {
