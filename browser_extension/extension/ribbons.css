@@ -43,25 +43,36 @@
      MoaRibbonTokens so the two surfaces read as one product. */
   --agee-ribbon-ink: #f4f4f6;
   --agee-ribbon-ink-ambient: rgba(244, 244, 246, 0.88);
-  --agee-ribbon-muted: #9b9ba4;
-  --agee-ribbon-accent: #ffd76a;
+  --agee-ribbon-muted: #b7aea0;
+  --agee-ribbon-accent: #e9b95f;
   /* The ink that sits ON the accent fill (the send button). It was a literal
      #17130a, which is a dark-mode value painted on a light page too. */
-  --agee-ribbon-on-accent: #17130a;
+  --agee-ribbon-on-accent: #21180b;
   --agee-ribbon-you: #7c8cff;
-  --agee-ribbon-agent: #f5a623;
+  --agee-ribbon-agent: #fff1d4;
   --agee-ribbon-ok: #35c759;
   --agee-ribbon-warn: #ff8a3d;
   --agee-ribbon-plate: rgba(18, 19, 23, 0.91);
   --agee-ribbon-plate-drag: rgba(18, 19, 23, 0.69);
   --agee-ribbon-hairline: rgba(255, 255, 255, 0.14);
+  --agee-ribbon-you-ink: #fbf8ff;
+  --agee-ribbon-you-ambient: rgba(246, 241, 255, 0.92);
+  --agee-ribbon-you-plate: rgba(67, 53, 105, 0.96);
+  --agee-ribbon-you-plate-drag: rgba(67, 53, 105, 0.76);
+  --agee-ribbon-you-line: rgba(206, 191, 255, 0.32);
+  --agee-ribbon-agent-ink: #2b241a;
+  --agee-ribbon-agent-ambient: rgba(43, 36, 26, 0.9);
+  --agee-ribbon-agent-plate: rgba(255, 249, 237, 0.97);
+  --agee-ribbon-agent-plate-drag: rgba(255, 249, 237, 0.82);
+  --agee-ribbon-agent-line: rgba(118, 84, 34, 0.2);
   /* The halo is for the ONE label that sits outside the plate, the copy
      caption. Glyphs on the plate need no shadow — that is the whole point of
      the plate — and the per-glyph scrim it used to accompany is gone. */
   --agee-ribbon-halo: 0 1px 2px rgba(0, 0, 0, 0.72), 0 0 8px rgba(0, 0, 0, 0.45);
-  --agee-ribbon-shadow: 0 8px 28px rgba(0, 0, 0, 0.46), 0 1px 2px rgba(0, 0, 0, 0.34);
-  --agee-ribbon-menu-bg: rgba(18, 19, 23, 0.86);
-  --agee-ribbon-menu-hover: rgba(255, 255, 255, 0.08);
+  --agee-ribbon-shadow: 0 16px 42px rgba(8, 7, 5, 0.26), 0 3px 10px rgba(8, 7, 5, 0.2);
+  --agee-ribbon-menu-bg: rgba(24, 22, 19, 0.96);
+  --agee-ribbon-menu-hover: rgba(255, 241, 214, 0.09);
+  --agee-ribbon-connector: rgba(233, 185, 95, 0.72);
 
   /* motion */
   --agee-ribbon-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
@@ -79,20 +90,31 @@
 #agee-root[data-agee-ribbon-theme="light"] {
   --agee-ribbon-ink: #141519;
   --agee-ribbon-ink-ambient: rgba(20, 21, 25, 0.9);
-  --agee-ribbon-muted: #6b6c76;
-  --agee-ribbon-accent: #b87400;
-  --agee-ribbon-on-accent: #fff8ec;
+  --agee-ribbon-muted: #716a60;
+  --agee-ribbon-accent: #a86612;
+  --agee-ribbon-on-accent: #fffaf0;
   --agee-ribbon-you: #6474e8;
-  --agee-ribbon-agent: #c06b00;
+  --agee-ribbon-agent: #7e5620;
   --agee-ribbon-ok: #1f8f3d;
   --agee-ribbon-warn: #c24a00;
   --agee-ribbon-plate: rgba(252, 252, 253, 0.91);
   --agee-ribbon-plate-drag: rgba(252, 252, 253, 0.72);
   --agee-ribbon-hairline: rgba(0, 0, 0, 0.1);
+  --agee-ribbon-you-ink: #fffaff;
+  --agee-ribbon-you-ambient: rgba(255, 250, 255, 0.94);
+  --agee-ribbon-you-plate: rgba(96, 78, 157, 0.97);
+  --agee-ribbon-you-plate-drag: rgba(96, 78, 157, 0.8);
+  --agee-ribbon-you-line: rgba(75, 54, 143, 0.28);
+  --agee-ribbon-agent-ink: #2a2319;
+  --agee-ribbon-agent-ambient: rgba(42, 35, 25, 0.91);
+  --agee-ribbon-agent-plate: rgba(255, 250, 240, 0.98);
+  --agee-ribbon-agent-plate-drag: rgba(255, 250, 240, 0.84);
+  --agee-ribbon-agent-line: rgba(107, 72, 25, 0.16);
   --agee-ribbon-halo: 0 1px 2px rgba(255, 255, 255, 0.88), 0 0 8px rgba(255, 255, 255, 0.62);
-  --agee-ribbon-shadow: 0 8px 28px rgba(16, 18, 24, 0.14), 0 1px 2px rgba(16, 18, 24, 0.1);
-  --agee-ribbon-menu-bg: rgba(252, 252, 253, 0.88);
-  --agee-ribbon-menu-hover: rgba(0, 0, 0, 0.05);
+  --agee-ribbon-shadow: 0 16px 38px rgba(48, 35, 16, 0.13), 0 3px 9px rgba(48, 35, 16, 0.09);
+  --agee-ribbon-menu-bg: rgba(255, 252, 246, 0.97);
+  --agee-ribbon-menu-hover: rgba(69, 51, 25, 0.06);
+  --agee-ribbon-connector: rgba(168, 102, 18, 0.58);
 }
 
 /* Collapsed geometry is fixed at one line. Neither a short nor a long stream
@@ -145,9 +167,43 @@
      controls opt in below, so blank padding reaches the page underneath. */
   pointer-events: none;
   background: var(--agee-ribbon-plate);
-  -webkit-backdrop-filter: blur(18px) saturate(1.3);
-  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.18);
+  backdrop-filter: blur(22px) saturate(1.18);
   box-shadow: inset 0 0 0 1px var(--agee-ribbon-hairline), var(--agee-ribbon-shadow);
+}
+#agee-ribbon-you.agee-ribbon-live {
+  background: var(--agee-ribbon-you-plate);
+  box-shadow: inset 0 0 0 1px var(--agee-ribbon-you-line), var(--agee-ribbon-shadow);
+}
+#agee-ribbon-reply.agee-ribbon-live {
+  background: var(--agee-ribbon-agent-plate);
+  box-shadow: inset 0 0 0 1px var(--agee-ribbon-agent-line), var(--agee-ribbon-shadow);
+}
+#agee-root[data-agee-unit="dragging"] #agee-ribbon-you.agee-ribbon-live {
+  background: var(--agee-ribbon-you-plate-drag);
+}
+#agee-root[data-agee-unit="dragging"] #agee-ribbon-reply.agee-ribbon-live {
+  background: var(--agee-ribbon-agent-plate-drag);
+}
+/* A quiet champagne thread visually binds both turns to the companion. It
+   occupies the runtime's existing eight-pixel gap and never changes geometry. */
+#agee-ribbon-you.agee-ribbon-live::before,
+#agee-ribbon-reply.agee-ribbon-live::before {
+  content: "";
+  position: absolute;
+  width: 1px;
+  height: var(--agee-ribbon-gap);
+  background: linear-gradient(var(--agee-ribbon-connector), transparent);
+  pointer-events: none;
+}
+#agee-ribbon-you.agee-ribbon-live::before {
+  left: 0;
+  bottom: calc(-1 * var(--agee-ribbon-gap));
+}
+#agee-ribbon-reply.agee-ribbon-live::before {
+  right: 0;
+  top: calc(-1 * var(--agee-ribbon-gap));
+  transform: rotate(180deg);
 }
 #agee-root[data-agee-unit="dragging"] .agee-ribbon.agee-ribbon-live {
   background: var(--agee-ribbon-plate-drag);
@@ -256,8 +312,8 @@
   width: 100%;
   font-size: 14px;
   line-height: var(--agee-ribbon-line-h);
-  font-weight: 450;
-  letter-spacing: 0.005em;
+  font-weight: 520;
+  letter-spacing: -0.005em;
   font-variant-numeric: tabular-nums;
   color: var(--agee-ribbon-ink-ambient);
   pointer-events: none;
@@ -274,9 +330,13 @@
 }
 /* Engaged is the reading state, so the ink goes to full strength. */
 #agee-root[data-agee-unit="engaged"] .agee-ribbon-line { color: var(--agee-ribbon-ink); }
+#agee-root #agee-ribbon-you .agee-ribbon-line { color: var(--agee-ribbon-you-ambient); }
+#agee-root #agee-ribbon-reply .agee-ribbon-line { color: var(--agee-ribbon-agent-ambient); }
+#agee-root[data-agee-unit="engaged"] #agee-ribbon-you .agee-ribbon-line { color: var(--agee-ribbon-you-ink); }
+#agee-root[data-agee-unit="engaged"] #agee-ribbon-reply .agee-ribbon-line { color: var(--agee-ribbon-agent-ink); }
 /* An interim transcript is a hypothesis and reads as one; it hardens to full
    ink when the recognizer settles the words. You can watch it think. */
-#agee-ribbon-you.agee-ribbon-streaming .agee-ribbon-line { color: var(--agee-ribbon-muted); }
+#agee-ribbon-you.agee-ribbon-streaming .agee-ribbon-line { color: var(--agee-ribbon-you-ambient); }
 /* Scoped to #agee-root so tone still beats the engaged ink rule below: a failed
    turn has to stay amber when you touch it to read it. */
 #agee-root .agee-ribbon-warn .agee-ribbon-line { color: var(--agee-ribbon-warn); }
@@ -363,6 +423,14 @@
 .agee-ribbon-copied .agee-ribbon-copy { color: var(--agee-ribbon-ok); }
 .agee-ribbon-copied .agee-ribbon-copy .agee-ribbon-glyph { display: none; }
 .agee-ribbon-copied .agee-ribbon-copy .agee-ribbon-check { display: block; }
+#agee-ribbon-you .agee-ribbon-copy,
+#agee-ribbon-you .agee-ribbon-chevron { color: var(--agee-ribbon-you-ambient); }
+#agee-ribbon-reply .agee-ribbon-copy,
+#agee-ribbon-reply .agee-ribbon-chevron { color: var(--agee-ribbon-agent-ink); opacity: 0.58; }
+#agee-ribbon-you .agee-ribbon-copy:hover,
+#agee-ribbon-you .agee-ribbon-chevron:hover { color: var(--agee-ribbon-you-ink); }
+#agee-ribbon-reply .agee-ribbon-copy:hover,
+#agee-ribbon-reply .agee-ribbon-chevron:hover { color: var(--agee-ribbon-agent-ink); opacity: 0.9; }
 
 /* Mute, on the reply rail only, because it acts on the reply. It was
    #agee-quiet-controls: a fixed pill beside the mascot with its own plate
@@ -400,6 +468,8 @@
 .agee-ribbon-voice-muted .agee-ribbon-voice { color: var(--agee-ribbon-warn); }
 .agee-ribbon-voice-muted .agee-ribbon-voice .agee-ribbon-voice-wave { display: none; }
 .agee-ribbon-voice-muted .agee-ribbon-voice .agee-ribbon-voice-slash { display: block; }
+#agee-ribbon-reply .agee-ribbon-voice { color: var(--agee-ribbon-agent-ink); opacity: 0.58; }
+#agee-ribbon-reply .agee-ribbon-voice:hover { color: var(--agee-ribbon-agent-ink); opacity: 0.9; }
 /* The composer takes the you-rail; the reply rail is untouched by it. */
 .agee-ribbon-composing .agee-ribbon-voice { display: none; }
 

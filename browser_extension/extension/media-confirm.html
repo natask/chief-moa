@@ -9,26 +9,41 @@
   </head>
   <body>
     <main>
-      <span class="boundary">EXTENSION-OWNED CONFIRMATION</span>
-      <h1>Allow this media action?</h1>
-      <p>The web page cannot change this disclosure or press Allow.</p>
-      <section><p id="disclosure">Loading immutable details…</p></section>
-      <dl>
-        <dt>Operation</dt><dd id="operation">—</dd>
-        <dt>Label</dt><dd id="label">—</dd>
-        <dt>Search query</dt><dd id="query">—</dd>
-        <dt>Exact title</dt><dd id="title">—</dd>
-        <dt>Exact channel</dt><dd id="channel">—</dd>
-        <dt>Video ID</dt><dd id="video-id">—</dd>
-        <dt>Position</dt><dd id="position">—</dd>
-        <dt>Note</dt><dd id="note">—</dd>
-        <dt>SHA-256 binding</dt><dd id="digest" class="digest">—</dd>
-      </dl>
-      <p id="status" role="status" aria-live="polite">Loading…</p>
-      <div class="actions">
-        <button id="cancel" type="button">Cancel</button>
-        <button id="allow" class="primary" type="button" disabled>Allow once</button>
+      <header data-security-boundary="EXTENSION-OWNED CONFIRMATION">
+        <span class="brand-mark" aria-hidden="true"><img src="moa-mark.png" alt="" /></span>
+        <span class="boundary"><i aria-hidden="true"></i> Protected by Ag</span>
+      </header>
+      <div class="intro">
+        <h1>Ready to play this?</h1>
+        <p>Review exactly what Ag will do. This page cannot change the request or approve it for you.</p>
       </div>
+      <section class="disclosure-card" aria-label="Requested action">
+        <span class="card-label">Requested action</span>
+        <p id="disclosure">Loading protected details…</p>
+      </section>
+      <dl class="essential-details">
+        <div><dt>Action</dt><dd id="operation">—</dd></div>
+        <div><dt>Name</dt><dd id="label">—</dd></div>
+        <div><dt>Search</dt><dd id="query">—</dd></div>
+        <div><dt>Title</dt><dd id="title">—</dd></div>
+        <div><dt>Creator</dt><dd id="channel">—</dd></div>
+        <div><dt>Starts at</dt><dd id="position">—</dd></div>
+        <div><dt>Note</dt><dd id="note">—</dd></div>
+      </dl>
+      <details>
+        <summary>Security details</summary>
+        <dl class="security-details">
+          <div><dt>Video ID</dt><dd id="video-id">—</dd></div>
+          <div><dt>Request fingerprint</dt><dd id="digest" class="digest">—</dd></div>
+        </dl>
+      </details>
+      <footer>
+        <p id="status" role="status" aria-live="polite">Checking the request…</p>
+        <div class="actions">
+          <button id="cancel" type="button">Not now</button>
+          <button id="allow" class="primary" type="button" disabled>Allow once</button>
+        </div>
+      </footer>
     </main>
   </body>
 </html>

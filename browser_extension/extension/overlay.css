@@ -1,25 +1,25 @@
-/* agee overlay — warm ember dark-glass system.
-   One amber-to-gold identity, layered dark surfaces read as elevation, calm
-   motion. No Shadow DOM yet, so #agee-root and its descendants carry explicit
-   resets to keep host-page CSS from bleeding in. */
+/* Ag overlay — a warm, page-independent conversation object.
+   The champagne-framed companion is the visual anchor; every transient surface
+   uses the same warm-black / ivory material system. No Shadow DOM yet, so the
+   root and its descendants carry explicit resets against hostile page CSS. */
 
 #agee-root {
   /* Surfaces: each step lighter, elevation from light not shadow. */
-  --agee-surface-0: #0b0c0e;
-  --agee-surface-1: rgba(20, 21, 24, 0.92);
-  --agee-surface-2: rgba(255, 255, 255, 0.06);
-  --agee-surface-3: rgba(255, 255, 255, 0.10);
+  --agee-surface-0: #100f0d;
+  --agee-surface-1: rgba(24, 22, 19, 0.94);
+  --agee-surface-2: rgba(255, 248, 232, 0.07);
+  --agee-surface-3: rgba(255, 248, 232, 0.12);
 
-  --agee-ink: #f4f4f6;
-  --agee-muted: #9b9ba4;
-  --agee-panel-bg: rgba(14, 15, 18, 0.92);
-  --agee-panel-line: rgba(255, 255, 255, 0.14);
-  --agee-card-line: rgba(255, 255, 255, 0.09);
+  --agee-ink: #fff9ee;
+  --agee-muted: #b8afa1;
+  --agee-panel-bg: rgba(20, 18, 15, 0.94);
+  --agee-panel-line: rgba(255, 225, 166, 0.2);
+  --agee-card-line: rgba(255, 241, 214, 0.11);
 
   /* One identity gradient. First and last stop match for a seamless spin. */
-  --agee-amber: #f5a623;
-  --agee-gold: #ffd76a;
-  --agee-ember: #ff8a3d;
+  --agee-amber: #e9b95f;
+  --agee-gold: #ffe2a0;
+  --agee-ember: #df8a42;
 
   --agee-green: #35c759;
   --agee-red: #ff453a;
@@ -43,6 +43,12 @@
   font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.5;
+  color: var(--agee-ink);
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  direction: ltr;
+  isolation: isolate;
 }
 
 /* Active-page observation is extension-owned and quiet. Chrome's debugger
@@ -92,15 +98,26 @@
 #agee-root * {
   margin: 0;
   font-family: inherit;
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  text-shadow: none;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* ---- Launcher: the bare mascot, no plate, no halo ------------------------ */
-/* The lion floats directly on the page. The circle stays as the hit and drag
-   target, but it paints nothing: no border, no background, no shadow.
-   Root scalar: --agee-mascot-font. One knob drives the hit circle, the lion,
-   and every animation distance (all in em). Scroll on the lion to resize;
-   content.js persists the knob as ageeMascotScale. */
+#agee-root button,
+#agee-root input,
+#agee-root select,
+#agee-root textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* ---- Launcher: the companion's framed focal point ----------------------- */
+/* The mark always has a clean silhouette, even on visually noisy pages. The
+   frame is also the generous click-and-drag target. Root scalar:
+   --agee-mascot-font; content.js persists it as ageeMascotScale. */
 #agee-launcher {
   appearance: none;
   position: absolute;
@@ -112,16 +129,23 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 0;
+  border: 1px solid rgba(255, 226, 160, 0.48);
   border-radius: 50%;
-  background: transparent;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 249, 236, 0.18), transparent 36%),
+    linear-gradient(145deg, rgba(42, 37, 29, 0.98), rgba(15, 14, 12, 0.98));
   color: #ffd76a;
   cursor: grab;
   padding: 0;
   pointer-events: auto;
   touch-action: none;
   overflow: visible;
-  transition: transform 0.2s ease;
+  box-shadow:
+    0 12px 30px rgba(8, 7, 5, 0.38),
+    0 3px 9px rgba(8, 7, 5, 0.38),
+    inset 0 1px 0 rgba(255, 249, 236, 0.18),
+    inset 0 0 0 1px rgba(255, 194, 92, 0.06);
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 /* The lion breathes: a single combined transform (scale + bob) so the
@@ -133,7 +157,7 @@
   user-select: none;
   -webkit-user-drag: none;
   pointer-events: none;
-  filter: drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.5));
+  filter: drop-shadow(0 0.07em 0.1em rgba(0, 0, 0, 0.5)) saturate(0.96);
   animation: agee-mascot-idle 6s ease-in-out infinite;
 }
 /* Unit state owns the idle opacity. Keeping the image itself opaque avoids
@@ -364,7 +388,13 @@
   animation: agee-avatar-glow 1.4s ease-in-out infinite;
 }
 #agee-launcher:hover {
-  transform: scale(1.06);
+  transform: translateY(-2px) scale(1.035);
+  border-color: rgba(255, 226, 160, 0.78);
+  box-shadow:
+    0 16px 38px rgba(8, 7, 5, 0.44),
+    0 4px 12px rgba(8, 7, 5, 0.4),
+    inset 0 1px 0 rgba(255, 249, 236, 0.24),
+    0 0 0 4px rgba(233, 185, 95, 0.08);
 }
 /* Hover: the lion perks up — a quick tilt-and-bounce loop while the cursor
    stays on it. AI-driven avatar-runtime motion outranks this by specificity. */
@@ -372,8 +402,8 @@
   animation: agee-perk 0.9s ease-in-out infinite;
 }
 #agee-launcher:focus-visible {
-  outline: 2px solid var(--agee-amber);
-  outline-offset: 2px;
+  outline: 3px solid var(--agee-gold);
+  outline-offset: 3px;
 }
 #agee-launcher:active {
   cursor: grabbing;
