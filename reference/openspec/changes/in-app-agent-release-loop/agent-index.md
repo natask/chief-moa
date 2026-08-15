@@ -78,6 +78,29 @@ remain disjoint and are required before the wave can be promoted.
 | `recovery_manifest` | `master` | shared current worktree | gateway recovery provenance/store/handler integration and tests | only exact verified recovery receipts and bytes are projected | complete: `ab7f6918`, `a2cf02c7`, `49c9792a` |
 | `android_recovery_install` | `master` | shared current worktree | Android recovery parser/cache/controller/verifier tests | verified forward APK installs in place without silent uninstall | complete: `db75fd92`, `94bfe96d` |
 
+## Active UI Redesign Wave
+
+Every lane uses the shared `master` worktree. No UI lane creates a branch or a
+secondary worktree. Audit lanes are read-only. Implementation lanes stage and
+commit only their owned paths; they do not push or deploy.
+
+| Agent/task | Branch | Worktree | Exact path claim | Exit criterion | State |
+| --- | --- | --- | --- | --- | --- |
+| `ui_visual_director` | `master` | shared current worktree | none; read-only audit of all Android and browser UI | unified visual direction, token system, hierarchy, and implementation brief delivered | active |
+| `android_visual_audit` | `master` | shared current worktree | none; read-only Android source and rendered-screen audit | prioritized defects and exact Talk/Work/Releases/Settings/overlay recommendations delivered | active |
+| `browser_visual_audit` | `master` | shared current worktree | none; read-only extension source and desktop/narrow/side-panel capture audit | severity-ranked responsive audit, capture evidence, and implementation map delivered | active |
+| `ui_accessibility_review` | `master` | shared current worktree | none; read-only Android and browser accessibility audit | screen-reader, keyboard, focus, target, contrast, motion, typography, and state-semantics findings delivered | active |
+| `ui_test_strategy` | `master` | shared current worktree | none; read-only Android and browser visual-QA audit | automated state/viewport/interactivity/accessibility matrix and exact test-extension map delivered | complete |
+| `claude_design_critic` | `master` | shared current worktree | none; read-only design critique | Claude access attempt recorded and independent screenshot/source redesign brief delivered | complete; Claude subscription disabled by organization |
+| `android_wow_ui` | `master` | shared current worktree | `android_app/app/src/main/java/ag/companion/{MainActivity.java,MoaColors.java,MoaDrawables.java,MoaMainNavigation.java,MoaTalkHomeView.java,MoaDevelopmentRequestsView.java,MoaSectionHeaderView.java,MoaReleaseCardController.java}`; new Android drawables; direct unit/capture tests | cohesive premium four-destination UI; all screens visually inspected; focused, lint, assembly, unit, and source-size gates pass | active |
+| `browser_workspace_wow` | `master` | shared current worktree | `browser_extension/extension/{sidepanel.html,sidepanel.js}`; new `sidepanel.css`; direct side-panel visual/smoke tests | premium responsive Now/Library/Control workspace; narrow/wide captures inspected; browser and source-size gates pass | active |
+| `browser_overlay_wow` | `master` | shared current worktree | `browser_extension/extension/{overlay.css,ribbons.css,media-confirm.css}`; `media-confirm.html` only if required; direct overlay/ribbon visual tests | premium mascot-anchored compact/expanded capsule; reduced-motion and host isolation preserved; real captures and browser gates pass | active |
+| `browser_overlay_wow/overlay_visual_audit` | `master` | shared current worktree | none; read-only overlay CSS/DOM audit | exact visual findings returned to overlay implementation owner | active |
+| `browser_overlay_wow/overlay_test_map` | `master` | shared current worktree | none; read-only overlay test and screenshot-route audit | exact visual-test coverage map returned to overlay implementation owner | active |
+| `browser_settings_wow` | `master` | shared current worktree | `browser_extension/extension/{options.html,options.js}`; new options CSS; direct options-page visual/smoke tests | premium grouped settings experience with preserved behavior; responsive captures inspected; browser and source-size gates pass | active |
+| `ui_agent_index` | `master` | shared current worktree | this index only | UI audit and implementation claims remain current; docs-only conventional commit | active |
+| Primary coordinator | `master` | shared current worktree | cross-lane integration, independent verification, guarded push/deploy | owned-path commits integrated; visual, accessibility, behavior, build, and source-size gates pass before deployment | active |
+
 ## Worktree State Convention
 
 Because all lanes intentionally share the primary worktree and `master`, idle is
